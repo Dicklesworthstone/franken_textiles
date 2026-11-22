@@ -235,6 +235,11 @@ pub fn validate(data: &Value) -> Vec<String> {
                 && let Err(error) = checked_value("stature", value)
             {
                 errors.push(format!("wearer.{key}: {}", error.message));
+            } else if key == "age_months"
+                && let Some(value) = v.as_f64()
+                && value < 0.0
+            {
+                errors.push("wearer.age_months must be >= 0".into());
             }
         }
     }
@@ -291,4 +296,30 @@ pub fn validate(data: &Value) -> Vec<String> {
         errors.push("fused must be an object".into());
     }
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_negative_age_months_and_allows_newborn_zero() {
+        let negative = json!({
+            "schema": "fabric-measurements/1",
+            "wearer": {"age_months": -3.0, "stature_mm": 920.0},
+            "records": []
+        });
+        let errs = validate(&negative);
+        assert!(
+            errs.iter().any(|e| e.contains("wearer.age_months")),
+            "expected wearer.age_months error, got {errs:?}"
+        );
+
+        let newborn = json!({
+            "schema": "fabric-measurements/1",
+            "wearer": {"age_months": 0.0, "stature_mm": 500.0},
+            "records": []
+        });
+        assert!(validate(&newborn).is_empty());
+    }
 }

@@ -43,6 +43,9 @@ fn keys(sex: Option<&str>) -> &'static [&'static str] {
 /// This is a population prior, not an individual measurement; ages extrapolate as in the reference.
 pub fn cdc_stature(age: f64, sex: Option<&str>) -> Result<(f64, f64), Refusal> {
     Refusal::finite("age_months", age)?;
+    if age < 0.0 {
+        return Err(invalid("age_months must be >= 0"));
+    }
     let mut out = (0.0, 0.0);
     for key in keys(sex) {
         let rows = tables()["cdc"][key].as_array().expect("CDC rows");
@@ -54,7 +57,7 @@ pub fn cdc_stature(age: f64, sex: Option<&str>) -> Result<(f64, f64), Refusal> {
         out.0 += interp(age, &AGES, &median) * 10.0 / keys(sex).len() as f64;
         out.1 += interp(age, &AGES, &sd) * 10.0 / keys(sex).len() as f64;
     }
-    if !out.0.is_finite() || !out.1.is_finite() || out.1 <= 0.0 {
+    if !out.0.is_finite() || out.0 <= 0.0 || !out.1.is_finite() || out.1 <= 0.0 {
         return Err(invalid("age outside the numerically usable chart range"));
     }
     Ok(out)
@@ -63,6 +66,9 @@ pub fn cdc_stature(age: f64, sex: Option<&str>) -> Result<(f64, f64), Refusal> {
 /// Sex-averaged CDC median age from stature, clamped to the tabulated 24.5–72.5 months.
 pub fn age_from_stature(mm: f64) -> Result<f64, Refusal> {
     Refusal::finite("stature_mm", mm)?;
+    if mm <= 0.0 {
+        return Err(invalid("stature_mm must be positive"));
+    }
     let hs: Vec<f64> = AGES
         .iter()
         .map(|a| cdc_stature(*a, None).unwrap().0)
@@ -182,6 +188,9 @@ pub fn priors_for(
     let cm = stature_mm / 10.0;
     let age = age_months.unwrap_or(age_from_stature(stature_mm)?);
     Refusal::finite("age_months", age)?;
+    if age < 0.0 {
+        return Err(invalid("age_months must be >= 0"));
+    }
     let mut notes = Vec::new();
     if age_months.is_none() {
         notes.push(format!("age inferred from CDC P50 stature: {age:.0} mo"));
@@ -443,4 +452,20 @@ pub fn priors_for(
         &[sn, "measure it from the P2 side photo (06 Q3)", &age_note],
     )?;
     Ok(Value::Object(p.out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn priors_and_cdc_refuse_negative_age_and_non_positive_stature() {
+        assert!(cdc_stature(-1.0, None).is_err());
+        assert!(cdc_stature(-200.0, None).is_err());
+        assert!(cdc_stature(0.0, None).is_ok());
+        assert!(age_from_stature(0.0).is_err());
+        assert!(age_from_stature(-500.0).is_err());
+        assert!(priors_for(920.0, Some(-12.0), None).is_err());
+        assert!(priors_for(920.0, Some(0.0), None).is_ok());
+    }
 }
