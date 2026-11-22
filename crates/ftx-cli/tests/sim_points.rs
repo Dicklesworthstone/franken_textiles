@@ -266,6 +266,45 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
 }
 
 #[test]
+fn viewer_uses_the_saved_pattern_of_an_archived_qualification_band() {
+    let dir = setup();
+    let band = dir.join("qualification.before-000/band_+0");
+    std::fs::create_dir_all(&band).unwrap();
+    let sim = band.join("sim");
+    std::fs::rename(dir.join("sim"), &sim).unwrap();
+    let mut garment = (0..12)
+        .map(|i| format!("v {i} -0.1 0.1\n"))
+        .collect::<String>();
+    garment.push_str("f 1 2 3\nf 5 6 7\nf 9 10 11\n");
+    std::fs::write(sim.join("garment.obj"), garment).unwrap();
+    save(
+        &sim.join("sim_report.json"),
+        &json!({"style":"KAT_BAND_+0","pattern":"p.json"}),
+    );
+    let view = || {
+        Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", "qualification.before-000/band_+0/sim", "--json"])
+            .output()
+            .unwrap()
+    };
+    assert_eq!(view().status.code(), Some(3));
+    assert!(!sim.join("fold_viewer.html").exists());
+    let mut pattern: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("p.json")).unwrap()).unwrap();
+    pattern["meta"] = json!({"title":"Archived band"});
+    save(&band.join("pattern.json"), &pattern);
+    let rebuilt = view();
+    assert!(
+        rebuilt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuilt.stderr)
+    );
+    let html = std::fs::read_to_string(sim.join("fold_viewer.html")).unwrap();
+    assert!(html.contains("<title>Archived Band Fold-up</title>"));
+}
+
+#[test]
 fn viewer_checks_cloth_crossings_even_in_frames_it_would_drop() {
     let dir = setup().join("sim");
     save(

@@ -511,6 +511,9 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "workspace fit contract changed during preflight; retry",
         ));
     }
+    if wants_sim {
+        recover_ws_qualification(&ws)?;
+    }
     let (n, rd) = reserve(&ws)?;
     if let Some(selected) = &fabric {
         selected.save(&rd)?;
@@ -858,32 +861,51 @@ fn unused_qualification_path(ws: &Path, kind: &str) -> Result<PathBuf, Refusal> 
     Err(bad_input("qualification directory numbers exhausted"))
 }
 
-/// The workspace lock covers the move and rollback. Both generations retain their files if
-/// the filesystem refuses a promotion or the process is interrupted between the two moves.
-fn publish_ws_qualification(ws: &Path, staged: &Path, current: &Path) -> Result<(), Refusal> {
-    let archive = if regular(current, true)? {
-        let archive = unused_qualification_path(ws, "before")?;
-        fs::rename(current, &archive).map_err(|e| io(&archive, e))?;
-        Some(archive)
+/// With the workspace locked, finish the interrupted handoff on either side of publication.
+fn recover_ws_qualification(ws: &Path) -> Result<(), Refusal> {
+    let previous = ws.join("qualification.previous");
+    if !regular(&previous, true)? {
+        return Ok(());
+    }
+    let current = ws.join("qualification");
+    let destination = if regular(&current, true)? {
+        if !regular(&current.join("qualify.json"), false)? {
+            return Err(
+                bad_input("the active qualification is missing its receipt").repair(format!(
+                    "The prior qualification is at {}",
+                    previous.display()
+                )),
+            );
+        }
+        unused_qualification_path(ws, "before")?
     } else {
-        None
+        current
     };
+    fs::rename(&previous, &destination).map_err(|e| io(&destination, e))
+}
+
+fn publish_ws_qualification(ws: &Path, staged: &Path, current: &Path) -> Result<(), Refusal> {
+    if regular(current, true)? {
+        let previous = ws.join("qualification.previous");
+        fs::rename(current, &previous).map_err(|e| io(&previous, e))?;
+    }
     if let Err(e) = fs::rename(staged, current) {
         let mut refusal = io(current, e).repair(format!(
             "Check the staged qualification at {}",
             staged.display()
         ));
-        if let Some(archive) = archive
-            && let Err(restore) = fs::rename(&archive, current)
-        {
+        if let Err(restore) = recover_ws_qualification(ws) {
             refusal = refusal.repair(format!(
-                "Recover the previous qualification from {} (restore failed: {restore})",
-                archive.display()
+                "Recover qualification.previous (restore failed: {})",
+                restore.message
             ));
         }
         return Err(refusal);
     }
-    Ok(())
+    recover_ws_qualification(ws).map_err(|refusal| {
+        refusal
+            .repair("The replacement is active. The previous qualification is still recoverable.")
+    })
 }
 
 /// `ftx qualify`: run the three known-answer chest bands (`-20`, `0`, `+20` mm ease) at zero
@@ -939,6 +961,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             ));
         }
         let lock = super::workspace::Workspace::open(ws)?;
+        recover_ws_qualification(ws)?;
         let meas_path = match args.options.get("measurements") {
             Some(m) => PathBuf::from(m),
             None => ws.join("measurements.json"),

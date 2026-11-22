@@ -408,6 +408,31 @@ fn report_rebuilds_review_html_without_adding_a_round_and_qualify_validates_inpu
 }
 
 #[test]
+fn qualification_recovers_both_sides_of_an_interrupted_handoff() {
+    let (dir, _, _) = setup();
+    let ws = dir.join("ws");
+    let current = ws.join("qualification");
+    let previous = ws.join("qualification.previous");
+    let old = json!({"schema":"fabric-qualify/1", "rows":[{"ease_mm":0}]});
+    std::fs::create_dir_all(&previous).unwrap();
+    save(&previous.join("qualify.json"), &old);
+    let retry = ["qualify", "--ws", "ws", "--measurements", "missing.json"];
+    assert_eq!(run(&dir, &retry, 3)["refusal"]["code"], "io");
+    assert_eq!(read(&current.join("qualify.json")), old);
+    assert!(!previous.exists());
+    assert!(!ws.join("qualification.before-000").exists());
+
+    std::fs::rename(&current, &previous).unwrap();
+    std::fs::create_dir(&current).unwrap();
+    let new = json!({"schema":"fabric-qualify/1", "rows":[{"ease_mm":20}]});
+    save(&current.join("qualify.json"), &new);
+    assert_eq!(run(&dir, &retry, 3)["refusal"]["code"], "io");
+    assert_eq!(read(&current.join("qualify.json")), new);
+    assert_eq!(read(&ws.join("qualification.before-000/qualify.json")), old);
+    assert!(!previous.exists());
+}
+
+#[test]
 #[ignore = "needs the converted Anny asset"]
 fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     let (dir, _, _) = setup_program("zouave_bolero-920");

@@ -331,6 +331,23 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             return Err(bad_input(errors.join("; ")));
         }
         Some(doc)
+    } else if let Some(parent) = dir.parent().filter(|parent| {
+        dir.file_name().is_some_and(|name| name == "sim")
+            && report["style"]
+                .as_str()
+                .and_then(|style| style.strip_prefix("KAT_BAND_"))
+                .is_some_and(|ease| {
+                    parent
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .and_then(|name| name.strip_prefix("band_"))
+                        == Some(ease)
+                })
+    }) {
+        // A qualification band moves with its saved input when it is archived.
+        let path = parent.join("pattern.json");
+        crate::round::regular(&path, false)?;
+        Some(document(&path)?.0)
     } else {
         let candidate = report["pattern"]
             .as_str()

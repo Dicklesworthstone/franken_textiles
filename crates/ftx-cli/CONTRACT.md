@@ -280,11 +280,15 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   retains the active qualification and the pending evidence. For a pending band, replay with the
   pattern saved next to that band's fit specification. Completed results include both
   `QUALIFIED` and `NOT QUALIFIED` verdicts, which return exit 0 and 2 respectively.
+  Publication holds the previous directory at `qualification.previous` until the replacement is
+  active. After an interruption, the next workspace qualification or simulated round restores it
+  when the active path is absent, or archives it when the replacement is already active.
 - `ftx report WS [--json]`: regenerates `WS/report.html` from existing `WS/rounds.jsonl` without creating
   a new round directory.
 - `ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]`: rebuilds `fold_viewer.html` from an existing
   simulation directory (`fold.pc2`, `mesh_map.json`, `body.obj`, `sim_report.json`) without re-running
-  the cloth solver.
+  the cloth solver. Native qualification bands use the pattern saved alongside their `sim/` folder,
+  including after archival. `--pattern` explicitly selects another input.
 - `ftx viewer SIMDIR --check-contact [--view VIEW] [--json]` checks all recorded physical frames
   against the full displayed body and cloth. When given a native still view, it first checks
   that the saved garment coordinates round to the final PC2 frame. Strain views also require the
