@@ -373,4 +373,95 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
   .reveal-on [data-reveal]{opacity:1;transform:none;transition:none}
   .ft-sheet[open]{animation:none}.ft-next a:hover,.ft-shelf a:hover{transform:none}
 }
-@media print{.ft-head,.ft-foot,.skip{display:none}}
+@media print{.ft-head,.ft-foot,.skip,.ft-rail{display:none}}
+
+/* ---------- surface: paper fibre, cloth weave, depth ---------- */
+:root{
+  /* Fibres in the paper: fractal noise in a warm brown at a few percent, tiled. */
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .24 0 0 0 0 .19 0 0 0 0 .13 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23g)'/%3E%3C/svg%3E");
+  /* The same fibres in a pale thread, for the dark bands. Ruled lines read as a screen, not as cloth. */
+  --nap:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .96 0 0 0 0 .88 0 0 0 .075 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23g)'/%3E%3C/svg%3E");
+  --lift:0 1px 2px #1b262c12,0 16px 30px -20px #1b262c5c,0 34px 60px -44px #1b262c4d;
+}
+.paper,.ft-page,.ft-manifesto,.ft-files,.ft-platform,.ft-pipeline,.ft-start,.ft-lost,#studies{background-image:var(--grain)}
+.ft-fitting,.films,.material-gallery,.ft-claims,.ft-foot,.ft-sheet{background-image:linear-gradient(180deg,#ffffff0a,#fff0 260px),var(--nap)}
+.ft-pillar:hover,.ft-next a:hover,.ft-shelf a:hover,.workbench-shelves>a:hover{box-shadow:var(--lift)}
+
+/* ---------- header: the index button and the thread ---------- */
+.ft-index{display:inline-flex;align-items:center;gap:9px;height:36px;padding:0 12px 0 11px;border:1px solid #cfc8b8;border-radius:18px;background:#fffdf7;color:var(--ink);
+  font:600 13.5px/1 var(--sans);white-space:nowrap;transition:border-color .2s,box-shadow .25s,background-color .2s}
+.ft-index:hover,.ft-index[aria-expanded=true]{border-color:var(--ink);box-shadow:0 8px 18px -12px #16232b99}
+.ft-index-dots{display:grid;grid-template-columns:repeat(3,3px);gap:2.5px}
+.ft-index-dots i{width:3px;height:3px;border-radius:50%;background:var(--rust)}
+.ft-index small{font:500 11px/1 var(--mono);color:#6d6558}
+@media(max-width:1279px){.ft-nav-extra{display:none}}
+/* A running stitch sewn along the header's lower edge as the page is read. */
+.ft-thread{position:absolute;inset:auto auto -1.5px 0;width:0;height:2px;pointer-events:none;
+  background:repeating-linear-gradient(90deg,var(--rust) 0 9px,transparent 9px 14px)}
+@supports (animation-timeline:scroll()){
+  .ft-thread{animation:ft-thread linear both;animation-timeline:scroll(root block)}
+  @keyframes ft-thread{to{width:100%}}
+}
+
+/* ---------- the index, on a wide screen ---------- */
+.ft-sheet-body>section:first-child ul{counter-reset:exhibit}
+.ft-sheet-body>section:first-child li{counter-increment:exhibit}
+.ft-sheet-body>section:first-child li a::before{content:counter(exhibit,decimal-leading-zero);font:500 11px/1.4 var(--mono);letter-spacing:.14em;color:#ffbd95}
+.ft-sheet li a{transition:padding-left .3s var(--ease-out)}
+.ft-sheet li a:hover{padding-left:8px}
+@media(min-width:1081px){
+  .ft-sheet-body{grid-template-columns:minmax(0,3fr) minmax(0,1fr);grid-template-rows:auto 1fr;column-gap:clamp(36px,5vw,88px);row-gap:34px;
+    align-items:start;padding-top:clamp(22px,3.4vh,44px)}
+  .ft-sheet-body>section:first-child{grid-row:1/span 2}
+  .ft-sheet-body>section:first-child ul{columns:2;column-gap:clamp(26px,3.2vw,52px)}
+  .ft-sheet li{break-inside:avoid}
+  .ft-sheet li a{padding:10px 0 11px}
+  .ft-sheet li strong{font-size:clamp(22px,1.75vw,27px)}
+  .ft-sheet li small{font-size:13.5px}
+}
+/* Three columns of seven hold the whole catalogue on one screen. */
+@media(min-width:1280px){.ft-sheet-body>section:first-child ul{columns:3}}
+@media(prefers-reduced-motion:reduce){.ft-sheet li a,.ft-rail i,.primary,.primary .arrow{transition:none}.ft-sheet li a:hover{padding-left:0}}
+
+/* ---------- footer: the exhibition in columns ---------- */
+.ft-foot-nav{font-size:15px}
+.ft-foot-index ul{display:block;columns:2;column-gap:clamp(18px,2.4vw,36px)}
+.ft-foot-index li{break-inside:avoid;padding-bottom:9px}
+@media(min-width:861px){.ft-foot-nav{grid-template-columns:minmax(0,2.1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.5fr)}}
+@media(max-width:460px){.ft-foot-index ul{columns:1}}
+.ft-foot-top{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#c9d2d0;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:4px;transition:color .2s,text-decoration-color .2s}
+.ft-foot-top:hover{color:#fff;text-decoration-color:var(--peach)}
+.ft-foot-top .arrow{transform:rotate(-90deg);width:.9em}
+
+/* ---------- home: a tailor's tape down the margin ---------- */
+.ft-rail{display:none}
+@media(min-width:1280px) and (hover:hover){
+  .ft-rail{display:block;position:fixed;z-index:30;top:50%;left:max(16px,calc(50vw - 766px));translate:0 -50%;color:#d5cfc2;mix-blend-mode:difference}
+  .ft-rail ol{list-style:none;margin:0;padding:4px 0;border-left:1.5px solid currentColor;transition:background-color .2s}
+  .ft-rail a{display:flex;align-items:center;gap:10px;height:21px;color:inherit}
+  /* Each mark sits in a box of one width, so the labels beside them line up. */
+  .ft-rail i{flex:none;width:24px;height:3px;background:linear-gradient(currentColor,currentColor) 0 50%/8px 1.5px no-repeat;transition:background-size .3s var(--ease-out)}
+  .ft-rail li:nth-child(5n+1) i{background-size:13px 1.5px}
+  .ft-rail a[aria-current] i{background-size:24px 3px}
+  .ft-rail a>span{display:none;gap:9px;font:500 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}
+  .ft-rail a>span b{font-weight:500;color:#8a8475}
+  .ft-rail-now{margin:10px 0 0 -5px;writing-mode:vertical-rl;font:500 11px/1 var(--mono);letter-spacing:.14em}
+  .ft-rail-now b{font-weight:500}
+  /* Under the pointer or the keyboard it opens into a small table of contents. */
+  .ft-rail:hover,.ft-rail:focus-within{mix-blend-mode:normal;color:var(--ink)}
+  .ft-rail:hover ol,.ft-rail:focus-within ol{padding:10px 18px 10px 0;border:1px solid #cfc8b8;border-left:1.5px solid var(--ink);border-radius:0 6px 6px 0;background:#fffdf7;box-shadow:var(--lift)}
+  .ft-rail:hover a>span,.ft-rail:focus-within a>span{display:flex}
+  .ft-rail:hover a:hover,.ft-rail:hover a[aria-current],.ft-rail:focus-within a[aria-current]{color:var(--rust)}
+  .ft-rail:hover a:hover i{background-size:24px 1.5px}
+  .ft-rail:hover .ft-rail-now,.ft-rail:focus-within .ft-rail-now{visibility:hidden}
+}
+
+/* ---------- home: the opening settles into place ---------- */
+@media(prefers-reduced-motion:no-preference){
+  .construction-hero .construction-copy>*{animation:ft-settle .75s var(--ease-out) backwards}
+  .construction-hero .construction-copy>:nth-child(2){animation-delay:.06s}
+  .construction-hero .construction-copy>:nth-child(3){animation-delay:.12s}
+  .construction-hero .construction-copy>:nth-child(4){animation-delay:.18s}
+  .construction-hero .construction-copy>:nth-child(n+5){animation-delay:.24s}
+  @keyframes ft-settle{from{opacity:0;transform:translateY(12px)}}
+}

@@ -12,7 +12,7 @@ export default function SiteFooter() {
           Whether a garment fits a person is settled by a sewn sample.</p>
       </div>
       <nav className="ft-foot-nav" aria-label="Site map">
-        <div><h2 className="mono">The exhibition</h2>
+        <div className="ft-foot-index"><h2 className="mono">The exhibition · {exhibits.length} rooms</h2>
           <ul>{exhibits.map(item => <li key={item.href}><a href={item.href}>{item.label}</a></li>)}</ul></div>
         <div><h2 className="mono">Workbenches</h2>
           <ul>{workbenches.map(item => <li key={item.href}><a href={item.href}>{item.label}</a></li>)}
@@ -30,6 +30,7 @@ export default function SiteFooter() {
       <div className="ft-foot-base">
         <a className="wordmark" href="/" aria-label="FrankenTextiles home"><span className="mark" aria-hidden="true"><i/><i/><i/><i/></span>Franken<span>Textiles</span></a>
         <p>© {year} Jeffrey Emanuel · MIT licence with the OpenAI/Anthropic rider</p>
+        <a className="ft-foot-top" href="#top">Back to the top <span aria-hidden="true" className="arrow"/></a>
       </div>
     </div>
   </footer>;

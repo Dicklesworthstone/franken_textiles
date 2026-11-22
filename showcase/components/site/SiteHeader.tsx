@@ -53,14 +53,6 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
     if (!open && el.open) el.close();
   }, [open]);
 
-  // A wide window has the full navigation in the bar, so the sheet has no reason to stay open.
-  useEffect(() => {
-    const wide = matchMedia("(min-width: 1081px)");
-    const close = () => { if (wide.matches) setOpen(false); };
-    wide.addEventListener("change", close);
-    return () => wide.removeEventListener("change", close);
-  }, []);
-
   const mark = (href: string, inSheet = false) => current(pathname, href, inSheet) ? "page" as const : undefined;
   return <>
     <a className="skip" href={skipTo}>Skip to content</a>
@@ -68,9 +60,14 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
       <div className="wrap ft-bar">
         <a className="wordmark" href="/" aria-label="FrankenTextiles home"><Mark/>Franken<span>Textiles</span></a>
         <nav className="ft-nav" aria-label="Main navigation">
+          {/* The bar names five rooms; this opens the whole catalogue, on any width. */}
+          <button type="button" className="ft-index" aria-haspopup="dialog" aria-expanded={open}
+            aria-label={`Index of all ${exhibits.length} exhibits`} onClick={() => setOpen(true)}>
+            <span className="ft-index-dots" aria-hidden="true"><i/><i/><i/><i/><i/><i/><i/><i/><i/></span>Index<small aria-hidden="true">{exhibits.length}</small>
+          </button>
           {primary.map(item => <a key={item.href} href={item.href} aria-current={mark(item.href)}>{item.label}</a>)}
-          <span className="ft-nav-rule" aria-hidden="true"/>
-          {project.map(item => <a key={item.href} href={item.href} aria-current={mark(item.href)}>{item.label}</a>)}
+          <span className="ft-nav-rule ft-nav-extra" aria-hidden="true"/>
+          {project.map(item => <a key={item.href} className="ft-nav-extra" href={item.href} aria-current={mark(item.href)}>{item.label}</a>)}
         </nav>
         <div className="ft-actions">
           <a className="ft-source" href={repo} aria-label="Source on GitHub">
@@ -82,6 +79,7 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
           </button>
         </div>
       </div>
+      <span className="ft-thread" aria-hidden="true"/>
     </header>
     <dialog ref={sheet} className="ft-sheet" aria-label="Site menu" onClose={() => setOpen(false)}
       onClick={event => { if (event.target instanceof HTMLAnchorElement) setOpen(false); }}>
