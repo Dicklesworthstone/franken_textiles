@@ -398,6 +398,14 @@ pub struct RefusedRun {
     pub start_unrelaxed_p95: Option<f64>,
 }
 
+fn start_unrelaxed_p95(scene: &Scene) -> Option<f64> {
+    scene.start.block_p95.last().copied().filter(|&p95| {
+        scene.start_backtracked_from.is_none()
+            && scene.start.relax_iterations >= crate::start::RELAX_MAX_ITERS
+            && p95 > crate::start::RELAX_TARGET_P95
+    })
+}
+
 fn refused_run(
     scene: &Scene,
     frames: &[Vec<Vec3>],
@@ -413,11 +421,7 @@ fn refused_run(
         start_fallback: scene
             .start_backtracked_from
             .map(|rejected| (scene.start.relax_iterations, rejected)),
-        start_unrelaxed_p95: scene.start.block_p95.last().copied().filter(|&p95| {
-            scene.start_backtracked_from.is_none()
-                && scene.start.relax_iterations >= crate::start::RELAX_MAX_ITERS
-                && p95 > crate::start::RELAX_TARGET_P95
-        }),
+        start_unrelaxed_p95: start_unrelaxed_p95(scene),
     })
 }
 
@@ -529,7 +533,7 @@ pub fn drape_observed(
                 let start_fallback = scene
                     .start_backtracked_from
                     .map(|rejected| (scene.start.relax_iterations, rejected));
-                let start_unrelaxed_p95 = scene.start.unrelaxed_p95;
+                let start_unrelaxed_p95 = start_unrelaxed_p95(&scene);
                 *refused = Some(RefusedRun {
                     positions: scene.positions(),
                     mesh: scene.mesh,
