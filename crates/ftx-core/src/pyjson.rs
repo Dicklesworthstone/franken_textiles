@@ -112,6 +112,7 @@ impl PyJson {
         let mut p = Parser {
             s: text.as_bytes(),
             i: 0,
+            depth: 0,
         };
         let v = p.value()?;
         p.ws();
@@ -182,9 +183,12 @@ impl PyJson {
     }
 }
 
+const MAX_PARSE_DEPTH: usize = 256;
+
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -212,10 +216,15 @@ impl Parser<'_> {
         match self.s.get(self.i) {
             None => self.err("unexpected end"),
             Some(b'{') => {
+                if self.depth >= MAX_PARSE_DEPTH {
+                    return self.err("JSON nesting too deep");
+                }
+                self.depth += 1;
                 self.i += 1;
                 let mut items = Vec::new();
                 self.ws();
                 if self.eat("}") {
+                    self.depth -= 1;
                     return Ok(PyJson::Dict(items));
                 }
                 loop {
@@ -231,16 +240,22 @@ impl Parser<'_> {
                         continue;
                     }
                     if self.eat("}") {
+                        self.depth -= 1;
                         return Ok(PyJson::Dict(items));
                     }
                     return self.err("expected ',' or '}'");
                 }
             }
             Some(b'[') => {
+                if self.depth >= MAX_PARSE_DEPTH {
+                    return self.err("JSON nesting too deep");
+                }
+                self.depth += 1;
                 self.i += 1;
                 let mut v = Vec::new();
                 self.ws();
                 if self.eat("]") {
+                    self.depth -= 1;
                     return Ok(PyJson::List(v));
                 }
                 loop {
@@ -250,6 +265,7 @@ impl Parser<'_> {
                         continue;
                     }
                     if self.eat("]") {
+                        self.depth -= 1;
                         return Ok(PyJson::List(v));
                     }
                     return self.err("expected ',' or ']'");
@@ -319,9 +335,11 @@ impl Parser<'_> {
                     };
                     self.i += 1;
                     if e == b'u' {
-                        let hex =
-                            std::str::from_utf8(self.s.get(self.i..self.i + 4).unwrap_or(&[]))
-                                .unwrap_or("");
+                        let hex_bytes = self.s.get(self.i..self.i + 4).unwrap_or(&[]);
+                        if hex_bytes.len() != 4 || !hex_bytes.iter().all(u8::is_ascii_hexdigit) {
+                            return Err(format!("bad \\u escape at byte {}", self.i));
+                        }
+                        let hex = std::str::from_utf8(hex_bytes).unwrap_or("");
                         let u = u16::from_str_radix(hex, 16)
                             .map_err(|_| format!("bad \\u escape at byte {}", self.i))?;
                         self.i += 4;
@@ -425,5 +443,15 @@ mod tests {
         }
         // An explicitly floating-point source retains floating-point semantics.
         assert!(matches!(PyJson::parse("1e20").unwrap(), PyJson::Float(_)));
+    }
+
+    #[test]
+    fn parser_rejects_excessive_nesting_and_signed_unicode_escapes() {
+        let deep = format!("{}{}", "[".repeat(300), "]".repeat(300));
+        let err = PyJson::parse(&deep).unwrap_err();
+        assert!(err.contains("nesting too deep"), "{err}");
+
+        let err = PyJson::parse(r#""\u+123""#).unwrap_err();
+        assert!(err.contains("bad \\u escape"), "{err}");
     }
 }
