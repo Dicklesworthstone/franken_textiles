@@ -184,7 +184,7 @@ impl Instance {
         let mut out = Vec::new();
         for e in &self.edges {
             let pts = self.edge_dense(&e.id, dense)?;
-            out.extend_from_slice(&pts[..pts.len() - 1]);
+            out.extend_from_slice(&pts[..pts.len().saturating_sub(1)]);
         }
         Ok(out)
     }
@@ -332,6 +332,12 @@ pub fn piece_instances(piece: &Piece, piece_index: usize) -> Result<Vec<Instance
                     .ok_or_else(|| PyError::Key(v.to_string()))
             };
             let (pa, pb) = (get(&a)?, get(&b)?);
+            if !pa.is_finite() || !pb.is_finite() || (pb - pa).norm() <= 0.0 {
+                return Err(PyError::Value(format!(
+                    "{pid}: fold edge {} must have finite, distinct endpoints",
+                    py::repr_str(fold)
+                )));
+            }
             let rest: Vec<InstEdge> = edges[i + 1..].iter().chain(&edges[..i]).cloned().collect();
             let on_line = |v: &str| v == a || v == b;
             let right = rest.iter().map(|e| InstEdge {
@@ -469,5 +475,31 @@ mod physical_side_tests {
                 .iter()
                 .any(|e| e.contains("placement.side"))
         );
+    }
+
+    #[test]
+    fn outline_zero_dense_and_degenerate_fold_fail_safely() {
+        let mut raw = panel();
+        raw["edges"][1]["curve"] = json!({"type": "quad", "c": [[0.5, 0.2]]});
+        let pat =
+            Pattern::new(json!({"schema": "fabric-pattern/1", "units": "mm", "pieces": [raw]}));
+        assert!(pat.instances[0].outline(0).unwrap().len() == 3);
+
+        let degenerate_fold: Piece = serde_json::from_value(json!({
+            "id": "fold_bad",
+            "cut": {"qty": 1, "on_fold": "left"},
+            "vertices": {"a": [0, 0], "b": [50, 0], "c": [50, 50], "d": [0, 0]},
+            "edges": [
+                {"id": "bottom", "from": "a", "to": "b"},
+                {"id": "right", "from": "b", "to": "c"},
+                {"id": "top", "from": "c", "to": "d"},
+                {"id": "left", "from": "d", "to": "a"}
+            ]
+        }))
+        .unwrap();
+        let err = piece_instances(&degenerate_fold, 0)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("distinct endpoints"), "{err}");
     }
 }
