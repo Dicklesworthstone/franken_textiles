@@ -92,6 +92,12 @@ fn closest_point(p0: Vec2, p1: Vec2, p: Vec2) -> Vec2 {
 /// Squared distance from `p` to a closed ring, as `DistanceToPoint::computeDistance(LineString)` walks it:
 /// segment `i` has its ends swapped on alternate steps (`segPts[i % 2]`), which can change the last bit.
 fn ring_dist2(ring: &[Vec2], p: Vec2) -> f64 {
+    if ring.is_empty() {
+        return f64::NAN;
+    }
+    if ring.len() == 1 {
+        return dist2(ring[0], p);
+    }
     let mut seg = [ring[0], ring[0]];
     let mut best = f64::NAN;
     for (i, &q) in ring.iter().enumerate().skip(1) {
@@ -165,6 +171,11 @@ mod tests {
             ]
         };
         assert!((hausdorff(&sq(0.0), &sq(0.25)) - 0.25).abs() < 1e-15);
+        assert!((hausdorff(&[Vec2::new(0.0, 0.0)], &[Vec2::new(3.0, 4.0)]) - 5.0).abs() < 1e-15);
+        assert_eq!(
+            hausdorff(&[Vec2::new(1.0, 2.0)], &[Vec2::new(1.0, 2.0)]),
+            0.0
+        );
         assert!(hausdorff(&[], &sq(0.0)).is_nan());
         assert!(hausdorff(&sq(0.0), &[]).is_nan());
         assert_eq!(
