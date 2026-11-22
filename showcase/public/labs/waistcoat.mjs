@@ -176,14 +176,14 @@ export function buildInsideOutState(
     pocket: Boolean(showPockets),
   };
 
-  // Radial offsets (mm) around base elliptical torso: turning layers apart moves shell outward,
-  // pocket tucked just inside shell, facing inside shell front, and lining inward.
+  // Radial offsets (mm) around base elliptical torso: lining sits cleanly outside the form core,
+  // while facing, pocket bags, and shell expand radially outward as the visitor turns layers apart.
   const sep = Math.max(0, Math.min(90, Number(explodeMm) || 0));
   const radialOffsetMm = {
-    shell: 6 + sep * 1.15,
-    pocket: 3 + sep * 0.45,
-    facing: 1.5 + sep * 0.25,
-    lining: -2 - sep * 0.85,
+    shell: 12 + sep * 1.45,
+    pocket: 8 + sep * 0.85,
+    facing: 5 + sep * 0.45,
+    lining: 1,
   };
 
   // Preserve exact 0-based native seam indices unconditionally!
