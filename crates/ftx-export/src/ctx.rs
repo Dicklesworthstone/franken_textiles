@@ -111,10 +111,55 @@ impl<'a> Ctx<'a> {
             _ => "base".to_string(),
         };
         let size = ascii_text(&size_label);
-        let sa = opts
-            .sa
-            .or_else(|| meta.get("sa_mm").and_then(Value::as_f64))
-            .unwrap_or(DEFAULT_SA);
+        let sa = match opts.sa {
+            Some(v) => {
+                if !v.is_finite() || v < 0.0 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("seam allowance override must be finite and >= 0 mm, got {v}"),
+                    ));
+                }
+                v
+            }
+            None => match meta.get("sa_mm") {
+                None | Some(Value::Null) => DEFAULT_SA,
+                Some(v) => v
+                    .as_f64()
+                    .filter(|x| x.is_finite() && *x >= 0.0)
+                    .ok_or_else(|| {
+                        Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "meta.sa_mm must be a finite number >= 0",
+                        )
+                    })?,
+            },
+        };
+        if !opts.mitre_limit.is_finite() || opts.mitre_limit <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "mitre_limit must be finite and > 0, got {}",
+                    opts.mitre_limit
+                ),
+            ));
+        }
+        if !opts.projector_width.is_finite() || opts.projector_width <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "projector_width must be finite and > 0 mm, got {}",
+                    opts.projector_width
+                ),
+            ));
+        }
+        if let Some(w) = opts.layout_width
+            && (!w.is_finite() || w <= 0.0)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("layout_width must be finite and > 0 mm, got {w}"),
+            ));
+        }
         let created = opts
             .created
             .clone()
@@ -264,5 +309,78 @@ impl<'a> Ctx<'a> {
         }
         let lay = shelf_layout(&geoms, 15.0, 10.0, self.opts.layout_width, false, true, 0.0);
         Ok(self.master.get_or_init(|| lay))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn minimal_pattern(meta: Value) -> Pattern {
+        Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "TEST",
+            "units": "mm",
+            "meta": meta,
+            "pieces": [{
+                "id": "p1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        }))
+    }
+
+    #[test]
+    fn ctx_refuses_malformed_or_out_of_range_export_options_and_sa_mm() {
+        let ok = minimal_pattern(json!({"sa_mm": 0.0}));
+        assert_eq!(Ctx::new(&ok, ExportOptions::default()).unwrap().sa, 0.0);
+
+        for bad_meta in [json!({"sa_mm": -5.0}), json!({"sa_mm": "10"})] {
+            let pat = minimal_pattern(bad_meta);
+            let err = Ctx::new(&pat, ExportOptions::default()).err().unwrap();
+            assert_eq!(err.code, RefusalCode::InvalidDocument);
+        }
+
+        let pat = minimal_pattern(json!({"sa_mm": 10.0}));
+        for bad_opts in [
+            ExportOptions {
+                sa: Some(-1.0),
+                ..ExportOptions::default()
+            },
+            ExportOptions {
+                sa: Some(f64::NAN),
+                ..ExportOptions::default()
+            },
+            ExportOptions {
+                mitre_limit: 0.0,
+                ..ExportOptions::default()
+            },
+            ExportOptions {
+                mitre_limit: f64::INFINITY,
+                ..ExportOptions::default()
+            },
+            ExportOptions {
+                projector_width: -100.0,
+                ..ExportOptions::default()
+            },
+            ExportOptions {
+                layout_width: Some(0.0),
+                ..ExportOptions::default()
+            },
+            ExportOptions {
+                layout_width: Some(f64::NAN),
+                ..ExportOptions::default()
+            },
+        ] {
+            let err = Ctx::new(&pat, bad_opts).err().unwrap();
+            assert_eq!(err.code, RefusalCode::OutOfRange);
+        }
     }
 }

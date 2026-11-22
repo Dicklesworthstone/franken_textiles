@@ -665,6 +665,9 @@ pub fn build_geom(
 
     for item in pv["internal"].as_array().cloned().unwrap_or_default() {
         let pts = points(&item["pts"]);
+        if pts.is_empty() {
+            continue;
+        }
         let closed = match item.get("closed") {
             Some(v) => truthy(v),
             None => {
@@ -705,22 +708,46 @@ pub fn build_geom(
         }
     }
     for d in pv["drills"].as_array().cloned().unwrap_or_default() {
+        let dia = match d.get("d") {
+            None | Some(Value::Null) => 3.0,
+            Some(v) => v
+                .as_f64()
+                .filter(|x| x.is_finite() && *x > 0.0)
+                .ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("{}: drill diameter must be a positive finite number", g.iid),
+                    )
+                })?,
+        };
         if let Some(p) = point(&d["p"]) {
             for m in &maps {
-                g.drills.push((
-                    m.apply(p),
-                    d.get("d").and_then(Value::as_f64).unwrap_or(3.0),
-                ));
+                g.drills.push((m.apply(p), dia));
             }
         }
     }
     for d in pv["decor"].as_array().cloned().unwrap_or_default() {
+        let width = match d.get("width_mm") {
+            None | Some(Value::Null) => 3.0,
+            Some(v) => v
+                .as_f64()
+                .filter(|x| x.is_finite() && *x > 0.0)
+                .ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("{}: decor width_mm must be a positive finite number", g.iid),
+                    )
+                })?,
+        };
         let pts = points(&d["pts"]);
+        if pts.is_empty() {
+            continue;
+        }
         for m in &maps {
             g.decor.push(Decor {
                 kind: d.get("kind").map_or_else(|| "soutache".to_string(), py_str),
                 pts: pts.iter().map(|&p| m.apply(p)).collect(),
-                width: d.get("width_mm").and_then(Value::as_f64).unwrap_or(3.0),
+                width,
                 closed: d.get("closed").is_some_and(truthy),
             });
         }
@@ -1202,4 +1229,102 @@ pub fn grain_vertical_rotation(g: &Geom) -> f64 {
         rot += 180.0;
     }
     rot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExportOptions;
+    use crate::ctx::Ctx;
+    use serde_json::json;
+
+    #[test]
+    fn build_geom_skips_empty_internal_and_decor_and_refuses_bad_drill_or_decor_width() {
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "GEOM",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 10},
+            "pieces": [{
+                "id": "p1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "internal": [
+                    {"kind": "draw", "pts": [], "label": "DART"},
+                    {"kind": "cut", "pts": [], "closed": true, "label": "SLOT"}
+                ],
+                "decor": [
+                    {"kind": "soutache", "pts": [], "width_mm": 3.0, "closed": false}
+                ],
+                "cut": {"qty": 1}
+            }]
+        }));
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let g = ctx.geom(Source::Piece(0), 6.0).unwrap();
+        assert!(g.internal_draw.is_empty());
+        assert!(g.internal_cut.is_empty());
+        assert!(g.decor.is_empty());
+        assert!(
+            g.labels
+                .iter()
+                .all(|lb| lb.p.x.is_finite() && lb.p.y.is_finite()),
+            "all label anchors must remain finite: {:?}",
+            g.labels
+        );
+
+        for bad_drill in [
+            json!({"p": [20, 20], "d": 0.0}),
+            json!({"p": [20, 20], "d": -2.0}),
+            json!({"p": [20, 20], "d": "3"}),
+        ] {
+            let pat = Pattern::new(json!({
+                "schema": "fabric-pattern/1",
+                "style": "DRILL",
+                "units": "mm",
+                "pieces": [{
+                    "id": "p1",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "drills": [bad_drill],
+                    "cut": {"qty": 1}
+                }]
+            }));
+            let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+            let err = ctx.geom(Source::Piece(0), 6.0).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument);
+        }
+
+        for bad_width in [json!(0.0), json!(-1.5), json!("wide")] {
+            let pat = Pattern::new(json!({
+                "schema": "fabric-pattern/1",
+                "style": "DECOR",
+                "units": "mm",
+                "pieces": [{
+                    "id": "p1",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "decor": [{"kind": "soutache", "pts": [[10, 10], [50, 10]], "width_mm": bad_width}],
+                    "cut": {"qty": 1}
+                }]
+            }));
+            let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+            let err = ctx.geom(Source::Piece(0), 6.0).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument);
+        }
+    }
 }

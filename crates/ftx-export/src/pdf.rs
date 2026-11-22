@@ -86,6 +86,9 @@ impl Canvas {
         ));
     }
     fn path(&mut self, pts: &[Vec2], closed: bool) {
+        if pts.is_empty() {
+            return;
+        }
         let mut seg = vec![format!("{} {} m", fnum(pts[0].x, 3), fnum(pts[0].y, 3))];
         seg.extend(
             pts[1..]
@@ -98,6 +101,9 @@ impl Canvas {
         self.raw(seg.join(" "));
     }
     fn polyline(&mut self, pts: &[Vec2], closed: bool) {
+        if pts.is_empty() {
+            return;
+        }
         self.path(pts, closed);
         self.raw("S");
     }
@@ -476,9 +482,9 @@ fn draw_piece(cv: &mut Canvas, g: &Geom, size_ocg: &str, st: &PdfStyle) {
         }
     }
     cv.end_oc();
-    if !g.decor.is_empty() {
+    if g.decor.iter().any(|d| !d.pts.is_empty()) {
         cv.begin_oc("Soutache placement");
-        for d in &g.decor {
+        for d in g.decor.iter().filter(|d| !d.pts.is_empty()) {
             cv.width(d.width);
             cv.stroke_gray(if st.ink.is_none() { 0.7 } else { 0.45 });
             cv.polyline(&d.pts, d.closed);
@@ -1330,6 +1336,12 @@ fn entry(kind: &str, file: &str, paper_mm: [f64; 2], meta: &Value) -> Value {
 /// As [`Ctx::master`].
 pub fn export_tiled(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
     let lay = ctx.master()?;
+    if lay.items.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "tiled PDF layout has no cut geometry",
+        ));
+    }
     let mut out = Vec::new();
     for paper in [Paper::letter(), Paper::a4()] {
         let title = format!("{} {} tiles", ctx.style, paper.name);
@@ -1352,6 +1364,12 @@ pub fn export_tiled(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
 /// As [`Ctx::master`].
 pub fn export_copyshop(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
     let lay = ctx.master()?;
+    if lay.items.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "copy-shop PDF layout has no cut geometry",
+        ));
+    }
     let mut out = Vec::new();
     for (label, (w, h)) in [
         ("A0", (841.0, 1189.0)),
@@ -1424,12 +1442,27 @@ fn test_squares_inline(cv: &mut Canvas, x: f64, y: f64, rgb: Option<[f64; 3]>) {
 pub fn export_projector(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
     let width = ctx.opts.projector_width;
     let (side, head, foot) = (50.0, 150.0, 100.0);
+    if !width.is_finite() || width <= 2.0 * side {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "projector width {width} mm must exceed side margins ({} mm)",
+                2.0 * side
+            ),
+        ));
+    }
     let doc_pieces = ctx.pattern.doc.as_ref().ok_or_else(|| {
         Refusal::new(
             RefusalCode::InvalidDocument,
             "the pattern has no typed document",
         )
     })?;
+    if doc_pieces.pieces.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "projector PDF layout has no cut geometry",
+        ));
+    }
     let mut geoms = Vec::new();
     for piece in &doc_pieces.pieces {
         let inst = primary_instance(ctx.pattern, &piece.id).ok_or_else(|| {
@@ -1549,4 +1582,89 @@ pub fn export_projector(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExportOptions;
+    use crate::geom::Decor;
+    use ftx_pattern::Pattern;
+
+    #[test]
+    fn pdf_exporters_handle_empty_polylines_and_refuse_empty_or_narrow_projector() {
+        let mut cv = Canvas::default();
+        cv.polyline(&[], true);
+        assert!(cv.ops.is_empty(), "empty polyline must emit no PDF ops");
+
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "DECOR",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 10},
+            "pieces": [{
+                "id": "p1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "internal": [{"kind": "draw", "pts": [], "label": "DART"}],
+                "decor": [{"kind": "soutache", "pts": [], "width_mm": 3.0, "closed": false}],
+                "cut": {"qty": 1}
+            }]
+        }));
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        assert_eq!(export_tiled(&ctx).unwrap().len(), 2);
+        assert_eq!(export_copyshop(&ctx).unwrap().len(), 2);
+        assert_eq!(export_projector(&ctx).unwrap().len(), 2);
+
+        // Even a hand-constructed Geom with empty decor points must not panic in draw_piece.
+        let mut g = ctx.geom(Source::Piece(0), 6.0).unwrap();
+        g.decor.push(Decor {
+            kind: "soutache".into(),
+            pts: Vec::new(),
+            width: 3.0,
+            closed: false,
+        });
+        let mut cv = Canvas {
+            ops: Vec::new(),
+            ocgs: vec!["Size 2T".into()],
+        };
+        draw_piece(&mut cv, &g, "Size 2T", &PdfStyle::tiles(1.0));
+        assert!(!cv.ops.is_empty());
+
+        let narrow = Ctx::new(
+            &pat,
+            ExportOptions {
+                projector_width: 100.0,
+                ..ExportOptions::default()
+            },
+        )
+        .unwrap();
+        let err = export_projector(&narrow).unwrap_err();
+        assert_eq!(err.code, RefusalCode::OutOfRange);
+
+        let empty = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "EMPTY",
+            "units": "mm",
+            "pieces": []
+        }));
+        let empty_ctx = Ctx::new(&empty, ExportOptions::default()).unwrap();
+        assert_eq!(
+            export_tiled(&empty_ctx).unwrap_err().code,
+            RefusalCode::DegenerateGeometry
+        );
+        assert_eq!(
+            export_copyshop(&empty_ctx).unwrap_err().code,
+            RefusalCode::DegenerateGeometry
+        );
+        assert_eq!(
+            export_projector(&empty_ctx).unwrap_err().code,
+            RefusalCode::DegenerateGeometry
+        );
+    }
 }
