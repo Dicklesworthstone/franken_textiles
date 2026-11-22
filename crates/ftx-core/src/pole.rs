@@ -323,7 +323,7 @@ pub fn pole_of_inaccessibility(rings: Rings, tolerance: f64) -> Vec2 {
     let size = (hi.x - lo.x).max(hi.y - lo.y);
     let ip = interior_point(rings);
     let mut farthest = Cell::new(ip.x, ip.y, 0.0, signed_distance(rings, ip));
-    if size == 0.0 {
+    if !size.is_finite() || size <= 0.0 || !tolerance.is_finite() || tolerance <= 0.0 {
         return Vec2::new(farthest.x, farthest.y);
     }
     let mut queue = Heap(Vec::new());
@@ -335,7 +335,12 @@ pub fn pole_of_inaccessibility(rings: Rings, tolerance: f64) -> Vec2 {
         signed_distance(rings, Vec2::new(cx, cy)),
     ));
     let diam = ((hi.x - lo.x) * (hi.x - lo.x) + (hi.y - lo.y) * (hi.y - lo.y)).sqrt();
-    let factor = (crate::det::ln(diam / tolerance) as i64).max(1);
+    let ratio = diam / tolerance;
+    let factor = if ratio.is_finite() && ratio > 0.0 {
+        (crate::det::ln(ratio).min(1_000.0) as i64).max(1)
+    } else {
+        1
+    };
     let max_iter = 2000 + 2000 * factor as usize;
     let mut iter = 0;
     while iter < max_iter {
@@ -353,4 +358,29 @@ pub fn pole_of_inaccessibility(rings: Rings, tolerance: f64) -> Vec2 {
         }
     }
     Vec2::new(farthest.x, farthest.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pole_of_inaccessibility_handles_empty_rings_and_non_positive_or_tiny_tolerance() {
+        assert_eq!(pole_of_inaccessibility(&[], 1.0), Vec2::ZERO);
+        let l_shape = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(100.0, 0.0),
+            Vec2::new(100.0, 40.0),
+            Vec2::new(40.0, 40.0),
+            Vec2::new(40.0, 100.0),
+            Vec2::new(0.0, 100.0),
+        ];
+        for bad_tol in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let p = pole_of_inaccessibility(&[&l_shape], bad_tol);
+            assert!(p.is_finite(), "bad_tol={bad_tol}: {p:?}");
+        }
+        // Extreme diameter/tolerance ratio overflowing f64 must not overflow max_iter.
+        let p = pole_of_inaccessibility(&[&l_shape], 1e-320);
+        assert!(p.is_finite());
+    }
 }
