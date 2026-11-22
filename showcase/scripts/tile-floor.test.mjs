@@ -129,3 +129,67 @@ test("A4 tile assembly floor toggles alignment crosses, compares master & scale 
     await page.close();
   }
 });
+
+test("the drafting studio assembles the current draft’s exact A4 PDF and master", async () => {
+  const page = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    reducedMotion: "reduce",
+    userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
+  });
+  try {
+    await page.goto(new URL("/sections/draft/", site).href, { waitUntil: "domcontentloaded" });
+    const drafting = page.locator(".draft-lab");
+    const floor = page.getByRole("region", { name: "A4 tiles for the current draft" });
+    const fileBytes = async link => Uint8Array.from(await link.evaluate(async anchor => {
+      const response = await fetch(anchor.href);
+      if (!response.ok) throw Error(`Export unavailable (${response.status}).`);
+      return Array.from(new Uint8Array(await response.arrayBuffer()));
+    }));
+    await drafting.getByRole("button", { name: "Fez", exact: true }).click();
+
+    let firstPdf;
+    for (const height of [104, 120]) {
+      await drafting.getByRole("slider", { name: "Chart stature in centimetres" }).fill(String(height));
+      const sourcePdf = drafting.getByRole("link", { name: "A4 pattern PDF" });
+      const sourceMaster = drafting.getByRole("link", { name: "Master SVG" });
+      await sourcePdf.waitFor();
+      const expectedPdf = await fileBytes(sourcePdf);
+      const expectedMaster = await fileBytes(sourceMaster);
+      if (firstPdf) {
+        assert.notDeepEqual(expectedPdf, firstPdf);
+      } else {
+        firstPdf = expectedPdf;
+        await drafting.getByRole("button", { name: "Preview this draft’s A4 tiles" }).click();
+      }
+
+      await floor.locator(".tf-svg").waitFor();
+      if (height === 104) {
+        const controls = await floor.locator(".tf-stage-head").boundingBox();
+        const header = await page.locator("header.ft-head").boundingBox();
+        assert.ok(controls && header && controls.y >= header.y + header.height - 1 && controls.y < 200,
+          "opening the preview should put its first row below the sticky header");
+      }
+      assert.match(await floor.locator(".tf-summary").innerText(), new RegExp(`Fez.*${height} cm`));
+      assert.deepEqual(await fileBytes(floor.getByRole("link", { name: /download this exact A4 PDF/i })), expectedPdf);
+      assert.deepEqual(await fileBytes(floor.getByRole("link", { name: /download uncut master SVG/i })), expectedMaster);
+      const parsed = await parseTiledPdf(expectedPdf);
+      assert.equal(await floor.locator(".tf-tile").count(), parsed.printedTileCount);
+      assert.match(await floor.locator(".tf-kpis").innerText(), new RegExp(`${parsed.totalPages} pages`));
+      const viewBox = new TextDecoder().decode(expectedMaster).match(/\bviewBox="([^"]+)"/);
+      assert.ok(viewBox, "master must declare its millimetre extent");
+      const [, , widthMm, heightMm] = viewBox[1].trim().split(/\s+/).map(Number);
+      const boundary = await floor.locator(".tf-master-overlay rect").first().evaluate(rect =>
+        [Number(rect.getAttribute("width")), Number(rect.getAttribute("height"))]);
+      assert.deepEqual(boundary, [widthMm, heightMm]);
+    }
+
+    assert.equal(await page.locator("header").count(), 1);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await floor.getByRole("button", { name: "Tape flush" }).click();
+    assert.match(await floor.locator(".tf-master-overlay").textContent(), /1:1 MATCH/);
+    await drafting.getByRole("button", { name: "Hide A4 tile preview" }).click();
+    assert.equal(await page.locator(".tf-svg").count(), 0);
+  } finally {
+    await page.close();
+  }
+});

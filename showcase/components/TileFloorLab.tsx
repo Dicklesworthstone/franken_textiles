@@ -46,6 +46,8 @@ type MasterData = {
 
 type GarmentId = "zouave_bolero" | "zouave_trousers" | "fez";
 
+type DraftTiles = { label: string; pdfUrl: string; pdfName: string; svgUrl: string; svgName: string };
+
 const GARMENTS: { id: GarmentId; label: string; pdf: string; svg: string; summary: string }[] = [
   {
     id: "zouave_bolero",
@@ -424,11 +426,15 @@ function FloorCanvas({
   );
 }
 
-export default function TileFloorLab() {
+export default function TileFloorLab({ draft }: { draft?: DraftTiles }) {
   const [garmentId, setGarmentId] = useState<GarmentId>("zouave_bolero");
   const garment = GARMENTS.find(g => g.id === garmentId) ?? GARMENTS[0];
-  const [pdf, setPdf] = useState<ParsedPdf | null>(null);
-  const [master, setMaster] = useState<MasterData | null>(null);
+  const pdfUrl = draft?.pdfUrl ?? garment.pdf;
+  const svgUrl = draft?.svgUrl ?? garment.svg;
+  const [loaded, setLoaded] = useState<{ pdfUrl: string; svgUrl: string; pdf: ParsedPdf; master: MasterData }>();
+  const current = loaded?.pdfUrl === pdfUrl && loaded.svgUrl === svgUrl ? loaded : undefined;
+  const pdf = current?.pdf;
+  const master = current?.master;
   const [error, setError] = useState("");
   const [assembled, setAssembled] = useState(0.55);
   const [showCrosses, setShowCrosses] = useState(true);
@@ -439,15 +445,13 @@ export default function TileFloorLab() {
   useEffect(() => {
     const controller = new AbortController();
     setError("");
-    setPdf(null);
-    setMaster(null);
 
     Promise.all([
-      fetch(garment.pdf, { signal: controller.signal }).then(async r => {
+      fetch(pdfUrl, { signal: controller.signal }).then(async r => {
         if (!r.ok) throw new Error(`Could not fetch exported PDF (${r.status}).`);
         return new Uint8Array(await r.arrayBuffer());
       }),
-      fetch(garment.svg, { signal: controller.signal }).then(async r => {
+      fetch(svgUrl, { signal: controller.signal }).then(async r => {
         if (!r.ok) throw new Error(`Could not fetch master SVG (${r.status}).`);
         return r.text();
       }),
@@ -455,8 +459,7 @@ export default function TileFloorLab() {
       .then(async ([pdfBytes, svgText]) => {
         const parsed: ParsedPdf = await parseTiledPdf(pdfBytes);
         if (controller.signal.aborted) return;
-        setPdf(parsed);
-        setMaster(parseMasterSvg(svgText));
+        setLoaded({ pdfUrl, svgUrl, pdf: parsed, master: parseMasterSvg(svgText) });
         const firstPrinted = parsed.tiles.find((t: TileInfo) => !t.blank)?.name ?? "A1";
         setSelectedTile(firstPrinted);
       })
@@ -467,7 +470,7 @@ export default function TileFloorLab() {
       });
 
     return () => controller.abort();
-  }, [garment]);
+  }, [pdfUrl, svgUrl]);
 
   const visibleTiles = useMemo(
     () => (pdf ? pdf.tiles.filter(t => showBlanks || !t.blank) : []),
@@ -475,23 +478,7 @@ export default function TileFloorLab() {
   );
   const activeTile = visibleTiles.find(t => t.name === selectedTile) ?? visibleTiles[0];
 
-  return (
-    <>
-      <SiteHeader />
-      <main id="main" className="tf-page">
-        <Crumbs trail={[["Exhibition", "/"], ["Studios", "/sections/studio/"], ["A4 tile assembly"]]} />
-        <div className="wrap tf-wrap">
-          <div className="tf-heading">
-            <div>
-              <p className="kicker">Home printing · Real exported A4 PDFs</p>
-              <h1>Assemble an A4 <em>pattern.</em></h1>
-            </div>
-            <p>
-              Every number on this floor — page count, grid rows and columns, 10 mm insets, 5 mm bleed overlap,
-              omitted blank sheets, and join diamond codes — is decoded live from the actual downloadable A4 PDF.
-            </p>
-          </div>
-
+  const desk = (
           <div className="tf-desk">
             <section className="tf-stage-card" aria-label="Virtual A4 pattern assembly floor">
               <div className="tf-stage-head">
@@ -567,7 +554,7 @@ export default function TileFloorLab() {
             <aside className="tf-console" aria-label="Assembly controls and tile inspector">
               <h2>Print &amp; tape controls</h2>
 
-              <label className="tf-field">
+              {!draft && <label className="tf-field">
                 Exported A4 pattern PDF
                 <select
                   aria-label="Choose exported A4 pattern PDF"
@@ -580,8 +567,8 @@ export default function TileFloorLab() {
                     </option>
                   ))}
                 </select>
-              </label>
-              <p className="tf-summary">{garment.summary}.</p>
+              </label>}
+              <p className="tf-summary">{draft?.label ?? `${garment.summary}.`}</p>
 
               <div className="tf-toggles">
                 <label className="tf-check">
@@ -658,21 +645,42 @@ export default function TileFloorLab() {
               )}
 
               <div className="tf-downloads">
-                <a className="tf-dl-primary" href={garment.pdf} download={`frankentextiles-${garment.id}-A4.pdf`}>
+                <a className="tf-dl-primary" href={pdfUrl} download={draft?.pdfName ?? `frankentextiles-${garment.id}-A4.pdf`}>
                   Download this exact A4 PDF ↓
                 </a>
-                <a className="tf-dl-secondary" href={garment.svg} download={`frankentextiles-${garment.id}-master-mm.svg`}>
+                <a className="tf-dl-secondary" href={svgUrl} download={draft?.svgName ?? `frankentextiles-${garment.id}-master-mm.svg`}>
                   Download uncut master SVG ↓
                 </a>
               </div>
 
               <p className="tf-note">
                 Print Page 1 first at <strong>100% / Actual Size</strong> (never Fit to Page) and measure the{" "}
-                <code>100 mm</code> / <code>4 in</code> calibration square with a ruler before printing the remaining
+                <code>100 mm</code> calibration square with a ruler before printing the remaining
                 tile pages.
               </p>
             </aside>
           </div>
+  );
+
+  if (draft) return desk;
+
+  return (
+    <>
+      <SiteHeader />
+      <main id="main" className="tf-page">
+        <Crumbs trail={[["Exhibition", "/"], ["Studios", "/sections/studio/"], ["A4 tile assembly"]]} />
+        <div className="wrap tf-wrap">
+          <div className="tf-heading">
+            <div>
+              <p className="kicker">Home printing · Real exported A4 PDFs</p>
+              <h1>Assemble an A4 <em>pattern.</em></h1>
+            </div>
+            <p>
+              Every number on this floor — page count, grid rows and columns, 10 mm insets, 5 mm bleed overlap,
+              omitted blank sheets, and join diamond codes — is decoded live from the actual downloadable A4 PDF.
+            </p>
+          </div>
+          {desk}
         </div>
       </main>
       <SiteFooter />

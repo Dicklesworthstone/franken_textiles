@@ -20,6 +20,8 @@
 .dl-downloads a:hover,.dl-retry:hover{background:#425170;color:white}
 .dl-watch-link{font:600 13px/1.4 var(--sans,sans-serif);color:var(--dl-copper);text-decoration:underline;text-decoration-color:#c6a491;text-underline-offset:4px;width:fit-content}
 .dl-watch-link:hover{color:var(--dl-ink);text-decoration-color:currentColor}
+.dl-tile-toggle{border:0;background:none;padding:0;text-align:left;cursor:pointer}
+.dl-tiles{margin-top:18px;scroll-margin-top:calc(var(--head-h,68px) + 12px)}
 .dl-plan-cut{align-self:flex-start;justify-self:start;border:0;border-bottom:1px solid currentColor;padding:2px 0;background:none;color:var(--dl-ink);font:600 13px var(--sans,sans-serif)}
 .dl-board{display:flex;flex-direction:column;min-width:0}
 .dl-plate{position:relative;display:grid;place-items:center;min-height:290px;flex:1;overflow:hidden;background-color:#eae9e0;background-image:linear-gradient(#3949690c 1px,transparent 1px),linear-gradient(90deg,#3949690c 1px,transparent 1px);background-size:16px 16px}

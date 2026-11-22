@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useId, useRef, useState } from "react";
 import "./draft-lab.css";
+
+const TileFloorLab = dynamic(() => import("./TileFloorLab"));
 
 const garments = {
   zouave_bolero: { name: "Bolero", key: "chest_ease", label: "Chest ease", unit: "mm", min: 60, max: 140, step: 5, initial: 100, first: "front" },
@@ -72,6 +75,8 @@ type Result = Omit<Reply, "files" | "preview"> & { pieces: Piece[]; files: { url
 export type CutDraft = { program: string; label: string; pattern: string; pdf: Blob };
 export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onPlanCut?: (draft: CutDraft) => void }) {
   const section = useRef<HTMLDivElement>(null);
+  const tilePanel = useRef<HTMLElement>(null);
+  const tilePanelId = useId();
   const [active, setActive] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [program, setProgram] = useState<Garment>("zouave_bolero");
@@ -79,6 +84,7 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
   const [value, setValue] = useState(100);
   const [selected, selectPiece] = useState<string>("front");
   const [result, setResult] = useState<Result>();
+  const [showTiles, setShowTiles] = useState(false);
   const [pin, setPin] = useState<{pieces: Piece[]; label: string; key: string}>();
   const [sample, setSample] = useState<Piece[]>();
   const [problem, setProblem] = useState<{key: string; message: string}>();
@@ -149,16 +155,24 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
     return () => clearTimeout(timer);
   }, [active, attempt, key, program, height, value, preset.key]);
   useEffect(() => () => { result?.files.forEach(file => URL.revokeObjectURL(file.url)); }, [result]);
+  useEffect(() => {
+    if (!showTiles || !tilePanel.current) return;
+    tilePanel.current.focus({ preventScroll: true });
+    tilePanel.current.scrollIntoView({ block: "start" });
+  }, [showTiles]);
 
   const error = problem && (problem.key === key || problem.key === "*") ? problem.message : "";
   const fresh = result?.key === key && !error ? result : undefined;
+  const pdf = fresh?.files.find(file => file.type === "pdf");
+  const svg = fresh?.files.find(file => file.type === "svg");
+  const draftLabel = `${preset.name} · ${height} cm · ${preset.label.toLowerCase()} ${value}${preset.unit === "%" ? "%" : " mm"}`;
   const pieces = fresh?.pieces ?? (key === "zouave_bolero/92/100" ? sample : undefined);
   const piece = pieces?.find(piece => piece.id === selected) ?? pieces?.[0];
   function choose(next: Garment) {
     if (next !== program) setPin(undefined);
     setProgram(next); setValue(garments[next].initial); selectPiece(garments[next].first); setActive(true);
   }
-  return <div className="draft-lab" ref={section}>
+  return <><div className="draft-lab" ref={section}>
     <div className="dl-controls">
       <fieldset><legend>Garment</legend><div className="dl-garments">
         {(Object.keys(garments) as Garment[]).map(id => <button key={id} type="button" aria-pressed={id === program}
@@ -185,11 +199,13 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
         {f.type === "pdf" ? "A4 pattern PDF" : "Master SVG"} <span aria-hidden="true">↓</span>
       </a>)}</div>
       <a className="dl-watch-link" href={"/?garment="+({zouave_bolero:"bolero",zouave_trousers:"trousers",fez:"fez"}[program])+"#construction"}>Watch the reference {preset.name.toLowerCase()} take shape <span aria-hidden="true">↗</span></a>
-      <a className="dl-watch-link" href="/studies/tiling/">See how the A4 tiles tape together <span aria-hidden="true">→</span></a>
-      {onPlanCut && fresh?.flat === "CONVERGED" && fresh.pattern && fresh.files.some(f => f.type === "pdf") &&
+      {pdf && svg ? <button className="dl-watch-link dl-tile-toggle" type="button" aria-expanded={showTiles}
+        aria-controls={tilePanelId} onClick={() => setShowTiles(open => !open)}>
+        {showTiles ? "Hide A4 tile preview" : "Preview this draft’s A4 tiles"}
+      </button> : <a className="dl-watch-link" href="/studies/tiling/">See example A4 tiles <span aria-hidden="true">→</span></a>}
+      {onPlanCut && fresh?.flat === "CONVERGED" && fresh.pattern && pdf &&
         <button className="dl-plan-cut" type="button" onClick={() => onPlanCut({program,
-          label:`${preset.name} · ${height} cm · ${preset.label.toLowerCase()} ${value}${preset.unit}`, pattern:fresh.pattern,
-          pdf:fresh.files.find(f => f.type === "pdf")!.blob})}>
+          label:draftLabel, pattern:fresh.pattern, pdf:pdf.blob})}>
           Plan this cut <span aria-hidden="true">→</span>
         </button>}
     </div>
@@ -210,5 +226,11 @@ export default function DraftLab({ enabled, onPlanCut }: { enabled: boolean; onP
         <span>{pin ? pin.key === key ? "Move a slider to compare." : `Pinned ${pin.label} · aligned at lower left` : "Compare two drafts at the same scale."}</span>
       </div>
     </div>
-  </div>;
+  </div>
+  <section id={tilePanelId} className="dl-tiles" ref={tilePanel} tabIndex={-1} aria-label="A4 tiles for the current draft"
+    hidden={!showTiles || !pdf || !svg}>
+    {showTiles && pdf && svg && <TileFloorLab draft={{
+      label:draftLabel, pdfUrl:pdf.url, pdfName:pdf.name, svgUrl:svg.url, svgName:svg.name,
+    }}/>}
+  </section></>;
 }
