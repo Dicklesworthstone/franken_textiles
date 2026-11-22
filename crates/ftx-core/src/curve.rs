@@ -166,6 +166,9 @@ pub fn abs_to_rel(p0: Vec2, p1: Vec2, q: Vec2) -> Result<[f64; 2], CurveError> {
 /// as in numpy; power 3 is the correctly rounded [`det::cube`] (numpy calls the platform `pow`).
 #[must_use]
 pub fn bezier(ctrl: &[Vec2], n: usize) -> Vec<Vec2> {
+    if ctrl.is_empty() || n == 0 {
+        return Vec::new();
+    }
     let k = ctrl.len() - 1;
     let pow = |x: f64, e: usize| match e {
         0 => 1.0,
@@ -360,5 +363,7 @@ mod tests {
         let round_trip: Value = serde_json::to_value(&m).unwrap();
         assert_eq!(round_trip["x"], Value::from(1));
         assert_eq!(round_trip["type"], Value::from("cubic"));
+        assert!(bezier(&[], 10).is_empty());
+        assert!(bezier(&[v(0.0, 0.0), v(1.0, 1.0)], 0).is_empty());
     }
 }

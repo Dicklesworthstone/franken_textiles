@@ -22,8 +22,11 @@ pub fn linspace(start: f64, stop: f64, n: usize) -> Vec<f64> {
 /// `d = (start + step) − start`, numpy's `DOUBLE_fill`, which can differ from `start + i·step` by an ULP.
 #[must_use]
 pub fn arange(start: f64, stop: f64, step: f64) -> Vec<f64> {
+    if !start.is_finite() || !stop.is_finite() || !step.is_finite() || step == 0.0 {
+        return Vec::new();
+    }
     let n = ((stop - start) / step).ceil();
-    if n.is_nan() || n <= 0.0 {
+    if !n.is_finite() || n <= 0.0 {
         return Vec::new();
     }
     let n = n as usize;
@@ -40,12 +43,12 @@ pub fn arange(start: f64, stop: f64, step: f64) -> Vec<f64> {
 
 /// numpy `percentile(values, p)` with the default linear method: virtual index
 /// `(n·q + (1 − q)) − 1` for `q = p/100`, then numpy's two-sided lerp between the neighbouring order
-/// statistics (`a + (b − a)·γ`, or `b − (b − a)·(1 − γ)` when γ ≥ 0.5). NaN for an empty slice; NaNs
-/// in `values` sort last, as in numpy.
+/// statistics (`a + (b − a)·γ`, or `b − (b − a)·(1 − γ)` when γ ≥ 0.5). NaN for an empty slice or
+/// NaN `p`; NaNs in `values` sort last, as in numpy.
 #[must_use]
 pub fn percentile(values: &[f64], p: f64) -> f64 {
     let n = values.len();
-    if n == 0 {
+    if n == 0 || p.is_nan() {
         return f64::NAN;
     }
     let mut v = values.to_vec();
@@ -326,7 +329,7 @@ pub fn median_f32(values: &[f32]) -> f32 {
 #[must_use]
 pub fn percentile_f32(values: &[f32], p: f64) -> f32 {
     let n = values.len();
-    if n == 0 {
+    if n == 0 || p.is_nan() {
         return f32::NAN;
     }
     let mut v = values.to_vec();
@@ -482,7 +485,12 @@ mod tests {
             ]
         );
         assert!(arange(3.0, 3.0, 1.0).is_empty());
+        assert!(arange(0.0, 10.0, 0.0).is_empty());
+        assert!(arange(0.0, f64::INFINITY, 1.0).is_empty());
+        assert!(arange(0.0, 10.0, f64::NAN).is_empty());
         assert_eq!(arange(0.0, 0.3, 0.1), vec![0.0, 0.1, 0.2]);
+        assert!(percentile(&[42.0], f64::NAN).is_nan());
+        assert!(percentile_f32(&[42.0], f64::NAN).is_nan());
     }
 
     #[test]
