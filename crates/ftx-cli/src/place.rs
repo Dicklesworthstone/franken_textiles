@@ -655,7 +655,10 @@ pub(super) fn refused_stills(
     let n = state.positions.len();
     // A full-display refusal names its cloth by triangle index, which tells a reader nothing: mark that
     // cloth in the pictures and say whose it is.
-    let named = if let Some(faces) = state.start_crossing_faces {
+    let valid_start_crossing = state
+        .start_crossing_faces
+        .filter(|faces| faces.iter().all(|&f| f < state.mesh.faces.len()));
+    let named = if let Some(faces) = valid_start_crossing {
         faces.to_vec()
     } else if refusal.code == RefusalCode::IntersectingTrajectory {
         named_cloth_triangles(&refusal.message, state.mesh.faces.len())
@@ -677,16 +680,23 @@ pub(super) fn refused_stills(
         }
     }
     let named_in = (!named.is_empty()).then(|| {
-        let (triangles, are) = if named.len() == 1 {
-            ("triangle", "is")
+        let owners = triangle_instances(&state.mesh, &named).join(" and ");
+        if refusal.message.contains("touch or overlap") {
+            format!(
+                "the cloth within {CROSSING_MARK_MM} mm of the touching or overlapping cloth the \
+                 refusal names, which is in {owners}"
+            )
         } else {
-            ("triangles", "are")
-        };
-        format!(
-            "the cloth within {CROSSING_MARK_MM} mm of the cloth {triangles} the refusal names, which \
-             {are} in {}",
-            triangle_instances(&state.mesh, &named).join(" and ")
-        )
+            let (triangles, are) = if named.len() == 1 {
+                ("triangle", "is")
+            } else {
+                ("triangles", "are")
+            };
+            format!(
+                "the cloth within {CROSSING_MARK_MM} mm of the cloth {triangles} the refusal names, which \
+                 {are} in {owners}"
+            )
+        }
     });
     let depth: Vec<f64> = near
         .iter()
@@ -719,7 +729,7 @@ pub(super) fn refused_stills(
                 &state.mesh,
                 state.phase,
                 state.accepted_steps,
-                state.start_crossing_faces,
+                valid_start_crossing,
                 size,
             );
             refusal.repairs.insert(
@@ -751,10 +761,10 @@ pub(super) fn refused_stills(
             ),
         ),
     }
-    // Only the start the first sewing step began from. Later states are stretched by seams that are
-    // still closing, which says nothing about the size of a piece. It is text, so it does not depend on
-    // the pictures having been written.
-    if state.phase == "sew" && state.accepted_steps == 0 {
+    // Only the start itself or the state before any sewing step. Later states are stretched by seams
+    // that are still closing, which says nothing about the size of a piece. It is text, so it does not
+    // depend on the pictures having been written.
+    if (state.phase == "sew" || state.phase == "start") && state.accepted_steps == 0 {
         let tight = tight_instances(
             state
                 .mesh

@@ -1168,6 +1168,45 @@ impl Contact {
         self.audit_self_contact_observed(x, &mut None)
     }
 
+    fn self_pair_triangles(&self, pair: Pair) -> Option<[usize; 2]> {
+        match pair {
+            Pair::SelfVertexTri { cv, ct } => {
+                let ta = self
+                    .cloth
+                    .triangles
+                    .iter()
+                    .enumerate()
+                    .find_map(|(ti, t)| (ti != ct && t.contains(&cv)).then_some(ti))?;
+                Some([ta, ct])
+            }
+            Pair::SelfEdgeEdge { a, b } => {
+                let [a0, a1] = *self.cloth.edges.get(a)?;
+                let [b0, b1] = *self.cloth.edges.get(b)?;
+                let ta = self
+                    .cloth
+                    .triangles
+                    .iter()
+                    .position(|t| t.contains(&a0) && t.contains(&a1))?;
+                let tb = self
+                    .cloth
+                    .triangles
+                    .iter()
+                    .enumerate()
+                    .find_map(|(ti, t)| {
+                        (ti != ta && t.contains(&b0) && t.contains(&b1)).then_some(ti)
+                    })
+                    .or_else(|| {
+                        self.cloth
+                            .triangles
+                            .iter()
+                            .position(|t| t.contains(&b0) && t.contains(&b1))
+                    })?;
+                Some([ta, tb])
+            }
+            _ => None,
+        }
+    }
+
     fn audit_self_contact_observed(
         &self,
         x: &[Vec3],
@@ -1202,6 +1241,7 @@ impl Contact {
             let (kind, _) = classify(pair, &st.pts);
             let gap = pair_gap(&st, kind, &self.pair_params(pair));
             if !gap.is_finite() || gap <= 0.0 {
+                *crossing = self.self_pair_triangles(pair);
                 return Err(Refusal::new(
                     RefusalCode::IntersectingStart,
                     format!("cloth layers touch or overlap at {pair:?} (gap {gap} m)"),
@@ -2443,6 +2483,17 @@ mod tests {
         assert_eq!(err.code, RefusalCode::IntersectingStart);
         assert!(err.message.contains("triangles 0 and 1"), "{err}");
         assert_eq!(observed, Some([0, 1]));
+        // Disjoint mid-surfaces closer than their combined thickness also report an incident
+        // solver triangle pair so diagnostics can name and mark the touching pieces.
+        let thin_gap = layers(0.5 * params().thickness);
+        let mut touch_observed = None;
+        let err = self_layers(&thin_gap)
+            .with_self_contact_observed(&thin_gap, params(), &mut touch_observed)
+            .unwrap_err();
+        assert_eq!(err.code, RefusalCode::IntersectingStart);
+        assert!(err.message.contains("touch or overlap"), "{err}");
+        let [ta, tb] = touch_observed.expect("touch/overlap start refusal must report a pair");
+        assert_eq!([ta.min(tb), ta.max(tb)], [0, 1]);
         let x = layers(0.002);
         for bad in [
             ContactParams {

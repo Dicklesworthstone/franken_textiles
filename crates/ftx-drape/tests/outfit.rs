@@ -330,6 +330,14 @@ fn coincident_garment_starts_refuse_instead_of_inventing_layer_offsets() {
     let name = |face: [usize; 3]| state.mesh.instances[state.mesh.owner[face[0]]].as_str();
     assert_eq!([name(a), name(b)], ["inner::panel", "outer::panel"]);
     assert!(
+        refusal
+            .repairs
+            .iter()
+            .any(|r| r.contains("inner::panel") && r.contains("outer::panel")),
+        "start self-contact refusal must name owning piece instances for library callers: {:?}",
+        refusal.repairs
+    );
+    assert!(
         ftx_core::intersection::indexed_triangle_pair(&state.positions, a, b).is_some(),
         "the exported state must contain the indexed crossing reported by the solver"
     );

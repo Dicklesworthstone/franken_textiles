@@ -489,7 +489,7 @@ pub fn drape_observed(
     )?;
     if let Some(p) = opts.self_contact {
         let mut crossing = None;
-        if let Err(refusal) = scene.solver.enable_self_contact_observed(p, &mut crossing) {
+        if let Err(mut refusal) = scene.solver.enable_self_contact_observed(p, &mut crossing) {
             if refusal.code == RefusalCode::IntersectingStart {
                 let crossing_faces = crossing.and_then(|[a, b]| {
                     // The solver retains the source face order after removing collapsed welds.
@@ -505,14 +505,39 @@ pub fn drape_observed(
                         .collect();
                     Some([*source_faces.get(a)?, *source_faces.get(b)?])
                 });
+                if let Some(faces) = crossing_faces {
+                    let mut owners = Vec::new();
+                    for face in faces {
+                        if let Some(name) = scene
+                            .mesh
+                            .faces
+                            .get(face)
+                            .and_then(|tri| scene.mesh.owner.get(tri[0]))
+                            .and_then(|&idx| scene.mesh.instances.get(idx))
+                            && !owners.contains(&name.as_str())
+                        {
+                            owners.push(name.as_str());
+                        }
+                    }
+                    if !owners.is_empty() {
+                        refusal.repairs.push(format!(
+                            "The reported cloth pair belongs to piece instance(s): {}.",
+                            owners.join(" and ")
+                        ));
+                    }
+                }
+                let start_fallback = scene
+                    .start_backtracked_from
+                    .map(|rejected| (scene.start.relax_iterations, rejected));
+                let start_unrelaxed_p95 = scene.start.unrelaxed_p95;
                 *refused = Some(RefusedRun {
                     positions: scene.positions(),
                     mesh: scene.mesh,
                     phase: "start",
                     accepted_steps: 0,
                     start_crossing_faces: crossing_faces,
-                    start_fallback: None,
-                    start_unrelaxed_p95: None,
+                    start_fallback,
+                    start_unrelaxed_p95,
                 });
             }
             return Err(refusal);
