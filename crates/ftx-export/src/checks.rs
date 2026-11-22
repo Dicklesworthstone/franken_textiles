@@ -148,23 +148,45 @@ pub fn pdf_objects(data: &[u8]) -> BTreeMap<u32, (Vec<u8>, Option<Vec<u8>>)> {
         match sm {
             Some(sm) if sm < em => {
                 let head = data[start..sm].to_vec();
-                let len = find(&head, b"/Length ", 0)
-                    .map(|i| {
-                        head[i + 8..]
-                            .iter()
-                            .take_while(|b| b.is_ascii_digit())
-                            .fold(0usize, |a, b| a * 10 + usize::from(b - b'0'))
-                    })
-                    .unwrap_or(0);
-                let end = (sm + 7 + len).min(data.len());
-                let raw = &data[sm + 7..end];
-                let stream = if find(&head, b"/FlateDecode", 0).is_some() {
-                    miniz_oxide::inflate::decompress_to_vec_zlib(raw).unwrap_or_default()
-                } else {
-                    raw.to_vec()
-                };
-                objs.insert(num, (head, Some(stream)));
-                pos = find(data, b"endobj", end).map_or(data.len(), |e| e + 6);
+                let len = find(&head, b"/Length ", 0).and_then(|i| {
+                    let digits: Vec<u8> = head[i + 8..]
+                        .iter()
+                        .copied()
+                        .take_while(u8::is_ascii_digit)
+                        .collect();
+                    if digits.is_empty() {
+                        return None;
+                    }
+                    std::str::from_utf8(&digits).ok()?.parse::<usize>().ok()
+                });
+                let stream = len.and_then(|len| {
+                    let end = sm.checked_add(7)?.checked_add(len)?;
+                    if end > data.len() {
+                        return None;
+                    }
+                    let tail = &data[end..];
+                    let after_eol = if tail.starts_with(b"\r\n") {
+                        &tail[2..]
+                    } else if tail.starts_with(b"\n") || tail.starts_with(b"\r") {
+                        &tail[1..]
+                    } else {
+                        tail
+                    };
+                    if !after_eol.starts_with(b"endstream") {
+                        return None;
+                    }
+                    let raw = &data[sm + 7..end];
+                    if find(&head, b"/FlateDecode", 0).is_some() {
+                        miniz_oxide::inflate::decompress_to_vec_zlib(raw).ok()
+                    } else {
+                        Some(raw.to_vec())
+                    }
+                });
+                let scan_from = len
+                    .and_then(|l| sm.checked_add(7)?.checked_add(l))
+                    .map_or(sm + 7, |end| end.min(data.len()));
+                objs.insert(num, (head, stream));
+                pos = find(data, b"endobj", scan_from).map_or(data.len(), |e| e + 6);
             }
             _ => {
                 objs.insert(num, (data[start..em].to_vec(), None));
@@ -502,10 +524,16 @@ pub fn check_pdf(
     let pages: Vec<&(u32, String, Option<&Vec<u8>>)> =
         heads.iter().filter(|(_, h, _)| is_page(h)).collect();
     let (ew, eh) = (expect_mm[0] * K, expect_mm[1] * K);
+    let declared_pages: Option<usize> = heads
+        .iter()
+        .find(|(_, h, _)| h.contains("/Type /Pages"))
+        .and_then(|(_, h, _)| text_after(h, "/Count ", ' '))
+        .and_then(|s| s.trim_end_matches('>').trim().parse().ok());
     let mut props = BTreeSet::new();
     let (mut mb_ok, mut sq_pages, mut tiles_info, mut fonts_all) =
         (true, Vec::new(), Vec::new(), Vec::new());
-    for (_, h, _) in &pages {
+    let mut damaged_pages: Vec<usize> = Vec::new();
+    for (page_idx, (_, h, _)) in pages.iter().enumerate() {
         let mb: Vec<f64> = text_after(h, "/MediaBox [", ']')
             .map(|s| {
                 s.split_whitespace()
@@ -529,11 +557,13 @@ pub fn check_pdf(
         let cnum: u32 = text_after(h, "/Contents ", ' ')
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        let stream = objs
-            .get(&cnum)
-            .and_then(|o| o.1.clone())
-            .unwrap_or_default();
-        let (rects, cutpts, fonts) = content_scan(&stream);
+        let stream_opt = objs.get(&cnum).and_then(|o| o.1.as_deref());
+        let stream_ok = stream_opt.is_some();
+        if !stream_ok {
+            damaged_pages.push(page_idx + 1);
+        }
+        let stream = stream_opt.unwrap_or(&[]);
+        let (rects, cutpts, fonts) = content_scan(stream);
         fonts_all.extend(fonts);
         let mut sq: Vec<(String, (f64, f64))> = Vec::new();
         for (tags, w, hh) in &rects {
@@ -572,9 +602,32 @@ pub fn check_pdf(
                     .iter()
                     .map(|&(x, y)| (x / K - fr[0] + org[0], (mbh - y) / K - fr[1] + org[1]))
                     .collect();
-                tiles_info.push((name, fr, org, blank, pts));
+                tiles_info.push((name, fr, org, blank, stream_ok, pts));
             }
         }
+    }
+    if let Some(expected) = declared_pages
+        && expected != pages.len()
+    {
+        out.push(CheckItem::new(
+            "pdf.page_count_matches_tree",
+            file,
+            false,
+            format!("found {} of {expected} declared pages", pages.len()),
+        ));
+    }
+    if !damaged_pages.is_empty() {
+        let list = damaged_pages
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push(CheckItem::new(
+            "pdf.page_streams_decode",
+            file,
+            false,
+            format!("damaged or missing content stream on page(s) {list}"),
+        ));
     }
     out.push(CheckItem::new(
         "pdf.mediabox_exact",
@@ -643,9 +696,13 @@ pub fn check_pdf(
     {
         let mut worst = 0.0f64;
         let mut covered = vec![false; master.len()];
-        for (_, fr, org, blank, pts) in &tiles_info {
+        let mut all_tile_streams_ok = true;
+        for (_, fr, org, blank, stream_ok, pts) in &tiles_info {
             let (fw, fh) = (fr[2], fr[3]);
-            if !blank {
+            if !*stream_ok {
+                all_tile_streams_ok = false;
+            }
+            if !blank && *stream_ok {
                 for (c, &(x, y)) in covered.iter_mut().zip(master) {
                     *c |= x >= org[0] - 1e-6
                         && x <= org[0] + fw + 1e-6
@@ -660,7 +717,7 @@ pub fn check_pdf(
         out.push(CheckItem::new(
             "pdf.restitch_matches_master",
             file,
-            worst <= 0.2,
+            worst <= 0.2 && all_tile_streams_ok,
             format!(
                 "max deviation {worst:.4} mm over {} tiles",
                 tiles_info.len()
@@ -1388,4 +1445,91 @@ pub fn check_dst(
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Ctx, ExportOptions, export_tiled, master_svg};
+    use ftx_pattern::Pattern;
+
+    fn sample_tiled_pdf() -> (Vec<u8>, Vec<(f64, f64)>) {
+        let raw = r#"{
+          "schema":"fabric-pattern/1","style":"CHK","units":"mm",
+          "meta":{"size_label":"2T","sa_mm":10,"round":0,"created":"2026-10-11T12:00"},
+          "fabric":{"name":"wool","width_mm":1500},
+          "pieces":[{
+            "id":"panel","name":"Panel",
+            "vertices":{"a":[0,0],"b":[320,0],"c":[320,260],"d":[0,260]},
+            "edges":[
+              {"id":"e0","from":"a","to":"b"},
+              {"id":"e1","from":"b","to":"c"},
+              {"id":"e2","from":"c","to":"d"},
+              {"id":"e3","from":"d","to":"a"}
+            ],
+            "cut":{"qty":1,"material":"wool"}
+          }]
+        }"#;
+        let pattern = Pattern::new(serde_json::from_str(raw).unwrap());
+        let ctx = Ctx::new(&pattern, ExportOptions::default()).unwrap();
+        let (svg, _) = master_svg(&ctx).unwrap();
+        let pts = svg_cut_points(&svg);
+        let pdf = export_tiled(&ctx)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.name.ends_with("_A4.pdf"))
+            .unwrap();
+        (pdf.bytes, pts)
+    }
+
+    #[test]
+    fn check_pdf_rejects_corrupt_and_truncated_tile_streams_without_altering_valid_checks() {
+        let (bytes, pts) = sample_tiled_pdf();
+        let valid = check_pdf(&bytes, "sample.pdf", [210.0, 297.0], "tiled", Some(&pts));
+        assert!(valid.iter().all(|c| c.ok), "valid PDF failed: {valid:?}");
+        assert!(
+            valid.iter().all(|c| c.check != "pdf.page_streams_decode"),
+            "valid PDF must not alter canonical check list"
+        );
+
+        // Locate all FlateDecode streams (page 1 = cover, page 2+ = tile pages).
+        let mut streams = Vec::new();
+        let mut pos = 0;
+        while let Some(off) = find(&bytes, b"/FlateDecode >>\nstream\n", pos) {
+            let start = off + b"/FlateDecode >>\nstream\n".len();
+            streams.push(start);
+            pos = start;
+        }
+        assert!(streams.len() >= 3, "expected cover + at least 2 tile pages");
+
+        // 1. Corrupt bytes inside page 3 (second printed tile) deflate stream.
+        let mut corrupt = bytes.clone();
+        let p3 = streams[2];
+        for i in 0..8 {
+            corrupt[p3 + i] ^= 0xff;
+        }
+        let corrupt_checks = check_pdf(&corrupt, "sample.pdf", [210.0, 297.0], "tiled", Some(&pts));
+        assert!(
+            corrupt_checks
+                .iter()
+                .any(|c| c.check == "pdf.page_streams_decode" && !c.ok && c.detail.contains('3')),
+            "expected failing pdf.page_streams_decode for page 3, got {corrupt_checks:?}"
+        );
+        assert!(
+            corrupt_checks
+                .iter()
+                .any(|c| c.check == "pdf.restitch_matches_master" && !c.ok),
+            "corrupt tile stream must fail pdf.restitch_matches_master"
+        );
+
+        // 2. Truncate PDF mid-stream on page 3.
+        let truncated = &bytes[..p3 + 12];
+        let trunc_checks = check_pdf(truncated, "sample.pdf", [210.0, 297.0], "tiled", Some(&pts));
+        assert!(
+            trunc_checks
+                .iter()
+                .any(|c| c.check == "pdf.page_count_matches_tree" && !c.ok),
+            "truncated PDF must fail pdf.page_count_matches_tree, got {trunc_checks:?}"
+        );
+    }
 }
