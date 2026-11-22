@@ -428,7 +428,7 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 .ft-foot-index ul{display:block;columns:2;column-gap:clamp(18px,2.4vw,36px)}
 .ft-foot-index li{break-inside:avoid;padding-bottom:9px}
 @media(min-width:861px){.ft-foot-nav{grid-template-columns:minmax(0,2.1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.5fr)}}
-@media(max-width:460px){.ft-foot-index ul{columns:1}}
+@media(max-width:339px){.ft-foot-index ul{columns:1}}
 .ft-foot-top{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#c9d2d0;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:4px;transition:color .2s,text-decoration-color .2s}
 .ft-foot-top:hover{color:#fff;text-decoration-color:var(--peach)}
 .ft-foot-top .arrow{transform:rotate(-90deg);width:.9em}

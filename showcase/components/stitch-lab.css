@@ -26,7 +26,7 @@
 .stitch-inset { position: absolute; right: 12px; bottom: 12px; width: clamp(80px,17%,125px); padding: 5px 6px; border: 1px solid #8f99aa99; border-radius: 3px; background: #23304a; color: #fff0d7; }
 .stitch-inset:hover { border-color: #efd8b6; }
 .stitch-inset canvas { display: block; width: 100%; aspect-ratio: 1.35; }
-.stitch-inset span { font: 500 9px var(--mono, monospace); }
+.stitch-inset span { font: 500 10.5px var(--mono, monospace); }
 .stitch-caption, .stitch-label, .stitch-key, .stitch-progress output {
   font-family: var(--mono, monospace);
   font-size: 10px;
