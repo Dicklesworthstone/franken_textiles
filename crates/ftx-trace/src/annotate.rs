@@ -273,7 +273,12 @@ pub fn split_edge(piece: &mut Piece, eid: &str, fractions: &[f64]) -> Result<Vec
     let mut bounds = vec![0.0];
     bounds.extend(&cuts);
     bounds.push(total);
-    if !total.is_finite() || total <= 0.0 || bounds.windows(2).any(|w| !(w[1] > w[0])) {
+    if !total.is_finite()
+        || total <= 0.0
+        || bounds
+            .windows(2)
+            .any(|w| !w[0].is_finite() || !w[1].is_finite() || w[1] <= w[0])
+    {
         return Err(PyError::Value(format!(
             "{}/{eid}: cannot split degenerate zero-length edge",
             piece.id
