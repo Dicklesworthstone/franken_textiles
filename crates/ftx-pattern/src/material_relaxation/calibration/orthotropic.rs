@@ -99,34 +99,50 @@ fn project(mut x: Vector, count: usize) -> Result<Vector, Refusal> {
             let (a, b, c) = (a / scale, b / scale, c / scale);
             let mid = 0.5 * (a + b);
             let diff = 0.5 * (a - b);
-            let radius = (diff * diff + c * c).sqrt();
+            let radius = ftx_core::det::hypot(diff, c);
             let high = mid + radius;
             if high <= 0. {
                 values[..3].fill(0.);
-            } else if mid < radius {
+            } else {
+                // Any infeasible 2x2 symmetric block with a positive largest eigenvalue has a
+                // nonpositive smaller eigenvalue (up to rounding on the PSD boundary), so its
+                // Frobenius projection is always the rank-one positive eigencomponent. Do not
+                // gate on `mid < radius`, which can fail by cancellation when `|b|, |c| << a`
+                // and leave a negative diagonal entry unprojected.
                 let (u, v) = if diff >= 0. {
                     (radius + diff, c)
                 } else {
                     (c, radius - diff)
                 };
-                let norm = (u * u + v * v).sqrt();
+                let norm = ftx_core::det::hypot(u, v);
                 let (u, v) = (u / norm, v / norm);
                 let eigenvalue = scale * high;
                 values[0] = eigenvalue * u * u;
                 values[1] = eigenvalue * v * v;
-                values[2] = (eigenvalue * u * v) * SQRT_2;
-            }
-            // A rank-one eigenprojection may round a coupling one ULP outside the production
-            // Cholesky test. Move only that rounding inward; larger failures remain refusals.
-            for _ in 0..8 {
-                if feasible(physical(values)) {
-                    break;
-                }
-                values[2] = if values[2] > 0. {
-                    values[2].next_down()
+                values[2] = if values[0] == 0. || values[1] == 0. {
+                    0.
                 } else {
-                    values[2].next_up()
+                    (eigenvalue * u * v) * SQRT_2
                 };
+            }
+            // A rank-one eigenprojection can round `values[2]` slightly past `sqrt(2*Q11*Q22)`
+            // (a few ULPs for normal diagonals, or more when a diagonal underflows to subnormal).
+            // Move only that rounding inward onto the exact PSD cone boundary.
+            if values[0] > 0. && values[1] > 0. && !feasible(physical(values)) {
+                let bound = values[0].sqrt() * values[1].sqrt() * SQRT_2;
+                if values[2].abs() > bound {
+                    values[2] = bound.copysign(values[2]);
+                }
+                for _ in 0..8 {
+                    if feasible(physical(values)) || values[2] == 0. {
+                        break;
+                    }
+                    values[2] = if values[2] > 0. {
+                        values[2].next_down()
+                    } else {
+                        values[2].next_up()
+                    };
+                }
             }
         }
         if values.iter().any(|v| !v.is_finite()) || !feasible(physical(values)) {
@@ -654,4 +670,37 @@ pub(super) fn replay_checks(report: &mut Report) -> Result<(), Refusal> {
     report.fit = fit;
     report.check = check;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn psd_projection_handles_rank_one_boundary_and_subnormal_diagonals() {
+        let cases = [
+            // Tiny negative weft diagonal where `mid == radius` in f64 due to cancellation.
+            [1000.0, -1e-14, 0.0, 0.0],
+            // Positive diagonals violating PSD with `c^2 / a^2 < f64::EPSILON`.
+            [1000.0, 1e-17, 1e-6 * SQRT_2, 5.0],
+            // Off-diagonal whose rank-one projection underflows `values[1]` to 0.
+            [1.0, 0.0, 1e-170 * SQRT_2, 0.0],
+            // Off-diagonal whose rank-one projection lands `values[1]` in subnormals.
+            [1.0, 0.0, 1e-158 * SQRT_2, 0.0],
+            // Both diagonals negative collapses to zero.
+            [-10.0, -20.0, 3.0 * SQRT_2, -1.0],
+        ];
+        for raw in cases {
+            let mut v = [0.0; MAX_PARAMETERS];
+            v[..4].copy_from_slice(&raw);
+            let p = project(v, 4).expect("finite symmetric block must project onto PSD cone");
+            let q = physical(&p[..4]);
+            assert!(feasible(q), "projected {raw:?} -> {q:?} is not PSD");
+        }
+        // Check exact value for tiny negative diagonal case.
+        let mut v = [0.0; MAX_PARAMETERS];
+        v[..4].copy_from_slice(&[1000.0, -1e-14, 0.0, 0.0]);
+        let p = project(v, 4).unwrap();
+        assert_eq!(physical(&p[..4]), [1000.0, 0.0, 0.0, 0.0]);
+    }
 }
