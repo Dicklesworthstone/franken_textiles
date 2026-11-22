@@ -168,12 +168,15 @@ impl Reader<'_> {
                 e.dtype, e.shape
             )));
         }
-        let width = match dtype {
+        let width: usize = match dtype {
             "f64" => 8,
             "u32" => 4,
             _ => 1,
         };
-        let expect = shape.iter().product::<usize>() * width;
+        let expect = shape
+            .iter()
+            .try_fold(width, |acc, &d| acc.checked_mul(d))
+            .ok_or_else(|| bad(format!("array '{name}' size overflows")))?;
         let start = usize::try_from(e.offset).map_err(|_| bad(format!("array '{name}' offset")))?;
         let len = usize::try_from(e.nbytes).map_err(|_| bad(format!("array '{name}' size")))?;
         if len != expect
@@ -275,7 +278,11 @@ impl AnnyData {
             arrays: &header.arrays,
             verify,
         };
-        let row_ptr = r.u32s("blendshape_row_ptr", &[c.blendshapes + 1])?;
+        let row_ptr_len = c
+            .blendshapes
+            .checked_add(1)
+            .ok_or_else(|| bad("blend-shape count overflows"))?;
+        let row_ptr = r.u32s("blendshape_row_ptr", &[row_ptr_len])?;
         let nnz = *row_ptr.last().unwrap_or(&0) as usize;
         let rolls = r.f64s("bone_rolls", &[c.bones, 3, 3])?;
         let data = Self {
@@ -318,11 +325,16 @@ impl AnnyData {
     fn check(&self) -> Result<(), Refusal> {
         let c = &self.header.counts;
         let l = &self.header.labels;
-        if l.blendshapes.len() != c.blendshapes
+        if c.bones == 0
+            || c.influences == 0
+            || l.blendshapes.len() != c.blendshapes
             || l.bones.len() != c.bones
             || l.bone_parents.len() != c.bones
             || l.local_changes.len() != c.local_changes
-            || c.phenotype_blendshapes + 2 * c.local_changes != c.blendshapes
+            || c.local_changes
+                .checked_mul(2)
+                .and_then(|n| c.phenotype_blendshapes.checked_add(n))
+                != Some(c.blendshapes)
         {
             return Err(bad("label counts disagree with the array counts"));
         }
@@ -338,9 +350,15 @@ impl AnnyData {
                 )));
             }
         }
-        let v = c.vertices as u32;
-        if self.faces.iter().flatten().any(|&i| i >= v)
-            || self.blendshape_vertex.iter().any(|&i| i >= v)
+        if self
+            .faces
+            .iter()
+            .flatten()
+            .any(|&i| i as usize >= c.vertices)
+            || self
+                .blendshape_vertex
+                .iter()
+                .any(|&i| i as usize >= c.vertices)
         {
             return Err(bad("a vertex index is out of range"));
         }
@@ -368,14 +386,50 @@ impl AnnyData {
         if comps.len() != 26 || self.phenotype_mask.iter().any(|&m| m > 1) {
             return Err(bad("the phenotype mask must be P × 26 of 0/1"));
         }
+        let mut comp_counts: BTreeMap<&str, usize> = BTreeMap::new();
         for (feature, _) in comps {
+            *comp_counts.entry(feature.as_str()).or_insert(0) += 1;
             if feature != "race" && !self.header.phenotype.anchors.contains_key(feature) {
                 return Err(bad(format!("no anchors for phenotype feature '{feature}'")));
             }
         }
+        for (feature, anchors) in &self.header.phenotype.anchors {
+            if anchors.is_empty()
+                || anchors.iter().any(|a| !a.is_finite())
+                || anchors.windows(2).any(|w| w[0] >= w[1])
+            {
+                return Err(bad(format!(
+                    "phenotype anchors for '{feature}' must be finite and strictly increasing"
+                )));
+            }
+            if let Some(&count) = comp_counts.get(feature.as_str())
+                && anchors.len() < count
+            {
+                return Err(bad(format!(
+                    "phenotype feature '{feature}' has {count} components but only {} anchors",
+                    anchors.len()
+                )));
+            }
+        }
         let all_finite = self.template_vertices.iter().all(|p| p.is_finite())
             && self.blendshape_delta.iter().all(|p| p.is_finite())
-            && self.vertex_bone_weights.iter().all(|w| w.is_finite());
+            && self.template_bone_heads.iter().all(|p| p.is_finite())
+            && self.template_bone_tails.iter().all(|p| p.is_finite())
+            && self.bone_heads_blendshapes.iter().all(|p| p.is_finite())
+            && self.bone_tails_blendshapes.iter().all(|p| p.is_finite())
+            && self
+                .bone_rolls
+                .iter()
+                .all(|m| m.rows.iter().flatten().all(|x| x.is_finite()))
+            && self.vertex_bone_weights.iter().all(|w| w.is_finite())
+            && self.header.y_axis.iter().all(|x| x.is_finite())
+            && self
+                .header
+                .degenerate_rotation
+                .iter()
+                .flatten()
+                .all(|x| x.is_finite())
+            && self.header.phenotype.fixed_value.is_finite();
         if !all_finite {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
@@ -383,5 +437,174 @@ impl AnnyData {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn pack_ftxbody(header: &Value, payload: &[u8]) -> Vec<u8> {
+        let mut h = serde_json::to_vec(header).unwrap();
+        while !h.len().is_multiple_of(8) {
+            h.push(b' ');
+        }
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"FTXBODY\0");
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf.extend_from_slice(&(h.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&h);
+        buf.extend_from_slice(payload);
+        buf
+    }
+
+    fn minimal_valid_ftxbody(
+        mut header_override: impl FnMut(&mut Value),
+        mut mutate_rolls: impl FnMut(&mut [f64; 9]),
+    ) -> Vec<u8> {
+        let mut payload = Vec::new();
+        let mut arrays = serde_json::Map::new();
+        let mut push_arr = |name: &str, dtype: &str, shape: Vec<usize>, bytes: &[u8]| {
+            let offset = payload.len() as u64;
+            payload.extend_from_slice(bytes);
+            arrays.insert(
+                name.into(),
+                json!({
+                    "dtype": dtype,
+                    "shape": shape,
+                    "offset": offset,
+                    "nbytes": bytes.len() as u64,
+                    "sha256": ""
+                }),
+            );
+        };
+        let u32_bytes =
+            |xs: &[u32]| -> Vec<u8> { xs.iter().flat_map(|x| x.to_le_bytes()).collect() };
+        let f64_bytes =
+            |xs: &[f64]| -> Vec<u8> { xs.iter().flat_map(|x| x.to_le_bytes()).collect() };
+        push_arr("blendshape_row_ptr", "u32", vec![1], &u32_bytes(&[0]));
+        let mut rolls = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        mutate_rolls(&mut rolls);
+        push_arr("bone_rolls", "f64", vec![1, 3, 3], &f64_bytes(&rolls));
+        push_arr(
+            "template_vertices",
+            "f64",
+            vec![1, 3],
+            &f64_bytes(&[0.0, 0.0, 0.0]),
+        );
+        push_arr("faces", "u32", vec![0, 3], &[]);
+        push_arr("blendshape_vertex", "u32", vec![0], &[]);
+        push_arr("blendshape_delta", "f64", vec![0, 3], &[]);
+        push_arr("phenotype_mask", "u8", vec![0, 26], &[]);
+        push_arr(
+            "template_bone_heads",
+            "f64",
+            vec![1, 3],
+            &f64_bytes(&[0.0, 0.0, 0.0]),
+        );
+        push_arr(
+            "template_bone_tails",
+            "f64",
+            vec![1, 3],
+            &f64_bytes(&[0.0, 1.0, 0.0]),
+        );
+        push_arr("bone_heads_blendshapes", "f64", vec![0, 1, 3], &[]);
+        push_arr("bone_tails_blendshapes", "f64", vec![0, 1, 3], &[]);
+        push_arr("vertex_bone_indices", "u32", vec![1, 1], &u32_bytes(&[0]));
+        push_arr("vertex_bone_weights", "f64", vec![1, 1], &f64_bytes(&[1.0]));
+        push_arr("base_mesh_vertex_indices", "u32", vec![1], &u32_bytes(&[0]));
+
+        let components: Vec<Value> = (0..26).map(|i| json!(["race", format!("c{i}")])).collect();
+        let mut header = json!({
+            "schema": "ftxbody/1",
+            "model": "anny",
+            "anny_version": "0.6.1",
+            "configuration": "synthetic",
+            "licence": "synthetic",
+            "package_sha256": {},
+            "counts": {
+                "vertices": 1,
+                "faces": 0,
+                "bones": 1,
+                "blendshapes": 0,
+                "phenotype_blendshapes": 0,
+                "local_changes": 0,
+                "influences": 1
+            },
+            "phenotype": {
+                "features": ["race"],
+                "components": components,
+                "anchors": {},
+                "exposed": [],
+                "fixed_value": 0.5
+            },
+            "labels": {
+                "blendshapes": [],
+                "bones": ["root"],
+                "bone_parents": [-1],
+                "local_changes": []
+            },
+            "y_axis": [0.0, 1.0, 0.0],
+            "degenerate_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            "waist_loop_final": [0],
+            "arrays": Value::Object(arrays)
+        });
+        header_override(&mut header);
+        pack_ftxbody(&header, &payload)
+    }
+
+    #[test]
+    fn from_bytes_refuses_overflowing_shapes_non_finite_rolls_and_unsorted_anchors() {
+        // Baseline minimal file parses cleanly.
+        let ok = minimal_valid_ftxbody(|_| {}, |_| {});
+        assert!(AnnyData::from_bytes(&ok, false).is_ok());
+
+        // Blendshape count usize::MAX overflows blendshapes + 1 -> InvalidDocument, not panic.
+        let overflow_bs = minimal_valid_ftxbody(
+            |h| {
+                h["counts"]["blendshapes"] = json!(usize::MAX);
+            },
+            |_| {},
+        );
+        assert_eq!(
+            AnnyData::from_bytes(&overflow_bs, false).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Shape multiplication overflow in Reader::raw -> InvalidDocument, not panic/wrap.
+        let overflow_shape = minimal_valid_ftxbody(
+            |h| {
+                h["counts"]["bones"] = json!(usize::MAX / 2);
+                h["arrays"]["bone_rolls"]["shape"] = json!([usize::MAX / 2, 3, 3]);
+            },
+            |_| {},
+        );
+        assert_eq!(
+            AnnyData::from_bytes(&overflow_shape, false)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Non-finite bone roll matrix -> NonFinite refusal.
+        let nan_roll = minimal_valid_ftxbody(|_| {}, |r| r[0] = f64::NAN);
+        assert_eq!(
+            AnnyData::from_bytes(&nan_roll, false).unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+
+        // Non-monotonic phenotype anchors (would divide by zero in anchor_weights) -> InvalidDocument.
+        let bad_anchors = minimal_valid_ftxbody(
+            |h| {
+                h["phenotype"]["anchors"] = json!({"height": [0.5, 0.5]});
+            },
+            |_| {},
+        );
+        assert_eq!(
+            AnnyData::from_bytes(&bad_anchors, false).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
     }
 }

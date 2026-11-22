@@ -98,16 +98,35 @@ pub struct BodyFrames {
     pub(crate) leg_landmarks_l: [f64; 3],
 }
 
-fn orthonormal(up: Vec3) -> Frame {
-    let up = up.normalized();
+fn orthonormal_frame(what: &str, up: Vec3) -> Result<Frame, Refusal> {
+    if !up.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            format!("the body has a non-finite {what} axis"),
+        ));
+    }
+    let up_n = up.norm();
+    if !up_n.is_finite() || up_n == 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            format!("the body has a zero-length {what} axis"),
+        ));
+    }
+    let up = up / up_n;
     let f = Vec3::new(0.0, -1.0, 0.0);
-    let front = (f - up * f.dot(up)).normalized();
-    Frame {
+    let projected = f - up * f.dot(up);
+    let front = if projected.norm2() > 1e-18 {
+        projected.normalized()
+    } else {
+        let fallback = Vec3::new(0.0, 0.0, 1.0);
+        (fallback - up * fallback.dot(up)).normalized()
+    };
+    Ok(Frame {
         origin: Vec3::ZERO,
         up,
         front,
         lat: up.cross(front),
-    }
+    })
 }
 
 /// Distance of `p` from the line through `o` along unit `u`, and the coordinate of `p` along it.
@@ -148,13 +167,47 @@ impl BodyFrames {
             })
         };
         let parents = &data.header.labels.bone_parents;
+        let k = data.header.counts.influences;
+        let expected_weights = posed.vertices.len().checked_mul(k);
+        if posed.vertices.is_empty()
+            || posed.vertices.len() != data.header.counts.vertices
+            || k == 0
+            || posed.bone_poses.len() != parents.len()
+            || expected_weights != Some(data.vertex_bone_weights.len())
+            || expected_weights != Some(data.vertex_bone_indices.len())
+            || data
+                .vertex_bone_indices
+                .iter()
+                .any(|&b| b as usize >= parents.len())
+            || data
+                .header
+                .waist_loop_final
+                .iter()
+                .any(|&i| i >= posed.vertices.len())
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "posed body geometry or skinning tables do not match the body model",
+            ));
+        }
+        if posed.vertices.iter().any(|v| !v.is_finite())
+            || posed
+                .bone_poses
+                .iter()
+                .any(|p| !p.t.is_finite() || p.m.rows.iter().flatten().any(|x| !x.is_finite()))
+            || data.vertex_bone_weights.iter().any(|w| !w.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "posed body contains non-finite coordinates or bone transforms",
+            ));
+        }
         let chains = [
             (descendants(parents, bone("upperarm01.R")?), Region::ArmR),
             (descendants(parents, bone("upperarm01.L")?), Region::ArmL),
             (descendants(parents, bone("upperleg01.R")?), Region::LegR),
             (descendants(parents, bone("upperleg01.L")?), Region::LegL),
         ];
-        let k = data.header.counts.influences;
         let mm: Vec<Vec3> = posed.vertices.iter().map(|v| *v * 1000.0).collect();
         let region: Vec<Region> = (0..mm.len())
             .map(|v| {
@@ -208,7 +261,10 @@ impl BodyFrames {
         }
         // Arm.
         let shoulder = head("upperarm01.R")?;
-        let mut arm = orthonormal(-posed.bone_poses[bone("upperarm01.R")?].m.col(1));
+        let mut arm = orthonormal_frame(
+            "right arm",
+            -posed.bone_poses[bone("upperarm01.R")?].m.col(1),
+        )?;
         arm.origin = shoulder;
         let upper = [bone("upperarm01.R")?, bone("upperarm02.R")?];
         let mut radii: Vec<f64> = (0..mm.len())
@@ -243,7 +299,10 @@ impl BodyFrames {
         // Explicit physical left panels use the same definitions on their own posed joints and
         // skin. Reflecting the right side loses independently posed or shaped left limbs.
         let shoulder_l = head("upperarm01.L")?;
-        let mut arm_l = orthonormal(-posed.bone_poses[bone("upperarm01.L")?].m.col(1));
+        let mut arm_l = orthonormal_frame(
+            "left arm",
+            -posed.bone_poses[bone("upperarm01.L")?].m.col(1),
+        )?;
         arm_l.origin = shoulder_l;
         let upper_l = [bone("upperarm01.L")?, bone("upperarm02.L")?];
         let mut radii_l: Vec<f64> = (0..mm.len())
@@ -264,12 +323,12 @@ impl BodyFrames {
         // Leg.
         let hip = head("upperleg01.R")?;
         let ankle = head("foot.R")?;
-        let mut leg = orthonormal(hip - ankle);
+        let mut leg = orthonormal_frame("right leg", hip - ankle)?;
         leg.origin = Vec3::new(hip.x, y_c, crotch_z + 25.0);
         let hip_l = head("upperleg01.L")?;
         let ankle_l = head("foot.L")?;
         let knee_l = head("lowerleg01.L")?;
-        let mut leg_l = orthonormal(hip_l - ankle_l);
+        let mut leg_l = orthonormal_frame("left leg", hip_l - ankle_l)?;
         leg_l.origin = Vec3::new(hip_l.x, y_c, crotch_z + 25.0);
         // Torso.
         let torso = Frame {
@@ -283,7 +342,7 @@ impl BodyFrames {
         let snp_z = head("neck01")?.z;
         // Neck: up the neck01 bone's line to the head bone.
         let head_bone = head("head")?;
-        let mut neck = orthonormal(head_bone - head("neck01")?);
+        let mut neck = orthonormal_frame("neck", head_bone - head("neck01")?)?;
         neck.origin = head("neck01")?;
         let landmarks: BTreeMap<String, f64> = [
             ("floor", floor_z),
@@ -371,7 +430,11 @@ impl BodyFrames {
             },
             "leg_R" => {
                 let z = self.floor_z + self.landmarks.get(name)?;
-                Some(-(self.leg_r.origin.z - z) / self.leg_r.up.z)
+                if self.leg_r.up.z == 0.0 {
+                    return None;
+                }
+                let h = -(self.leg_r.origin.z - z) / self.leg_r.up.z;
+                h.is_finite().then_some(h)
             }
             "leg_L" => {
                 let h = match name {
@@ -381,7 +444,11 @@ impl BodyFrames {
                     _ => *self.landmarks.get(name)?,
                 };
                 let z = self.floor_z + h;
-                Some(-(self.leg_l.origin.z - z) / self.leg_l.up.z)
+                if self.leg_l.up.z == 0.0 {
+                    return None;
+                }
+                let proj = -(self.leg_l.origin.z - z) / self.leg_l.up.z;
+                proj.is_finite().then_some(proj)
             }
             _ => None,
         }
@@ -430,5 +497,177 @@ impl BodyFrames {
             }
             _ => 0.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::AnnyData;
+    use crate::kinematics::Affine;
+    use ftx_core::Mat3;
+    use serde_json::json;
+
+    #[test]
+    fn orthonormal_frame_handles_axes_parallel_to_front_and_refuses_degenerate_axes() {
+        for axis in [
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, -2.0, 3.0),
+        ] {
+            let f = orthonormal_frame("limb", axis).unwrap();
+            assert!((f.up.norm() - 1.0).abs() < 1e-12);
+            assert!((f.front.norm() - 1.0).abs() < 1e-12);
+            assert!((f.lat.norm() - 1.0).abs() < 1e-12);
+            assert!(f.up.dot(f.front).abs() < 1e-12);
+            assert!((f.up.cross(f.front) - f.lat).norm() < 1e-12);
+        }
+        assert_eq!(
+            orthonormal_frame("limb", Vec3::ZERO).unwrap_err().code,
+            RefusalCode::DegenerateGeometry
+        );
+        assert_eq!(
+            orthonormal_frame("limb", Vec3::new(f64::NAN, 0.0, 1.0))
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+    }
+
+    #[test]
+    fn landmark_h_returns_none_for_horizontal_legs_instead_of_infinity() {
+        let up_z = Frame {
+            origin: Vec3::ZERO,
+            up: Vec3::new(0.0, 0.0, 1.0),
+            front: Vec3::new(0.0, -1.0, 0.0),
+            lat: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let horiz = orthonormal_frame("leg", Vec3::new(0.0, -1.0, 0.0)).unwrap();
+        assert_eq!(horiz.up.z, 0.0);
+        let mut landmarks = BTreeMap::new();
+        landmarks.insert("knee".into(), 200.0);
+        landmarks.insert("ankle".into(), 50.0);
+        let frames = BodyFrames {
+            torso: up_z,
+            arm_r: up_z,
+            arm_l: up_z,
+            leg_r: horiz,
+            leg_l: horiz,
+            floor_z: 0.0,
+            tip_h: 30.0,
+            tip_h_l: 30.0,
+            upper_arm_radius: 35.0,
+            upper_arm_radius_l: 35.0,
+            arm_length: 250.0,
+            arm_length_l: 250.0,
+            landmarks,
+            neck: up_z,
+            head_bone: Vec3::ZERO,
+            shoulder_joint_r: Vec3::ZERO,
+            torso_points: Vec::new(),
+            leg_points: Vec::new(),
+            leg_points_l: Vec::new(),
+            leg_landmarks_l: [50.0, 140.0, 200.0],
+        };
+        assert_eq!(frames.landmark_h("leg_R", "knee"), None);
+        assert_eq!(frames.landmark_h("leg_L", "knee"), None);
+        assert_eq!(frames.landmark_h("torso", "knee"), Some(200.0));
+    }
+
+    #[test]
+    fn body_frames_refuses_mismatched_tables_non_finite_coords_and_zero_bone_axes() {
+        let bone_names = [
+            "root",
+            "neck01",
+            "head",
+            "upperarm01.R",
+            "upperarm02.R",
+            "wrist.R",
+            "upperarm01.L",
+            "upperarm02.L",
+            "wrist.L",
+            "upperleg01.R",
+            "lowerleg01.R",
+            "foot.R",
+            "upperleg01.L",
+            "lowerleg01.L",
+            "foot.L",
+        ];
+        let nb = bone_names.len();
+        let parents: Vec<i64> = (0..nb).map(|i| if i == 0 { -1 } else { 0 }).collect();
+        let make_model = |waist_loop: Vec<usize>, influences: usize| {
+            let vertices = vec![
+                Vec3::new(0.0, 0.0, 0.5),
+                Vec3::new(0.0, 0.0, 0.3),
+                Vec3::new(-0.1, 0.0, 0.7),
+                Vec3::new(0.1, 0.0, 0.7),
+            ];
+            let data = AnnyData {
+                header: serde_json::from_value(json!({
+                    "schema":"ftxbody/1", "model":"anny", "anny_version":"0.6.1",
+                    "configuration":"synthetic", "licence":"synthetic", "package_sha256":{},
+                    "counts":{"vertices":4,"faces":0,"bones":nb,"blendshapes":0,
+                        "phenotype_blendshapes":0,"local_changes":0,"influences":influences},
+                    "phenotype":{"features":[],"components":[],"anchors":{},"exposed":[],"fixed_value":0.5},
+                    "labels":{"blendshapes":[],"bones":bone_names,"bone_parents":parents,"local_changes":[]},
+                    "y_axis":[0,1,0], "degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],
+                    "waist_loop_final":waist_loop, "arrays":{}
+                }))
+                .unwrap(),
+                template_vertices: vertices,
+                faces: vec![],
+                blendshape_row_ptr: vec![0],
+                blendshape_vertex: vec![],
+                blendshape_delta: vec![],
+                phenotype_mask: vec![],
+                template_bone_heads: vec![Vec3::ZERO; nb],
+                template_bone_tails: vec![Vec3::ZERO; nb],
+                bone_heads_blendshapes: vec![],
+                bone_tails_blendshapes: vec![],
+                bone_rolls: vec![Mat3::IDENTITY; nb],
+                vertex_bone_indices: vec![0, 0, 3, 6][..4 * influences.min(1)].to_vec(),
+                vertex_bone_weights: vec![1.0; 4 * influences.min(1)],
+                base_mesh_vertex_indices: vec![0, 1, 2, 3],
+            };
+            AnnyModel::from_data(data).unwrap()
+        };
+        let mut poses = vec![Affine::IDENTITY; nb];
+        poses[1].t = Vec3::new(0.0, 0.0, 0.8);
+        poses[2].t = Vec3::new(0.0, 0.0, 0.8); // zero-length neck axis (head == neck01)
+        poses[3].t = Vec3::new(-0.1, 0.0, 0.75);
+        poses[6].t = Vec3::new(0.1, 0.0, 0.75);
+        poses[9].t = Vec3::new(-0.08, 0.0, 0.4);
+        poses[11].t = Vec3::new(-0.08, 0.0, 0.05);
+        poses[12].t = Vec3::new(0.08, 0.0, 0.4);
+        poses[14].t = Vec3::new(0.08, 0.0, 0.05);
+        let posed = PosedBody {
+            vertices: vec![
+                Vec3::new(0.0, 0.0, 0.5),
+                Vec3::new(0.0, 0.0, 0.3),
+                Vec3::new(-0.1, 0.0, 0.7),
+                Vec3::new(0.1, 0.0, 0.7),
+            ],
+            bone_poses: poses,
+            transforms: vec![Affine::IDENTITY; nb],
+        };
+
+        // Zero influences -> InvalidDocument (not a panic)
+        let err = BodyFrames::new(&make_model(vec![0], 0), &posed).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+
+        // Out-of-bounds waist_loop_final -> InvalidDocument (not a panic)
+        let err = BodyFrames::new(&make_model(vec![99], 1), &posed).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+
+        // Non-finite vertex -> NonFinite
+        let mut nan_posed = posed.clone();
+        nan_posed.vertices[0].z = f64::NAN;
+        let err = BodyFrames::new(&make_model(vec![0], 1), &nan_posed).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
+
+        // Zero-length neck axis -> DegenerateGeometry
+        let err = BodyFrames::new(&make_model(vec![0], 1), &posed).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
     }
 }
