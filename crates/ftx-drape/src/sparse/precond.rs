@@ -41,11 +41,43 @@ pub fn pcg(
     max_iters: usize,
 ) -> Result<(Vec<f64>, PcgReport), PcgFailure> {
     let n = b.len();
-    let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let bnorm = norm(b).max(f64::MIN_POSITIVE);
+    if a.nrows() != n || a.ncols() != n || !(tol.is_finite() && tol > 0.0) {
+        return Err(PcgFailure::NotConverged(0));
+    }
+    let norm = |v: &[f64]| -> f64 {
+        let mut max_abs = 0.0f64;
+        for &x in v {
+            if x.is_nan() {
+                return f64::NAN;
+            }
+            max_abs = max_abs.max(x.abs());
+        }
+        if !max_abs.is_finite() || max_abs == 0.0 {
+            return max_abs;
+        }
+        if (1e-100..=1e100).contains(&max_abs) {
+            return v.iter().map(|x| x * x).sum::<f64>().sqrt();
+        }
+        max_abs
+            * v.iter()
+                .map(|x| {
+                    let s = x / max_abs;
+                    s * s
+                })
+                .sum::<f64>()
+                .sqrt()
+    };
+    let bnorm_raw = norm(b);
+    if !bnorm_raw.is_finite() {
+        return Err(PcgFailure::NotConverged(0));
+    }
+    let bnorm = bnorm_raw.max(f64::MIN_POSITIVE);
     let mut x = vec![0.0f64; n];
     let mut r = b.to_vec();
     let mut z = m(&r);
+    if z.len() != n {
+        return Err(PcgFailure::NotConverged(0));
+    }
     let mut p = z.clone();
     let mut rz: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
     let mut ap = vec![0.0f64; n];
@@ -55,17 +87,23 @@ pub fn pcg(
             return Err(PcgFailure::NotConverged(it));
         }
         if rel <= tol {
-            return accept(a, b, x, it, rel, tol, bnorm);
+            return accept(a, b, x, it, tol, bnorm, &norm);
+        }
+        if rz <= 0.0 {
+            return Err(PcgFailure::NotConverged(it));
         }
         a.spmv(&p, &mut ap);
         let pap: f64 = p.iter().zip(&ap).map(|(a, b)| a * b).sum();
-        if pap.is_nan() {
+        if !pap.is_finite() {
             return Err(PcgFailure::NotConverged(it));
         }
         if pap <= 0.0 {
             return Err(PcgFailure::NegativeCurvature(it + 1));
         }
         let alpha = rz / pap;
+        if !alpha.is_finite() {
+            return Err(PcgFailure::NotConverged(it));
+        }
         for i in 0..n {
             x[i] += alpha * p[i];
             r[i] -= alpha * ap[i];
@@ -79,8 +117,8 @@ pub fn pcg(
         }
     }
     let rel = norm(&r) / bnorm;
-    if rel <= tol {
-        accept(a, b, x, max_iters, rel, tol, bnorm)
+    if rel.is_finite() && rel <= tol {
+        accept(a, b, x, max_iters, tol, bnorm, &norm)
     } else {
         Err(PcgFailure::NotConverged(max_iters))
     }
@@ -94,25 +132,20 @@ fn accept(
     b: &[f64],
     x: Vec<f64>,
     iters: usize,
-    rel: f64,
     tol: f64,
     bnorm: f64,
+    norm: &impl Fn(&[f64]) -> f64,
 ) -> Result<(Vec<f64>, PcgReport), PcgFailure> {
     let mut ax = vec![0.0f64; b.len()];
     a.spmv(&x, &mut ax);
-    let true_rel = b
-        .iter()
-        .zip(&ax)
-        .map(|(bi, axi)| (bi - axi) * (bi - axi))
-        .sum::<f64>()
-        .sqrt()
-        / bnorm;
-    if true_rel <= tol {
+    let diff: Vec<f64> = b.iter().zip(&ax).map(|(bi, axi)| bi - axi).collect();
+    let true_rel = norm(&diff) / bnorm;
+    if true_rel.is_finite() && true_rel <= tol {
         Ok((
             x,
             PcgReport {
                 iters,
-                rel_residual: rel,
+                rel_residual: true_rel,
             },
         ))
     } else {
@@ -172,5 +205,30 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(fail, PcgFailure::NegativeCurvature(1));
+
+        // Non-SPD preconditioner (M = -I) must refuse immediately instead of stepping uphill.
+        let mut spd = Coo::new(2, 2);
+        spd.push(0, 0, 2.0);
+        spd.push(1, 1, 3.0);
+        let spd = spd.assemble();
+        assert_eq!(
+            pcg(
+                &spd,
+                &[1.0, 1.0],
+                |r: &[f64]| r.iter().map(|v| -v).collect(),
+                1e-12,
+                10
+            )
+            .unwrap_err(),
+            PcgFailure::NotConverged(0)
+        );
+        // Zero RHS accepts immediately without dividing by rz == 0; NaN RHS refuses cleanly.
+        let (xz, rz) = pcg(&spd, &[0.0, 0.0], |r: &[f64]| r.to_vec(), 1e-12, 10).unwrap();
+        assert_eq!(xz, vec![0.0, 0.0]);
+        assert_eq!(rz.iters, 0);
+        assert_eq!(
+            pcg(&spd, &[f64::NAN, 1.0], |r: &[f64]| r.to_vec(), 1e-12, 10).unwrap_err(),
+            PcgFailure::NotConverged(0)
+        );
     }
 }

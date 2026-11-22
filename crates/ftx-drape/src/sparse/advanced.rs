@@ -46,7 +46,19 @@ fn dot64(a: &[f64], b: &[f64]) -> f64 {
 
 #[inline]
 fn norm2(v: &[f64]) -> f64 {
-    dot64(v, v).sqrt()
+    let max_abs = inf_norm(v);
+    if !max_abs.is_finite() || max_abs == 0.0 {
+        return max_abs;
+    }
+    if (1e-100..=1e100).contains(&max_abs) {
+        return dot64(v, v).sqrt();
+    }
+    let mut acc = 0.0f64;
+    for &x in v {
+        let s = x / max_abs;
+        acc += s * s;
+    }
+    max_abs * acc.sqrt()
 }
 
 #[inline]
@@ -92,7 +104,7 @@ pub fn rigal_gaches_backward_error(a: &Csr, b: &[f64], x: &[f64]) -> f64 {
     if denom > 0.0 { r_inf / denom } else { r_inf }
 }
 
-/// Recomputed true Euclidean relative residual `‖b − Ax‖₂ / max(‖b‖₂, f64::MIN_POSITIVE)`.
+/// Recomputed true Euclidean relative residual `‖b − Ax‖₂ / ‖b‖₂` (or `‖b − Ax‖₂` when `b == 0`).
 #[must_use]
 pub fn true_relative_residual(a: &Csr, b: &[f64], x: &[f64]) -> f64 {
     if a.nrows() != b.len() || a.ncols() != x.len() {
@@ -100,15 +112,8 @@ pub fn true_relative_residual(a: &Csr, b: &[f64], x: &[f64]) -> f64 {
     }
     let mut ax = vec![0.0f64; b.len()];
     a.spmv(x, &mut ax);
-    let r_norm = b
-        .iter()
-        .zip(&ax)
-        .map(|(&bi, &ai)| {
-            let d = bi - ai;
-            d * d
-        })
-        .sum::<f64>()
-        .sqrt();
+    let r: Vec<f64> = b.iter().zip(&ax).map(|(&bi, &ai)| bi - ai).collect();
+    let r_norm = norm2(&r);
     let b_norm = norm2(b);
     if b_norm == 0.0 {
         r_norm
@@ -371,7 +376,7 @@ impl Precond for Jacobi {
 #[must_use]
 pub fn lambda_max_estimate(a: &Csr, iters: usize, safety: f64) -> f64 {
     let n = a.nrows();
-    if n == 0 || a.ncols() != n || iters == 0 {
+    if n == 0 || a.ncols() != n || iters == 0 || !safety.is_finite() || safety < 0.0 {
         return 0.0;
     }
     let mut v: Vec<f64> = (0..n)
@@ -381,15 +386,20 @@ pub fn lambda_max_estimate(a: &Csr, iters: usize, safety: f64) -> f64 {
     let mut lam = 0.0f64;
     for _ in 0..iters {
         let nrm = norm2(&v);
+        if nrm.is_nan() {
+            return f64::NAN;
+        }
         if !(nrm.is_finite() && nrm > 0.0) {
             return 0.0;
         }
-        let inv = 1.0 / nrm;
         for x in &mut v {
-            *x *= inv;
+            *x /= nrm;
         }
         a.spmv(&v, &mut w);
         lam = dot64(&v, &w);
+        if lam.is_nan() {
+            return f64::NAN;
+        }
         std::mem::swap(&mut v, &mut w);
     }
     lam.max(0.0) * safety
@@ -450,10 +460,20 @@ impl Chebyshev {
                 "Chebyshev smoother requires a matrix with positive finite spectral ceiling",
             ));
         }
+        let lo = hi / alpha;
+        let theta = 0.5 * hi + 0.5 * lo;
+        let delta = 0.5 * hi - 0.5 * lo;
+        if !(lo.is_finite() && theta.is_finite() && theta > 0.0 && delta.is_finite() && delta > 0.0)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "Chebyshev smoother requires a resolvable spectral band lo < hi",
+            ));
+        }
         Ok(Self {
             a: a.clone(),
             degree,
-            lo: hi / alpha,
+            lo,
             hi,
         })
     }
@@ -468,8 +488,10 @@ impl Chebyshev {
 impl Precond for Chebyshev {
     fn apply(&self, r: &[f64], z: &mut [f64]) {
         let n = r.len();
-        let theta = 0.5 * (self.hi + self.lo);
-        let delta = 0.5 * (self.hi - self.lo);
+        assert_eq!(n, self.a.nrows(), "Chebyshev apply: r length mismatch");
+        assert_eq!(z.len(), n, "Chebyshev apply: z length mismatch");
+        let theta = 0.5 * self.hi + 0.5 * self.lo;
+        let delta = 0.5 * self.hi - 0.5 * self.lo;
         let mut zk: Vec<f64> = r.iter().map(|&v| v / theta).collect();
         let mut zk_prev = vec![0.0f64; n];
         let mut rho_prev = delta / theta;
@@ -1240,20 +1262,37 @@ pub struct SteihaugOutcome {
 
 /// Numerically stable positive root `τ ≥ 0` of `‖p + τ d‖₂² = Δ²`.
 fn boundary_tau(p: &[f64], d: &[f64], delta: f64) -> f64 {
-    let pd = dot64(p, d);
-    let dd = dot64(d, d);
-    let pp = dot64(p, p);
-    if !(dd.is_finite() && dd > 0.0) {
+    let d_norm = norm2(d);
+    if !(d_norm.is_finite() && d_norm > 0.0 && delta.is_finite() && delta > 0.0) {
         return 0.0;
     }
-    let gap = (delta * delta - pp).max(0.0);
-    let disc = (pd * pd + dd * gap).max(0.0);
-    let root = disc.sqrt();
-    if pd >= 0.0 {
-        let denom = pd + root;
-        if denom > 0.0 { gap / denom } else { 0.0 }
+    let p_norm = norm2(p);
+    if !p_norm.is_finite() || p_norm >= delta {
+        return 0.0;
+    }
+    // Solve ‖p + τ_u u‖₂² = Δ² for unit direction u = d / ‖d‖₂, avoiding cancellation in
+    // Δ² − ‖p‖₂² and intermediate overflow/underflow for extreme Δ or ‖d‖₂.
+    let mut pu = 0.0f64;
+    for (&pi, &di) in p.iter().zip(d) {
+        pu += pi * (di / d_norm);
+    }
+    let gap_sqrt = (delta - p_norm).sqrt() * (delta + p_norm).sqrt();
+    let root = det::hypot(pu, gap_sqrt);
+    let tau_u = if pu >= 0.0 {
+        let denom = pu + root;
+        if denom > 0.0 {
+            (gap_sqrt / denom) * gap_sqrt
+        } else {
+            0.0
+        }
     } else {
-        (-pd + root) / dd
+        -pu + root
+    };
+    let tau = tau_u / d_norm;
+    if tau.is_finite() && tau >= 0.0 {
+        tau
+    } else {
+        0.0
     }
 }
 
@@ -1266,6 +1305,8 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
     let n = g.len();
     let mut p = vec![0.0f64; n];
     if n == 0
+        || a.nrows() != n
+        || a.ncols() != n
         || !(cfg.radius.is_finite() && cfg.radius > 0.0)
         || !(cfg.rel_tol.is_finite() && cfg.rel_tol >= 0.0)
     {
@@ -1273,26 +1314,48 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
             step: p,
             hit_boundary: false,
             negative_curvature: false,
-            interior_converged: n == 0,
+            interior_converged: n == 0 && a.nrows() == 0 && a.ncols() == 0,
             matvecs: 0,
             model_decrease: 0.0,
         };
     }
-    let mut r: Vec<f64> = g.iter().map(|&v| -v).collect();
-    let mut d = r.clone();
-    let mut rr = dot64(&r, &r);
-    let g_norm = rr.sqrt();
-    if !(g_norm.is_finite() && g_norm > 0.0) {
+    let g_max = inf_norm(g);
+    if !(g_max.is_finite() && g_max > 0.0) {
         return SteihaugOutcome {
             step: p,
             hit_boundary: false,
             negative_curvature: false,
-            interior_converged: g_norm == 0.0,
+            interior_converged: g_max == 0.0,
             matvecs: 0,
             model_decrease: 0.0,
         };
     }
-    let target = cfg.rel_tol * g_norm;
+    // Scale extreme gradients internally so `rᵀr` and `dᵀHd` neither overflow near stiff barrier
+    // walls nor underflow near equilibrium; normal-scale gradients stay at `g_scale == 1.0`.
+    let g_scale = if !(1e-60..=1e60).contains(&g_max) {
+        g_max
+    } else {
+        1.0
+    };
+    let mut r: Vec<f64> = if g_scale == 1.0 {
+        g.iter().map(|&v| -v).collect()
+    } else {
+        g.iter().map(|&v| -v / g_scale).collect()
+    };
+    let mut d = r.clone();
+    let mut rr = dot64(&r, &r);
+    let r_norm0 = rr.sqrt();
+    if !(r_norm0.is_finite() && r_norm0 > 0.0) {
+        return SteihaugOutcome {
+            step: p,
+            hit_boundary: false,
+            negative_curvature: false,
+            interior_converged: false,
+            matvecs: 0,
+            model_decrease: 0.0,
+        };
+    }
+    let target = cfg.rel_tol * r_norm0;
     let mut hd = vec![0.0f64; n];
     let mut matvecs = 0usize;
     let mut hit_boundary = false;
@@ -1320,8 +1383,13 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
             negative_curvature = true;
             break;
         }
-        let alpha = rr / dhd;
-        if !alpha.is_finite() {
+        let alpha_r = rr / dhd;
+        let alpha_p = if g_scale == 1.0 {
+            alpha_r
+        } else {
+            alpha_r * g_scale
+        };
+        if !alpha_r.is_finite() || !alpha_p.is_finite() {
             let tau = boundary_tau(&p, &d, cfg.radius);
             for i in 0..n {
                 p[i] += tau * d[i];
@@ -1331,7 +1399,7 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
         }
         let mut p_next = p.clone();
         for i in 0..n {
-            p_next[i] += alpha * d[i];
+            p_next[i] += alpha_p * d[i];
         }
         let p_next_norm = norm2(&p_next);
         if !p_next_norm.is_finite() || p_next_norm >= cfg.radius {
@@ -1344,7 +1412,7 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
         }
         p = p_next;
         for i in 0..n {
-            r[i] -= alpha * hd[i];
+            r[i] -= alpha_r * hd[i];
         }
         let rr_new = dot64(&r, &r);
         if !rr_new.is_finite() {
@@ -1369,13 +1437,11 @@ pub fn steihaug_cg(a: &Csr, g: &[f64], cfg: SteihaugConfig) -> SteihaugOutcome {
     let php = dot64(&p, &hd);
     let model_decrease = -gp - 0.5 * php;
     if interior_converged {
-        let mut true_rr = 0.0f64;
-        for i in 0..n {
-            let ri = hd[i] + g[i];
-            true_rr += ri * ri;
-        }
-        let true_r_norm = true_rr.sqrt();
-        interior_converged = true_r_norm.is_finite() && true_r_norm <= target;
+        let res: Vec<f64> = hd.iter().zip(g).map(|(&h, &gi)| h + gi).collect();
+        let true_r_norm = norm2(&res);
+        let g_norm = norm2(g);
+        interior_converged =
+            true_r_norm.is_finite() && g_norm.is_finite() && true_r_norm <= cfg.rel_tol * g_norm;
     }
 
     SteihaugOutcome {
@@ -1723,5 +1789,79 @@ mod tests {
             let eta = eisenstat_walker(1.0, 0.1, 0.1, 1e-8, bad_max, 0.9, 2.0);
             assert!(eta.is_finite() && eta > 0.0, "bad_max={bad_max} -> {eta}");
         }
+    }
+
+    #[test]
+    fn extreme_scale_norms_spectral_estimate_chebyshev_band_and_steihaug_stay_accurate() {
+        for scale in [1e-160_f64, 1e160_f64] {
+            let mut coo = Coo::new(2, 2);
+            coo.push(0, 0, 2.0 * scale);
+            coo.push(1, 1, 5.0 * scale);
+            let a = coo.assemble();
+            let lam = lambda_max_estimate(&a, 20, 1.0);
+            assert!(
+                lam.is_finite() && ((lam - 5.0 * scale).abs() / (5.0 * scale)) < 1e-6,
+                "scale={scale:e}: lam={lam:e}"
+            );
+            let b = [2.0 * scale, 10.0 * scale];
+            let rel = true_relative_residual(&a, &b, &[1.0, 2.0]);
+            assert!(
+                rel.is_finite() && rel < 1e-14,
+                "scale={scale:e}: rel={rel:e}"
+            );
+
+            // Exact interior Newton step p* = [-1, -2] inside radius 5.0.
+            let g = [2.0 * scale, 10.0 * scale];
+            let out = steihaug_cg(
+                &a,
+                &g,
+                SteihaugConfig {
+                    radius: 5.0,
+                    rel_tol: 1e-12,
+                    max_iters: 10,
+                },
+            );
+            assert!(out.interior_converged, "scale={scale:e}: {out:?}");
+            assert!((out.step[0] + 1.0).abs() < 1e-12 && (out.step[1] + 2.0).abs() < 1e-12);
+
+            // Boundary-limited step with tiny radius Δ = 1e-200 must land on the ball boundary.
+            let out_tiny = steihaug_cg(
+                &a,
+                &g,
+                SteihaugConfig {
+                    radius: 1e-200,
+                    rel_tol: 1e-12,
+                    max_iters: 10,
+                },
+            );
+            assert!(out_tiny.hit_boundary, "scale={scale:e}: {out_tiny:?}");
+            assert!(((norm2(&out_tiny.step) - 1e-200).abs() / 1e-200) < 1e-12);
+        }
+
+        // NaN entry must propagate from lambda_max_estimate rather than collapsing to 0.0.
+        let mut coo_nan = Coo::new(2, 2);
+        coo_nan.push(0, 0, f64::NAN);
+        coo_nan.push(1, 1, 2.0);
+        assert!(lambda_max_estimate(&coo_nan.assemble(), 10, 1.0).is_nan());
+
+        // Chebyshev refuses an unresolvable subnormal band where hi / alpha rounds back to hi,
+        // and stays finite near f64::MAX without overflowing `hi + lo`.
+        let mut coo_sub = Coo::new(2, 2);
+        coo_sub.push(0, 0, 1e-322);
+        coo_sub.push(1, 1, 1e-322);
+        assert_eq!(
+            Chebyshev::new(&coo_sub.assemble(), 2, 1.001)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        let huge = f64::MAX / 1.5;
+        let mut coo_huge = Coo::new(2, 2);
+        coo_huge.push(0, 0, huge);
+        coo_huge.push(1, 1, huge);
+        let cheb_huge = Chebyshev::new(&coo_huge.assemble(), 2, 2.0).unwrap();
+        let mut z = [0.0; 2];
+        cheb_huge.apply(&[huge, huge], &mut z);
+        assert!(z.iter().all(|v| v.is_finite() && *v > 0.0), "z={z:?}");
     }
 }
