@@ -846,28 +846,44 @@ fn simulate(
     }
 }
 
-/// Rotates an existing workspace `qualification` directory to `qualification.before-NNN`
-/// so re-running `ftx qualify --ws WS` after a body or fabric change never deletes prior evidence.
-fn reserve_ws_qualification(ws: &Path) -> Result<PathBuf, Refusal> {
-    let out = ws.join("qualification");
-    if fs::symlink_metadata(&out).is_ok() {
-        regular(&out, true)?;
-        let mut suffix = 0u64;
-        let archive = loop {
-            let candidate = ws.join(format!("qualification.before-{suffix:03}"));
-            match fs::symlink_metadata(&candidate) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break candidate,
-                Err(e) => return Err(io(&candidate, e)),
-                Ok(_) => {}
-            }
-            suffix = suffix
-                .checked_add(1)
-                .ok_or_else(|| bad_input("qualification backup number overflow"))?;
-        };
-        fs::rename(&out, &archive).map_err(|e| io(&archive, e))?;
+fn unused_qualification_path(ws: &Path, kind: &str) -> Result<PathBuf, Refusal> {
+    for suffix in 0..u64::MAX {
+        let path = ws.join(format!("qualification.{kind}-{suffix:03}"));
+        match fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(path),
+            Err(e) => return Err(io(&path, e)),
+            Ok(_) => {}
+        }
     }
-    super::reserve_drape_output(&out)?;
-    Ok(out)
+    Err(bad_input("qualification directory numbers exhausted"))
+}
+
+/// The workspace lock covers the move and rollback. Both generations retain their files if
+/// the filesystem refuses a promotion or the process is interrupted between the two moves.
+fn publish_ws_qualification(ws: &Path, staged: &Path, current: &Path) -> Result<(), Refusal> {
+    let archive = if regular(current, true)? {
+        let archive = unused_qualification_path(ws, "before")?;
+        fs::rename(current, &archive).map_err(|e| io(&archive, e))?;
+        Some(archive)
+    } else {
+        None
+    };
+    if let Err(e) = fs::rename(staged, current) {
+        let mut refusal = io(current, e).repair(format!(
+            "Check the staged qualification at {}",
+            staged.display()
+        ));
+        if let Some(archive) = archive
+            && let Err(restore) = fs::rename(&archive, current)
+        {
+            refusal = refusal.repair(format!(
+                "Recover the previous qualification from {} (restore failed: {restore})",
+                archive.display()
+            ));
+        }
+        return Err(refusal);
+    }
+    Ok(())
 }
 
 /// `ftx qualify`: run the three known-answer chest bands (`-20`, `0`, `+20` mm ease) at zero
@@ -916,7 +932,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     let hands = super::parse_hands(args)?;
     let fabric_override = super::fabric::load(args)?;
 
-    let (data, meas_bytes, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg.as_deref() {
+    let (data, meas_bytes, mut pat, published, _ws_lock) = if let Some(ws) = ws_arg.as_deref() {
         if args.options.contains_key("out") {
             return Err(bad_input(
                 "--out cannot be combined with a workspace (workspace qualification writes to WS/qualification)",
@@ -1005,11 +1021,14 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let out = ws_arg
-        .as_deref()
-        .map(reserve_ws_qualification)
-        .transpose()?
-        .unwrap_or(out);
+    let out = if let Some(ws) = ws_arg.as_deref() {
+        regular(&published, true)?;
+        let staged = unused_qualification_path(ws, "pending")?;
+        super::reserve_output(&staged, "qualify")?;
+        staged
+    } else {
+        published.clone()
+    };
     let mut authored_pose = serde_json::Map::new();
     if let Some(thumbs) = thumbs {
         authored_pose.insert("thumb_pose".into(), json!(thumbs));
@@ -1061,7 +1080,11 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
                 report["fabric_override"] = selected.receipt().clone();
             }
             if let Some(o) = report.as_object_mut() {
-                o.insert("pattern".into(), json!(pat_path.to_string_lossy()));
+                let relative = pat_path.strip_prefix(&out).map_err(|e| io(&pat_path, e))?;
+                o.insert(
+                    "pattern".into(),
+                    json!(published.join(relative).to_string_lossy()),
+                );
                 o.insert("measurements_sha256".into(), json!(meas_sha.clone()));
                 o.insert(
                     "wall_s".into(),
@@ -1210,6 +1233,9 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         rec["body"] = Value::Object(authored_pose);
     }
     write_json(&out.join("qualify.json"), &rec)?;
+    if let Some(ws) = ws_arg.as_deref() {
+        publish_ws_qualification(ws, &out, &published)?;
+    }
     // spec 04 §7.1's printout: a line per band, then the verdict
     let mut text = format!("Posed torso girth at the chest landmark: {chest_girth_mm:.2} mm");
     if let Some(target) = input_chest_mm {

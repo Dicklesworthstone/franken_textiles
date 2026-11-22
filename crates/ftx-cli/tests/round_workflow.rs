@@ -412,6 +412,10 @@ fn report_rebuilds_review_html_without_adding_a_round_and_qualify_validates_inpu
 fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     let (dir, _, _) = setup_program("zouave_bolero-920");
     run(&dir, FIRST, 0);
+    let active = dir.join("ws/qualification");
+    std::fs::create_dir(&active).unwrap();
+    let earlier = json!({"schema":"fabric-qualify/1", "pass":false, "rows":[]});
+    save(&active.join("qualify.json"), &earlier);
     let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
         .args(["qualify", "--ws", "ws", "--json"])
@@ -424,6 +428,10 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     );
     let env: Value = serde_json::from_slice(&out.stdout).unwrap();
     let q = &env["result"];
+    assert_eq!(
+        read(&dir.join("ws/qualification.before-000/qualify.json")),
+        earlier
+    );
     assert_eq!(q["schema"], "fabric-qualify/1");
     assert_eq!(q["engine"], "ftx");
     assert_eq!(q["pass"], true, "{q}");
@@ -493,6 +501,10 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     let original = dir.join("ws/qualification/band_+0/sim");
     let replay_report = read(&dir.join("band-replay/sim_report.json"));
     let qualified = read(&original.join("sim_report.json"));
+    assert_eq!(
+        qualified["pattern"],
+        "ws/qualification/band_+0/pattern.json"
+    );
     for key in ["landmarks", "seams", "numerical", "material"] {
         assert_eq!(replay_report[key], qualified[key], "{key}");
     }
@@ -505,7 +517,27 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
         q["measurements_sha256"],
         ftx_core::receipt::sha256_hex(&measurements)
     );
-    assert!(dir.join("ws/qualification/qualify.json").is_file());
+    let active_receipt = std::fs::read(active.join("qualify.json")).unwrap();
+    let mut incompatible = read(&dir.join("p.json"));
+    incompatible["fabric"]["material_id"] = json!("unknown-qualification-test-material");
+    save(&dir.join("incompatible.json"), &incompatible);
+    let refusal = run(
+        &dir,
+        &["qualify", "--ws", "ws", "--pattern", "incompatible.json"],
+        3,
+    );
+    assert!(
+        refusal["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("material")
+    );
+    assert_eq!(
+        std::fs::read(active.join("qualify.json")).unwrap(),
+        active_receipt
+    );
+    assert!(!dir.join("ws/qualification.before-001").exists());
+    assert!(dir.join("ws/qualification.pending-000").is_dir());
     let round = Command::new(env!("CARGO_BIN_EXE_ftx"))
         .current_dir(&dir)
         .args([

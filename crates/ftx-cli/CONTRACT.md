@@ -68,7 +68,7 @@ the selected collision proxy trims the hands. The full-hand check retains the st
 pelvic caps. The separate cloth contact audit still checks the complete displayed body.
 `ftx place` records the full-hand check as `authored_hand_surface`. The chosen vectors appear under
 `body.thumb_pose` in placement, simulation and qualification reports. Qualification checks the authored
-hand surface before rotating a workspace's previous qualification.
+hand surface before preparing its band runs.
 Extra settling continues the same sewn cloth at the original time step until the shared numerical
 quiet window or the declared cap. Reports and animations retain all accepted steps and actual
 duration, including both starts when requested. Invalid settings refuse before file I/O. History
@@ -264,7 +264,8 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   Tests: `round_workflow`, `round_review`, and `round::stills` synthetic triangle scenes; these
   tests do not certify an Anny garment's fit or solve at every requested arm angle.
 - `ftx qualify [WS | --ws WS | --measurements M --out DIR] [--pattern P] [--fabric F] [--model PATH]
-  [--body-fit PATH] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--json]`:
+  [--body-fit PATH] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs]
+  [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--json]`:
   runs the three known-answer chest bands (`-20`, `0`,
   `+20` mm ease) at zero gravity (70 sew steps, no drape steps) for the uniform garment fabric or for
   every distinct active simulated `piece.fabric` selection. Band widths use the torso girth
@@ -273,8 +274,12 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   in `qualify.json` (`fabric-qualify/1`, spec 04 §7.1) alongside `pass`, `rows`, optional
   `piece_materials`, `fabric_key`, `qualification_basis` and `measurements_sha256`.
   Each band saves its `pattern.json`, the exact `fit_spec.json` used by the solve, and `sim/` outputs,
-  so the band can be replayed through `ftx drape` with those saved inputs. It prints each
-  band's result and `QUALIFIED` / `NOT QUALIFIED: ...`. Exit 0 when all three bands pass, 2 otherwise.
+  so the band can be replayed through `ftx drape` with those saved inputs. Workspace runs write to
+  a fresh `qualification.pending-NNN` directory. A completed result becomes `qualification` and
+  moves the previous result to `qualification.before-NNN`. A refusal during calculation or writing
+  retains the active qualification and the pending evidence. For a pending band, replay with the
+  pattern saved next to that band's fit specification. Completed results include both
+  `QUALIFIED` and `NOT QUALIFIED` verdicts, which return exit 0 and 2 respectively.
 - `ftx report WS [--json]`: regenerates `WS/report.html` from existing `WS/rounds.jsonl` without creating
   a new round directory.
 - `ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]`: rebuilds `fold_viewer.html` from an existing
