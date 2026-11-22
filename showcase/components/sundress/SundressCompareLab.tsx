@@ -83,6 +83,11 @@ type CompareManifest = {
 };
 
 const CAMERA_NAMES: CompareCameraPreset[] = ["Full length", "Hem elevation", "Waist profile", "Back"];
+const COMPARE_MANIFEST = "/exhibits/sundress-compare/compare.json";
+const NATIVE_REPLAYS = [
+  { id: "reference", label: "Reference adult", directory: "reference-drape", source: "/exhibits/sundress", file: "dress-measures.json" },
+  { id: "slender", label: "Petite adult", directory: "petite-drape", source: "/exhibits/sundress-compare", file: "slender-slender-measures.json" },
+] as const;
 
 function segmentsPath(segs: [number, number, number, number][]): string {
   if (!segs.length) return "";
@@ -304,7 +309,8 @@ function SideViewportCard({
 }
 
 export default function SundressCompareLab() {
-  const [manifest, setManifest] = useState<CompareManifest | null>(null);
+  const [comparison, setComparison] = useState<{ manifest: CompareManifest; downloadUrl: string }>();
+  const [manifestAttempt, setManifestAttempt] = useState(0);
   const [error, setError] = useState("");
   const [leftId, setLeftId] = useState("reference");
   const [rightId, setRightId] = useState("slender");
@@ -334,19 +340,28 @@ export default function SundressCompareLab() {
 
   useEffect(() => {
     const controller = new AbortController();
+    let downloadUrl: string | undefined;
     async function loadManifest() {
       try {
-        const response = await publishedGeometry("/exhibits/sundress-compare/compare.json", controller.signal, "no-cache");
-        const data: CompareManifest = await response.json();
-        if (!controller.signal.aborted) setManifest(data);
+        const response = await publishedGeometry(COMPARE_MANIFEST, controller.signal, manifestAttempt ? "reload" : "no-cache");
+        const bytes = await response.blob();
+        const manifest: CompareManifest = JSON.parse(await bytes.text());
+        if (controller.signal.aborted) return;
+        downloadUrl = URL.createObjectURL(bytes);
+        setComparison({ manifest, downloadUrl });
       } catch {
         if (!controller.signal.aborted) setError("Could not load the published comparison data.");
       }
     }
     void loadManifest();
-    return () => controller.abort();
-  }, []);
+    return () => {
+      controller.abort();
+      if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+    };
+  }, [manifestAttempt]);
 
+  const manifest = comparison?.manifest;
+  const manifestDownload = comparison?.downloadUrl;
   const leftState = manifest?.states.find(s => s.id === leftId) ?? null;
   const rightState = manifest?.states.find(s => s.id === rightId) ?? null;
 
@@ -386,9 +401,17 @@ export default function SundressCompareLab() {
             </p>
           </div>
 
-          {error && <p className="sc-error" role="alert">{error}</p>}
+          {error ? (
+            <div className="sc-error">
+              <p role="alert">{error}</p>
+              <button className="sc-dl-sec" type="button" onClick={() => {
+                setError("");
+                setManifestAttempt(attempt => attempt + 1);
+              }}>Retry comparison</button>
+            </div>
+          ) : !manifest && <p className="sc-note" role="status">Loading comparison data…</p>}
 
-          {manifest && leftState && rightState && metrics && (
+          {manifest && manifestDownload && leftState && rightState && metrics && (
             <>
               {/* Selector & Swap Bar */}
               <section className="sc-bar" aria-label="Choose left and right synthetic adult forms and shared camera">
@@ -575,11 +598,8 @@ export default function SundressCompareLab() {
                     Both accepted drapes solve the exact same fixed pattern (<code>{manifest.fixedPattern.style}</code>,{" "}
                     <code>{manifest.fixedPattern.vertices.toLocaleString("en")}</code> vertices,{" "}
                     <code>{manifest.fixedPattern.triangles.toLocaleString("en")}</code> triangles,{" "}
-                    <code>{manifest.fixedPattern.spacingMm} mm</code> spacing) with identical CLI flags:
+                    <code>{manifest.fixedPattern.spacingMm} mm</code> spacing) with identical solver settings.
                   </p>
-                  <pre className="sc-cli">
-                    <code>ftx drape dress-pattern.json {manifest.fixedPattern.solverArguments.join(" ")}</code>
-                  </pre>
                   <p className="sc-sha">
                     Fixed pattern SHA-256: <code>{manifest.fixedPattern.patternSha256.slice(0, 20)}…</code>
                   </p>
@@ -587,10 +607,10 @@ export default function SundressCompareLab() {
                     <a className="sc-dl-pri" href="/sundress/pattern-A4.pdf" download>
                       Full-size sewing pattern PDF ↓
                     </a>
-                    <a className="sc-dl-sec" href="/exhibits/sundress-compare/compare.json" download>
+                    <a className="sc-dl-sec" href={manifestDownload} download="compare.json">
                       Download comparison manifest (JSON) ↓
                     </a>
-                    <a className="sc-dl-sec" href="/exhibits/sundress/dress-pattern.json" download>
+                    <a className="sc-dl-sec" href={manifest.fixedPattern.patternUrl} download="dress-pattern.json">
                       Fixed sundress pattern (fabric-pattern/1) ↓
                     </a>
                     <a className="sc-dl-sec" href="/exhibits/sundress/dress-summary.json" download>
@@ -603,6 +623,31 @@ export default function SundressCompareLab() {
                       Redraft sundress after an ease warning →
                     </a>
                   </div>
+                  <details className="sc-flags">
+                    <summary>Rerun the native drapes</summary>
+                    <p className="sc-note">
+                      Save the fixed pattern, fit specification and the form’s measurements together. Set <code>FTX_ANNY_MODEL</code>{" "}
+                      to your converted Anny model and run the command from that directory.
+                    </p>
+                    <a className="sc-dl-sec" href="/exhibits/sundress/dress-fit.json" download="dress-fit.json">
+                      Shared fit specification (JSON) ↓
+                    </a>
+                    {NATIVE_REPLAYS.map(run => {
+                      const state = manifest.states.find(state => state.id === run.id);
+                      if (!state?.accepted) return null;
+                      const command = `ftx drape dress-pattern.json --measurements ${run.file} --fit dress-fit.json` +
+                        ` --model "$FTX_ANNY_MODEL" --out ${run.directory} ${manifest.fixedPattern.solverArguments.join(" ")} --json`;
+                      return <div key={run.id} data-native-replay={run.id}>
+                        <p className="sc-note">
+                          {run.label}{state.summary.solverRevision && <> · Archived solver <code>{state.summary.solverRevision.slice(0, 12)}</code></>}
+                        </p>
+                        <a className="sc-dl-sec" href={`${run.source}/${run.file}`} download={run.file}>
+                          {run.label} measurements (JSON) ↓
+                        </a>
+                        <pre className="sc-cli"><code>{command}</code></pre>
+                      </div>;
+                    })}
+                  </details>
                 </aside>
               </div>
             </>

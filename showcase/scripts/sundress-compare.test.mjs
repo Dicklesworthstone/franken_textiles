@@ -187,6 +187,57 @@ test("Comparison refuses swapped replay files, recovers on retry, and downloads 
   }
 });
 
+test("Comparison retries its manifest and hands off the exact report and native rerun inputs", async () => {
+  const page = await browser.newPage({
+    acceptDownloads: true,
+    reducedMotion: "reduce",
+    userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
+  });
+  try {
+    const manifestPath = "sundress-compare/compare.json";
+    const exhibitBytes = file => readFileSync(new URL(`../public/exhibits/${file}`, import.meta.url));
+    const manifest = JSON.parse(exhibitBytes(manifestPath));
+    let requests = 0;
+    await page.route(url => url.pathname === `/exhibits/${manifestPath}`, route => {
+      if (++requests === 1) return route.fulfill({ status: 503 });
+      return route.continue();
+    });
+    await page.goto(new URL("/wardrobe/sundress/compare/", site).href, { waitUntil: "domcontentloaded" });
+    await page.getByRole("alert").filter({ hasText: "Could not load the published comparison data." }).waitFor();
+    assert.equal(await page.locator("[data-side]").count(), 0);
+    await page.getByRole("button", { name: "Retry comparison" }).click();
+    const report = page.getByRole("link", { name: /download comparison manifest/i });
+    await report.waitFor();
+    assert.match(await report.getAttribute("href"), /^blob:/);
+    await page.getByText("Rerun the native drapes", { exact: true }).click();
+
+    const inputs = [
+      [/download comparison manifest/i, manifestPath],
+      [/fixed sundress pattern/i, "sundress/dress-pattern.json"],
+      [/shared fit specification/i, "sundress/dress-fit.json"],
+      [/reference adult measurements/i, "sundress/dress-measures.json"],
+      [/petite adult measurements/i, "sundress-compare/slender-slender-measures.json"],
+    ];
+    for (const [name, file] of inputs) {
+      const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name }).click()]);
+      assert.equal(download.suggestedFilename(), file.split("/").at(-1));
+      assert.deepEqual(readFileSync(await download.path()), exhibitBytes(file));
+    }
+    assert.equal(requests, 2);
+    for (const [id, file, out] of [
+      ["reference", "dress-measures.json", "reference-drape"],
+      ["slender", "slender-slender-measures.json", "petite-drape"],
+    ]) {
+      const command = await page.locator(`[data-native-replay="${id}"] pre`).innerText();
+      assert.equal(command, `ftx drape dress-pattern.json --measurements ${file} --fit dress-fit.json` +
+        ` --model "$FTX_ANNY_MODEL" --out ${out} ${manifest.fixedPattern.solverArguments.join(" ")} --json`);
+    }
+    assert.equal(await page.locator("[data-native-replay]").count(), 2);
+  } finally {
+    await page.close();
+  }
+});
+
 test("Compare page loads both native drapes under common world scale, swaps cleanly, matches same state, blocks refused garment, and fits phone", async () => {
   const page = await browser.newPage({
     viewport: { width: 1200, height: 860 },
