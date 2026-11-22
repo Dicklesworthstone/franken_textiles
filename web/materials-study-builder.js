@@ -327,7 +327,12 @@ export function buildMicroclimateExteriorExchange(report) {
     throw Error("A correlation-derived exterior must remain estimate evidence.");
   }
   const exterior = buildMaterialExteriorExchange(convection.exterior);
-  if (!Number.isFinite(report.air?.temperature_k) || exterior.air_c !== report.air.temperature_k - 273.15 ||
+  const air = report.air, airK = air?.temperature_k;
+  const hasAirC = air && typeof air === "object" && Object.hasOwn(air, "temperature_c");
+  const airC = hasAirC ? air.temperature_c : undefined;
+  const airConsistent = Number.isFinite(airK) && (!hasAirC || (Number.isFinite(airC) && airC + 273.15 === airK));
+  const exteriorMatchesAir = (hasAirC && exterior.air_c === airC) || exterior.air_c === airK - 273.15;
+  if (!airConsistent || !exteriorMatchesAir ||
       exterior.convection_w_m2_k !== convection.h_w_m2_k || exterior.convection_source.reference !== convection.citation) {
     throw Error("The native convection exterior must match its reported air state, coefficient and source.");
   }
