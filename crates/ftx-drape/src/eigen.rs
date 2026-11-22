@@ -13,11 +13,24 @@
 pub fn jacobi_eigh(a: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     let square = n * n;
     assert_eq!(a.len(), square, "a must be n*n = {square}");
-    let mut m = a.to_vec();
     let mut v = vec![0.0f64; square];
     for i in 0..n {
         v[i * n + i] = 1.0;
     }
+    if a.iter().any(|val| !val.is_finite()) {
+        return (vec![f64::NAN; n], v);
+    }
+    let max_abs = a.iter().map(|val| val.abs()).fold(0.0f64, f64::max);
+    let scale_all = if max_abs > 0.0 && !(1e-150..=1e150).contains(&max_abs) {
+        max_abs
+    } else {
+        1.0
+    };
+    let mut m: Vec<f64> = if scale_all == 1.0 {
+        a.to_vec()
+    } else {
+        a.iter().map(|&val| val / scale_all).collect()
+    };
     for _sweep in 0..60 {
         let mut rotated = false;
         for p in 0..n {
@@ -29,10 +42,15 @@ pub fn jacobi_eigh(a: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
                 }
                 rotated = true;
                 let theta = (m[q * n + q] - m[p * n + p]) / (2.0 * apq);
-                let t = if theta >= 0.0 {
-                    1.0 / (theta + (1.0 + theta * theta).sqrt())
+                let hypot_theta = if theta.abs() > 1e150 {
+                    ftx_core::det::hypot(1.0, theta)
                 } else {
-                    -1.0 / (-theta + (1.0 + theta * theta).sqrt())
+                    (1.0 + theta * theta).sqrt()
+                };
+                let t = if theta >= 0.0 {
+                    1.0 / (theta + hypot_theta)
+                } else {
+                    -1.0 / (-theta + hypot_theta)
                 };
                 let c = 1.0 / (1.0 + t * t).sqrt();
                 let s = c * t;
@@ -58,7 +76,11 @@ pub fn jacobi_eigh(a: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
         }
     }
     let mut order: Vec<usize> = (0..n).collect();
-    let vals: Vec<f64> = (0..n).map(|i| m[i * n + i]).collect();
+    let vals: Vec<f64> = if scale_all == 1.0 {
+        (0..n).map(|i| m[i * n + i]).collect()
+    } else {
+        (0..n).map(|i| m[i * n + i] * scale_all).collect()
+    };
     order.sort_by(|&x, &y| vals[x].total_cmp(&vals[y]).then(x.cmp(&y)));
     let mut evals = vec![0.0f64; n];
     let mut evecs = vec![0.0f64; square];
@@ -73,8 +95,17 @@ pub fn jacobi_eigh(a: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
 
 /// Projects a symmetric matrix onto the positive semidefinite cone in place (`V·max(Λ, 0)·Vᵀ`), the
 /// standard fix for indefinite element Hessians in projected Newton. Returns whether anything changed.
+/// Non-finite matrices are left untouched (never zeroed) so upstream callers fail closed.
 pub fn project_psd(h: &mut [f64], n: usize) -> bool {
+    assert_eq!(h.len(), n * n, "h must be n*n = {}", n * n);
+    if h.iter().any(|v| !v.is_finite()) {
+        return false;
+    }
     let (vals, vecs) = jacobi_eigh(h, n);
+    if vals.iter().any(|l| !l.is_finite()) || vecs.iter().any(|v| !v.is_finite()) {
+        h.fill(f64::NAN);
+        return false;
+    }
     if vals.first().is_none_or(|&l| l >= 0.0) {
         return false;
     }
@@ -99,6 +130,13 @@ pub fn project_psd(h: &mut [f64], n: usize) -> bool {
 /// for a triangle. Returns whether anything changed.
 pub fn project_psd_translation_free(h: &mut [f64], v: usize) -> bool {
     let n = 3 * v;
+    assert_eq!(h.len(), n * n, "h must be (3v)^2 = {}", n * n);
+    if v == 0 || h.iter().any(|x| !x.is_finite()) {
+        return false;
+    }
+    if v == 1 {
+        return project_psd(h, 3);
+    }
     let r = 3 * (v - 1);
     // Helmert basis of {1}⊥ in Rᵛ: q_j = (1, …, 1, −j, 0, …) / √(j(j + 1)), j = 1..v−1.
     let q = |j: usize, i: usize| -> f64 {
@@ -146,6 +184,9 @@ pub fn project_psd_translation_free(h: &mut [f64], v: usize) -> bool {
         }
     }
     if !project_psd(&mut red, r) {
+        if red.iter().any(|x| !x.is_finite()) {
+            h.fill(f64::NAN);
+        }
         return false;
     }
     // H⁺ = Q R⁺ Qᵀ
@@ -264,6 +305,38 @@ mod tests {
             let before = psd.clone();
             assert!(!project_psd_translation_free(&mut psd, v));
             assert_eq!(psd, before);
+        }
+    }
+
+    #[test]
+    fn non_finite_hessian_is_preserved_and_extreme_scales_project_cleanly() {
+        // Non-finite inputs must NEVER be silently zeroed out by PSD projection.
+        let mut all_nan = [f64::NAN; 4];
+        assert!(!project_psd(&mut all_nan, 2));
+        assert!(all_nan.iter().all(|v| v.is_nan()));
+
+        let mut mixed_nan = [-1.0, 0.0, 0.0, f64::NAN];
+        assert!(!project_psd(&mut mixed_nan, 2));
+        assert!(mixed_nan[3].is_nan());
+
+        let mut inf_h = [f64::INFINITY, 0.0, 0.0, -1.0];
+        assert!(!project_psd(&mut inf_h, 2));
+        assert!(inf_h[0].is_infinite());
+
+        let mut tf_nan = vec![f64::NAN; 81];
+        assert!(!project_psd_translation_free(&mut tf_nan, 3));
+        assert!(tf_nan.iter().all(|v| v.is_nan()));
+
+        // Extreme-scale symmetric indefinite matrices project accurately without overflow/underflow.
+        for scale in [1e-200_f64, 1e200_f64] {
+            let mut h = [1.0 * scale, 2.0 * scale, 2.0 * scale, 1.0 * scale];
+            assert!(project_psd(&mut h, 2));
+            for x in h {
+                assert!(
+                    ((x - 1.5 * scale).abs() / (1.5 * scale)) < 1e-13,
+                    "scale={scale:e}: {h:?}"
+                );
+            }
         }
     }
 }
