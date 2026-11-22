@@ -164,6 +164,7 @@
   height: 490px;
   position: relative;
   cursor: grab;
+  touch-action: none;
   background: #132026;
 }
 

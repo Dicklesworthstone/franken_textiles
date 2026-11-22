@@ -91,6 +91,10 @@ test("Wrap skirt page compares two tie settings, neutral vs seated poses, serves
     const ovB = await page.locator('[data-metric="waist-overlap-b"]').innerText();
     assert.notEqual(ovA, ovB, "Setting A and Setting B must display distinct front overlaps");
     assert.equal(await page.locator('[data-metric="status-a"]').innerText(), "SECURE");
+    assert.deepEqual(await page.locator(".ws-waist-tie").evaluate(tie => {
+      const { width, height } = tie.getBBox();
+      return [width, height];
+    }), [780, 70]);
 
     const arcsInsideBody = () => page.locator(".ws-svg").evaluate(svg => {
       const body = svg.querySelector(".ws-body-slice");

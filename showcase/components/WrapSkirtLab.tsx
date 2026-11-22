@@ -308,16 +308,13 @@ function FlatPatternPreviewSvg({
       </g>
 
       {/* Waist tie strap (780 x 70 mm folded to 35 mm, cut 2) */}
-      <g transform="translate(880, 120)">
-        <rect x="0" y="0" width="420" height="70" fill="#c78b22" fillOpacity="0.2" stroke="#8f5f10" strokeWidth="3" />
-        <line x1="0" y1="35" x2="420" y2="35" stroke="#8f5f10" strokeWidth="1.6" strokeDasharray="10 6" />
-        <text x="210" y="-16" textAnchor="middle" fill="#1b2d34" fontSize="20" fontWeight="700" fontFamily="var(--mono)">
-          WAIST TIE ×2 (780 × 70 MM FOLD)
-        </text>
-        <text x="210" y="102" textAnchor="middle" fill="#465659" fontSize="17" fontFamily="var(--mono)">
-          Joins waistband ends (70 mm seam)
-        </text>
+      <g transform="translate(1010, 20) rotate(90)">
+        <rect className="ws-waist-tie" x="0" y="0" width="780" height="70" fill="#c78b22" fillOpacity="0.2" stroke="#8f5f10" strokeWidth="3" />
+        <line x1="0" y1="35" x2="780" y2="35" stroke="#8f5f10" strokeWidth="1.6" strokeDasharray="10 6" />
       </g>
+      <text x="1035" y="376" fill="#1b2d34" fontSize="20" fontWeight="700" fontFamily="var(--mono)">WAIST TIE ×2</text>
+      <text x="1035" y="404" fill="#465659" fontSize="17" fontFamily="var(--mono)">780 × 70 MM · FOLD TO 35</text>
+      <text x="1035" y="432" fill="#465659" fontSize="17" fontFamily="var(--mono)">70 MM WAISTBAND SEAM</text>
     </svg>
   );
 }

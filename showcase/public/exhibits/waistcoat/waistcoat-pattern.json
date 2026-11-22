@@ -127,11 +127,11 @@
           "pts": [
             [
               96,
-              152
+              176
             ],
             [
               232,
-              152
+              176
             ]
           ]
         },
@@ -141,11 +141,11 @@
           "pts": [
             [
               96,
-              164
+              188
             ],
             [
               232,
-              164
+              188
             ]
           ]
         },
@@ -155,11 +155,11 @@
           "pts": [
             [
               96,
-              140
+              164
             ],
             [
               232,
-              140
+              164
             ]
           ]
         },
@@ -169,15 +169,15 @@
           "pts": [
             [
               108,
-              164
+              188
             ],
             [
               96,
-              152
+              176
             ],
             [
               108,
-              140
+              164
             ]
           ]
         },
@@ -187,15 +187,15 @@
           "pts": [
             [
               220,
-              164
+              188
             ],
             [
               232,
-              152
+              176
             ],
             [
               220,
-              140
+              164
             ]
           ]
         },
@@ -386,7 +386,7 @@
         {
           "id": "pocket_level",
           "edge": "side",
-          "s": 0.3494,
+          "s": 0.4046,
           "type": "V"
         },
         {
@@ -746,7 +746,7 @@
         {
           "id": "pocket_level",
           "edge": "side",
-          "s": 0.6506,
+          "s": 0.5954,
           "type": "V"
         },
         {
@@ -1116,11 +1116,11 @@
         ],
         "p2": [
           136,
-          156
+          140
         ],
         "p3": [
           0,
-          156
+          140
         ]
       },
       "edges": [
@@ -1148,14 +1148,14 @@
       "grain": [
         [
           68,
-          24
+          22
         ],
         [
           68,
-          132
+          118
         ]
       ],
-      "note": "Lower linen pocket bag. Joins pocket welt along top edge (136 mm) and closes around left, bottom, and right edges with upper pocket bag."
+      "note": "Lower linen pocket bag (136 x 140 mm, hanging from y = 176 mm to 36 mm above the hem). Joins pocket welt along top edge (136 mm) and closes around left, bottom, and right edges with upper pocket bag."
     },
     {
       "id": "wc_pocket_inner",
@@ -1175,11 +1175,11 @@
         ],
         "p2": [
           136,
-          156
+          140
         ],
         "p3": [
           0,
-          156
+          140
         ]
       },
       "edges": [
@@ -1207,14 +1207,14 @@
       "grain": [
         [
           68,
-          24
+          22
         ],
         [
           68,
-          132
+          118
         ]
       ],
-      "note": "Upper linen pocket bag. Top 136 mm edge stitches directly to upper seam allowance of the 136 mm internal slash on waistcoat front; perimeter closes to lower bag."
+      "note": "Upper linen pocket bag (136 x 140 mm). Top 136 mm edge stitches directly to upper seam allowance of the 136 mm internal slash on waistcoat front; perimeter closes to lower bag cleanly above the hem."
     }
   ],
   "seams": [

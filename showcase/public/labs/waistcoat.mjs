@@ -14,7 +14,7 @@ export const WELT_STAGES = [
     step: 1,
     title: "Mark welt box & stitch welt strip",
     summary:
-      "Transfer the 136 mm slash line (y = 152 mm), stitch box (y = 140 & 164 mm), and corner clip marks onto wc_front. Fold the 136 × 48 mm silk welt lengthwise to 24 mm and stitch it along the lower line.",
+      "Transfer the 136 mm slash line (y = 176 mm), stitch box (y = 164 & 188 mm), and corner clip marks onto wc_front. Fold the 136 × 48 mm silk welt lengthwise to 24 mm and stitch it along the lower line.",
     pieces: ["wc_front", "wc_welt", "wc_pocket_outer", "wc_pocket_inner"],
   },
   {
@@ -30,7 +30,7 @@ export const WELT_STAGES = [
     step: 3,
     title: "Turn welt & linen pocket bags to the inside",
     summary:
-      "Push the silk welt and upper/lower unbleached linen pocket bags (136 × 156 mm) through the slash to the inside of the front shell, press the 24 mm welt lip upward to fill the opening, and stitch the small clipped corner triangles cleanly to the welt ends.",
+      "Push the silk welt and upper/lower unbleached linen pocket bags (136 × 140 mm) through the slash to the inside of the front shell, press the 24 mm welt lip upward to fill the opening, and stitch the small clipped corner triangles cleanly to the welt ends.",
     pieces: ["wc_front", "wc_welt", "wc_pocket_outer", "wc_pocket_inner"],
   },
   {
@@ -38,7 +38,7 @@ export const WELT_STAGES = [
     step: 4,
     title: "Close pocket bag & cover with front lining",
     summary:
-      "Close the outer and inner linen pocket bags around left, bottom, and right seams (indices 30–35) so the bag hangs inside between wc_front and wc_front_lining, leaving only the crisp 136 × 24 mm silk welt visible on the front.",
+      "Close the outer and inner linen pocket bags around left, bottom, and right seams (indices 30–35) so the bag hangs cleanly 36 mm above the hem between wc_front and wc_front_lining, leaving only the crisp 136 × 24 mm silk welt visible on the front.",
     pieces: ["wc_front", "wc_welt", "wc_pocket_outer", "wc_pocket_inner", "wc_front_lining"],
   },
 ];
@@ -249,28 +249,41 @@ export function projectWaistcoatPointTo3D(instanceId, xMm, yMm, radialOffsetMm =
       sMm = -537.5 + xMm; // x=+262.5 -> -275; x=0 -> -537.5
     }
   } else if (basePiece === "wc_collar") {
-    // Collar spans xMm in [-229.8..+229.8] centered at CB (x=0 -> theta=PI)!
-    // Scale onto a tighter neck cylinder (aNeck=0.078 m, bNeck=0.072 m) at y = +0.315..+0.363 m!
-    const aNeck = 0.078 + radialOffsetMm / 1000;
-    const bNeck = 0.072 + radialOffsetMm / 1000;
-    const theta = Math.PI - (xMm / 229.8) * Math.PI * 0.88;
-    const x3 = -aNeck * Math.sin(theta);
-    const z3 = bNeck * Math.cos(theta);
-    const y3 = (648 + yMm - 345) / 1000;
+    // Collar spans xMm in [-229.8..+229.8] centered at CB (x=0 -> theta=+/-PI),
+    // passing smoothly through SNP (|x|=87.9 -> theta=+/-0.5*PI) to CF (|x|=229.8 -> theta=+/-0.03*PI).
+    // Note: sin(theta) crosses 0 continuously at CB (theta=+/-PI) with cos(theta)=-1, so there is
+    // no sign discontinuity or bowtie across xMm = 0.
+    const absX = Math.abs(xMm);
+    const baseY =
+      absX <= 87.9
+        ? 670 + (absX / 87.9) * 20
+        : 690 - ((absX - 87.9) / (229.8 - 87.9)) * 108;
+    const upperT = Math.max(0, Math.min(1, (baseY - 435) / 255));
+    const taper = 1 - upperT * 0.24;
+    const thetaAbs =
+      absX <= 87.9
+        ? Math.PI * (1 - 0.5 * (absX / 87.9))
+        : Math.PI * (0.5 - 0.47 * ((absX - 87.9) / (229.8 - 87.9)));
+    const theta = xMm >= 0 ? thetaAbs : -thetaAbs;
+    const aCollar = 0.105 + radialOffsetMm / 1000;
+    const bCollar = bM * taper;
+    const x3 = -aCollar * Math.sin(theta);
+    const z3 = bCollar * Math.cos(theta);
+    const y3 = (baseY + yMm - 345) / 1000;
     return [x3, y3, z3];
   } else if (basePiece === "wc_welt") {
-    // Welt sits directly on the front pocket slash: x in [96..232] (R) or [-232..-96] (L), y in [140..164].
+    // Welt sits directly on the front pocket slash: x in [96..232] (R) or [-232..-96] (L), y in [164..188].
     const u = isLeft ? -xMm : xMm; // [0..136]
     const sLocal = 96 + u;
     sMm = isLeft ? -sLocal : sLocal;
-    // Folded welt spans y = 140..164 mm (map 0..48 mm to 140..164 mm lip).
-    yAdjustedM = (140 + yMm * 0.5 - 345) / 1000;
+    // Folded welt spans y = 164..188 mm (map 0..48 mm to 164..188 mm lip).
+    yAdjustedM = (164 + yMm * 0.5 - 345) / 1000;
   } else if (basePiece === "wc_pocket_outer" || basePiece === "wc_pocket_inner") {
-    // Pocket bags hang directly below the 136 mm slash (y = 152 down to y = -4 mm, x in [96..232]).
+    // Pocket bags hang directly below the 136 mm slash (y = 176 down to y = +36 mm, cleanly above hem y = 0).
     const u = isLeft ? -xMm : xMm; // [0..136]
     const sLocal = 96 + u;
     sMm = isLeft ? -sLocal : sLocal;
-    yAdjustedM = (152 - (156 - yMm) - 345) / 1000;
+    yAdjustedM = (176 - (140 - yMm) - 345) / 1000;
   }
 
   // Taper torso gently inward toward high shoulder & neckline above armscye (y > 435 mm)

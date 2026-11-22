@@ -14,10 +14,10 @@ export type SharedCameraState = {
 };
 
 export const COMPARE_CAMERAS: Record<CompareCameraPreset, SharedCameraState> = {
-  "Full length": { yaw: -0.26, pitch: 0.05, dist: 2.38, targetY: 0.86 },
+  "Full length": { yaw: -0.26, pitch: 0.035, dist: 3.25, targetY: 0.84 },
   "Hem elevation": { yaw: -0.18, pitch: 0.02, dist: 1.38, targetY: 0.48 },
   "Waist profile": { yaw: -Math.PI / 2, pitch: 0.04, dist: 1.24, targetY: 0.96 },
-  Back: { yaw: Math.PI - 0.26, pitch: 0.05, dist: 2.38, targetY: 0.86 },
+  Back: { yaw: Math.PI - 0.26, pitch: 0.035, dist: 3.25, targetY: 0.84 },
 };
 
 type ParsedMesh = ReturnType<typeof parsePackedDrapeBuffer>;
@@ -48,10 +48,25 @@ function loadPackedDrape(sourceBase: string): Promise<ParsedMesh> {
       const [meta, gzBuf] = await Promise.all([metaRes.json(), gzRes.arrayBuffer()]);
       const raw = await gunzipBytes(gzBuf);
       return parsePackedDrapeBuffer(meta, raw);
-    })();
+    })().catch(error => {
+      packedCache.delete(sourceBase);
+      throw error;
+    });
     packedCache.set(sourceBase, pending);
   }
   return pending;
+}
+
+function buildElevationRing(yMeters: number, colorHex: number, radius = 0.36, opacity = 0.85) {
+  const pts: THREE.Vector3[] = [];
+  const segs = 48;
+  for (let i = 0; i <= segs; i++) {
+    const a = (i / segs) * Math.PI * 2;
+    pts.push(new THREE.Vector3(Math.cos(a) * radius, yMeters, Math.sin(a) * radius));
+  }
+  const geom = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity });
+  return { line: new THREE.Line(geom, mat), geom, mat };
 }
 
 export default function SundressCompareScene({
@@ -72,8 +87,10 @@ export default function SundressCompareScene({
   label: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const ringGroupRef = useRef<{ group: THREE.Group; disposables: { dispose: () => void }[] } | null>(null);
   const [loadErr, setLoadErr] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -108,33 +125,18 @@ export default function SundressCompareScene({
     rim.position.set(0.3, 0.8, -2.4);
     scene.add(rim);
 
-    // Common world floor grid at exact Y = 0.000 m + world elevation ticks at 0.40 m, 0.45 m, 0.50 m, 1.00 m
+    // Common world floor grid at exact Y = 0.000 m
     const floor = new THREE.GridHelper(1.2, 12, 0x455a60, 0x26383e);
     floor.position.y = 0;
     scene.add(floor);
 
+    const ringGroup = new THREE.Group();
+    scene.add(ringGroup);
+    ringGroupRef.current = { group: ringGroup, disposables: [] };
+
     const disposables: { dispose: () => void }[] = [];
 
-    const addElevationRing = (yMeters: number, colorHex: number, radius = 0.36, opacity = 0.85) => {
-      const pts: THREE.Vector3[] = [];
-      const segs = 48;
-      for (let i = 0; i <= segs; i++) {
-        const a = (i / segs) * Math.PI * 2;
-        pts.push(new THREE.Vector3(Math.cos(a) * radius, yMeters, Math.sin(a) * radius));
-      }
-      const g = new THREE.BufferGeometry().setFromPoints(pts);
-      const m = new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity });
-      scene.add(new THREE.Line(g, m));
-      disposables.push(g, m);
-    };
-
-    // Common 0.50 m world reference plane ring (subtle) + own hem ring + partner hem ring for instant hem-shift comparison!
-    addElevationRing(0.5, 0x678085, 0.42, 0.45);
-    addElevationRing(ownHemMm / 1000, new THREE.Color(accentHex).getHex(), 0.36, 0.95);
-    if (otherHemMm !== null && Math.abs(otherHemMm - ownHemMm) >= 1) {
-      addElevationRing(otherHemMm / 1000, 0xe1b55f, 0.39, 0.72);
-    }
-
+    let rafId = 0;
     // Load native packed drape at exact COMMON_WORLD_SCALE_M_PER_UNIT (1.0)
     loadPackedDrape(sourceBase)
       .then(parsed => {
@@ -173,7 +175,9 @@ export default function SundressCompareScene({
         setLoaded(true);
       })
       .catch(err => {
-        if (alive) setLoadErr(err instanceof Error ? err.message : String(err));
+        if (!alive) return;
+        cancelAnimationFrame(rafId);
+        setLoadErr(err instanceof Error ? err.message : String(err));
       });
 
     const resize = () => {
@@ -215,9 +219,10 @@ export default function SundressCompareScene({
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointermove", onMove);
     renderer.domElement.addEventListener("pointerup", onUp);
+    renderer.domElement.addEventListener("pointercancel", onUp);
+    renderer.domElement.addEventListener("lostpointercapture", onUp);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
 
-    let rafId = 0;
     const loop = () => {
       const st = cameraRef.current;
       camera.position.set(
@@ -238,26 +243,56 @@ export default function SundressCompareScene({
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("pointerup", onUp);
+      renderer.domElement.removeEventListener("pointercancel", onUp);
+      renderer.domElement.removeEventListener("lostpointercapture", onUp);
       renderer.domElement.removeEventListener("wheel", onWheel);
+      for (const d of ringGroupRef.current?.disposables ?? []) d.dispose();
+      ringGroupRef.current = null;
       for (const d of disposables) d.dispose();
-      floor.geometry.dispose();
+      floor.dispose();
       renderer.dispose();
+      renderer.forceContextLoss();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
-  }, [sourceBase, ownHemMm, otherHemMm, accentHex, cameraRef, onCameraDrag]);
+  }, [sourceBase, accentHex, cameraRef, onCameraDrag, attempt]);
 
-  if (loadErr) {
-    return <div className="sc-fallback" role="alert">{loadErr}</div>;
-  }
+  // Update lightweight elevation reference rings whenever partner hem changes without tearing down WebGL!
+  useEffect(() => {
+    const holder = ringGroupRef.current;
+    if (!holder) return;
+    while (holder.group.children.length > 0) holder.group.remove(holder.group.children[0]);
+    for (const d of holder.disposables) d.dispose();
+    holder.disposables.length = 0;
+
+    const add = (yM: number, hex: number, radius: number, opacity: number) => {
+      const built = buildElevationRing(yM, hex, radius, opacity);
+      holder.group.add(built.line);
+      holder.disposables.push(built.geom, built.mat);
+    };
+    add(0.5, 0x678085, 0.42, 0.45);
+    add(ownHemMm / 1000, new THREE.Color(accentHex).getHex(), 0.36, 0.95);
+    if (otherHemMm !== null && Math.abs(otherHemMm - ownHemMm) >= 1) {
+      add(otherHemMm / 1000, 0xe1b55f, 0.39, 0.72);
+    }
+  }, [sourceBase, ownHemMm, otherHemMm, accentHex, attempt]);
 
   return (
-    <div
-      ref={hostRef}
-      className="sc-canvas-host"
-      data-drape-loaded={loaded ? "true" : "false"}
-      data-world-scale={COMMON_WORLD_SCALE_M_PER_UNIT}
-      role="img"
-      aria-label={label}
-    />
+    <>
+      <div
+        ref={hostRef}
+        className="sc-canvas-host"
+        hidden={Boolean(loadErr)}
+        data-drape-loaded={loaded ? "true" : "false"}
+        data-world-scale={COMMON_WORLD_SCALE_M_PER_UNIT}
+        role="img"
+        aria-label={label}
+      />
+      {loadErr && (
+        <div className="sc-fallback">
+          <p role="alert">{loadErr}</p>
+          <button type="button" className="sc-dl-sec" onClick={() => setAttempt(n => n + 1)}>Retry 3D view</button>
+        </div>
+      )}
+    </>
   );
 }

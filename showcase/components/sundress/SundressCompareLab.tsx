@@ -214,6 +214,7 @@ function SideViewportCard({
 
       {state.accepted ? (
         <SundressCompareScene
+          key={state.id}
           sourceBase={state.sourceBase}
           ownHemMm={state.world.hemAboveSoleMm.mean}
           otherHemMm={otherState.accepted ? otherState.world.hemAboveSoleMm.mean : null}
@@ -583,7 +584,10 @@ export default function SundressCompareLab() {
                     Fixed pattern SHA-256: <code>{manifest.fixedPattern.patternSha256.slice(0, 20)}…</code>
                   </p>
                   <div className="sc-downloads">
-                    <a className="sc-dl-pri" href="/exhibits/sundress-compare/compare.json" download>
+                    <a className="sc-dl-pri" href="/sundress/pattern-A4.pdf" download>
+                      Full-size sewing pattern PDF ↓
+                    </a>
+                    <a className="sc-dl-sec" href="/exhibits/sundress-compare/compare.json" download>
                       Download comparison manifest (JSON) ↓
                     </a>
                     <a className="sc-dl-sec" href="/exhibits/sundress/dress-pattern.json" download>

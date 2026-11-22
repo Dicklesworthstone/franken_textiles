@@ -257,6 +257,32 @@ export default function Exhibition({section}: {section?: string}) {
           <a className="material-caption" href={`/wardrobe/${s.id}/`}><div className="mono">{s.detail}</div><h3>{s.title}</h3><span>{s.action} <Arrow/></span></a>
           <GarmentPatterns exhibit={s.id==="sundress"?"sundress-cuts":s.id}/>
         </article>)}</div>
+        <div className="material-callouts" data-reveal>
+          <a className="thermal-callout" href="/wardrobe/waistcoat/">
+            <div>
+              <span className="mono">V&amp;A 256-1880 · 1780s reconstruction</span>
+              <h3>1780s waistcoat &amp; welt pockets</h3>
+              <p>Separate silk fronts, plain silk facings, linen linings, and slit welt pockets validated CONVERGED across 36 native seams with 1:1 mm SVG &amp; A4 exports.</p>
+            </div>
+            <span className="thermal-callout-cta">Inspect cut &amp; welt steps <Arrow diagonal/></span>
+          </a>
+          <a className="thermal-callout" href="/wardrobe/waistcoat/inside-out/">
+            <div>
+              <span className="mono">3D layers · Invariant seam indices</span>
+              <h3>Turn a lined garment inside out</h3>
+              <p>Rotate shell, silk facing, linen lining, and pocket bags together, toggle the shell off to reveal the lining, and audit missing collar linings honestly.</p>
+            </div>
+            <span className="thermal-callout-cta">Open 3D layer view <Arrow diagonal/></span>
+          </a>
+          <a className="thermal-callout" href="/wardrobe/sundress/compare/">
+            <div>
+              <span className="mono">Synchronized camera · 1:1 m world scale</span>
+              <h3>Compare two native dress drapes</h3>
+              <p>Place independently accepted native drapes of one fixed sundress side by side to measure hem drop and waist clearance — or inspect an explicit solver refusal.</p>
+            </div>
+            <span className="thermal-callout-cta">Compare native drapes <Arrow diagonal/></span>
+          </a>
+        </div>
       </div></section>}
       {(show("studio") || studio) && <LabBench initialStation={studio} heading={Heading}/>}
       {show("materials") && <section className="material-gallery" id="materials"><div className="wrap">
@@ -305,6 +331,32 @@ export default function Exhibition({section}: {section?: string}) {
             <button className="card-text" onClick={()=>setItem({study:s,film:false})}><span className="mono">{s.detail}</span><h3>{s.title}</h3><p>{s.description}</p></button>
             <GarmentPatterns exhibit={s.garment}/>
           </article>)}</div>
+        <div className="material-callouts" data-reveal>
+          <a className="thermal-callout" href="/studies/wrap-skirt/">
+            <div>
+              <span className="mono">Fixed pattern · Neutral vs seated slices</span>
+              <h3>Adjustable-overlap wrap skirt</h3>
+              <p>Keep one trued wrap-skirt cut fixed across three synthetic adult forms, compare two waist-tie settings, and inspect seated Anny thigh slices.</p>
+            </div>
+            <span className="thermal-callout-cta">Check wrap overlap <Arrow diagonal/></span>
+          </a>
+          <a className="thermal-callout" href="/studies/tiling/">
+            <div>
+              <span className="mono">Home printing · A4 tiled PDF</span>
+              <h3>Assemble an A4 pattern floor</h3>
+              <p>Inspect real tiled A4 pages, 5 mm bleed overlap, alignment diamonds, and the 100 mm scale bar before printing at full size.</p>
+            </div>
+            <span className="thermal-callout-cta">Open tile floor <Arrow diagonal/></span>
+          </a>
+          <a className="thermal-callout" href="/studies/sewing/">
+            <div>
+              <span className="mono">Native planner · 10 operations</span>
+              <h3>Jacket sewing order</h3>
+              <p>Step through all ten accepted operations of the Zouave bolero across flat pieces and the 3D jacket with prerequisites and stitch files.</p>
+            </div>
+            <span className="thermal-callout-cta">Play sewing order <Arrow diagonal/></span>
+          </a>
+        </div>
       </div></section>}
       {show("tracing") && <TraceReveal heading={Heading}/>}
       {!section && <PlatformCapabilities/>}

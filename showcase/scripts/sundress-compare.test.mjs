@@ -4,6 +4,7 @@
 // same-state exact match (0.0 deltas), refusal never appearing as a completed garment, and phone layout.
 // Run with: FTX_STUDIO_URL=http://127.0.0.1:3000 node --test scripts/sundress-compare.test.mjs
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
 import { chromium } from "playwright-core";
@@ -28,6 +29,13 @@ test("Compare manifest proves identical fixed pattern & solver config, swap symm
   assert.equal(manifest.schema, "ftx-sundress-compare/1");
   assert.equal(manifest.fixedPattern.spacingMm, 20);
   assert.equal(manifest.fixedPattern.vertices, 3458);
+  const pattern = readFileSync(new URL("../public/exhibits/sundress/dress-pattern.json", import.meta.url));
+  assert.equal(createHash("sha256").update(pattern).digest("hex"), manifest.fixedPattern.patternSha256);
+  assert.deepEqual(pattern, readFileSync(new URL("../public/exhibits/sundress-compare/slender-pattern.json", import.meta.url)));
+  for (const file of ["sundress/dress-summary.json", "sundress-compare/slender-summary.json"]) {
+    const summary = JSON.parse(readFileSync(new URL(`../public/exhibits/${file}`, import.meta.url), "utf8"));
+    assert.deepEqual(summary.solverArguments, manifest.fixedPattern.solverArguments);
+  }
 
   const ref = manifest.states.find(s => s.id === "reference");
   const slender = manifest.states.find(s => s.id === "slender");
@@ -67,6 +75,46 @@ test("Compare manifest proves identical fixed pattern & solver config, swap symm
   assert.equal(withRefusal.deltas, null);
 });
 
+test("Comparison recovers from failed geometry by changing forms or retrying, and downloads the fixed cut at full scale", async () => {
+  const page = await browser.newPage({
+    reducedMotion: "reduce",
+    userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
+  });
+  try {
+    let requests = 0;
+    await page.route("**/exhibits/sundress-compare/slender.gz", route =>
+      ++requests <= 2 ? route.fulfill({ status: 503 }) : route.continue());
+    await page.goto(new URL("/wardrobe/sundress/compare/", site).href, { waitUntil: "domcontentloaded" });
+    const right = page.locator('[data-side="right"]');
+    const loaded = right.locator('[data-drape-loaded="true"]');
+    const error = right.getByRole("alert").filter({ hasText: /could not fetch native drape/i });
+    await error.waitFor();
+    assert.equal(await right.locator("canvas").isVisible(), false);
+
+    await page.locator('button[data-action="match-same"]').click();
+    await loaded.waitFor();
+    assert.equal(await right.getByRole("alert").count(), 0);
+
+    await page.locator('button[data-pick-right="slender"]').click();
+    await error.waitFor();
+    await right.getByRole("button", { name: "Retry 3D view" }).click();
+    await loaded.waitFor();
+    assert.equal(requests, 3);
+    assert.equal(await right.locator("canvas").count(), 1);
+    assert.equal(await right.getByRole("alert").count(), 0);
+
+    const download = page.getByRole("link", { name: /full-size sewing pattern PDF/i });
+    const response = await page.request.get(new URL(await download.getAttribute("href"), site).href);
+    assert.equal(response.status(), 200);
+    assert.deepEqual(
+      await response.body(),
+      readFileSync(new URL("../public/sundress/pattern-A4.pdf", import.meta.url)),
+    );
+  } finally {
+    await page.close();
+  }
+});
+
 test("Compare page loads both native drapes under common world scale, swaps cleanly, matches same state, blocks refused garment, and fits phone", async () => {
   const page = await browser.newPage({
     viewport: { width: 1200, height: 860 },
@@ -101,13 +149,17 @@ test("Compare page loads both native drapes under common world scale, swaps clea
     assert.equal(await page.locator('[data-metric="delta-hem-front"]').innerText(), "0.0 mm");
     assert.equal(await page.locator('[data-metric="delta-back-gap"]').innerText(), "0.0 mm");
     assert.equal(await page.locator('[data-metric="delta-strain"]').innerText(), "0.00%");
+    const leftCanvas = page.locator('[data-side="left"] canvas');
+    await page.locator('[data-side="left"] [data-drape-loaded="true"]').waitFor();
+    const existingCanvas = await leftCanvas.elementHandle();
 
     // Selecting refused form on right side displays native refusal card and ZERO garment canvas
     await page.locator('button[data-pick-right="tight_refused"]').click();
     await page.locator('[data-side="right"] [data-refused-garment="true"]').waitFor({ timeout: 10000 });
     assert.equal(await page.locator('[data-side="right"] canvas').count(), 0, "Refused solve must never render a garment canvas");
     assert.match(await page.locator('[data-side="right"]').innerText(), /intersecting_start/);
-    assert.equal(await page.locator('[data-side="left"] canvas').count(), 1, "Accepted left side remains rendered");
+    assert.equal(await leftCanvas.count(), 1, "Accepted left side remains rendered");
+    assert.ok(await existingCanvas.evaluate(canvas => canvas.isConnected), "Changing the other form retains the accepted canvas");
 
     // Restore accepted pair and check desktop + 390px phone overflow & single aria-current
     await page.locator('button[data-pick-left="reference"]').click();

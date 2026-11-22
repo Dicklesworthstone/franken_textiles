@@ -16,8 +16,8 @@
     },
     "reconstructionScope": "Original flat cutting pattern reconstructed in millimetres from the V&A curatorial description and published chest/front/back dimensions of 256-1880 (O112019), not a direct trace of the surviving museum garment. Test the cut in a toile before cutting silk."
   },
-  "patternSha256": "49d4763bcd36b9de60c1b407f869a66002d837f89b683c569815fbdb53076e1c",
-  "svgSha256": "d1a055d9491666b502982e1762bd4d1b2debcc2eee3d16a09aba9b56d02da6d6",
+  "patternSha256": "8dccb0f3ba86355eb0f1740b674e032fed4b7e0775460280a1eb8a5311a530d4",
+  "svgSha256": "e33bb75d5238c65c5c4a370f29c854300615640002fe1cef62d5e5bb22988be9",
   "svgDimensions": {
     "widthAttr": "1139.12mm",
     "heightAttr": "1570.648mm",
@@ -583,8 +583,8 @@
       "edgeB": "left",
       "layerB": "pocket",
       "reverse": true,
-      "lenAMm": 156.0,
-      "lenBMm": 156.0,
+      "lenAMm": 140.0,
+      "lenBMm": 140.0,
       "residualMm": 0.0,
       "status": "PASS"
     },
@@ -600,8 +600,8 @@
       "edgeB": "left",
       "layerB": "pocket",
       "reverse": true,
-      "lenAMm": 156.0,
-      "lenBMm": 156.0,
+      "lenAMm": 140.0,
+      "lenBMm": 140.0,
       "residualMm": 0.0,
       "status": "PASS"
     },
@@ -651,8 +651,8 @@
       "edgeB": "right",
       "layerB": "pocket",
       "reverse": true,
-      "lenAMm": 156.0,
-      "lenBMm": 156.0,
+      "lenAMm": 140.0,
+      "lenBMm": 140.0,
       "residualMm": 0.0,
       "status": "PASS"
     },
@@ -668,8 +668,8 @@
       "edgeB": "right",
       "layerB": "pocket",
       "reverse": true,
-      "lenAMm": 156.0,
-      "lenBMm": 156.0,
+      "lenAMm": 140.0,
+      "lenBMm": 140.0,
       "residualMm": 0.0,
       "status": "PASS"
     }
@@ -817,7 +817,7 @@
       "edge": "end_R",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     },
     {
       "ref": "wc_welt.R/slit_attach",
@@ -826,7 +826,7 @@
       "edge": "slit_attach",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     },
     {
       "ref": "wc_welt.R/end_L",
@@ -835,7 +835,7 @@
       "edge": "end_L",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     },
     {
       "ref": "wc_welt.L/end_R",
@@ -844,7 +844,7 @@
       "edge": "end_R",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     },
     {
       "ref": "wc_welt.L/slit_attach",
@@ -853,7 +853,7 @@
       "edge": "slit_attach",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     },
     {
       "ref": "wc_welt.L/end_L",
@@ -862,7 +862,7 @@
       "edge": "end_L",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     },
     {
       "ref": "wc_pocket_inner.R/slit_top",
@@ -871,7 +871,7 @@
       "edge": "slit_top",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     },
     {
       "ref": "wc_pocket_inner.L/slit_top",
@@ -880,7 +880,7 @@
       "edge": "slit_top",
       "layer": "pocket",
       "kind": "INTERNAL_SLASH_ATTACHMENT",
-      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
+      "reason": "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
     }
   ]
 }

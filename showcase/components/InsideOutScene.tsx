@@ -42,6 +42,13 @@ type PatternDoc = {
   }[];
 };
 
+type PieceOutline3D = {
+  id: string;
+  instance: string;
+  polygon: [number, number][];
+  edges: { id: string; pts: [number, number][] }[];
+};
+
 export type CameraPreset = "Front" | "Three-quarter" | "Back" | "Inside-out" | "Neck & collar";
 
 const PRESETS: Record<CameraPreset, { yaw: number; pitch: number; dist: number; targetY: number }> = {
@@ -218,13 +225,6 @@ export default function InsideOutScene({
     disposables: { dispose: () => void }[];
   } | null>(null);
 
-type PieceOutline3D = {
-  id: string;
-  instance: string;
-  polygon: [number, number][];
-  edges: { id: string; pts: [number, number][] }[];
-};
-
   // Precompute flat outlines for all 17 cut instances once.
   const outlinesRef = useRef<Map<string, PieceOutline3D>>(new Map());
   if (outlinesRef.current.size === 0) {
@@ -339,6 +339,8 @@ type PieceOutline3D = {
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointermove", onMove);
     renderer.domElement.addEventListener("pointerup", onUp);
+    renderer.domElement.addEventListener("pointercancel", onUp);
+    renderer.domElement.addEventListener("lostpointercapture", onUp);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
 
     let rafId = 0;
@@ -365,11 +367,14 @@ type PieceOutline3D = {
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("pointerup", onUp);
+      renderer.domElement.removeEventListener("pointercancel", onUp);
+      renderer.domElement.removeEventListener("lostpointercapture", onUp);
       renderer.domElement.removeEventListener("wheel", onWheel);
       for (const d of sceneObjsRef.current?.disposables ?? []) d.dispose();
       coreGeom.dispose();
       coreMat.dispose();
       renderer.dispose();
+      renderer.forceContextLoss();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
       sceneObjsRef.current = null;
     };
@@ -450,19 +455,20 @@ type PieceOutline3D = {
         highlightGroup.add(meshA, meshB);
         disposables.push(lineA.geom, lineB.geom, matA, matB);
 
-        // Draw correspondence stitch tie-bars connecting paired points across separated layers
+        // Draw correspondence stitch tie-bars connecting paired points across separated layers.
+        // Decide monotone pairing orientation ONCE across the whole seam so curved edges never twist mid-seam.
+        const nA = lineA.pts3.length - 1;
+        const nB = lineB.pts3.length - 1;
+        const distSame = lineA.pts3[0].distanceTo(lineB.pts3[0]) + lineA.pts3[nA].distanceTo(lineB.pts3[nB]);
+        const distRev = lineA.pts3[0].distanceTo(lineB.pts3[nB]) + lineA.pts3[nA].distanceTo(lineB.pts3[0]);
+        const useReversed = distRev < distSame;
         const tiePts: THREE.Vector3[] = [];
         const samples = 7;
         for (let i = 0; i < samples; i++) {
           const frac = i / (samples - 1);
-          const idxA = Math.min(lineA.pts3.length - 1, Math.round(frac * (lineA.pts3.length - 1)));
-          const idxB = Math.min(lineB.pts3.length - 1, Math.round((1 - frac) * (lineB.pts3.length - 1)));
-          // Pick closest pairing end so tie-bars never cross when one side is mirrored
-          const pa = lineA.pts3[idxA];
-          const pbSame = lineB.pts3[Math.min(lineB.pts3.length - 1, Math.round(frac * (lineB.pts3.length - 1)))];
-          const pbRev = lineB.pts3[idxB];
-          const pb = pa.distanceTo(pbSame) <= pa.distanceTo(pbRev) ? pbSame : pbRev;
-          tiePts.push(pa, pb);
+          const idxA = Math.min(nA, Math.round(frac * nA));
+          const idxB = Math.min(nB, Math.round((useReversed ? 1 - frac : frac) * nB));
+          tiePts.push(lineA.pts3[idxA], lineB.pts3[idxB]);
         }
         const tieGeom = new THREE.BufferGeometry().setFromPoints(tiePts);
         const tieMat = new THREE.LineBasicMaterial({ color: 0xf6c762, transparent: true, opacity: 0.9, depthTest: false });

@@ -105,9 +105,9 @@ test("Waistcoat page selects both front and pocket pieces, steps welt pocket sta
     assert.equal(await page.locator('[data-metric="selected-dims"]').innerText(), "136 × 48 MM");
     assert.match(await page.locator(".wc-landmarks").innerText(), /Welt lengthwise fold/i);
 
-    // Select pocket bag and confirm dimensions & linked pocket seams
+    // Select pocket bag and confirm dimensions & linked pocket seams (136 x 140 mm, hanging 36 mm above hem)
     await page.locator('button[data-piece="wc_pocket_outer"]').click();
-    assert.equal(await page.locator('[data-metric="selected-dims"]').innerText(), "136 × 156 MM");
+    assert.equal(await page.locator('[data-metric="selected-dims"]').innerText(), "136 × 140 MM");
 
     // Step through welt pocket transformation to stage 4 (visible stitched welt)
     await page.locator('button[data-welt-stage="finish"]').click();

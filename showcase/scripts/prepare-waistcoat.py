@@ -137,13 +137,15 @@ def waistcoat_pattern():
     c_h = 48.0  # 1780s 48 mm stand collar height
 
     # Twelve covered button / buttonhole stations along centre front (V&A 256-1880 record):
+    # Pocket welt slash sits at y = 176 mm (box y = 164..188 mm) so 140 mm deep linen pocket bags
+    # end cleanly at y = 36 mm above the square hem (y = 0 mm).
     button_ys = [round(36.0 + i * (528.0 / 11.0), 1) for i in range(12)]
     front_internals = [
-        {"kind": "mark", "label": "Pocket welt slash (136 mm cut line)", "pts": [[96, 152], [232, 152]]},
-        {"kind": "mark", "label": "Pocket welt upper stitch line (12 mm above slash)", "pts": [[96, 164], [232, 164]]},
-        {"kind": "mark", "label": "Pocket welt lower stitch line (12 mm below slash)", "pts": [[96, 140], [232, 140]]},
-        {"kind": "mark", "label": "Pocket left corner clip triangle", "pts": [[108, 164], [96, 152], [108, 140]]},
-        {"kind": "mark", "label": "Pocket right corner clip triangle", "pts": [[220, 164], [232, 152], [220, 140]]},
+        {"kind": "mark", "label": "Pocket welt slash (136 mm cut line)", "pts": [[96, 176], [232, 176]]},
+        {"kind": "mark", "label": "Pocket welt upper stitch line (12 mm above slash)", "pts": [[96, 188], [232, 188]]},
+        {"kind": "mark", "label": "Pocket welt lower stitch line (12 mm below slash)", "pts": [[96, 164], [232, 164]]},
+        {"kind": "mark", "label": "Pocket left corner clip triangle", "pts": [[108, 188], [96, 176], [108, 164]]},
+        {"kind": "mark", "label": "Pocket right corner clip triangle", "pts": [[220, 188], [232, 176], [220, 164]]},
         {"kind": "mark", "label": "Facing-to-lining inner seam reference (x = 82 mm)", "pts": [[82, 0], [82, 690]]},
     ] + [
         {"kind": "mark", "label": f"Button / buttonhole #{i + 1}", "pts": [[14, y], [30, y]]}
@@ -183,7 +185,7 @@ def waistcoat_pattern():
             "grain": [[145, 220], [145, 560]],
             "internal": front_internals,
             "notches": [
-                {"id": "pocket_level", "edge": "side", "s": round(152.0 / 435.0, 4), "type": "V"},
+                {"id": "pocket_level", "edge": "side", "s": round(176.0 / 435.0, 4), "type": "V"},
                 {"id": "waist_level", "edge": "side", "s": round(240.0 / 435.0, 4), "type": "V"},
             ],
             "note": "Shell front (V&A 256-1880). Slash 136 mm pocket welt opening and clip corners cleanly to stitch line before turning pocket bags inside.",
@@ -263,7 +265,7 @@ def waistcoat_pattern():
             "internal": back_internals,
             "notches": [
                 {"id": "waist_level", "edge": "side", "s": round((435.0 - 240.0) / 435.0, 4), "type": "V"},
-                {"id": "pocket_level", "edge": "side", "s": round((435.0 - 152.0) / 435.0, 4), "type": "V"},
+                {"id": "pocket_level", "edge": "side", "s": round((435.0 - 176.0) / 435.0, 4), "type": "V"},
                 {"id": "cb_mid", "edge": "cb_upper", "s": 0.5, "type": "double"},
             ],
             "note": "Linen back (670 mm CB length). Seam upper CB above y = 120 mm; leave lower 120 mm notched vent open and attach three pairs of linen adjustment tapes.",
@@ -358,8 +360,8 @@ def waistcoat_pattern():
             "vertices": {
                 "p0": [0, 0],
                 "p1": [136, 0],
-                "p2": [136, 156],
-                "p3": [0, 156],
+                "p2": [136, 140],
+                "p3": [0, 140],
             },
             "edges": [
                 {"id": "bottom", "from": "p0", "to": "p1"},
@@ -367,8 +369,8 @@ def waistcoat_pattern():
                 {"id": "top", "from": "p2", "to": "p3"},
                 {"id": "left", "from": "p3", "to": "p0"},
             ],
-            "grain": [[68, 24], [68, 132]],
-            "note": "Lower linen pocket bag. Joins pocket welt along top edge (136 mm) and closes around left, bottom, and right edges with upper pocket bag.",
+            "grain": [[68, 22], [68, 118]],
+            "note": "Lower linen pocket bag (136 x 140 mm, hanging from y = 176 mm to 36 mm above the hem). Joins pocket welt along top edge (136 mm) and closes around left, bottom, and right edges with upper pocket bag.",
         },
         {
             "id": "wc_pocket_inner",
@@ -377,8 +379,8 @@ def waistcoat_pattern():
             "vertices": {
                 "p0": [0, 0],
                 "p1": [136, 0],
-                "p2": [136, 156],
-                "p3": [0, 156],
+                "p2": [136, 140],
+                "p3": [0, 140],
             },
             "edges": [
                 {"id": "bottom", "from": "p0", "to": "p1"},
@@ -386,8 +388,8 @@ def waistcoat_pattern():
                 {"id": "slit_top", "from": "p2", "to": "p3"},
                 {"id": "left", "from": "p3", "to": "p0"},
             ],
-            "grain": [[68, 24], [68, 132]],
-            "note": "Upper linen pocket bag. Top 136 mm edge stitches directly to upper seam allowance of the 136 mm internal slash on waistcoat front; perimeter closes to lower bag.",
+            "grain": [[68, 22], [68, 118]],
+            "note": "Upper linen pocket bag (136 x 140 mm). Top 136 mm edge stitches directly to upper seam allowance of the 136 mm internal slash on waistcoat front; perimeter closes to lower bag cleanly above the hem.",
         },
     ]
 
@@ -562,7 +564,7 @@ def audit_unpaired_and_missing(pat):
                     elif p["id"] in ("wc_welt", "wc_pocket_inner"):
                         kind = "INTERNAL_SLASH_ATTACHMENT"
                         reason = (
-                            "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 152 mm) "
+                            "Attaches directly to the 136 mm internal welt slash cut inside wc_front (y = 176 mm) "
                             "rather than a perimeter edge; welt ends catch the clipped diagonal slash corners."
                         )
                     else:
