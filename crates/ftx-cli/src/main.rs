@@ -463,6 +463,9 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "body",
         &["measurements", "out", "pose", "skinning", "model"],
     )?;
+    if args.positional.len() != 1 {
+        return Err(bad_input("body takes named options, not positional files"));
+    }
     let pose_name = args.options.get("pose").map_or("drape", String::as_str);
     let pose = match pose_name {
         "drape" => Pose::drape(),
@@ -747,10 +750,10 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "validate",
         &["measurements", "fit", "model", "body-fit", "flat-body"],
     )?;
-    let pattern_path = args
-        .positional
-        .get(1)
-        .ok_or_else(|| bad_input("ftx validate needs a pattern file"))?;
+    if args.positional.len() != 2 {
+        return Err(bad_input("ftx validate needs exactly one pattern file"));
+    }
+    let pattern_path = &args.positional[1];
     let (pat, _) = read_json(pattern_path)?;
     let (meas, _) = read_json(required(args, "measurements")?)?;
     let spec = fit_spec(args)?;
@@ -1059,10 +1062,10 @@ fn cmd_drape_bound(
     // A drape writes no stills of its own. This is the size of the pictures a refusal leaves, which a
     // round sets to the size of its stills so a pixel means the same place in both.
     let refusal_size = render::resolution(args.options.get("res").map(String::as_str))?;
-    let pattern_path = args
-        .positional
-        .get(1)
-        .ok_or_else(|| bad_input("ftx drape needs a pattern file"))?;
+    if args.positional.len() != 2 {
+        return Err(bad_input("ftx drape needs exactly one pattern file"));
+    }
+    let pattern_path = &args.positional[1];
     let (mut pat, pattern_bytes) = read_json(pattern_path)?;
     let fabric_override = fabric::load(args)?;
     let outfit = if pat["schema"] == ftx_drape::outfit::SCHEMA {
@@ -2374,6 +2377,60 @@ mod tests {
                 .contains("--newton-strategy requires --sim or --stills"),
             "{}",
             no_sim_err.message
+        );
+    }
+
+    #[test]
+    fn body_validate_and_drape_refuse_extra_positional_arguments() {
+        let body_args = parse(
+            &[
+                "body",
+                "stray.json",
+                "--measurements",
+                "absent.json",
+                "--out",
+                "absent-out",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_body(&body_args).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        let validate_args = parse(
+            &[
+                "validate",
+                "a.json",
+                "b.json",
+                "--measurements",
+                "absent.json",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_validate(&validate_args).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        let drape_args = parse(
+            &[
+                "drape",
+                "a.json",
+                "b.json",
+                "--measurements",
+                "absent.json",
+                "--out",
+                "absent-out",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_drape(&drape_args).unwrap_err().code,
+            RefusalCode::InvalidDocument
         );
     }
 }
