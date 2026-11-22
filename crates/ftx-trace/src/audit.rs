@@ -1093,7 +1093,7 @@ mod tests {
                     .unwrap()
                     .clone(),
             );
-            doc.seams = vec![
+            doc.seams = Some(vec![
                 serde_json::from_value(json!({
                     "id": "s1",
                     "a": "p1/e1",
@@ -1101,7 +1101,7 @@ mod tests {
                     "ratio_band": bad_band
                 }))
                 .unwrap(),
-            ];
+            ]);
             doc.extra.insert(
                 "checks".into(),
                 json!([{
