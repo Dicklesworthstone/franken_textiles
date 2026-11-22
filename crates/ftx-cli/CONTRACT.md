@@ -335,8 +335,20 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   that reached the target before the cap and was stretched past it by the leg-separation repair), the
   repair and the `TIGHT START` line add that stretch next to a seam can then be unfinished relaxation and
   not a piece that is too small, and name the check: `ftx place` at a coarser `--spacing-mm`, where
-  stretch that remains once the relaxation reaches its target is not unfinished relaxation. Neither
-  sentence has been printed by a built binary yet; the string builder is unit-tested. `ftx place` applies the same measure to the start it draws, prints such instances as
+  stretch that remains once the relaxation reaches its target is not unfinished relaxation. A checkpoint
+  is less relaxed than the full start by construction, so its repair carries the same warning and points
+  to `ftx place` for the fully relaxed start's own measure. When the pictures cannot be written (a full
+  disk, an existing `refused/`), the first repair says so with the error and the start's diagnosis is
+  still given.
+  Run on a build of 2026-11-21: `ftx place` at 6 mm printed the `TIGHT START` sentence and its check and
+  reproduced an earlier report (8910 vertices, p95 0.194, three vertices inside the body). Two 6 mm drapes
+  of the 385 mm sleeve (drafted cuff; widened cuff on a 45 mm cylinder) both began from checkpoints, at
+  1225 and 250 iterations. The first named the back and both fronts by their shoulder and neck seams and
+  not the sleeves, so the instance list is not to be trusted on a mesh finer than the 12 mm it was
+  measured on. The second could not write its pictures and came back with no diagnosis, which is what the
+  sentence before this paragraph now prevents. Still not printed by any built binary: the capped-start
+  sentence of a drape, the checkpoint warning and the unwritable-pictures repair, which postdate that
+  build; all three are unit-tested. `ftx place` applies the same measure to the start it draws, prints such instances as
   `TIGHT START` and records `stretched_past_ramp_pct` and `stretched_nearest_edge` in each instance's
   `start_edge_strain`. It draws the fully relaxed start, so it does not flag a garment whose fully relaxed
   start is loose but is not admitted for cloth contact: there only the drape's refusal names the stretched
