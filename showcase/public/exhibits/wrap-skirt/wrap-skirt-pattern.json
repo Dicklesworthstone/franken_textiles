@@ -1,0 +1,461 @@
+{
+  "schema": "fabric-pattern/1",
+  "units": "mm",
+  "style": "WRAP_SKIRT",
+  "meta": {
+    "title": "Adjustable-overlap wrap skirt",
+    "size_label": "Fixed 1020 mm wrap \u00b7 synthetic adult study",
+    "sa_mm": 10,
+    "origin": "VECTOR_EDIT",
+    "note": "Fixed wrap skirt with 1020 mm total waist sweep, 1540 mm hem sweep, and two 780 mm waist ties. Check seated overlap and confirm fit in a muslin."
+  },
+  "pieces": [
+    {
+      "id": "skirt_back",
+      "name": "Back skirt",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "hl": [
+          -290,
+          -600
+        ],
+        "hr": [
+          290,
+          -600
+        ],
+        "wr": [
+          180,
+          0
+        ],
+        "wl": [
+          -180,
+          0
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "hl",
+          "to": "hr"
+        },
+        {
+          "id": "side_R",
+          "from": "hr",
+          "to": "wr",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.32,
+                -0.018
+              ],
+              [
+                0.7,
+                -0.032
+              ]
+            ]
+          }
+        },
+        {
+          "id": "waist",
+          "from": "wr",
+          "to": "wl"
+        },
+        {
+          "id": "side_L",
+          "from": "wl",
+          "to": "hl",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.3,
+                -0.032
+              ],
+              [
+                0.68,
+                -0.018
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          0,
+          -520
+        ],
+        [
+          0,
+          -80
+        ]
+      ],
+      "notches": [
+        {
+          "id": "cb_waist",
+          "edge": "waist",
+          "s": 0.5,
+          "type": "double"
+        }
+      ],
+      "note": "Join side seams to both overlapping fronts. Match centre-back notch to waistband."
+    },
+    {
+      "id": "skirt_front",
+      "name": "Wrap front panel",
+      "cut": {
+        "qty": 2
+      },
+      "vertices": {
+        "h_side": [
+          -110,
+          -600
+        ],
+        "h_wrap": [
+          370,
+          -600
+        ],
+        "w_wrap": [
+          330,
+          0
+        ],
+        "w_side": [
+          0,
+          0
+        ]
+      },
+      "edges": [
+        {
+          "id": "hem",
+          "from": "h_side",
+          "to": "h_wrap"
+        },
+        {
+          "id": "wrap_edge",
+          "from": "h_wrap",
+          "to": "w_wrap"
+        },
+        {
+          "id": "waist",
+          "from": "w_wrap",
+          "to": "w_side"
+        },
+        {
+          "id": "side",
+          "from": "w_side",
+          "to": "h_side",
+          "curve": {
+            "type": "cubic",
+            "c": [
+              [
+                0.3,
+                -0.032
+              ],
+              [
+                0.68,
+                -0.018
+              ]
+            ]
+          }
+        }
+      ],
+      "grain": [
+        [
+          140,
+          -520
+        ],
+        [
+          140,
+          -80
+        ]
+      ],
+      "internal": [
+        {
+          "kind": "fold",
+          "label": "Wrap edge hem fold (20 mm)",
+          "pts": [
+            [
+              350,
+              -600
+            ],
+            [
+              310,
+              0
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Centre-front reference (+180 mm from side)",
+          "pts": [
+            [
+              180,
+              -40
+            ],
+            [
+              180,
+              0
+            ]
+          ]
+        }
+      ],
+      "notches": [
+        {
+          "id": "cf_mark",
+          "edge": "waist",
+          "s": 0.4545,
+          "type": "V"
+        }
+      ],
+      "note": "Cut mirror pair (R overwrap, L underwrap). Hem front wrap edges before attaching waistband."
+    },
+    {
+      "id": "waistband",
+      "name": "Wrap waistband (fold)",
+      "cut": {
+        "qty": 1
+      },
+      "vertices": {
+        "b0": [
+          0,
+          0
+        ],
+        "b1": [
+          330,
+          0
+        ],
+        "b2": [
+          690,
+          0
+        ],
+        "b3": [
+          1020,
+          0
+        ],
+        "r_mid": [
+          1020,
+          35
+        ],
+        "r_top": [
+          1020,
+          70
+        ],
+        "l_top": [
+          0,
+          70
+        ],
+        "l_mid": [
+          0,
+          35
+        ]
+      },
+      "edges": [
+        {
+          "id": "front_L",
+          "from": "b0",
+          "to": "b1"
+        },
+        {
+          "id": "back",
+          "from": "b1",
+          "to": "b2"
+        },
+        {
+          "id": "front_R",
+          "from": "b2",
+          "to": "b3"
+        },
+        {
+          "id": "end_R_tie",
+          "from": "b3",
+          "to": "r_mid"
+        },
+        {
+          "id": "end_R_upper",
+          "from": "r_mid",
+          "to": "r_top"
+        },
+        {
+          "id": "top",
+          "from": "r_top",
+          "to": "l_top"
+        },
+        {
+          "id": "end_L_upper",
+          "from": "l_top",
+          "to": "l_mid"
+        },
+        {
+          "id": "end_L_tie",
+          "from": "l_mid",
+          "to": "b0"
+        }
+      ],
+      "grain": [
+        [
+          60,
+          35
+        ],
+        [
+          960,
+          35
+        ]
+      ],
+      "internal": [
+        {
+          "kind": "fold",
+          "label": "Waistband lengthwise fold",
+          "pts": [
+            [
+              0,
+              35
+            ],
+            [
+              1020,
+              35
+            ]
+          ]
+        },
+        {
+          "kind": "mark",
+          "label": "Right side-seam tie pass-through slot",
+          "pts": [
+            [
+              690,
+              8
+            ],
+            [
+              690,
+              27
+            ]
+          ]
+        }
+      ],
+      "notches": [
+        {
+          "id": "cf_band_L",
+          "edge": "front_L",
+          "s": 0.4545,
+          "type": "V"
+        },
+        {
+          "id": "cb_band",
+          "edge": "back",
+          "s": 0.5,
+          "type": "double"
+        },
+        {
+          "id": "cf_band_R",
+          "edge": "front_R",
+          "s": 0.5455,
+          "type": "V"
+        }
+      ],
+      "note": "Attach to joined skirt waist (1020 mm total). Work a 20 mm buttonhole at the right side-seam slot for the inner tie."
+    },
+    {
+      "id": "waist_tie",
+      "name": "Waist tie strap",
+      "cut": {
+        "qty": 2
+      },
+      "vertices": {
+        "a0": [
+          0,
+          0
+        ],
+        "a1": [
+          780,
+          0
+        ],
+        "a2": [
+          780,
+          35
+        ],
+        "a3": [
+          0,
+          35
+        ]
+      },
+      "edges": [
+        {
+          "id": "bottom",
+          "from": "a0",
+          "to": "a1"
+        },
+        {
+          "id": "tip",
+          "from": "a1",
+          "to": "a2"
+        },
+        {
+          "id": "top",
+          "from": "a2",
+          "to": "a3"
+        },
+        {
+          "id": "attach",
+          "from": "a3",
+          "to": "a0"
+        }
+      ],
+      "grain": [
+        [
+          40,
+          17.5
+        ],
+        [
+          740,
+          17.5
+        ]
+      ],
+      "note": "Cut two 780 mm ties. Press into finished narrow straps and insert into the folded waistband ends."
+    }
+  ],
+  "seams": [
+    {
+      "id": "side_R",
+      "a": "skirt_back/side_R",
+      "b": "skirt_front.R/side",
+      "reverse": true
+    },
+    {
+      "id": "side_L",
+      "a": "skirt_back/side_L",
+      "b": "skirt_front.L/side",
+      "reverse": true
+    },
+    {
+      "id": "band_back",
+      "a": "waistband/back",
+      "b": "skirt_back/waist",
+      "reverse": true
+    },
+    {
+      "id": "band_front_R",
+      "a": "waistband/front_R",
+      "b": "skirt_front.R/waist",
+      "reverse": true
+    },
+    {
+      "id": "band_front_L",
+      "a": "waistband/front_L",
+      "b": "skirt_front.L/waist",
+      "reverse": true
+    },
+    {
+      "id": "tie_R",
+      "a": "waist_tie.R/attach",
+      "b": "waistband/end_R_tie",
+      "reverse": true
+    },
+    {
+      "id": "tie_L",
+      "a": "waist_tie.L/attach",
+      "b": "waistband/end_L_tie",
+      "reverse": true
+    }
+  ]
+}

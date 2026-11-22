@@ -284,6 +284,14 @@ export default function Exhibition({section}: {section?: string}) {
             </div>
             <span className="thermal-callout-cta">Compare wash shrinkage <Arrow diagonal/></span>
           </a>
+          <a className="thermal-callout" href="/experiments/friction/">
+            <div>
+              <span className="mono">Native contact · Live WASM calibration</span>
+              <h3>Friction sled</h3>
+              <p>Step across recorded IPC normal reactions and the Coulomb stick-to-slip plateau between synthetic surface states while uncalibrated catalog textiles stay unavailable.</p>
+            </div>
+            <span className="thermal-callout-cta">Inspect stick-to-slip <Arrow diagonal/></span>
+          </a>
         </div>
       </div></section>}
       {show("studies") && <section id="studies" className="paper"><div className="wrap collection">

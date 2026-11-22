@@ -1,0 +1,22 @@
+{
+  "schema": "fabric-fit/1",
+  "garment": "Adjustable-overlap wrap skirt",
+  "points": [
+    {
+      "id": "waist_total",
+      "label": "Total flat waist sweep (with wrap overlap)",
+      "kind": "path",
+      "refs": [
+        "skirt_front.L/waist",
+        "skirt_back/waist",
+        "skirt_front.R/waist"
+      ],
+      "body": "waist",
+      "target_mm": [
+        150,
+        300,
+        420
+      ]
+    }
+  ]
+}

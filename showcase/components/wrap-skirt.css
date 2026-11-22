@@ -1,0 +1,382 @@
+.ws-page {
+  background: var(--paper, #f4f1e6);
+  color: var(--ink, #172328);
+  padding: 20px 0 84px;
+}
+
+.ws-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+.ws-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: end;
+}
+
+.ws-heading h1 {
+  font: 400 clamp(38px, 4.8vw, 56px)/0.98 var(--serif, Georgia);
+  margin: 8px 0 0;
+  letter-spacing: -0.02em;
+}
+
+.ws-heading h1 em {
+  color: #a64123;
+  font-style: italic;
+}
+
+.ws-heading p:not(.kicker) {
+  margin: 0;
+  font: 400 15px/1.6 var(--sans, sans-serif);
+  color: #425052;
+}
+
+.ws-heading code,
+.ws-note code {
+  font: 500 12.5px var(--mono, monospace);
+  background: #e9e4d5;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.ws-bar {
+  background: #132229;
+  color: #f4efe0;
+  border: 1px solid #263b45;
+  border-radius: 6px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.ws-bar-top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px 14px;
+}
+
+.ws-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.ws-group button,
+.ws-preset-row button,
+.ws-slice-tabs button {
+  padding: 6px 11px;
+  border-radius: 4px;
+  border: 1px solid #3c5460;
+  background: #1b303a;
+  color: #eef0ea;
+  font: 600 12px var(--sans, sans-serif);
+  cursor: pointer;
+}
+
+.ws-group button[aria-pressed="true"],
+.ws-slice-tabs button[aria-pressed="true"] {
+  background: #d3aa59;
+  border-color: #ebc97c;
+  color: #162127;
+}
+
+.ws-tie-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ws-tie-box {
+  background: #192c35;
+  border: 1px solid #2e4754;
+  border-radius: 5px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.ws-tie-b {
+  border-color: #5c4c2a;
+}
+
+.ws-tie-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  font: 600 12px var(--mono, monospace);
+  color: #f2cf83;
+}
+
+.ws-tie-box label {
+  display: grid;
+  gap: 4px;
+  font: 500 12px var(--sans, sans-serif);
+  color: #d0dcda;
+}
+
+.ws-tie-box input[type="range"] {
+  width: 100%;
+  accent-color: #df6c42;
+}
+
+.ws-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font: 500 12px var(--sans, sans-serif);
+  color: #c5d1d2;
+}
+
+.ws-error {
+  margin: 0;
+  padding: 12px;
+  border-radius: 5px;
+  background: #fbe4dc;
+  color: #82280f;
+  font: 600 13px var(--sans, sans-serif);
+}
+
+.ws-dual {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.ws-card {
+  min-width: 0;
+  background: #122026;
+  color: #f3ede0;
+  border: 1px solid #263a43;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #233740;
+  font: 600 11px var(--mono, monospace);
+  letter-spacing: 0.05em;
+  color: #d6dfd8;
+}
+
+.ws-slice-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ws-slice-tabs button {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--mono, monospace);
+}
+
+.ws-svg-wrap {
+  padding: 12px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ws-svg,
+.ws-flat-svg {
+  width: 100%;
+  max-height: 390px;
+  height: auto;
+  display: block;
+  border-radius: 3px;
+}
+
+.ws-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 14px;
+  border-top: 1px solid #233740;
+  font: 400 11.5px var(--sans, sans-serif);
+  color: #c2cecf;
+}
+
+.ws-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-legend i {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+}
+
+.ws-legend .sw-under { background: #1c8572; }
+.ws-legend .sw-over { background: #d55d37; }
+.ws-legend .sw-b { border-top: 2.5px dashed #d3aa59; height: 0; }
+.ws-legend .sw-gap { border-top: 2.5px dashed #e04731; height: 0; }
+
+.ws-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.85fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.ws-panel-card {
+  min-width: 0;
+  background: #fffef9;
+  border: 1px solid #d4cfc0;
+  border-radius: 6px;
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.ws-panel-card h2 {
+  margin: 0;
+  font: 400 24px/1.1 var(--serif, Georgia);
+}
+
+.ws-note,
+.ws-scope {
+  margin: 0;
+  font: 400 13.5px/1.55 var(--sans, sans-serif);
+  color: #465457;
+}
+
+.ws-scope {
+  font-size: 12px;
+  color: #5b686a;
+}
+
+.ws-table-scroll {
+  overflow-x: auto;
+}
+
+.ws-panel-card table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 12.5px/1.4 var(--sans, sans-serif);
+}
+
+.ws-panel-card th,
+.ws-panel-card td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid #e4dfd1;
+}
+
+.ws-panel-card th {
+  font: 600 10.5px var(--mono, monospace);
+  text-transform: uppercase;
+  color: #536164;
+}
+
+.ws-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font: 700 10.5px var(--mono, monospace);
+  background: #e1efe8;
+  color: #155344;
+}
+
+.ws-pill[data-status="MARGINAL"] {
+  background: #f9e4be;
+  color: #84500c;
+}
+
+.ws-pill[data-status="LIMIT_EXCEEDED"] {
+  background: #fae2d7;
+  color: #9b2e13;
+}
+
+.ws-limits {
+  background: #faf7ee;
+  border: 1px solid #dfd9c9;
+  border-radius: 5px;
+  padding: 12px 14px;
+}
+
+.ws-limits h3 {
+  margin: 0 0 6px;
+  font: 600 13px var(--sans, sans-serif);
+}
+
+.ws-limits p,
+.ws-limits ul {
+  margin: 0;
+  font: 400 12.5px/1.5 var(--sans, sans-serif);
+  color: #3f4e51;
+}
+
+.ws-limits ul {
+  padding-left: 18px;
+}
+
+.ws-downloads {
+  display: grid;
+  gap: 8px;
+}
+
+.ws-dl-pri,
+.ws-dl-sec {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font: 600 13px var(--sans, sans-serif);
+  text-decoration: none;
+}
+
+.ws-dl-pri {
+  background: #172b32;
+  color: #fffef8;
+}
+
+.ws-dl-pri:hover {
+  background: #25414b;
+}
+
+.ws-dl-sec {
+  background: #f5f2e8;
+  color: #1d3136;
+  border: 1px solid #c9c2b1;
+}
+
+.ws-dl-sec:hover {
+  background: #eae5d7;
+}
+
+@media (max-width: 960px) {
+  .ws-heading,
+  .ws-tie-grid,
+  .ws-dual,
+  .ws-lower {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .ws-panel-card table {
+    font-size: 11px;
+  }
+  .ws-panel-card th,
+  .ws-panel-card td {
+    padding: 6px 4px;
+  }
+}

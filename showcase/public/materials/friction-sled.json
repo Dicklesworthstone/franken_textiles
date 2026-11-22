@@ -1,0 +1,6378 @@
+{
+  "catalog_audit": {
+    "materials_with_source_qualified_friction": 0,
+    "total_materials": 449,
+    "unavailable_pairs": [
+      {
+        "available": false,
+        "id": "denim1_vs_cotton_jersey",
+        "label": "Kanat & Ozdil Denim 1 vs De Mey Cotton Jersey",
+        "reason": "Missing source-qualified friction coefficient for both catalog counterfaces; no pair interface or generic preset is invented.",
+        "sheets": [
+          {
+            "id": "kanat_ozdil_2026_denim_1_unwashed",
+            "missing": [
+              "friction_self",
+              "friction_skin"
+            ]
+          },
+          {
+            "id": "demey/2025/cotton-jersey",
+            "missing": [
+              "friction_self",
+              "friction_skin"
+            ],
+            "name": "De Mey specimen 1d: Cotton single jersey (beige)"
+          }
+        ]
+      },
+      {
+        "available": false,
+        "id": "cotton_muslin_vs_wool_blend",
+        "label": "Dharma Cotton Muslin 3.5 oz vs De Mey Wool/Linen/Cotton",
+        "reason": "Missing source-qualified friction coefficient for both catalog counterfaces; no pair interface or generic preset is invented.",
+        "sheets": [
+          {
+            "id": "dharma_cotton_muslin_35",
+            "missing": [
+              "friction_self",
+              "friction_skin"
+            ],
+            "name": "Dharma cotton muslin 3.5 oz"
+          },
+          {
+            "id": "demey/2025/wool70-linen20-cotton10-woven",
+            "missing": [
+              "friction_self",
+              "friction_skin"
+            ],
+            "name": "De Mey specimen 1f: Wool 70% / linen 20% / cotton 10% plain woven"
+          }
+        ]
+      }
+    ]
+  },
+  "histories": [
+    {
+      "coulomb_threshold_n": 0.8,
+      "description": "Synthetic pair A/B (μ = 0.40) under 2.0 N normal load, pulled along +x past the 0.80 N Coulomb threshold.",
+      "eps_v_mm_s": 1.0,
+      "first_slip_pull_n": 0.763636,
+      "first_slip_step": 24,
+      "first_slip_time_s": 0.24,
+      "id": "state_a_2n_pos_x",
+      "label": "2.0 N normal · +x pull ramp (0 → 1.40 N)",
+      "mu": 0.4,
+      "normal_load_n": 2.0,
+      "pull_direction": [
+        1.0,
+        0.0
+      ],
+      "pull_direction_label": "+x (1.00, 0.00)",
+      "pull_max_n": 1.4,
+      "samples": [
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.0,
+          "applied_pull_n": [
+            0.0,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0,
+          "iterations": 0,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 2.000008,
+          "sled_center_mm": [
+            0.0,
+            0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0,
+          "step": 0,
+          "tangential_reaction_along_n": 0.0,
+          "tangential_reaction_n": [
+            0.0,
+            0.0
+          ],
+          "time_s": 0.0,
+          "velocity_mm_s": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.031818,
+          "applied_pull_n": [
+            0.031818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0002,
+          "iterations": 9,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999999,
+          "sled_center_mm": [
+            0.0002,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0185,
+          "step": 1,
+          "tangential_reaction_along_n": 0.031447,
+          "tangential_reaction_n": [
+            0.031447,
+            0.0
+          ],
+          "time_s": 0.01,
+          "velocity_mm_s": [
+            0.0185,
+            -0.0
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.063636,
+          "applied_pull_n": [
+            0.063636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0006,
+          "iterations": 9,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999992,
+          "sled_center_mm": [
+            0.0006,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0377,
+          "step": 2,
+          "tangential_reaction_along_n": 0.063253,
+          "tangential_reaction_n": [
+            0.063253,
+            2e-6
+          ],
+          "time_s": 0.02,
+          "velocity_mm_s": [
+            0.0377,
+            -0.0001
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.095455,
+          "applied_pull_n": [
+            0.095455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0011,
+          "iterations": 9,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999974,
+          "sled_center_mm": [
+            0.0011,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0574,
+          "step": 3,
+          "tangential_reaction_along_n": 0.095062,
+          "tangential_reaction_n": [
+            0.095062,
+            3e-6
+          ],
+          "time_s": 0.03,
+          "velocity_mm_s": [
+            0.0574,
+            -0.0003
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.127273,
+          "applied_pull_n": [
+            0.127273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0019,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999939,
+          "sled_center_mm": [
+            0.0019,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0775,
+          "step": 4,
+          "tangential_reaction_along_n": 0.12687,
+          "tangential_reaction_n": [
+            0.12687,
+            4e-6
+          ],
+          "time_s": 0.04,
+          "velocity_mm_s": [
+            0.0775,
+            -0.0005
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.159091,
+          "applied_pull_n": [
+            0.159091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0029,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999882,
+          "sled_center_mm": [
+            0.0029,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0981,
+          "step": 5,
+          "tangential_reaction_along_n": 0.158678,
+          "tangential_reaction_n": [
+            0.158678,
+            5e-6
+          ],
+          "time_s": 0.05,
+          "velocity_mm_s": [
+            0.0981,
+            -0.0007
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.190909,
+          "applied_pull_n": [
+            0.190909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0041,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999796,
+          "sled_center_mm": [
+            0.0041,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.1193,
+          "step": 6,
+          "tangential_reaction_along_n": 0.190485,
+          "tangential_reaction_n": [
+            0.190485,
+            7e-6
+          ],
+          "time_s": 0.06,
+          "velocity_mm_s": [
+            0.1193,
+            -0.0011
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.222727,
+          "applied_pull_n": [
+            0.222727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0055,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999675,
+          "sled_center_mm": [
+            0.0055,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.1411,
+          "step": 7,
+          "tangential_reaction_along_n": 0.222292,
+          "tangential_reaction_n": [
+            0.222292,
+            8e-6
+          ],
+          "time_s": 0.07,
+          "velocity_mm_s": [
+            0.1411,
+            -0.0014
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.254545,
+          "applied_pull_n": [
+            0.254545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0071,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999511,
+          "sled_center_mm": [
+            0.0071,
+            -0.0001,
+            0.51
+          ],
+          "speed_mm_s": 0.1635,
+          "step": 8,
+          "tangential_reaction_along_n": 0.254097,
+          "tangential_reaction_n": [
+            0.254097,
+            9e-6
+          ],
+          "time_s": 0.08,
+          "velocity_mm_s": [
+            0.1635,
+            -0.0019
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.286364,
+          "applied_pull_n": [
+            0.286364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.009,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999298,
+          "sled_center_mm": [
+            0.009,
+            -0.0001,
+            0.51
+          ],
+          "speed_mm_s": 0.1866,
+          "step": 9,
+          "tangential_reaction_along_n": 0.285901,
+          "tangential_reaction_n": [
+            0.285901,
+            0.000011
+          ],
+          "time_s": 0.09,
+          "velocity_mm_s": [
+            0.1866,
+            -0.0025
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.318182,
+          "applied_pull_n": [
+            0.318182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0111,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999027,
+          "sled_center_mm": [
+            0.0111,
+            -0.0001,
+            0.51
+          ],
+          "speed_mm_s": 0.2106,
+          "step": 10,
+          "tangential_reaction_along_n": 0.317703,
+          "tangential_reaction_n": [
+            0.317703,
+            0.000013
+          ],
+          "time_s": 0.1,
+          "velocity_mm_s": [
+            0.2106,
+            -0.0031
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.35,
+          "applied_pull_n": [
+            0.35,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0135,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.998689,
+          "sled_center_mm": [
+            0.0135,
+            -0.0002,
+            0.51
+          ],
+          "speed_mm_s": 0.2354,
+          "step": 11,
+          "tangential_reaction_along_n": 0.349504,
+          "tangential_reaction_n": [
+            0.349504,
+            0.000015
+          ],
+          "time_s": 0.11,
+          "velocity_mm_s": [
+            0.2353,
+            -0.0038
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.381818,
+          "applied_pull_n": [
+            0.381818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0161,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.998275,
+          "sled_center_mm": [
+            0.0161,
+            -0.0002,
+            0.51
+          ],
+          "speed_mm_s": 0.2611,
+          "step": 12,
+          "tangential_reaction_along_n": 0.381303,
+          "tangential_reaction_n": [
+            0.381303,
+            0.000017
+          ],
+          "time_s": 0.12,
+          "velocity_mm_s": [
+            0.2611,
+            -0.0047
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.413636,
+          "applied_pull_n": [
+            0.413636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0189,
+          "iterations": 12,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.997776,
+          "sled_center_mm": [
+            0.0189,
+            -0.0003,
+            0.51
+          ],
+          "speed_mm_s": 0.288,
+          "step": 13,
+          "tangential_reaction_along_n": 0.4131,
+          "tangential_reaction_n": [
+            0.4131,
+            0.000019
+          ],
+          "time_s": 0.13,
+          "velocity_mm_s": [
+            0.2879,
+            -0.0056
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.445455,
+          "applied_pull_n": [
+            0.445455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0221,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.997181,
+          "sled_center_mm": [
+            0.0221,
+            -0.0003,
+            0.51
+          ],
+          "speed_mm_s": 0.316,
+          "step": 14,
+          "tangential_reaction_along_n": 0.444893,
+          "tangential_reaction_n": [
+            0.444893,
+            0.000021
+          ],
+          "time_s": 0.14,
+          "velocity_mm_s": [
+            0.316,
+            -0.0067
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.477273,
+          "applied_pull_n": [
+            0.477273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0256,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.996477,
+          "sled_center_mm": [
+            0.0256,
+            -0.0004,
+            0.51
+          ],
+          "speed_mm_s": 0.3455,
+          "step": 15,
+          "tangential_reaction_along_n": 0.476684,
+          "tangential_reaction_n": [
+            0.476684,
+            0.000024
+          ],
+          "time_s": 0.15,
+          "velocity_mm_s": [
+            0.3454,
+            -0.0079
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.509091,
+          "applied_pull_n": [
+            0.509091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0293,
+          "iterations": 15,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.995654,
+          "sled_center_mm": [
+            0.0293,
+            -0.0005,
+            0.51
+          ],
+          "speed_mm_s": 0.3766,
+          "step": 16,
+          "tangential_reaction_along_n": 0.508469,
+          "tangential_reaction_n": [
+            0.508469,
+            0.000027
+          ],
+          "time_s": 0.16,
+          "velocity_mm_s": [
+            0.3765,
+            -0.0093
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.540909,
+          "applied_pull_n": [
+            0.540909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0334,
+          "iterations": 15,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.994699,
+          "sled_center_mm": [
+            0.0334,
+            -0.0006,
+            0.51
+          ],
+          "speed_mm_s": 0.4097,
+          "step": 17,
+          "tangential_reaction_along_n": 0.540249,
+          "tangential_reaction_n": [
+            0.540249,
+            0.000031
+          ],
+          "time_s": 0.17,
+          "velocity_mm_s": [
+            0.4096,
+            -0.0108
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.572727,
+          "applied_pull_n": [
+            0.572727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0379,
+          "iterations": 15,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.993598,
+          "sled_center_mm": [
+            0.0379,
+            -0.0007,
+            0.51
+          ],
+          "speed_mm_s": 0.4451,
+          "step": 18,
+          "tangential_reaction_along_n": 0.57202,
+          "tangential_reaction_n": [
+            0.57202,
+            0.000035
+          ],
+          "time_s": 0.18,
+          "velocity_mm_s": [
+            0.4449,
+            -0.0126
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.604545,
+          "applied_pull_n": [
+            0.604545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0427,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.992337,
+          "sled_center_mm": [
+            0.0427,
+            -0.0009,
+            0.51
+          ],
+          "speed_mm_s": 0.4834,
+          "step": 19,
+          "tangential_reaction_along_n": 0.60378,
+          "tangential_reaction_n": [
+            0.60378,
+            0.00004
+          ],
+          "time_s": 0.19,
+          "velocity_mm_s": [
+            0.4832,
+            -0.0146
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.636364,
+          "applied_pull_n": [
+            0.636364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.048,
+          "iterations": 17,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.9909,
+          "sled_center_mm": [
+            0.048,
+            -0.001,
+            0.51
+          ],
+          "speed_mm_s": 0.5255,
+          "step": 20,
+          "tangential_reaction_along_n": 0.635522,
+          "tangential_reaction_n": [
+            0.635522,
+            0.000047
+          ],
+          "time_s": 0.2,
+          "velocity_mm_s": [
+            0.5252,
+            -0.0169
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.668182,
+          "applied_pull_n": [
+            0.668182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0537,
+          "iterations": 18,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.989271,
+          "sled_center_mm": [
+            0.0537,
+            -0.0012,
+            0.51
+          ],
+          "speed_mm_s": 0.573,
+          "step": 21,
+          "tangential_reaction_along_n": 0.667234,
+          "tangential_reaction_n": [
+            0.667234,
+            0.000056
+          ],
+          "time_s": 0.21,
+          "velocity_mm_s": [
+            0.5726,
+            -0.0197
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.7,
+          "applied_pull_n": [
+            0.7,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.06,
+          "iterations": 20,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.987423,
+          "sled_center_mm": [
+            0.06,
+            -0.0015,
+            0.51
+          ],
+          "speed_mm_s": 0.6293,
+          "step": 22,
+          "tangential_reaction_along_n": 0.698876,
+          "tangential_reaction_n": [
+            0.698876,
+            0.00007
+          ],
+          "time_s": 0.22,
+          "velocity_mm_s": [
+            0.6288,
+            -0.0232
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.731818,
+          "applied_pull_n": [
+            0.731818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0681,
+          "iterations": 62,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.984931,
+          "sled_center_mm": [
+            0.0681,
+            -0.0019,
+            0.51
+          ],
+          "speed_mm_s": 0.8094,
+          "step": 23,
+          "tangential_reaction_along_n": 0.728226,
+          "tangential_reaction_n": [
+            0.728226,
+            0.000329
+          ],
+          "time_s": 0.23,
+          "velocity_mm_s": [
+            0.8085,
+            -0.0397
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.763636,
+          "applied_pull_n": [
+            0.763636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0825,
+          "iterations": 64,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.980833,
+          "sled_center_mm": [
+            0.0825,
+            -0.0031,
+            0.51
+          ],
+          "speed_mm_s": 1.447,
+          "step": 24,
+          "tangential_reaction_along_n": 0.750969,
+          "tangential_reaction_n": [
+            0.750969,
+            0.001652
+          ],
+          "time_s": 0.24,
+          "velocity_mm_s": [
+            1.4418,
+            -0.1223
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.795455,
+          "applied_pull_n": [
+            0.795455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.1063,
+          "iterations": 39,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.979319,
+          "sled_center_mm": [
+            0.1063,
+            -0.0052,
+            0.509
+          ],
+          "speed_mm_s": 2.3892,
+          "step": 25,
+          "tangential_reaction_along_n": 0.776698,
+          "tangential_reaction_n": [
+            0.776698,
+            0.001814
+          ],
+          "time_s": 0.25,
+          "velocity_mm_s": [
+            2.3796,
+            -0.213
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.827273,
+          "applied_pull_n": [
+            0.827273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.1432,
+          "iterations": 31,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.981849,
+          "sled_center_mm": [
+            0.1432,
+            -0.0072,
+            0.508
+          ],
+          "speed_mm_s": 3.7,
+          "step": 26,
+          "tangential_reaction_along_n": 0.80097,
+          "tangential_reaction_n": [
+            0.80097,
+            -0.000331
+          ],
+          "time_s": 0.26,
+          "velocity_mm_s": [
+            3.6948,
+            -0.1965
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.859091,
+          "applied_pull_n": [
+            0.859091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.2058,
+          "iterations": 68,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.980771,
+          "sled_center_mm": [
+            0.2058,
+            -0.0091,
+            0.508
+          ],
+          "speed_mm_s": 6.258,
+          "step": 27,
+          "tangential_reaction_along_n": 0.807884,
+          "tangential_reaction_n": [
+            0.807884,
+            -0.000141
+          ],
+          "time_s": 0.27,
+          "velocity_mm_s": [
+            6.2551,
+            -0.1894
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.890909,
+          "applied_pull_n": [
+            0.890909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.3191,
+          "iterations": 43,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.982216,
+          "sled_center_mm": [
+            0.3191,
+            -0.0124,
+            0.507
+          ],
+          "speed_mm_s": 11.341,
+          "step": 28,
+          "tangential_reaction_along_n": 0.78929,
+          "tangential_reaction_n": [
+            0.78929,
+            0.002876
+          ],
+          "time_s": 0.28,
+          "velocity_mm_s": [
+            11.3361,
+            -0.3332
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.922727,
+          "applied_pull_n": [
+            0.922727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.4973,
+          "iterations": 28,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.994522,
+          "sled_center_mm": [
+            0.4973,
+            -0.0154,
+            0.507
+          ],
+          "speed_mm_s": 17.8229,
+          "step": 29,
+          "tangential_reaction_along_n": 0.793041,
+          "tangential_reaction_n": [
+            0.793041,
+            -0.000686
+          ],
+          "time_s": 0.29,
+          "velocity_mm_s": [
+            17.8204,
+            -0.2989
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.954545,
+          "applied_pull_n": [
+            0.954545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.7527,
+          "iterations": 19,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000643,
+          "sled_center_mm": [
+            0.7527,
+            -0.0165,
+            0.506
+          ],
+          "speed_mm_s": 25.5379,
+          "step": 30,
+          "tangential_reaction_along_n": 0.800202,
+          "tangential_reaction_n": [
+            0.800202,
+            -0.003698
+          ],
+          "time_s": 0.3,
+          "velocity_mm_s": [
+            25.5376,
+            -0.114
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.986364,
+          "applied_pull_n": [
+            0.986364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 1.1012,
+          "iterations": 15,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000216,
+          "sled_center_mm": [
+            1.1012,
+            -0.0171,
+            0.506
+          ],
+          "speed_mm_s": 34.8518,
+          "step": 31,
+          "tangential_reaction_along_n": 0.80008,
+          "tangential_reaction_n": [
+            0.80008,
+            -0.001259
+          ],
+          "time_s": 0.31,
+          "velocity_mm_s": [
+            34.8518,
+            -0.0511
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.018182,
+          "applied_pull_n": [
+            1.018182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 1.5588,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000006,
+          "sled_center_mm": [
+            1.5588,
+            -0.0173,
+            0.506
+          ],
+          "speed_mm_s": 45.7606,
+          "step": 32,
+          "tangential_reaction_along_n": 0.800005,
+          "tangential_reaction_n": [
+            0.800005,
+            -0.000496
+          ],
+          "time_s": 0.32,
+          "velocity_mm_s": [
+            45.7606,
+            -0.0263
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.05,
+          "applied_pull_n": [
+            1.05,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 2.1414,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000004,
+          "sled_center_mm": [
+            2.1414,
+            -0.0175,
+            0.506
+          ],
+          "speed_mm_s": 58.2601,
+          "step": 33,
+          "tangential_reaction_along_n": 0.800011,
+          "tangential_reaction_n": [
+            0.800011,
+            -0.000224
+          ],
+          "time_s": 0.33,
+          "velocity_mm_s": [
+            58.2601,
+            -0.0151
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.081818,
+          "applied_pull_n": [
+            1.081818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 2.8649,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000005,
+          "sled_center_mm": [
+            2.8649,
+            -0.0176,
+            0.506
+          ],
+          "speed_mm_s": 72.3504,
+          "step": 34,
+          "tangential_reaction_along_n": 0.800012,
+          "tangential_reaction_n": [
+            0.800012,
+            -0.000111
+          ],
+          "time_s": 0.34,
+          "velocity_mm_s": [
+            72.3504,
+            -0.0096
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.113636,
+          "applied_pull_n": [
+            1.113636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 3.7453,
+          "iterations": 12,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000004,
+          "sled_center_mm": [
+            3.7453,
+            -0.0176,
+            0.506
+          ],
+          "speed_mm_s": 88.0318,
+          "step": 35,
+          "tangential_reaction_along_n": 0.800009,
+          "tangential_reaction_n": [
+            0.800009,
+            -0.000058
+          ],
+          "time_s": 0.35,
+          "velocity_mm_s": [
+            88.0318,
+            -0.0067
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.145455,
+          "applied_pull_n": [
+            1.145455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 4.7983,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000002,
+          "sled_center_mm": [
+            4.7983,
+            -0.0177,
+            0.506
+          ],
+          "speed_mm_s": 105.3044,
+          "step": 36,
+          "tangential_reaction_along_n": 0.800003,
+          "tangential_reaction_n": [
+            0.800003,
+            -0.00003
+          ],
+          "time_s": 0.36,
+          "velocity_mm_s": [
+            105.3044,
+            -0.0052
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.177273,
+          "applied_pull_n": [
+            1.177273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 6.04,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.0,
+          "sled_center_mm": [
+            6.04,
+            -0.0177,
+            0.506
+          ],
+          "speed_mm_s": 124.1682,
+          "step": 37,
+          "tangential_reaction_along_n": 0.799996,
+          "tangential_reaction_n": [
+            0.799996,
+            -0.000015
+          ],
+          "time_s": 0.37,
+          "velocity_mm_s": [
+            124.1682,
+            -0.0044
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.209091,
+          "applied_pull_n": [
+            1.209091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 7.4862,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.999997,
+          "sled_center_mm": [
+            7.4862,
+            -0.0178,
+            0.506
+          ],
+          "speed_mm_s": 144.6234,
+          "step": 38,
+          "tangential_reaction_along_n": 0.799987,
+          "tangential_reaction_n": [
+            0.799987,
+            -6e-6
+          ],
+          "time_s": 0.38,
+          "velocity_mm_s": [
+            144.6234,
+            -0.0041
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.240909,
+          "applied_pull_n": [
+            1.240909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 9.1529,
+          "iterations": 13,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 1.999994,
+          "sled_center_mm": [
+            9.1529,
+            -0.0178,
+            0.506
+          ],
+          "speed_mm_s": 166.6701,
+          "step": 39,
+          "tangential_reaction_along_n": 0.799976,
+          "tangential_reaction_n": [
+            0.799976,
+            0.0
+          ],
+          "time_s": 0.39,
+          "velocity_mm_s": [
+            166.6701,
+            -0.0041
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.272727,
+          "applied_pull_n": [
+            1.272727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 11.056,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 1.999989,
+          "sled_center_mm": [
+            11.056,
+            -0.0179,
+            0.506
+          ],
+          "speed_mm_s": 190.3084,
+          "step": 40,
+          "tangential_reaction_along_n": 0.799962,
+          "tangential_reaction_n": [
+            0.799962,
+            9e-6
+          ],
+          "time_s": 0.4,
+          "velocity_mm_s": [
+            190.3084,
+            -0.0046
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.304545,
+          "applied_pull_n": [
+            1.304545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 13.2114,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 1.999984,
+          "sled_center_mm": [
+            13.2114,
+            -0.0179,
+            0.506
+          ],
+          "speed_mm_s": 215.5384,
+          "step": 41,
+          "tangential_reaction_along_n": 0.799946,
+          "tangential_reaction_n": [
+            0.799946,
+            0.000021
+          ],
+          "time_s": 0.41,
+          "velocity_mm_s": [
+            215.5384,
+            -0.0056
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.336364,
+          "applied_pull_n": [
+            1.336364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 15.635,
+          "iterations": 14,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 1.999979,
+          "sled_center_mm": [
+            15.635,
+            -0.018,
+            0.506
+          ],
+          "speed_mm_s": 242.3601,
+          "step": 42,
+          "tangential_reaction_along_n": 0.799928,
+          "tangential_reaction_n": [
+            0.799928,
+            0.000034
+          ],
+          "time_s": 0.42,
+          "velocity_mm_s": [
+            242.3601,
+            -0.0073
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.368182,
+          "applied_pull_n": [
+            1.368182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 18.3427,
+          "iterations": 14,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 1.999973,
+          "sled_center_mm": [
+            18.3427,
+            -0.0181,
+            0.506
+          ],
+          "speed_mm_s": 270.7736,
+          "step": 43,
+          "tangential_reaction_along_n": 0.799912,
+          "tangential_reaction_n": [
+            0.799912,
+            0.000046
+          ],
+          "time_s": 0.43,
+          "velocity_mm_s": [
+            270.7736,
+            -0.0096
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.4,
+          "applied_pull_n": [
+            1.4,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 21.3505,
+          "iterations": 13,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 1.999969,
+          "sled_center_mm": [
+            21.3505,
+            -0.0182,
+            0.506
+          ],
+          "speed_mm_s": 300.7786,
+          "step": 44,
+          "tangential_reaction_along_n": 0.7999,
+          "tangential_reaction_n": [
+            0.7999,
+            0.000054
+          ],
+          "time_s": 0.44,
+          "velocity_mm_s": [
+            300.7786,
+            -0.0123
+          ]
+        }
+      ],
+      "state_id": "synthetic_pair_040",
+      "units": {
+        "displacement": "mm",
+        "force": "N",
+        "mu": "1",
+        "time": "s",
+        "velocity": "mm/s"
+      }
+    },
+    {
+      "coulomb_threshold_n": 2.0,
+      "description": "Synthetic pair A/B (μ = 0.40) under 5.0 N normal load, pulled along the fitting acquisition's (-0.6, +0.8) vector past 2.00 N.",
+      "eps_v_mm_s": 1.0,
+      "first_slip_pull_n": 1.777273,
+      "first_slip_step": 23,
+      "first_slip_time_s": 0.23,
+      "id": "state_a_5n_diag",
+      "label": "5.0 N normal · diagonal (-0.6, +0.8) ramp (0 → 3.40 N)",
+      "mu": 0.4,
+      "normal_load_n": 5.0,
+      "pull_direction": [
+        -0.6,
+        0.8
+      ],
+      "pull_direction_label": "(-0.60, +0.80)",
+      "pull_max_n": 3.4,
+      "samples": [
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.0,
+          "applied_pull_n": [
+            0.0,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0,
+          "iterations": 0,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 5.0,
+          "sled_center_mm": [
+            0.0,
+            0.0,
+            0.504
+          ],
+          "speed_mm_s": 0.0,
+          "step": 0,
+          "tangential_reaction_along_n": 0.0,
+          "tangential_reaction_n": [
+            0.0,
+            0.0
+          ],
+          "time_s": 0.0,
+          "velocity_mm_s": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.077273,
+          "applied_pull_n": [
+            -0.046364,
+            0.061818
+          ],
+          "converged": true,
+          "displacement_mm": 0.0002,
+          "iterations": 9,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.999994,
+          "sled_center_mm": [
+            -0.0001,
+            0.0001,
+            0.504
+          ],
+          "speed_mm_s": 0.0182,
+          "step": 1,
+          "tangential_reaction_along_n": 0.076909,
+          "tangential_reaction_n": [
+            -0.046145,
+            0.061527
+          ],
+          "time_s": 0.01,
+          "velocity_mm_s": [
+            -0.0109,
+            0.0145
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.154545,
+          "applied_pull_n": [
+            -0.092727,
+            0.123636
+          ],
+          "converged": true,
+          "displacement_mm": 0.0006,
+          "iterations": 9,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.999958,
+          "sled_center_mm": [
+            -0.0003,
+            0.0004,
+            0.504
+          ],
+          "speed_mm_s": 0.0369,
+          "step": 2,
+          "tangential_reaction_along_n": 0.154171,
+          "tangential_reaction_n": [
+            -0.092502,
+            0.123337
+          ],
+          "time_s": 0.02,
+          "velocity_mm_s": [
+            -0.0222,
+            0.0295
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.231818,
+          "applied_pull_n": [
+            -0.139091,
+            0.185455
+          ],
+          "converged": true,
+          "displacement_mm": 0.0011,
+          "iterations": 10,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.999869,
+          "sled_center_mm": [
+            -0.0007,
+            0.0009,
+            0.504
+          ],
+          "speed_mm_s": 0.0561,
+          "step": 3,
+          "tangential_reaction_along_n": 0.231434,
+          "tangential_reaction_n": [
+            -0.13886,
+            0.185148
+          ],
+          "time_s": 0.03,
+          "velocity_mm_s": [
+            -0.0337,
+            0.0449
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.309091,
+          "applied_pull_n": [
+            -0.185455,
+            0.247273
+          ],
+          "converged": true,
+          "displacement_mm": 0.0019,
+          "iterations": 10,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.999701,
+          "sled_center_mm": [
+            -0.0011,
+            0.0015,
+            0.504
+          ],
+          "speed_mm_s": 0.0758,
+          "step": 4,
+          "tangential_reaction_along_n": 0.308696,
+          "tangential_reaction_n": [
+            -0.185217,
+            0.246958
+          ],
+          "time_s": 0.04,
+          "velocity_mm_s": [
+            -0.0456,
+            0.0606
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.386364,
+          "applied_pull_n": [
+            -0.231818,
+            0.309091
+          ],
+          "converged": true,
+          "displacement_mm": 0.0028,
+          "iterations": 11,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.999427,
+          "sled_center_mm": [
+            -0.0017,
+            0.0023,
+            0.504
+          ],
+          "speed_mm_s": 0.0961,
+          "step": 5,
+          "tangential_reaction_along_n": 0.385958,
+          "tangential_reaction_n": [
+            -0.231574,
+            0.308767
+          ],
+          "time_s": 0.05,
+          "velocity_mm_s": [
+            -0.0578,
+            0.0768
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.463636,
+          "applied_pull_n": [
+            -0.278182,
+            0.370909
+          ],
+          "converged": true,
+          "displacement_mm": 0.004,
+          "iterations": 11,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.999019,
+          "sled_center_mm": [
+            -0.0024,
+            0.0032,
+            0.504
+          ],
+          "speed_mm_s": 0.117,
+          "step": 6,
+          "tangential_reaction_along_n": 0.463219,
+          "tangential_reaction_n": [
+            -0.27793,
+            0.370576
+          ],
+          "time_s": 0.06,
+          "velocity_mm_s": [
+            -0.0704,
+            0.0934
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.540909,
+          "applied_pull_n": [
+            -0.324545,
+            0.432727
+          ],
+          "converged": true,
+          "displacement_mm": 0.0054,
+          "iterations": 11,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.998445,
+          "sled_center_mm": [
+            -0.0032,
+            0.0043,
+            0.504
+          ],
+          "speed_mm_s": 0.1385,
+          "step": 7,
+          "tangential_reaction_along_n": 0.540479,
+          "tangential_reaction_n": [
+            -0.324285,
+            0.432384
+          ],
+          "time_s": 0.07,
+          "velocity_mm_s": [
+            -0.0834,
+            0.1106
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.618182,
+          "applied_pull_n": [
+            -0.370909,
+            0.494545
+          ],
+          "converged": true,
+          "displacement_mm": 0.007,
+          "iterations": 11,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.997675,
+          "sled_center_mm": [
+            -0.0042,
+            0.0056,
+            0.504
+          ],
+          "speed_mm_s": 0.1608,
+          "step": 8,
+          "tangential_reaction_along_n": 0.617737,
+          "tangential_reaction_n": [
+            -0.37064,
+            0.494191
+          ],
+          "time_s": 0.08,
+          "velocity_mm_s": [
+            -0.0969,
+            0.1283
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.695455,
+          "applied_pull_n": [
+            -0.417273,
+            0.556364
+          ],
+          "converged": true,
+          "displacement_mm": 0.0088,
+          "iterations": 11,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.996673,
+          "sled_center_mm": [
+            -0.0053,
+            0.0071,
+            0.504
+          ],
+          "speed_mm_s": 0.1838,
+          "step": 9,
+          "tangential_reaction_along_n": 0.694994,
+          "tangential_reaction_n": [
+            -0.416994,
+            0.555997
+          ],
+          "time_s": 0.09,
+          "velocity_mm_s": [
+            -0.1108,
+            0.1466
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.772727,
+          "applied_pull_n": [
+            -0.463636,
+            0.618182
+          ],
+          "converged": true,
+          "displacement_mm": 0.0109,
+          "iterations": 13,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.995406,
+          "sled_center_mm": [
+            -0.0066,
+            0.0087,
+            0.504
+          ],
+          "speed_mm_s": 0.2076,
+          "step": 10,
+          "tangential_reaction_along_n": 0.77225,
+          "tangential_reaction_n": [
+            -0.463347,
+            0.617802
+          ],
+          "time_s": 0.1,
+          "velocity_mm_s": [
+            -0.1253,
+            0.1656
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.85,
+          "applied_pull_n": [
+            -0.51,
+            0.68
+          ],
+          "converged": true,
+          "displacement_mm": 0.0132,
+          "iterations": 13,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.993837,
+          "sled_center_mm": [
+            -0.008,
+            0.0106,
+            0.504
+          ],
+          "speed_mm_s": 0.2325,
+          "step": 11,
+          "tangential_reaction_along_n": 0.849503,
+          "tangential_reaction_n": [
+            -0.509699,
+            0.679605
+          ],
+          "time_s": 0.11,
+          "velocity_mm_s": [
+            -0.1403,
+            0.1853
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 0.927273,
+          "applied_pull_n": [
+            -0.556364,
+            0.741818
+          ],
+          "converged": true,
+          "displacement_mm": 0.0158,
+          "iterations": 13,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.991931,
+          "sled_center_mm": [
+            -0.0095,
+            0.0126,
+            0.504
+          ],
+          "speed_mm_s": 0.2584,
+          "step": 12,
+          "tangential_reaction_along_n": 0.926754,
+          "tangential_reaction_n": [
+            -0.556049,
+            0.741406
+          ],
+          "time_s": 0.12,
+          "velocity_mm_s": [
+            -0.1561,
+            0.2059
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.004545,
+          "applied_pull_n": [
+            -0.602727,
+            0.803636
+          ],
+          "converged": true,
+          "displacement_mm": 0.0187,
+          "iterations": 13,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.989656,
+          "sled_center_mm": [
+            -0.0113,
+            0.0149,
+            0.504
+          ],
+          "speed_mm_s": 0.2855,
+          "step": 13,
+          "tangential_reaction_along_n": 1.004003,
+          "tangential_reaction_n": [
+            -0.602398,
+            0.803205
+          ],
+          "time_s": 0.13,
+          "velocity_mm_s": [
+            -0.1726,
+            0.2275
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.081818,
+          "applied_pull_n": [
+            -0.649091,
+            0.865455
+          ],
+          "converged": true,
+          "displacement_mm": 0.0218,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.98698,
+          "sled_center_mm": [
+            -0.0132,
+            0.0174,
+            0.504
+          ],
+          "speed_mm_s": 0.3141,
+          "step": 14,
+          "tangential_reaction_along_n": 1.081248,
+          "tangential_reaction_n": [
+            -0.648744,
+            0.865002
+          ],
+          "time_s": 0.14,
+          "velocity_mm_s": [
+            -0.1899,
+            0.2502
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.159091,
+          "applied_pull_n": [
+            -0.695455,
+            0.927273
+          ],
+          "converged": true,
+          "displacement_mm": 0.0253,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.983884,
+          "sled_center_mm": [
+            -0.0152,
+            0.0201,
+            0.504
+          ],
+          "speed_mm_s": 0.3442,
+          "step": 15,
+          "tangential_reaction_along_n": 1.158488,
+          "tangential_reaction_n": [
+            -0.695088,
+            0.926795
+          ],
+          "time_s": 0.15,
+          "velocity_mm_s": [
+            -0.2082,
+            0.2741
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.236364,
+          "applied_pull_n": [
+            -0.741818,
+            0.989091
+          ],
+          "converged": true,
+          "displacement_mm": 0.029,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.980356,
+          "sled_center_mm": [
+            -0.0175,
+            0.0231,
+            0.504
+          ],
+          "speed_mm_s": 0.3762,
+          "step": 16,
+          "tangential_reaction_along_n": 1.235724,
+          "tangential_reaction_n": [
+            -0.741429,
+            0.988583
+          ],
+          "time_s": 0.16,
+          "velocity_mm_s": [
+            -0.2277,
+            0.2994
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.313636,
+          "applied_pull_n": [
+            -0.788182,
+            1.050909
+          ],
+          "converged": true,
+          "displacement_mm": 0.0331,
+          "iterations": 16,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.976401,
+          "sled_center_mm": [
+            -0.02,
+            0.0264,
+            0.504
+          ],
+          "speed_mm_s": 0.4104,
+          "step": 17,
+          "tangential_reaction_along_n": 1.312952,
+          "tangential_reaction_n": [
+            -0.787765,
+            1.050366
+          ],
+          "time_s": 0.17,
+          "velocity_mm_s": [
+            -0.2486,
+            0.3266
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.390909,
+          "applied_pull_n": [
+            -0.834545,
+            1.112727
+          ],
+          "converged": true,
+          "displacement_mm": 0.0376,
+          "iterations": 16,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.972051,
+          "sled_center_mm": [
+            -0.0227,
+            0.03,
+            0.504
+          ],
+          "speed_mm_s": 0.4473,
+          "step": 18,
+          "tangential_reaction_along_n": 1.390171,
+          "tangential_reaction_n": [
+            -0.834096,
+            1.112142
+          ],
+          "time_s": 0.18,
+          "velocity_mm_s": [
+            -0.271,
+            0.3559
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.468182,
+          "applied_pull_n": [
+            -0.880909,
+            1.174545
+          ],
+          "converged": true,
+          "displacement_mm": 0.0425,
+          "iterations": 17,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.967369,
+          "sled_center_mm": [
+            -0.0257,
+            0.0338,
+            0.504
+          ],
+          "speed_mm_s": 0.4876,
+          "step": 19,
+          "tangential_reaction_along_n": 1.467376,
+          "tangential_reaction_n": [
+            -0.880418,
+            1.173907
+          ],
+          "time_s": 0.19,
+          "velocity_mm_s": [
+            -0.2956,
+            0.3878
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.545455,
+          "applied_pull_n": [
+            -0.927273,
+            1.236364
+          ],
+          "converged": true,
+          "displacement_mm": 0.0478,
+          "iterations": 19,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.962461,
+          "sled_center_mm": [
+            -0.0289,
+            0.0381,
+            0.504
+          ],
+          "speed_mm_s": 0.5323,
+          "step": 20,
+          "tangential_reaction_along_n": 1.54456,
+          "tangential_reaction_n": [
+            -0.926727,
+            1.235654
+          ],
+          "time_s": 0.2,
+          "velocity_mm_s": [
+            -0.3229,
+            0.4233
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.622727,
+          "applied_pull_n": [
+            -0.973636,
+            1.298182
+          ],
+          "converged": true,
+          "displacement_mm": 0.0536,
+          "iterations": 20,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.957479,
+          "sled_center_mm": [
+            -0.0324,
+            0.0427,
+            0.503
+          ],
+          "speed_mm_s": 0.5838,
+          "step": 21,
+          "tangential_reaction_along_n": 1.621699,
+          "tangential_reaction_n": [
+            -0.97301,
+            1.297366
+          ],
+          "time_s": 0.21,
+          "velocity_mm_s": [
+            -0.3542,
+            0.464
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.7,
+          "applied_pull_n": [
+            -1.02,
+            1.36
+          ],
+          "converged": true,
+          "displacement_mm": 0.0602,
+          "iterations": 29,
+          "min_gap_mm": 0.002,
+          "regime": "stick",
+          "retained_normal_n": 4.952587,
+          "sled_center_mm": [
+            -0.0364,
+            0.0479,
+            0.503
+          ],
+          "speed_mm_s": 0.6529,
+          "step": 22,
+          "tangential_reaction_along_n": 1.698617,
+          "tangential_reaction_n": [
+            -1.019156,
+            1.358904
+          ],
+          "time_s": 0.22,
+          "velocity_mm_s": [
+            -0.3964,
+            0.5189
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.777273,
+          "applied_pull_n": [
+            -1.066364,
+            1.421818
+          ],
+          "converged": true,
+          "displacement_mm": 0.0732,
+          "iterations": 65,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.948821,
+          "sled_center_mm": [
+            -0.0443,
+            0.0582,
+            0.503
+          ],
+          "speed_mm_s": 1.3015,
+          "step": 23,
+          "tangential_reaction_along_n": 1.764302,
+          "tangential_reaction_n": [
+            -1.058421,
+            1.411562
+          ],
+          "time_s": 0.23,
+          "velocity_mm_s": [
+            -0.7935,
+            1.0317
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.854545,
+          "applied_pull_n": [
+            -1.112727,
+            1.483636
+          ],
+          "converged": true,
+          "displacement_mm": 0.0908,
+          "iterations": 47,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.951711,
+          "sled_center_mm": [
+            -0.0551,
+            0.0723,
+            0.503
+          ],
+          "speed_mm_s": 1.7665,
+          "step": 24,
+          "tangential_reaction_along_n": 1.845246,
+          "tangential_reaction_n": [
+            -1.107159,
+            1.476189
+          ],
+          "time_s": 0.24,
+          "velocity_mm_s": [
+            -1.0719,
+            1.404
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 1.931818,
+          "applied_pull_n": [
+            -1.159091,
+            1.545455
+          ],
+          "converged": true,
+          "displacement_mm": 0.1104,
+          "iterations": 32,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.955415,
+          "sled_center_mm": [
+            -0.0668,
+            0.0878,
+            0.503
+          ],
+          "speed_mm_s": 1.9532,
+          "step": 25,
+          "tangential_reaction_along_n": 1.928083,
+          "tangential_reaction_n": [
+            -1.156983,
+            1.542366
+          ],
+          "time_s": 0.25,
+          "velocity_mm_s": [
+            -1.1773,
+            1.5585
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.009091,
+          "applied_pull_n": [
+            -1.205455,
+            1.607273
+          ],
+          "converged": true,
+          "displacement_mm": 0.1469,
+          "iterations": 69,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.960856,
+          "sled_center_mm": [
+            -0.0888,
+            0.117,
+            0.503
+          ],
+          "speed_mm_s": 3.6499,
+          "step": 26,
+          "tangential_reaction_along_n": 1.975157,
+          "tangential_reaction_n": [
+            -1.184988,
+            1.580205
+          ],
+          "time_s": 0.26,
+          "velocity_mm_s": [
+            -2.2007,
+            2.9118
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.086364,
+          "applied_pull_n": [
+            -1.251818,
+            1.669091
+          ],
+          "converged": true,
+          "displacement_mm": 0.2393,
+          "iterations": 42,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.980821,
+          "sled_center_mm": [
+            -0.1445,
+            0.1907,
+            0.502
+          ],
+          "speed_mm_s": 9.2419,
+          "step": 27,
+          "tangential_reaction_along_n": 1.974523,
+          "tangential_reaction_n": [
+            -1.184501,
+            1.579778
+          ],
+          "time_s": 0.27,
+          "velocity_mm_s": [
+            -5.5665,
+            7.3774
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.163636,
+          "applied_pull_n": [
+            -1.298182,
+            1.730909
+          ],
+          "converged": true,
+          "displacement_mm": 0.4154,
+          "iterations": 24,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.997925,
+          "sled_center_mm": [
+            -0.2503,
+            0.3315,
+            0.502
+          ],
+          "speed_mm_s": 17.6093,
+          "step": 28,
+          "tangential_reaction_along_n": 1.996287,
+          "tangential_reaction_n": [
+            -1.198009,
+            1.596853
+          ],
+          "time_s": 0.28,
+          "velocity_mm_s": [
+            -10.5752,
+            14.0803
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.240909,
+          "applied_pull_n": [
+            -1.344545,
+            1.792727
+          ],
+          "converged": true,
+          "displacement_mm": 0.7119,
+          "iterations": 16,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 5.000088,
+          "sled_center_mm": [
+            -0.4282,
+            0.5687,
+            0.502
+          ],
+          "speed_mm_s": 29.6532,
+          "step": 29,
+          "tangential_reaction_along_n": 2.000031,
+          "tangential_reaction_n": [
+            -1.200135,
+            1.599937
+          ],
+          "time_s": 0.29,
+          "velocity_mm_s": [
+            -17.7957,
+            23.7198
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.318182,
+          "applied_pull_n": [
+            -1.390909,
+            1.854545
+          ],
+          "converged": true,
+          "displacement_mm": 1.1675,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 5.000014,
+          "sled_center_mm": [
+            -0.7016,
+            0.9332,
+            0.502
+          ],
+          "speed_mm_s": 45.5614,
+          "step": 30,
+          "tangential_reaction_along_n": 2.000018,
+          "tangential_reaction_n": [
+            -1.200039,
+            1.599993
+          ],
+          "time_s": 0.3,
+          "velocity_mm_s": [
+            -27.3392,
+            36.4474
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.395455,
+          "applied_pull_n": [
+            -1.437273,
+            1.916364
+          ],
+          "converged": true,
+          "displacement_mm": 1.8209,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 5.000007,
+          "sled_center_mm": [
+            -1.0936,
+            1.4559,
+            0.502
+          ],
+          "speed_mm_s": 65.3333,
+          "step": 31,
+          "tangential_reaction_along_n": 2.000016,
+          "tangential_reaction_n": [
+            -1.20002,
+            1.600004
+          ],
+          "time_s": 0.31,
+          "velocity_mm_s": [
+            -39.2018,
+            52.2653
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.472727,
+          "applied_pull_n": [
+            -1.483636,
+            1.978182
+          ],
+          "converged": true,
+          "displacement_mm": 2.7106,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 5.000004,
+          "sled_center_mm": [
+            -1.6274,
+            2.1676,
+            0.502
+          ],
+          "speed_mm_s": 88.9692,
+          "step": 32,
+          "tangential_reaction_along_n": 2.00001,
+          "tangential_reaction_n": [
+            -1.200027,
+            1.599992
+          ],
+          "time_s": 0.32,
+          "velocity_mm_s": [
+            -53.3822,
+            71.1748
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.55,
+          "applied_pull_n": [
+            -1.53,
+            2.04
+          ],
+          "converged": true,
+          "displacement_mm": 3.8752,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 5.000001,
+          "sled_center_mm": [
+            -2.3263,
+            3.0994,
+            0.502
+          ],
+          "speed_mm_s": 116.4692,
+          "step": 33,
+          "tangential_reaction_along_n": 2.0,
+          "tangential_reaction_n": [
+            -1.200015,
+            1.599989
+          ],
+          "time_s": 0.33,
+          "velocity_mm_s": [
+            -69.8815,
+            93.1754
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.627273,
+          "applied_pull_n": [
+            -1.576364,
+            2.101818
+          ],
+          "converged": true,
+          "displacement_mm": 5.3536,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.999996,
+          "sled_center_mm": [
+            -3.2133,
+            4.282,
+            0.502
+          ],
+          "speed_mm_s": 147.8336,
+          "step": 34,
+          "tangential_reaction_along_n": 1.999984,
+          "tangential_reaction_n": [
+            -1.199996,
+            1.599983
+          ],
+          "time_s": 0.34,
+          "velocity_mm_s": [
+            -88.6998,
+            118.2671
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.704545,
+          "applied_pull_n": [
+            -1.622727,
+            2.163636
+          ],
+          "converged": true,
+          "displacement_mm": 7.1842,
+          "iterations": 16,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 4.999989,
+          "sled_center_mm": [
+            -4.3116,
+            5.7465,
+            0.502
+          ],
+          "speed_mm_s": 183.0629,
+          "step": 35,
+          "tangential_reaction_along_n": 1.99996,
+          "tangential_reaction_n": [
+            -1.199979,
+            1.599966
+          ],
+          "time_s": 0.35,
+          "velocity_mm_s": [
+            -109.8373,
+            146.4507
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.781818,
+          "applied_pull_n": [
+            -1.669091,
+            2.225455
+          ],
+          "converged": true,
+          "displacement_mm": 9.4058,
+          "iterations": 16,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999978,
+          "sled_center_mm": [
+            -5.6446,
+            7.5238,
+            0.502
+          ],
+          "speed_mm_s": 222.1574,
+          "step": 36,
+          "tangential_reaction_along_n": 1.999928,
+          "tangential_reaction_n": [
+            -1.199955,
+            1.599944
+          ],
+          "time_s": 0.36,
+          "velocity_mm_s": [
+            -133.294,
+            177.7262
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.859091,
+          "applied_pull_n": [
+            -1.715455,
+            2.287273
+          ],
+          "converged": true,
+          "displacement_mm": 12.057,
+          "iterations": 15,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999967,
+          "sled_center_mm": [
+            -7.2353,
+            9.6447,
+            0.502
+          ],
+          "speed_mm_s": 265.1172,
+          "step": 37,
+          "tangential_reaction_along_n": 1.999894,
+          "tangential_reaction_n": [
+            -1.19993,
+            1.59992
+          ],
+          "time_s": 0.37,
+          "velocity_mm_s": [
+            -159.0703,
+            212.0938
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 2.936364,
+          "applied_pull_n": [
+            -1.761818,
+            2.349091
+          ],
+          "converged": true,
+          "displacement_mm": 15.1764,
+          "iterations": 16,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999959,
+          "sled_center_mm": [
+            -9.1069,
+            12.1403,
+            0.502
+          ],
+          "speed_mm_s": 311.9419,
+          "step": 38,
+          "tangential_reaction_along_n": 1.999869,
+          "tangential_reaction_n": [
+            -1.199912,
+            1.599903
+          ],
+          "time_s": 0.38,
+          "velocity_mm_s": [
+            -187.1656,
+            249.5532
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 3.013636,
+          "applied_pull_n": [
+            -1.808182,
+            2.410909
+          ],
+          "converged": true,
+          "displacement_mm": 18.8027,
+          "iterations": 16,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999954,
+          "sled_center_mm": [
+            -11.2827,
+            15.0413,
+            0.502
+          ],
+          "speed_mm_s": 362.6308,
+          "step": 39,
+          "tangential_reaction_along_n": 1.999858,
+          "tangential_reaction_n": [
+            -1.199905,
+            1.599894
+          ],
+          "time_s": 0.39,
+          "velocity_mm_s": [
+            -217.5794,
+            290.104
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 3.090909,
+          "applied_pull_n": [
+            -1.854545,
+            2.472727
+          ],
+          "converged": true,
+          "displacement_mm": 22.9745,
+          "iterations": 15,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999954,
+          "sled_center_mm": [
+            -13.7858,
+            18.3788,
+            0.502
+          ],
+          "speed_mm_s": 417.1833,
+          "step": 40,
+          "tangential_reaction_along_n": 1.999859,
+          "tangential_reaction_n": [
+            -1.199907,
+            1.599893
+          ],
+          "time_s": 0.4,
+          "velocity_mm_s": [
+            -250.3113,
+            333.7457
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 3.168182,
+          "applied_pull_n": [
+            -1.900909,
+            2.534545
+          ],
+          "converged": true,
+          "displacement_mm": 27.7305,
+          "iterations": 15,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999956,
+          "sled_center_mm": [
+            -16.6394,
+            22.1835,
+            0.502
+          ],
+          "speed_mm_s": 475.5991,
+          "step": 41,
+          "tangential_reaction_along_n": 1.999867,
+          "tangential_reaction_n": [
+            -1.199914,
+            1.599898
+          ],
+          "time_s": 0.41,
+          "velocity_mm_s": [
+            -285.3611,
+            380.478
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 3.245455,
+          "applied_pull_n": [
+            -1.947273,
+            2.596364
+          ],
+          "converged": true,
+          "displacement_mm": 33.1093,
+          "iterations": 15,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999959,
+          "sled_center_mm": [
+            -19.8667,
+            26.4866,
+            0.502
+          ],
+          "speed_mm_s": 537.8779,
+          "step": 42,
+          "tangential_reaction_along_n": 1.999878,
+          "tangential_reaction_n": [
+            -1.199922,
+            1.599905
+          ],
+          "time_s": 0.42,
+          "velocity_mm_s": [
+            -322.7286,
+            430.3009
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 3.322727,
+          "applied_pull_n": [
+            -1.993636,
+            2.658182
+          ],
+          "converged": true,
+          "displacement_mm": 39.1496,
+          "iterations": 17,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 4.999201,
+          "sled_center_mm": [
+            -23.4909,
+            31.3188,
+            0.502
+          ],
+          "speed_mm_s": 604.0315,
+          "step": 43,
+          "tangential_reaction_along_n": 1.999657,
+          "tangential_reaction_n": [
+            -1.199798,
+            1.599722
+          ],
+          "time_s": 0.43,
+          "velocity_mm_s": [
+            -362.4205,
+            483.2239
+          ]
+        },
+        {
+          "applied_normal_n": 5.0,
+          "applied_pull_along_n": 3.4,
+          "applied_pull_n": [
+            -2.04,
+            2.72
+          ],
+          "converged": true,
+          "displacement_mm": 45.8898,
+          "iterations": 16,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 5.000756,
+          "sled_center_mm": [
+            -27.5351,
+            36.7109,
+            0.502
+          ],
+          "speed_mm_s": 674.0188,
+          "step": 44,
+          "tangential_reaction_along_n": 2.000253,
+          "tangential_reaction_n": [
+            -1.200152,
+            1.600202
+          ],
+          "time_s": 0.44,
+          "velocity_mm_s": [
+            -404.4129,
+            539.2138
+          ]
+        }
+      ],
+      "state_id": "synthetic_pair_040",
+      "units": {
+        "displacement": "mm",
+        "force": "N",
+        "mu": "1",
+        "time": "s",
+        "velocity": "mm/s"
+      }
+    },
+    {
+      "coulomb_threshold_n": 1.5,
+      "description": "Higher-grip synthetic pair (μ = 0.75) under the same 2.0 N normal load, holding in stick until 1.50 N before sliding along +x.",
+      "eps_v_mm_s": 1.0,
+      "first_slip_pull_n": 1.418182,
+      "first_slip_step": 26,
+      "first_slip_time_s": 0.26,
+      "id": "state_b_2n_pos_x",
+      "label": "2.0 N normal · +x pull ramp (0 → 2.40 N)",
+      "mu": 0.75,
+      "normal_load_n": 2.0,
+      "pull_direction": [
+        1.0,
+        0.0
+      ],
+      "pull_direction_label": "+x (1.00, 0.00)",
+      "pull_max_n": 2.4,
+      "samples": [
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.0,
+          "applied_pull_n": [
+            0.0,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0,
+          "iterations": 0,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 2.000008,
+          "sled_center_mm": [
+            0.0,
+            0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0,
+          "step": 0,
+          "tangential_reaction_along_n": 0.0,
+          "tangential_reaction_n": [
+            0.0,
+            0.0
+          ],
+          "time_s": 0.0,
+          "velocity_mm_s": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.054545,
+          "applied_pull_n": [
+            0.054545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0002,
+          "iterations": 8,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999999,
+          "sled_center_mm": [
+            0.0002,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.017,
+          "step": 1,
+          "tangential_reaction_along_n": 0.054205,
+          "tangential_reaction_n": [
+            0.054205,
+            0.0
+          ],
+          "time_s": 0.01,
+          "velocity_mm_s": [
+            0.017,
+            -0.0
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.109091,
+          "applied_pull_n": [
+            0.109091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0005,
+          "iterations": 9,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999988,
+          "sled_center_mm": [
+            0.0005,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0345,
+          "step": 2,
+          "tangential_reaction_along_n": 0.108742,
+          "tangential_reaction_n": [
+            0.108742,
+            1e-6
+          ],
+          "time_s": 0.02,
+          "velocity_mm_s": [
+            0.0345,
+            -0.0001
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.163636,
+          "applied_pull_n": [
+            0.163636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.001,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999961,
+          "sled_center_mm": [
+            0.001,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0523,
+          "step": 3,
+          "tangential_reaction_along_n": 0.16328,
+          "tangential_reaction_n": [
+            0.16328,
+            1e-6
+          ],
+          "time_s": 0.03,
+          "velocity_mm_s": [
+            0.0523,
+            -0.0001
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.218182,
+          "applied_pull_n": [
+            0.218182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0017,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999908,
+          "sled_center_mm": [
+            0.0017,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0705,
+          "step": 4,
+          "tangential_reaction_along_n": 0.217818,
+          "tangential_reaction_n": [
+            0.217818,
+            2e-6
+          ],
+          "time_s": 0.04,
+          "velocity_mm_s": [
+            0.0705,
+            -0.0002
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.272727,
+          "applied_pull_n": [
+            0.272727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0026,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999821,
+          "sled_center_mm": [
+            0.0026,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.0891,
+          "step": 5,
+          "tangential_reaction_along_n": 0.272356,
+          "tangential_reaction_n": [
+            0.272356,
+            3e-6
+          ],
+          "time_s": 0.05,
+          "velocity_mm_s": [
+            0.0891,
+            -0.0003
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.327273,
+          "applied_pull_n": [
+            0.327273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0037,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999692,
+          "sled_center_mm": [
+            0.0037,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.1081,
+          "step": 6,
+          "tangential_reaction_along_n": 0.326893,
+          "tangential_reaction_n": [
+            0.326893,
+            3e-6
+          ],
+          "time_s": 0.06,
+          "velocity_mm_s": [
+            0.1081,
+            -0.0005
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.381818,
+          "applied_pull_n": [
+            0.381818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.005,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.999512,
+          "sled_center_mm": [
+            0.005,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.1275,
+          "step": 7,
+          "tangential_reaction_along_n": 0.381429,
+          "tangential_reaction_n": [
+            0.381429,
+            4e-6
+          ],
+          "time_s": 0.07,
+          "velocity_mm_s": [
+            0.1275,
+            -0.0007
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.436364,
+          "applied_pull_n": [
+            0.436364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0065,
+          "iterations": 10,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.99927,
+          "sled_center_mm": [
+            0.0065,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.1475,
+          "step": 8,
+          "tangential_reaction_along_n": 0.435965,
+          "tangential_reaction_n": [
+            0.435965,
+            4e-6
+          ],
+          "time_s": 0.08,
+          "velocity_mm_s": [
+            0.1475,
+            -0.0009
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.490909,
+          "applied_pull_n": [
+            0.490909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0081,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.998958,
+          "sled_center_mm": [
+            0.0081,
+            -0.0,
+            0.51
+          ],
+          "speed_mm_s": 0.168,
+          "step": 9,
+          "tangential_reaction_along_n": 0.490499,
+          "tangential_reaction_n": [
+            0.490499,
+            5e-6
+          ],
+          "time_s": 0.09,
+          "velocity_mm_s": [
+            0.168,
+            -0.0012
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.545455,
+          "applied_pull_n": [
+            0.545455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.01,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.998563,
+          "sled_center_mm": [
+            0.01,
+            -0.0001,
+            0.51
+          ],
+          "speed_mm_s": 0.1891,
+          "step": 10,
+          "tangential_reaction_along_n": 0.545033,
+          "tangential_reaction_n": [
+            0.545033,
+            6e-6
+          ],
+          "time_s": 0.1,
+          "velocity_mm_s": [
+            0.189,
+            -0.0015
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.6,
+          "applied_pull_n": [
+            0.6,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0121,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.998077,
+          "sled_center_mm": [
+            0.0121,
+            -0.0001,
+            0.51
+          ],
+          "speed_mm_s": 0.2107,
+          "step": 11,
+          "tangential_reaction_along_n": 0.599566,
+          "tangential_reaction_n": [
+            0.599566,
+            7e-6
+          ],
+          "time_s": 0.11,
+          "velocity_mm_s": [
+            0.2107,
+            -0.0018
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.654545,
+          "applied_pull_n": [
+            0.654545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0145,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.997485,
+          "sled_center_mm": [
+            0.0145,
+            -0.0001,
+            0.51
+          ],
+          "speed_mm_s": 0.2331,
+          "step": 12,
+          "tangential_reaction_along_n": 0.654098,
+          "tangential_reaction_n": [
+            0.654098,
+            8e-6
+          ],
+          "time_s": 0.12,
+          "velocity_mm_s": [
+            0.2331,
+            -0.0022
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.709091,
+          "applied_pull_n": [
+            0.709091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.017,
+          "iterations": 11,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.996777,
+          "sled_center_mm": [
+            0.017,
+            -0.0001,
+            0.51
+          ],
+          "speed_mm_s": 0.2563,
+          "step": 13,
+          "tangential_reaction_along_n": 0.708628,
+          "tangential_reaction_n": [
+            0.708628,
+            8e-6
+          ],
+          "time_s": 0.13,
+          "velocity_mm_s": [
+            0.2563,
+            -0.0026
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.763636,
+          "applied_pull_n": [
+            0.763636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0198,
+          "iterations": 12,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.99594,
+          "sled_center_mm": [
+            0.0198,
+            -0.0002,
+            0.51
+          ],
+          "speed_mm_s": 0.2803,
+          "step": 14,
+          "tangential_reaction_along_n": 0.763157,
+          "tangential_reaction_n": [
+            0.763157,
+            0.00001
+          ],
+          "time_s": 0.14,
+          "velocity_mm_s": [
+            0.2803,
+            -0.0031
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.818182,
+          "applied_pull_n": [
+            0.818182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0229,
+          "iterations": 13,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.99496,
+          "sled_center_mm": [
+            0.0229,
+            -0.0002,
+            0.51
+          ],
+          "speed_mm_s": 0.3052,
+          "step": 15,
+          "tangential_reaction_along_n": 0.817683,
+          "tangential_reaction_n": [
+            0.817683,
+            0.000011
+          ],
+          "time_s": 0.15,
+          "velocity_mm_s": [
+            0.3052,
+            -0.0036
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.872727,
+          "applied_pull_n": [
+            0.872727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0262,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.993824,
+          "sled_center_mm": [
+            0.0262,
+            -0.0002,
+            0.51
+          ],
+          "speed_mm_s": 0.3312,
+          "step": 16,
+          "tangential_reaction_along_n": 0.872207,
+          "tangential_reaction_n": [
+            0.872207,
+            0.000012
+          ],
+          "time_s": 0.16,
+          "velocity_mm_s": [
+            0.3312,
+            -0.0042
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.927273,
+          "applied_pull_n": [
+            0.927273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0298,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.992517,
+          "sled_center_mm": [
+            0.0298,
+            -0.0003,
+            0.51
+          ],
+          "speed_mm_s": 0.3585,
+          "step": 17,
+          "tangential_reaction_along_n": 0.926728,
+          "tangential_reaction_n": [
+            0.926728,
+            0.000013
+          ],
+          "time_s": 0.17,
+          "velocity_mm_s": [
+            0.3584,
+            -0.0049
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 0.981818,
+          "applied_pull_n": [
+            0.981818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0337,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.991025,
+          "sled_center_mm": [
+            0.0337,
+            -0.0003,
+            0.51
+          ],
+          "speed_mm_s": 0.3871,
+          "step": 18,
+          "tangential_reaction_along_n": 0.981245,
+          "tangential_reaction_n": [
+            0.981245,
+            0.000015
+          ],
+          "time_s": 0.18,
+          "velocity_mm_s": [
+            0.3871,
+            -0.0056
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.036364,
+          "applied_pull_n": [
+            1.036364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0378,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.989332,
+          "sled_center_mm": [
+            0.0378,
+            -0.0004,
+            0.51
+          ],
+          "speed_mm_s": 0.4175,
+          "step": 19,
+          "tangential_reaction_along_n": 1.035758,
+          "tangential_reaction_n": [
+            1.035758,
+            0.000016
+          ],
+          "time_s": 0.19,
+          "velocity_mm_s": [
+            0.4174,
+            -0.0064
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.090909,
+          "applied_pull_n": [
+            1.090909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0423,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.987422,
+          "sled_center_mm": [
+            0.0423,
+            -0.0005,
+            0.51
+          ],
+          "speed_mm_s": 0.4497,
+          "step": 20,
+          "tangential_reaction_along_n": 1.090263,
+          "tangential_reaction_n": [
+            1.090263,
+            0.000018
+          ],
+          "time_s": 0.2,
+          "velocity_mm_s": [
+            0.4497,
+            -0.0073
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.145455,
+          "applied_pull_n": [
+            1.145455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0472,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.98528,
+          "sled_center_mm": [
+            0.0472,
+            -0.0006,
+            0.51
+          ],
+          "speed_mm_s": 0.4845,
+          "step": 21,
+          "tangential_reaction_along_n": 1.144761,
+          "tangential_reaction_n": [
+            1.144761,
+            0.000021
+          ],
+          "time_s": 0.21,
+          "velocity_mm_s": [
+            0.4844,
+            -0.0084
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.2,
+          "applied_pull_n": [
+            1.2,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0524,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.98289,
+          "sled_center_mm": [
+            0.0524,
+            -0.0006,
+            0.51
+          ],
+          "speed_mm_s": 0.5222,
+          "step": 22,
+          "tangential_reaction_along_n": 1.199245,
+          "tangential_reaction_n": [
+            1.199245,
+            0.000024
+          ],
+          "time_s": 0.22,
+          "velocity_mm_s": [
+            0.5221,
+            -0.0096
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.254545,
+          "applied_pull_n": [
+            1.254545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.058,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.980234,
+          "sled_center_mm": [
+            0.058,
+            -0.0008,
+            0.51
+          ],
+          "speed_mm_s": 0.564,
+          "step": 23,
+          "tangential_reaction_along_n": 1.253709,
+          "tangential_reaction_n": [
+            1.253709,
+            0.000027
+          ],
+          "time_s": 0.23,
+          "velocity_mm_s": [
+            0.5639,
+            -0.0109
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.309091,
+          "applied_pull_n": [
+            1.309091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0642,
+          "iterations": 18,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.977292,
+          "sled_center_mm": [
+            0.0642,
+            -0.0009,
+            0.51
+          ],
+          "speed_mm_s": 0.6118,
+          "step": 24,
+          "tangential_reaction_along_n": 1.308136,
+          "tangential_reaction_n": [
+            1.308136,
+            0.000032
+          ],
+          "time_s": 0.24,
+          "velocity_mm_s": [
+            0.6117,
+            -0.0125
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.363636,
+          "applied_pull_n": [
+            1.363636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0709,
+          "iterations": 21,
+          "min_gap_mm": 0.005,
+          "regime": "stick",
+          "retained_normal_n": 1.974025,
+          "sled_center_mm": [
+            0.0709,
+            -0.001,
+            0.51
+          ],
+          "speed_mm_s": 0.6705,
+          "step": 25,
+          "tangential_reaction_along_n": 1.362462,
+          "tangential_reaction_n": [
+            1.362462,
+            0.000043
+          ],
+          "time_s": 0.25,
+          "velocity_mm_s": [
+            0.6704,
+            -0.0147
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.418182,
+          "applied_pull_n": [
+            1.418182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0822,
+          "iterations": 67,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.968439,
+          "sled_center_mm": [
+            0.0822,
+            -0.0015,
+            0.51
+          ],
+          "speed_mm_s": 1.1399,
+          "step": 26,
+          "tangential_reaction_along_n": 1.408809,
+          "tangential_reaction_n": [
+            1.408809,
+            0.000615
+          ],
+          "time_s": 0.26,
+          "velocity_mm_s": [
+            1.139,
+            -0.0454
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.472727,
+          "applied_pull_n": [
+            1.472727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.1044,
+          "iterations": 47,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.962928,
+          "sled_center_mm": [
+            0.1044,
+            -0.0028,
+            0.509
+          ],
+          "speed_mm_s": 2.2159,
+          "step": 27,
+          "tangential_reaction_along_n": 1.451264,
+          "tangential_reaction_n": [
+            1.451264,
+            0.001662
+          ],
+          "time_s": 0.27,
+          "velocity_mm_s": [
+            2.2122,
+            -0.1285
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.527273,
+          "applied_pull_n": [
+            1.527273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.1422,
+          "iterations": 35,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.966787,
+          "sled_center_mm": [
+            0.1422,
+            -0.0042,
+            0.509
+          ],
+          "speed_mm_s": 3.7839,
+          "step": 28,
+          "tangential_reaction_along_n": 1.495889,
+          "tangential_reaction_n": [
+            1.495889,
+            0.000196
+          ],
+          "time_s": 0.28,
+          "velocity_mm_s": [
+            3.7814,
+            -0.1383
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.581818,
+          "applied_pull_n": [
+            1.581818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.2054,
+          "iterations": 26,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.970873,
+          "sled_center_mm": [
+            0.2054,
+            -0.005,
+            0.508
+          ],
+          "speed_mm_s": 6.3255,
+          "step": 29,
+          "tangential_reaction_along_n": 1.530948,
+          "tangential_reaction_n": [
+            1.530948,
+            -0.001024
+          ],
+          "time_s": 0.29,
+          "velocity_mm_s": [
+            6.3249,
+            -0.0871
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.636364,
+          "applied_pull_n": [
+            1.636364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.3334,
+          "iterations": 59,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.965116,
+          "sled_center_mm": [
+            0.3334,
+            -0.0069,
+            0.507
+          ],
+          "speed_mm_s": 12.7985,
+          "step": 30,
+          "tangential_reaction_along_n": 1.506918,
+          "tangential_reaction_n": [
+            1.506918,
+            0.001957
+          ],
+          "time_s": 0.3,
+          "velocity_mm_s": [
+            12.7972,
+            -0.1849
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.690909,
+          "applied_pull_n": [
+            1.690909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.561,
+          "iterations": 29,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.987014,
+          "sled_center_mm": [
+            0.561,
+            -0.0091,
+            0.507
+          ],
+          "speed_mm_s": 22.7632,
+          "step": 31,
+          "tangential_reaction_along_n": 1.491611,
+          "tangential_reaction_n": [
+            1.491611,
+            0.000797
+          ],
+          "time_s": 0.31,
+          "velocity_mm_s": [
+            22.7621,
+            -0.2248
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.745455,
+          "applied_pull_n": [
+            1.745455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.9109,
+          "iterations": 19,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.001179,
+          "sled_center_mm": [
+            0.9109,
+            -0.0098,
+            0.506
+          ],
+          "speed_mm_s": 34.9915,
+          "step": 32,
+          "tangential_reaction_along_n": 1.500867,
+          "tangential_reaction_n": [
+            1.500867,
+            -0.003153
+          ],
+          "time_s": 0.32,
+          "velocity_mm_s": [
+            34.9914,
+            -0.0671
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.8,
+          "applied_pull_n": [
+            1.8,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 1.4107,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000313,
+          "sled_center_mm": [
+            1.4107,
+            -0.01,
+            0.506
+          ],
+          "speed_mm_s": 49.9803,
+          "step": 33,
+          "tangential_reaction_along_n": 1.500223,
+          "tangential_reaction_n": [
+            1.500223,
+            -0.000866
+          ],
+          "time_s": 0.33,
+          "velocity_mm_s": [
+            49.9803,
+            -0.0238
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.854545,
+          "applied_pull_n": [
+            1.854545,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 2.0878,
+          "iterations": 16,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000008,
+          "sled_center_mm": [
+            2.0878,
+            -0.0101,
+            0.506
+          ],
+          "speed_mm_s": 67.7074,
+          "step": 34,
+          "tangential_reaction_along_n": 1.500002,
+          "tangential_reaction_n": [
+            1.500002,
+            -0.000302
+          ],
+          "time_s": 0.34,
+          "velocity_mm_s": [
+            67.7074,
+            -0.0087
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.909091,
+          "applied_pull_n": [
+            1.909091,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 2.9694,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000007,
+          "sled_center_mm": [
+            2.9694,
+            -0.0101,
+            0.506
+          ],
+          "speed_mm_s": 88.1616,
+          "step": 35,
+          "tangential_reaction_along_n": 1.500007,
+          "tangential_reaction_n": [
+            1.500007,
+            -0.000122
+          ],
+          "time_s": 0.35,
+          "velocity_mm_s": [
+            88.1616,
+            -0.0027
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 1.963636,
+          "applied_pull_n": [
+            1.963636,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 4.0829,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000006,
+          "sled_center_mm": [
+            4.0829,
+            -0.0101,
+            0.506
+          ],
+          "speed_mm_s": 111.3431,
+          "step": 36,
+          "tangential_reaction_along_n": 1.500008,
+          "tangential_reaction_n": [
+            1.500008,
+            -0.00005
+          ],
+          "time_s": 0.36,
+          "velocity_mm_s": [
+            111.3431,
+            -0.0001
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.018182,
+          "applied_pull_n": [
+            2.018182,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 5.4554,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 2.000002,
+          "sled_center_mm": [
+            5.4554,
+            -0.0101,
+            0.506
+          ],
+          "speed_mm_s": 137.2521,
+          "step": 37,
+          "tangential_reaction_along_n": 1.500002,
+          "tangential_reaction_n": [
+            1.500002,
+            -0.000016
+          ],
+          "time_s": 0.37,
+          "velocity_mm_s": [
+            137.2521,
+            0.0006
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.072727,
+          "applied_pull_n": [
+            2.072727,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 7.1143,
+          "iterations": 14,
+          "min_gap_mm": 0.005,
+          "regime": "slip",
+          "retained_normal_n": 1.999996,
+          "sled_center_mm": [
+            7.1143,
+            -0.0101,
+            0.506
+          ],
+          "speed_mm_s": 165.8889,
+          "step": 38,
+          "tangential_reaction_along_n": 1.49999,
+          "tangential_reaction_n": [
+            1.49999,
+            5e-6
+          ],
+          "time_s": 0.38,
+          "velocity_mm_s": [
+            165.8889,
+            0.0004
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.127273,
+          "applied_pull_n": [
+            2.127273,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 9.0868,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 1.999988,
+          "sled_center_mm": [
+            9.0868,
+            -0.0101,
+            0.506
+          ],
+          "speed_mm_s": 197.2539,
+          "step": 39,
+          "tangential_reaction_along_n": 1.499972,
+          "tangential_reaction_n": [
+            1.499972,
+            0.00002
+          ],
+          "time_s": 0.39,
+          "velocity_mm_s": [
+            197.2539,
+            -0.0006
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.181818,
+          "applied_pull_n": [
+            2.181818,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 11.4003,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 1.999978,
+          "sled_center_mm": [
+            11.4003,
+            -0.0102,
+            0.506
+          ],
+          "speed_mm_s": 231.3475,
+          "step": 40,
+          "tangential_reaction_along_n": 1.499948,
+          "tangential_reaction_n": [
+            1.499948,
+            0.000032
+          ],
+          "time_s": 0.4,
+          "velocity_mm_s": [
+            231.3475,
+            -0.0022
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.236364,
+          "applied_pull_n": [
+            2.236364,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 14.082,
+          "iterations": 15,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 1.999965,
+          "sled_center_mm": [
+            14.082,
+            -0.0102,
+            0.506
+          ],
+          "speed_mm_s": 268.1697,
+          "step": 41,
+          "tangential_reaction_along_n": 1.499919,
+          "tangential_reaction_n": [
+            1.499919,
+            0.000043
+          ],
+          "time_s": 0.41,
+          "velocity_mm_s": [
+            268.1697,
+            -0.0044
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.290909,
+          "applied_pull_n": [
+            2.290909,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 17.1592,
+          "iterations": 16,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 1.999952,
+          "sled_center_mm": [
+            17.1592,
+            -0.0103,
+            0.506
+          ],
+          "speed_mm_s": 307.7207,
+          "step": 42,
+          "tangential_reaction_along_n": 1.49989,
+          "tangential_reaction_n": [
+            1.49989,
+            0.00005
+          ],
+          "time_s": 0.42,
+          "velocity_mm_s": [
+            307.7207,
+            -0.0069
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.345455,
+          "applied_pull_n": [
+            2.345455,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 20.6592,
+          "iterations": 16,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 1.999942,
+          "sled_center_mm": [
+            20.6592,
+            -0.0104,
+            0.506
+          ],
+          "speed_mm_s": 350.0,
+          "step": 43,
+          "tangential_reaction_along_n": 1.499868,
+          "tangential_reaction_n": [
+            1.499868,
+            0.000051
+          ],
+          "time_s": 0.43,
+          "velocity_mm_s": [
+            350.0,
+            -0.0095
+          ]
+        },
+        {
+          "applied_normal_n": 2.0,
+          "applied_pull_along_n": 2.4,
+          "applied_pull_n": [
+            2.4,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 24.6093,
+          "iterations": 16,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 1.999935,
+          "sled_center_mm": [
+            24.6093,
+            -0.0105,
+            0.507
+          ],
+          "speed_mm_s": 395.0072,
+          "step": 44,
+          "tangential_reaction_along_n": 1.499856,
+          "tangential_reaction_n": [
+            1.499856,
+            0.000047
+          ],
+          "time_s": 0.44,
+          "velocity_mm_s": [
+            395.0072,
+            -0.0119
+          ]
+        }
+      ],
+      "state_id": "synthetic_pair_075",
+      "units": {
+        "displacement": "mm",
+        "force": "N",
+        "mu": "1",
+        "time": "s",
+        "velocity": "mm/s"
+      }
+    },
+    {
+      "coulomb_threshold_n": 2.25,
+      "description": "Higher-grip synthetic pair (μ = 0.75) under 3.0 N normal load, pulled along the held-out check's -y direction past 2.25 N.",
+      "eps_v_mm_s": 1.0,
+      "first_slip_pull_n": 2.163636,
+      "first_slip_step": 28,
+      "first_slip_time_s": 0.28,
+      "id": "state_b_3n_neg_y",
+      "label": "3.0 N normal · -y pull ramp (0 → 3.40 N)",
+      "mu": 0.75,
+      "normal_load_n": 3.0,
+      "pull_direction": [
+        0.0,
+        -1.0
+      ],
+      "pull_direction_label": "-y (0.00, -1.00)",
+      "pull_max_n": 3.4,
+      "samples": [
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.0,
+          "applied_pull_n": [
+            0.0,
+            0.0
+          ],
+          "converged": true,
+          "displacement_mm": 0.0,
+          "iterations": 0,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 3.0,
+          "sled_center_mm": [
+            0.0,
+            0.0,
+            0.507
+          ],
+          "speed_mm_s": 0.0,
+          "step": 0,
+          "tangential_reaction_along_n": 0.0,
+          "tangential_reaction_n": [
+            0.0,
+            0.0
+          ],
+          "time_s": 0.0,
+          "velocity_mm_s": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.077273,
+          "applied_pull_n": [
+            0.0,
+            -0.077273
+          ],
+          "converged": true,
+          "displacement_mm": 0.0002,
+          "iterations": 8,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999998,
+          "sled_center_mm": [
+            0.0,
+            -0.0002,
+            0.507
+          ],
+          "speed_mm_s": 0.0161,
+          "step": 1,
+          "tangential_reaction_along_n": 0.076951,
+          "tangential_reaction_n": [
+            -0.0,
+            -0.076951
+          ],
+          "time_s": 0.01,
+          "velocity_mm_s": [
+            0.0,
+            -0.0161
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.154545,
+          "applied_pull_n": [
+            0.0,
+            -0.154545
+          ],
+          "converged": true,
+          "displacement_mm": 0.0005,
+          "iterations": 9,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999983,
+          "sled_center_mm": [
+            0.0,
+            -0.0005,
+            0.507
+          ],
+          "speed_mm_s": 0.0326,
+          "step": 2,
+          "tangential_reaction_along_n": 0.154216,
+          "tangential_reaction_n": [
+            -1e-6,
+            -0.154216
+          ],
+          "time_s": 0.02,
+          "velocity_mm_s": [
+            0.0001,
+            -0.0326
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.231818,
+          "applied_pull_n": [
+            0.0,
+            -0.231818
+          ],
+          "converged": true,
+          "displacement_mm": 0.001,
+          "iterations": 10,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999945,
+          "sled_center_mm": [
+            0.0,
+            -0.001,
+            0.507
+          ],
+          "speed_mm_s": 0.0494,
+          "step": 3,
+          "tangential_reaction_along_n": 0.231482,
+          "tangential_reaction_n": [
+            -1e-6,
+            -0.231482
+          ],
+          "time_s": 0.03,
+          "velocity_mm_s": [
+            0.0001,
+            -0.0494
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.309091,
+          "applied_pull_n": [
+            0.0,
+            -0.309091
+          ],
+          "converged": true,
+          "displacement_mm": 0.0016,
+          "iterations": 10,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999873,
+          "sled_center_mm": [
+            0.0,
+            -0.0016,
+            0.507
+          ],
+          "speed_mm_s": 0.0665,
+          "step": 4,
+          "tangential_reaction_along_n": 0.308749,
+          "tangential_reaction_n": [
+            -2e-6,
+            -0.308749
+          ],
+          "time_s": 0.04,
+          "velocity_mm_s": [
+            0.0002,
+            -0.0665
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.386364,
+          "applied_pull_n": [
+            0.0,
+            -0.386364
+          ],
+          "converged": true,
+          "displacement_mm": 0.0025,
+          "iterations": 10,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999755,
+          "sled_center_mm": [
+            0.0,
+            -0.0025,
+            0.507
+          ],
+          "speed_mm_s": 0.0839,
+          "step": 5,
+          "tangential_reaction_along_n": 0.386014,
+          "tangential_reaction_n": [
+            -2e-6,
+            -0.386014
+          ],
+          "time_s": 0.05,
+          "velocity_mm_s": [
+            0.0003,
+            -0.0839
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.463636,
+          "applied_pull_n": [
+            0.0,
+            -0.463636
+          ],
+          "converged": true,
+          "displacement_mm": 0.0035,
+          "iterations": 10,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999581,
+          "sled_center_mm": [
+            0.0,
+            -0.0035,
+            0.507
+          ],
+          "speed_mm_s": 0.1018,
+          "step": 6,
+          "tangential_reaction_along_n": 0.463279,
+          "tangential_reaction_n": [
+            -3e-6,
+            -0.463279
+          ],
+          "time_s": 0.06,
+          "velocity_mm_s": [
+            0.0005,
+            -0.1018
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.540909,
+          "applied_pull_n": [
+            0.0,
+            -0.540909
+          ],
+          "converged": true,
+          "displacement_mm": 0.0047,
+          "iterations": 10,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999337,
+          "sled_center_mm": [
+            0.0,
+            -0.0047,
+            0.507
+          ],
+          "speed_mm_s": 0.12,
+          "step": 7,
+          "tangential_reaction_along_n": 0.540544,
+          "tangential_reaction_n": [
+            -4e-6,
+            -0.540544
+          ],
+          "time_s": 0.07,
+          "velocity_mm_s": [
+            0.0007,
+            -0.12
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.618182,
+          "applied_pull_n": [
+            0.0,
+            -0.618182
+          ],
+          "converged": true,
+          "displacement_mm": 0.0061,
+          "iterations": 10,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.999012,
+          "sled_center_mm": [
+            0.0,
+            -0.0061,
+            0.507
+          ],
+          "speed_mm_s": 0.1387,
+          "step": 8,
+          "tangential_reaction_along_n": 0.617808,
+          "tangential_reaction_n": [
+            -4e-6,
+            -0.617808
+          ],
+          "time_s": 0.08,
+          "velocity_mm_s": [
+            0.0009,
+            -0.1387
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.695455,
+          "applied_pull_n": [
+            0.0,
+            -0.695455
+          ],
+          "converged": true,
+          "displacement_mm": 0.0077,
+          "iterations": 11,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.998591,
+          "sled_center_mm": [
+            0.0,
+            -0.0077,
+            0.507
+          ],
+          "speed_mm_s": 0.1578,
+          "step": 9,
+          "tangential_reaction_along_n": 0.695072,
+          "tangential_reaction_n": [
+            -5e-6,
+            -0.695072
+          ],
+          "time_s": 0.09,
+          "velocity_mm_s": [
+            0.0011,
+            -0.1578
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.772727,
+          "applied_pull_n": [
+            0.0,
+            -0.772727
+          ],
+          "converged": true,
+          "displacement_mm": 0.0094,
+          "iterations": 11,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.998062,
+          "sled_center_mm": [
+            0.0001,
+            -0.0094,
+            0.507
+          ],
+          "speed_mm_s": 0.1775,
+          "step": 10,
+          "tangential_reaction_along_n": 0.772335,
+          "tangential_reaction_n": [
+            -5e-6,
+            -0.772335
+          ],
+          "time_s": 0.1,
+          "velocity_mm_s": [
+            0.0014,
+            -0.1775
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.85,
+          "applied_pull_n": [
+            0.0,
+            -0.85
+          ],
+          "converged": true,
+          "displacement_mm": 0.0114,
+          "iterations": 11,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.997409,
+          "sled_center_mm": [
+            0.0001,
+            -0.0114,
+            0.507
+          ],
+          "speed_mm_s": 0.1977,
+          "step": 11,
+          "tangential_reaction_along_n": 0.849596,
+          "tangential_reaction_n": [
+            -6e-6,
+            -0.849596
+          ],
+          "time_s": 0.11,
+          "velocity_mm_s": [
+            0.0017,
+            -0.1977
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 0.927273,
+          "applied_pull_n": [
+            0.0,
+            -0.927273
+          ],
+          "converged": true,
+          "displacement_mm": 0.0136,
+          "iterations": 11,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.996617,
+          "sled_center_mm": [
+            0.0001,
+            -0.0136,
+            0.507
+          ],
+          "speed_mm_s": 0.2184,
+          "step": 12,
+          "tangential_reaction_along_n": 0.926857,
+          "tangential_reaction_n": [
+            -7e-6,
+            -0.926857
+          ],
+          "time_s": 0.12,
+          "velocity_mm_s": [
+            0.002,
+            -0.2184
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.004545,
+          "applied_pull_n": [
+            0.0,
+            -1.004545
+          ],
+          "converged": true,
+          "displacement_mm": 0.016,
+          "iterations": 11,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.995671,
+          "sled_center_mm": [
+            0.0001,
+            -0.016,
+            0.507
+          ],
+          "speed_mm_s": 0.2398,
+          "step": 13,
+          "tangential_reaction_along_n": 1.004117,
+          "tangential_reaction_n": [
+            -8e-6,
+            -1.004117
+          ],
+          "time_s": 0.13,
+          "velocity_mm_s": [
+            0.0024,
+            -0.2398
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.081818,
+          "applied_pull_n": [
+            0.0,
+            -1.081818
+          ],
+          "converged": true,
+          "displacement_mm": 0.0186,
+          "iterations": 12,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.994555,
+          "sled_center_mm": [
+            0.0001,
+            -0.0186,
+            0.507
+          ],
+          "speed_mm_s": 0.262,
+          "step": 14,
+          "tangential_reaction_along_n": 1.081376,
+          "tangential_reaction_n": [
+            -9e-6,
+            -1.081376
+          ],
+          "time_s": 0.14,
+          "velocity_mm_s": [
+            0.0029,
+            -0.262
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.159091,
+          "applied_pull_n": [
+            0.0,
+            -1.159091
+          ],
+          "converged": true,
+          "displacement_mm": 0.0215,
+          "iterations": 12,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.993253,
+          "sled_center_mm": [
+            0.0002,
+            -0.0215,
+            0.507
+          ],
+          "speed_mm_s": 0.2849,
+          "step": 15,
+          "tangential_reaction_along_n": 1.158633,
+          "tangential_reaction_n": [
+            -0.00001,
+            -1.158633
+          ],
+          "time_s": 0.15,
+          "velocity_mm_s": [
+            0.0034,
+            -0.2849
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.236364,
+          "applied_pull_n": [
+            0.0,
+            -1.236364
+          ],
+          "converged": true,
+          "displacement_mm": 0.0246,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.991747,
+          "sled_center_mm": [
+            0.0002,
+            -0.0246,
+            0.507
+          ],
+          "speed_mm_s": 0.3087,
+          "step": 16,
+          "tangential_reaction_along_n": 1.235888,
+          "tangential_reaction_n": [
+            -0.000011,
+            -1.235888
+          ],
+          "time_s": 0.16,
+          "velocity_mm_s": [
+            0.0039,
+            -0.3087
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.313636,
+          "applied_pull_n": [
+            0.0,
+            -1.313636
+          ],
+          "converged": true,
+          "displacement_mm": 0.0279,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.990021,
+          "sled_center_mm": [
+            0.0003,
+            -0.0279,
+            0.507
+          ],
+          "speed_mm_s": 0.3335,
+          "step": 17,
+          "tangential_reaction_along_n": 1.31314,
+          "tangential_reaction_n": [
+            -0.000012,
+            -1.31314
+          ],
+          "time_s": 0.17,
+          "velocity_mm_s": [
+            0.0045,
+            -0.3335
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.390909,
+          "applied_pull_n": [
+            0.0,
+            -1.390909
+          ],
+          "converged": true,
+          "displacement_mm": 0.0315,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.988058,
+          "sled_center_mm": [
+            0.0003,
+            -0.0315,
+            0.507
+          ],
+          "speed_mm_s": 0.3594,
+          "step": 18,
+          "tangential_reaction_along_n": 1.390391,
+          "tangential_reaction_n": [
+            -0.000013,
+            -1.390391
+          ],
+          "time_s": 0.18,
+          "velocity_mm_s": [
+            0.0052,
+            -0.3594
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.468182,
+          "applied_pull_n": [
+            0.0,
+            -1.468182
+          ],
+          "converged": true,
+          "displacement_mm": 0.0354,
+          "iterations": 14,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.985843,
+          "sled_center_mm": [
+            0.0004,
+            -0.0354,
+            0.507
+          ],
+          "speed_mm_s": 0.3867,
+          "step": 19,
+          "tangential_reaction_along_n": 1.467637,
+          "tangential_reaction_n": [
+            -0.000015,
+            -1.467637
+          ],
+          "time_s": 0.19,
+          "velocity_mm_s": [
+            0.0059,
+            -0.3866
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.545455,
+          "applied_pull_n": [
+            0.0,
+            -1.545455
+          ],
+          "converged": true,
+          "displacement_mm": 0.0395,
+          "iterations": 16,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.98336,
+          "sled_center_mm": [
+            0.0004,
+            -0.0395,
+            0.507
+          ],
+          "speed_mm_s": 0.4154,
+          "step": 20,
+          "tangential_reaction_along_n": 1.54488,
+          "tangential_reaction_n": [
+            -0.000016,
+            -1.54488
+          ],
+          "time_s": 0.2,
+          "velocity_mm_s": [
+            0.0067,
+            -0.4154
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.622727,
+          "applied_pull_n": [
+            0.0,
+            -1.622727
+          ],
+          "converged": true,
+          "displacement_mm": 0.044,
+          "iterations": 16,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.980595,
+          "sled_center_mm": [
+            0.0005,
+            -0.044,
+            0.507
+          ],
+          "speed_mm_s": 0.446,
+          "step": 21,
+          "tangential_reaction_along_n": 1.622117,
+          "tangential_reaction_n": [
+            -0.000018,
+            -1.622117
+          ],
+          "time_s": 0.21,
+          "velocity_mm_s": [
+            0.0076,
+            -0.4459
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.7,
+          "applied_pull_n": [
+            0.0,
+            -1.7
+          ],
+          "converged": true,
+          "displacement_mm": 0.0488,
+          "iterations": 16,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.977537,
+          "sled_center_mm": [
+            0.0006,
+            -0.0488,
+            0.507
+          ],
+          "speed_mm_s": 0.4786,
+          "step": 22,
+          "tangential_reaction_along_n": 1.699347,
+          "tangential_reaction_n": [
+            -0.00002,
+            -1.699347
+          ],
+          "time_s": 0.22,
+          "velocity_mm_s": [
+            0.0086,
+            -0.4786
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.777273,
+          "applied_pull_n": [
+            0.0,
+            -1.777273
+          ],
+          "converged": true,
+          "displacement_mm": 0.0539,
+          "iterations": 16,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.974178,
+          "sled_center_mm": [
+            0.0007,
+            -0.0539,
+            0.507
+          ],
+          "speed_mm_s": 0.514,
+          "step": 23,
+          "tangential_reaction_along_n": 1.776566,
+          "tangential_reaction_n": [
+            -0.000022,
+            -1.776566
+          ],
+          "time_s": 0.23,
+          "velocity_mm_s": [
+            0.0097,
+            -0.5139
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.854545,
+          "applied_pull_n": [
+            0.0,
+            -1.854545
+          ],
+          "converged": true,
+          "displacement_mm": 0.0594,
+          "iterations": 16,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.970513,
+          "sled_center_mm": [
+            0.0008,
+            -0.0594,
+            0.507
+          ],
+          "speed_mm_s": 0.5528,
+          "step": 24,
+          "tangential_reaction_along_n": 1.853769,
+          "tangential_reaction_n": [
+            -0.000025,
+            -1.853769
+          ],
+          "time_s": 0.24,
+          "velocity_mm_s": [
+            0.0109,
+            -0.5527
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 1.931818,
+          "applied_pull_n": [
+            0.0,
+            -1.931818
+          ],
+          "converged": true,
+          "displacement_mm": 0.0654,
+          "iterations": 17,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.966541,
+          "sled_center_mm": [
+            0.0009,
+            -0.0654,
+            0.507
+          ],
+          "speed_mm_s": 0.5965,
+          "step": 25,
+          "tangential_reaction_along_n": 1.930946,
+          "tangential_reaction_n": [
+            -0.000029,
+            -1.930946
+          ],
+          "time_s": 0.25,
+          "velocity_mm_s": [
+            0.0124,
+            -0.5964
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.009091,
+          "applied_pull_n": [
+            0.0,
+            -2.009091
+          ],
+          "converged": true,
+          "displacement_mm": 0.0719,
+          "iterations": 18,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.962258,
+          "sled_center_mm": [
+            0.0011,
+            -0.0719,
+            0.506
+          ],
+          "speed_mm_s": 0.648,
+          "step": 26,
+          "tangential_reaction_along_n": 2.008062,
+          "tangential_reaction_n": [
+            -0.000036,
+            -2.008062
+          ],
+          "time_s": 0.26,
+          "velocity_mm_s": [
+            0.0142,
+            -0.6478
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.086364,
+          "applied_pull_n": [
+            0.0,
+            -2.086364
+          ],
+          "converged": true,
+          "displacement_mm": 0.0816,
+          "iterations": 91,
+          "min_gap_mm": 0.004,
+          "regime": "stick",
+          "retained_normal_n": 2.956084,
+          "sled_center_mm": [
+            0.0014,
+            -0.0816,
+            0.506
+          ],
+          "speed_mm_s": 0.9701,
+          "step": 27,
+          "tangential_reaction_along_n": 2.079929,
+          "tangential_reaction_n": [
+            -0.000378,
+            -2.079929
+          ],
+          "time_s": 0.27,
+          "velocity_mm_s": [
+            0.0331,
+            -0.9695
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.163636,
+          "applied_pull_n": [
+            0.0,
+            -2.163636
+          ],
+          "converged": true,
+          "displacement_mm": 0.1019,
+          "iterations": 52,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 2.950427,
+          "sled_center_mm": [
+            0.0025,
+            -0.1019,
+            0.506
+          ],
+          "speed_mm_s": 2.0349,
+          "step": 28,
+          "tangential_reaction_along_n": 2.142384,
+          "tangential_reaction_n": [
+            -0.001465,
+            -2.142384
+          ],
+          "time_s": 0.28,
+          "velocity_mm_s": [
+            0.1063,
+            -2.0322
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.240909,
+          "applied_pull_n": [
+            0.0,
+            -2.240909
+          ],
+          "converged": true,
+          "displacement_mm": 0.1312,
+          "iterations": 36,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 2.955861,
+          "sled_center_mm": [
+            0.0036,
+            -0.1312,
+            0.505
+          ],
+          "speed_mm_s": 2.9371,
+          "step": 29,
+          "tangential_reaction_along_n": 2.222852,
+          "tangential_reaction_n": [
+            -0.000059,
+            -2.222852
+          ],
+          "time_s": 0.29,
+          "velocity_mm_s": [
+            0.1093,
+            -2.935
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.318182,
+          "applied_pull_n": [
+            0.0,
+            -2.318182
+          ],
+          "converged": true,
+          "displacement_mm": 0.1844,
+          "iterations": 27,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 2.96095,
+          "sled_center_mm": [
+            0.0042,
+            -0.1844,
+            0.505
+          ],
+          "speed_mm_s": 5.3199,
+          "step": 30,
+          "tangential_reaction_along_n": 2.270492,
+          "tangential_reaction_n": [
+            0.000869,
+            -2.270492
+          ],
+          "time_s": 0.3,
+          "velocity_mm_s": [
+            0.0658,
+            -5.3195
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.395455,
+          "applied_pull_n": [
+            0.0,
+            -2.395455
+          ],
+          "converged": true,
+          "displacement_mm": 0.2834,
+          "iterations": 58,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 2.95991,
+          "sled_center_mm": [
+            0.0048,
+            -0.2834,
+            0.505
+          ],
+          "speed_mm_s": 9.8997,
+          "step": 31,
+          "tangential_reaction_along_n": 2.303854,
+          "tangential_reaction_n": [
+            0.000211,
+            -2.303854
+          ],
+          "time_s": 0.31,
+          "velocity_mm_s": [
+            0.0553,
+            -9.8995
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.472727,
+          "applied_pull_n": [
+            0.0,
+            -2.472727
+          ],
+          "converged": true,
+          "displacement_mm": 0.5002,
+          "iterations": 44,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 2.973255,
+          "sled_center_mm": [
+            0.007,
+            -0.5002,
+            0.504
+          ],
+          "speed_mm_s": 21.6832,
+          "step": 32,
+          "tangential_reaction_along_n": 2.237076,
+          "tangential_reaction_n": [
+            -0.003273,
+            -2.237076
+          ],
+          "time_s": 0.32,
+          "velocity_mm_s": [
+            0.2189,
+            -21.6821
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.55,
+          "applied_pull_n": [
+            0.0,
+            -2.55
+          ],
+          "converged": true,
+          "displacement_mm": 0.8671,
+          "iterations": 22,
+          "min_gap_mm": 0.004,
+          "regime": "slip",
+          "retained_normal_n": 3.000099,
+          "sled_center_mm": [
+            0.0077,
+            -0.8671,
+            0.504
+          ],
+          "speed_mm_s": 36.6868,
+          "step": 33,
+          "tangential_reaction_along_n": 2.249907,
+          "tangential_reaction_n": [
+            0.002914,
+            -2.249907
+          ],
+          "time_s": 0.33,
+          "velocity_mm_s": [
+            0.0732,
+            -36.6867
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.627273,
+          "applied_pull_n": [
+            0.0,
+            -2.627273
+          ],
+          "converged": true,
+          "displacement_mm": 1.4225,
+          "iterations": 16,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 3.000334,
+          "sled_center_mm": [
+            0.0079,
+            -1.4225,
+            0.504
+          ],
+          "speed_mm_s": 55.5388,
+          "step": 34,
+          "tangential_reaction_along_n": 2.250231,
+          "tangential_reaction_n": [
+            0.00099,
+            -2.250231
+          ],
+          "time_s": 0.34,
+          "velocity_mm_s": [
+            0.0237,
+            -55.5388
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.704545,
+          "applied_pull_n": [
+            0.0,
+            -2.704545
+          ],
+          "converged": true,
+          "displacement_mm": 2.2052,
+          "iterations": 16,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 3.000016,
+          "sled_center_mm": [
+            0.008,
+            -2.2052,
+            0.504
+          ],
+          "speed_mm_s": 78.2659,
+          "step": 35,
+          "tangential_reaction_along_n": 2.250004,
+          "tangential_reaction_n": [
+            0.000327,
+            -2.250004
+          ],
+          "time_s": 0.35,
+          "velocity_mm_s": [
+            0.0074,
+            -78.2659
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.781818,
+          "applied_pull_n": [
+            0.0,
+            -2.781818
+          ],
+          "converged": true,
+          "displacement_mm": 3.2537,
+          "iterations": 15,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 3.000007,
+          "sled_center_mm": [
+            0.008,
+            -3.2537,
+            0.504
+          ],
+          "speed_mm_s": 104.8566,
+          "step": 36,
+          "tangential_reaction_along_n": 2.250004,
+          "tangential_reaction_n": [
+            0.000121,
+            -2.250004
+          ],
+          "time_s": 0.36,
+          "velocity_mm_s": [
+            0.0014,
+            -104.8566
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.859091,
+          "applied_pull_n": [
+            0.0,
+            -2.859091
+          ],
+          "converged": true,
+          "displacement_mm": 4.6068,
+          "iterations": 14,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 3.000004,
+          "sled_center_mm": [
+            0.008,
+            -4.6068,
+            0.504
+          ],
+          "speed_mm_s": 135.311,
+          "step": 37,
+          "tangential_reaction_along_n": 2.250003,
+          "tangential_reaction_n": [
+            0.000039,
+            -2.250003
+          ],
+          "time_s": 0.37,
+          "velocity_mm_s": [
+            -0.0006,
+            -135.311
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 2.936364,
+          "applied_pull_n": [
+            0.0,
+            -2.936364
+          ],
+          "converged": true,
+          "displacement_mm": 6.3031,
+          "iterations": 14,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 2.999999,
+          "sled_center_mm": [
+            0.008,
+            -6.3031,
+            0.504
+          ],
+          "speed_mm_s": 169.6294,
+          "step": 38,
+          "tangential_reaction_along_n": 2.249994,
+          "tangential_reaction_n": [
+            4e-6,
+            -2.249994
+          ],
+          "time_s": 0.38,
+          "velocity_mm_s": [
+            -0.0008,
+            -169.6294
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 3.013636,
+          "applied_pull_n": [
+            0.0,
+            -3.013636
+          ],
+          "converged": true,
+          "displacement_mm": 8.3812,
+          "iterations": 14,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 2.999991,
+          "sled_center_mm": [
+            0.008,
+            -8.3812,
+            0.504
+          ],
+          "speed_mm_s": 207.8123,
+          "step": 39,
+          "tangential_reaction_along_n": 2.249979,
+          "tangential_reaction_n": [
+            -0.000014,
+            -2.249979
+          ],
+          "time_s": 0.39,
+          "velocity_mm_s": [
+            -0.0001,
+            -207.8123
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 3.090909,
+          "applied_pull_n": [
+            0.0,
+            -3.090909
+          ],
+          "converged": true,
+          "displacement_mm": 10.8798,
+          "iterations": 15,
+          "min_gap_mm": 0.003,
+          "regime": "slip",
+          "retained_normal_n": 2.99998,
+          "sled_center_mm": [
+            0.008,
+            -10.8798,
+            0.504
+          ],
+          "speed_mm_s": 249.86,
+          "step": 40,
+          "tangential_reaction_along_n": 2.249955,
+          "tangential_reaction_n": [
+            -0.000028,
+            -2.249955
+          ],
+          "time_s": 0.4,
+          "velocity_mm_s": [
+            0.0013,
+            -249.86
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 3.168182,
+          "applied_pull_n": [
+            0.0,
+            -3.168182
+          ],
+          "converged": true,
+          "displacement_mm": 13.8376,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 2.999967,
+          "sled_center_mm": [
+            0.008,
+            -13.8376,
+            0.504
+          ],
+          "speed_mm_s": 295.7729,
+          "step": 41,
+          "tangential_reaction_along_n": 2.249924,
+          "tangential_reaction_n": [
+            -0.000039,
+            -2.249924
+          ],
+          "time_s": 0.41,
+          "velocity_mm_s": [
+            0.0033,
+            -295.7729
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 3.245455,
+          "applied_pull_n": [
+            0.0,
+            -3.245455
+          ],
+          "converged": true,
+          "displacement_mm": 17.2931,
+          "iterations": 15,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 2.999953,
+          "sled_center_mm": [
+            0.0081,
+            -17.2931,
+            0.504
+          ],
+          "speed_mm_s": 345.551,
+          "step": 42,
+          "tangential_reaction_along_n": 2.249893,
+          "tangential_reaction_n": [
+            -0.000048,
+            -2.249893
+          ],
+          "time_s": 0.42,
+          "velocity_mm_s": [
+            0.0057,
+            -345.551
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 3.322727,
+          "applied_pull_n": [
+            0.0,
+            -3.322727
+          ],
+          "converged": true,
+          "displacement_mm": 21.285,
+          "iterations": 16,
+          "min_gap_mm": 0.002,
+          "regime": "slip",
+          "retained_normal_n": 2.999942,
+          "sled_center_mm": [
+            0.0082,
+            -21.285,
+            0.504
+          ],
+          "speed_mm_s": 399.1939,
+          "step": 43,
+          "tangential_reaction_along_n": 2.24987,
+          "tangential_reaction_n": [
+            -0.000052,
+            -2.24987
+          ],
+          "time_s": 0.43,
+          "velocity_mm_s": [
+            0.0083,
+            -399.1939
+          ]
+        },
+        {
+          "applied_normal_n": 3.0,
+          "applied_pull_along_n": 3.4,
+          "applied_pull_n": [
+            0.0,
+            -3.4
+          ],
+          "converged": true,
+          "displacement_mm": 25.852,
+          "iterations": 16,
+          "min_gap_mm": 0.001,
+          "regime": "slip",
+          "retained_normal_n": 2.999936,
+          "sled_center_mm": [
+            0.0083,
+            -25.852,
+            0.504
+          ],
+          "speed_mm_s": 456.7009,
+          "step": 44,
+          "tangential_reaction_along_n": 2.249859,
+          "tangential_reaction_n": [
+            -0.00005,
+            -2.249859
+          ],
+          "time_s": 0.44,
+          "velocity_mm_s": [
+            0.0108,
+            -456.7009
+          ]
+        }
+      ],
+      "state_id": "synthetic_pair_075",
+      "units": {
+        "displacement": "mm",
+        "force": "N",
+        "mu": "1",
+        "time": "s",
+        "velocity": "mm/s"
+      }
+    }
+  ],
+  "report_sha256": "3f49ba86937ef076b70098c15f8ca2299381e63b0d7211a8900fe1fec209db2e",
+  "schema": "ftx-friction-sled-exhibit/1",
+  "scope": "Synthetic software/physics sliding-sled runs computed by production ftx-drape (IPC barrier + smoothed Coulomb friction) and ftx-pattern material_friction::calibrate. Not measured textile qualification, static breakaway calibration, or garment fit.",
+  "sled": {
+    "barrier_dhat_mm": 0.2,
+    "contact_thickness_mm": 0.5,
+    "eps_v_mm_s": 1.0,
+    "footprint_mm": [
+      100.0,
+      100.0
+    ],
+    "mass_kg": 0.2,
+    "mesh_cells": [
+      2,
+      2
+    ],
+    "steps": 44,
+    "time_step_s": 0.01
+  },
+  "states": [
+    {
+      "calibration_input": {
+        "allow_estimated_observations": true,
+        "conditions": {
+          "purpose": "Synthetic numerical regression only; not a measured textile pair"
+        },
+        "experiments": [
+          {
+            "evidence": "estimate",
+            "id": "fitting-acquisition",
+            "partition": "fit",
+            "samples": [
+              {
+                "normal_n": 2.0,
+                "pull_n": [
+                  0.8,
+                  0.0
+                ],
+                "scale_n": 0.1,
+                "velocity_m_s": [
+                  0.01,
+                  0.0
+                ]
+              },
+              {
+                "normal_n": 5.0,
+                "pull_n": [
+                  -1.2,
+                  1.6
+                ],
+                "scale_n": 0.1,
+                "velocity_m_s": [
+                  -0.03,
+                  0.04
+                ]
+              }
+            ],
+            "source": "acquisition"
+          },
+          {
+            "evidence": "estimate",
+            "id": "held-out-acquisition",
+            "partition": "check",
+            "samples": [
+              {
+                "normal_n": 3.0,
+                "pull_n": [
+                  0.0,
+                  -1.2
+                ],
+                "scale_n": 0.1,
+                "velocity_m_s": [
+                  0.0,
+                  -0.02
+                ]
+              }
+            ],
+            "source": "acquisition"
+          }
+        ],
+        "fitted_on": "2026-10-18",
+        "max_peak_scaled": 1e-8,
+        "max_rms_scaled": 1e-8,
+        "method": "Synthetic corrected steady-pull vector oracle; coefficient 0.4, no apparatus drag or inertia",
+        "replace_existing": false,
+        "schema": "ftx-friction-calibration/1",
+        "sources": {
+          "acquisition": {
+            "accessed_on": "2026-10-18",
+            "note": "All forces and velocities are synthetic known answers",
+            "reference": "test:synthetic-sliding-oracle"
+          }
+        },
+        "target": {
+          "kind": "pair",
+          "materials": [
+            {
+              "allow_estimates": true,
+              "id": "friction-sheet-a",
+              "overrides": {},
+              "record": {
+                "composition": [],
+                "composition_complete": false,
+                "form": "woven",
+                "id": "friction-sheet-a",
+                "name": "Synthetic sliding sheet, not a named textile",
+                "properties": {
+                  "areal_density": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "kg/m2",
+                    "value": 0.2
+                  },
+                  "bending_rigidity": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N*m",
+                    "value": 0.00003
+                  },
+                  "friction_self": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.3
+                  },
+                  "friction_skin": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "poisson_warp_weft": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "shear_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 10.0
+                  },
+                  "thickness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "m",
+                    "value": 0.0006
+                  },
+                  "warp_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 100.0
+                  },
+                  "weft_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 40.0
+                  }
+                },
+                "sources": {
+                  "sheet": {
+                    "accessed_on": "2026-10-18",
+                    "note": "Entire record synthetic; no real material or garment qualification",
+                    "reference": "test:synthetic-friction-sheet"
+                  }
+                },
+                "structure": {}
+              },
+              "sources": {}
+            },
+            {
+              "allow_estimates": true,
+              "id": "friction-sheet-b",
+              "overrides": {},
+              "record": {
+                "composition": [],
+                "composition_complete": false,
+                "form": "woven",
+                "id": "friction-sheet-b",
+                "name": "Synthetic sliding sheet, not a named textile",
+                "properties": {
+                  "areal_density": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "kg/m2",
+                    "value": 0.4
+                  },
+                  "bending_rigidity": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N*m",
+                    "value": 0.00006
+                  },
+                  "friction_self": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.3
+                  },
+                  "friction_skin": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "poisson_warp_weft": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "shear_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 40.0
+                  },
+                  "thickness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "m",
+                    "value": 0.0006
+                  },
+                  "warp_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 400.0
+                  },
+                  "weft_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 160.0
+                  }
+                },
+                "sources": {
+                  "sheet": {
+                    "accessed_on": "2026-10-18",
+                    "note": "Entire record synthetic; no real material or garment qualification",
+                    "reference": "test:synthetic-friction-sheet"
+                  }
+                },
+                "structure": {}
+              },
+              "sources": {}
+            }
+          ]
+        }
+      },
+      "calibration_input_sha256": "9bb58123aa399e349def67a5672c3a81f7ee19adbb298263316490bb1826b256",
+      "check_rms_scaled": 1.5700924586837751e-15,
+      "evidence": "estimate",
+      "fit_normal_n_range": [
+        2.0,
+        5.0
+      ],
+      "fit_rms_scaled": 1.1102230246251565e-15,
+      "fit_speed_m_s_range": [
+        0.01,
+        0.05
+      ],
+      "id": "synthetic_pair_040",
+      "label": "Synthetic pair A/B (μ = 0.40 · bundled oracle)",
+      "mu": 0.4,
+      "synthetic": true
+    },
+    {
+      "calibration_input": {
+        "allow_estimated_observations": true,
+        "conditions": {
+          "purpose": "Synthetic numerical regression only; not a measured textile pair"
+        },
+        "experiments": [
+          {
+            "evidence": "estimate",
+            "id": "fitting-acquisition",
+            "partition": "fit",
+            "samples": [
+              {
+                "normal_n": 2.0,
+                "pull_n": [
+                  1.5,
+                  0.0
+                ],
+                "scale_n": 0.1,
+                "velocity_m_s": [
+                  0.01,
+                  0.0
+                ]
+              },
+              {
+                "normal_n": 5.0,
+                "pull_n": [
+                  -2.25,
+                  3.0
+                ],
+                "scale_n": 0.1,
+                "velocity_m_s": [
+                  -0.03,
+                  0.04
+                ]
+              }
+            ],
+            "source": "acquisition"
+          },
+          {
+            "evidence": "estimate",
+            "id": "held-out-acquisition",
+            "partition": "check",
+            "samples": [
+              {
+                "normal_n": 3.0,
+                "pull_n": [
+                  0.0,
+                  -2.25
+                ],
+                "scale_n": 0.1,
+                "velocity_m_s": [
+                  0.0,
+                  -0.02
+                ]
+              }
+            ],
+            "source": "acquisition"
+          }
+        ],
+        "fitted_on": "2026-10-18",
+        "max_peak_scaled": 1e-8,
+        "max_rms_scaled": 1e-8,
+        "method": "Synthetic corrected steady-pull vector oracle scaled to coefficient 0.75; no apparatus drag or inertia",
+        "replace_existing": false,
+        "schema": "ftx-friction-calibration/1",
+        "sources": {
+          "acquisition": {
+            "accessed_on": "2026-10-18",
+            "note": "All forces and velocities are synthetic known answers",
+            "reference": "test:synthetic-sliding-oracle"
+          }
+        },
+        "target": {
+          "kind": "pair",
+          "materials": [
+            {
+              "allow_estimates": true,
+              "id": "friction-sheet-a",
+              "overrides": {},
+              "record": {
+                "composition": [],
+                "composition_complete": false,
+                "form": "woven",
+                "id": "friction-sheet-a",
+                "name": "Synthetic sliding sheet, not a named textile",
+                "properties": {
+                  "areal_density": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "kg/m2",
+                    "value": 0.2
+                  },
+                  "bending_rigidity": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N*m",
+                    "value": 0.00003
+                  },
+                  "friction_self": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.3
+                  },
+                  "friction_skin": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "poisson_warp_weft": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "shear_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 10.0
+                  },
+                  "thickness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "m",
+                    "value": 0.0006
+                  },
+                  "warp_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 100.0
+                  },
+                  "weft_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 40.0
+                  }
+                },
+                "sources": {
+                  "sheet": {
+                    "accessed_on": "2026-10-18",
+                    "note": "Entire record synthetic; no real material or garment qualification",
+                    "reference": "test:synthetic-friction-sheet"
+                  }
+                },
+                "structure": {}
+              },
+              "sources": {}
+            },
+            {
+              "allow_estimates": true,
+              "id": "friction-sheet-b",
+              "overrides": {},
+              "record": {
+                "composition": [],
+                "composition_complete": false,
+                "form": "woven",
+                "id": "friction-sheet-b",
+                "name": "Synthetic sliding sheet, not a named textile",
+                "properties": {
+                  "areal_density": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "kg/m2",
+                    "value": 0.4
+                  },
+                  "bending_rigidity": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N*m",
+                    "value": 0.00006
+                  },
+                  "friction_self": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.3
+                  },
+                  "friction_skin": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "poisson_warp_weft": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "1",
+                    "value": 0.2
+                  },
+                  "shear_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 40.0
+                  },
+                  "thickness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "m",
+                    "value": 0.0006
+                  },
+                  "warp_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 400.0
+                  },
+                  "weft_stiffness": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic software fixture, not a textile measurement",
+                    "source": "sheet",
+                    "unit": "N/m",
+                    "value": 160.0
+                  }
+                },
+                "sources": {
+                  "sheet": {
+                    "accessed_on": "2026-10-18",
+                    "note": "Entire record synthetic; no real material or garment qualification",
+                    "reference": "test:synthetic-friction-sheet"
+                  }
+                },
+                "structure": {}
+              },
+              "sources": {}
+            }
+          ]
+        }
+      },
+      "calibration_input_sha256": "95e4acac0932d1c763b80a8572f5842e2aae7869feabaeb09d248bd6df49bcd6",
+      "check_rms_scaled": 0.0,
+      "evidence": "estimate",
+      "fit_normal_n_range": [
+        2.0,
+        5.0
+      ],
+      "fit_rms_scaled": 2.220446049250313e-15,
+      "fit_speed_m_s_range": [
+        0.01,
+        0.05
+      ],
+      "id": "synthetic_pair_075",
+      "label": "Higher-grip synthetic pair (μ = 0.75 · scaled oracle)",
+      "mu": 0.75,
+      "synthetic": true
+    }
+  ]
+}

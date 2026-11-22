@@ -7,6 +7,7 @@ export interface SiteLink { href: string; label: string; note: string }
 
 export const exhibits: SiteLink[] = [
   { href: "/studies/skirt/", label: "Skirt atelier", note: "Compare two hems on fitted adult forms" },
+  { href: "/studies/wrap-skirt/", label: "Wrap skirt overlap", note: "Check front overlap, tie reach, and neutral vs seated Anny slices" },
   { href: "/#drape-room", label: "Drape room", note: "Sew five flat pieces onto a fitted body" },
   { href: "/studies/trousers/", label: "Trouser study", note: "Bend knees, test elastic grip, and slice through sewn folds" },
   { href: "/#visual-fitting", label: "Visual fitting", note: "Trace rendered pixels back to flat pattern edges" },
@@ -19,6 +20,7 @@ export const exhibits: SiteLink[] = [
   { href: "/#materials", label: "Materials", note: "Pull and twist cloth between two grips" },
   { href: "/experiments/thermal/", label: "Thermal sandwich", note: "Stack measured neoprene & leather sheets with live steady conduction" },
   { href: "/experiments/wash/", label: "Wash & shrink", note: "Apply measured warp/weft denim shrinkage or compute a pre-wash recut" },
+  { href: "/experiments/friction/", label: "Friction sled", note: "Inspect retained normal & tangential reactions across the stick-to-slip threshold" },
   { href: "/#studies", label: "Drape gallery", note: "Follow panels from the board to the sewn garment" },
   { href: "/#tracing", label: "Tracing", note: "Recover cut lines from a drawn pattern sheet" },
   { href: "/#films", label: "Films", note: "Watch the garments, material rigs and workshops" },
