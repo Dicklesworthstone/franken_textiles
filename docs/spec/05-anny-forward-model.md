@@ -885,9 +885,13 @@ boundary (355 and 360 mm drape, 361 and 365 mm are refused). With `Knuckle`, 335
 drape, and 343, 344, 345, 350, 355, 360, 365 and 370 mm are refused, at the start or by the display audit
 at frame 87 or 88. The displayed hand accounts for the place. In the arm's wrap frame it stays within
 26 mm of the arm axis up to 10 mm beyond the wrist landmark, then reaches 33 mm (10 to 20 mm beyond),
-40 mm (20 to 30), 50 mm (30 to 40) and 59 mm (40 to 60), where the thumb stands out to the front and
-towards the side on which the underarm seam closes. The sleeve's wrap cylinder is 34.7 mm, and a circle
-centred on the middle of that slice of the hand still needs 42 mm.
+40 mm (20 to 30), 50 mm (30 to 40) and 59 mm (40 to 60). That farthest point is the end of the thumb as
+the displayed geometry shows it (the outline runs out along one ray from 10 to 52 mm beyond the wrist and
+nothing reaches as far forward beyond 60 mm; no rig label was consulted). It lies 52 mm beyond the wrist
+landmark and 43° round from the front toward the lateral axis. The underarm seam closes
+at 69° on the drafted 34.7 mm cylinder, and on a 45 mm cylinder the open gap it closes spans 25° to 122°,
+so the seam closes across the thumb. A circle centred on the middle of that slice of the hand still
+needs 42 mm.
 
 Authored wrap-axis adjustments (`frame_rotation`, `radius_mm`; `docs/fold-inspection.md`) did not give the
 385 mm sleeve a start. A tilt of 3.08° about [19, −6, 0] (front, lateral, up) puts the centre of a 45 mm
