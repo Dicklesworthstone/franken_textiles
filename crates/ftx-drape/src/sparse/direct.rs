@@ -891,7 +891,17 @@ impl SymbolicLdlt {
             for c in 0..k_elim {
                 l[c + c * m] = 1.0;
                 for i in c + 1..m {
-                    l[i + c * m] = f[i + c * m];
+                    let val = f[i + c * m];
+                    if !val.is_finite() {
+                        return Err(LdltError::PivotBreakdown {
+                            orig_col: self.perm[local2var[c]],
+                            permuted_col: local2var[c],
+                            best_abs: f64::INFINITY,
+                            required: zero_tol,
+                            two_by_two_enabled: opts.allow_2x2,
+                        });
+                    }
+                    l[i + c * m] = val;
                 }
                 nnz_l_actual += m - c;
             }
@@ -1088,7 +1098,8 @@ fn diagonal_pivot(
     zero_tol: f64,
 ) -> Option<PivotChoice> {
     let dk = f[k + k * m].abs();
-    (dk > zero_tol && dk >= opts.pivot_threshold * gamma_of(f, m, k, k))
+    let gk = gamma_of(f, m, k, k);
+    (dk.is_finite() && gk.is_finite() && dk > zero_tol && dk >= opts.pivot_threshold * gk)
         .then_some(PivotChoice::One(k))
 }
 
@@ -1106,7 +1117,11 @@ fn gamma_of(f: &[f64], m: usize, k: usize, c: usize) -> f64 {
     let mut g = 0.0f64;
     for i in k..m {
         if i != c {
-            g = g.max(f[i + c * m].abs());
+            let v = f[i + c * m].abs();
+            if !v.is_finite() {
+                return f64::NAN;
+            }
+            g = g.max(v);
         }
     }
     g
@@ -1130,9 +1145,13 @@ fn choose_pivot(
     for q in k..w {
         let dq = f[q + q * m].abs();
         let gq = gamma_of(f, m, k, q);
-        best_abs = best_abs.max(dq);
-        required = required.max(u * gq).max(zero_tol);
-        if dq > zero_tol && dq >= u * gq {
+        if dq.is_finite() {
+            best_abs = best_abs.max(dq);
+        }
+        if gq.is_finite() {
+            required = required.max(u * gq).max(zero_tol);
+        }
+        if dq.is_finite() && gq.is_finite() && dq > zero_tol && dq >= u * gq {
             return PivotChoice::One(q);
         }
     }
@@ -1143,15 +1162,27 @@ fn choose_pivot(
                 let e11 = f[p + p * m];
                 let e21 = f[q + p * m];
                 let e22 = f[q + q * m];
+                if !(e11.is_finite() && e21.is_finite() && e22.is_finite()) {
+                    continue;
+                }
                 let det = e11 * e22 - e21 * e21;
-                if det.abs() <= det_tol {
+                if !det.is_finite() || det.abs() <= det_tol {
+                    continue;
+                }
+                let inv11 = e22 / det;
+                let inv21 = -e21 / det;
+                let inv22 = e11 / det;
+                if !(inv11.is_finite() && inv21.is_finite() && inv22.is_finite()) {
                     continue;
                 }
                 let gp = gamma_pair(f, m, k, p, q);
                 let gq = gamma_pair(f, m, k, q, p);
+                if !(gp.is_finite() && gq.is_finite()) {
+                    continue;
+                }
                 let g1 = (e22.abs() * gp + e21.abs() * gq) / det.abs();
                 let g2 = (e21.abs() * gp + e11.abs() * gq) / det.abs();
-                if g1.max(g2) <= 1.0 / u {
+                if g1.is_finite() && g2.is_finite() && g1.max(g2) <= 1.0 / u {
                     return PivotChoice::Two(p, q);
                 }
             }
@@ -1166,7 +1197,11 @@ fn gamma_pair(f: &[f64], m: usize, k: usize, c: usize, other: usize) -> f64 {
     let mut g = 0.0f64;
     for i in k..m {
         if i != c && i != other {
-            g = g.max(f[i + c * m].abs());
+            let v = f[i + c * m].abs();
+            if !v.is_finite() {
+                return f64::NAN;
+            }
+            g = g.max(v);
         }
     }
     g
@@ -1728,6 +1763,28 @@ mod tests {
         assert!(matches!(
             sym.factor(&a, &bad),
             Err(LdltError::InvalidOptions { .. })
+        ));
+        // Intermediate Schur complement overflow must refuse instead of accepting ±inf as a pivot.
+        let mut coo = Coo::new(2, 2);
+        coo.push(0, 0, 1e305);
+        coo.push(0, 1, 1e307);
+        coo.push(1, 0, 1e307);
+        coo.push(1, 1, 1e305);
+        let schur_overflow = coo.assemble();
+        let sym_so = SymbolicLdlt::analyze(&schur_overflow, DirectOrdering::Natural).unwrap();
+        assert!(matches!(
+            sym_so.factor(&schur_overflow, &LdltOptions::default()),
+            Err(LdltError::PivotBreakdown { .. })
+        ));
+        // Overflowing 2x2 determinant must refuse instead of dividing by ±inf into zeroed L/D⁻¹.
+        let mut coo = Coo::new(2, 2);
+        coo.push(0, 1, 1e200);
+        coo.push(1, 0, 1e200);
+        let det_overflow = coo.assemble();
+        let sym_do = SymbolicLdlt::analyze(&det_overflow, DirectOrdering::Natural).unwrap();
+        assert!(matches!(
+            sym_do.factor(&det_overflow, &LdltOptions::default()),
+            Err(LdltError::PivotBreakdown { .. })
         ));
     }
 
