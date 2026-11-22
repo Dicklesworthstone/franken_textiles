@@ -392,10 +392,23 @@ pub fn measure_photo(
             ));
         }
         let digits = if angle { 2 } else { 1 };
+        let raw_value = value_of(a, b);
+        let rounded_value = {
+            let r = py::round(raw_value, digits);
+            if r == 0.0 && raw_value > 0.0 && !angle {
+                raw_value
+            } else {
+                r
+            }
+        };
+        let rounded_sigma = {
+            let r = py::round(sigma, digits);
+            if r == 0.0 && sigma > 0.0 { sigma } else { r }
+        };
         let mut record = crate::make_record(
             name,
-            py::round(value_of(a, b), digits),
-            py::round(sigma, digits),
+            rounded_value,
+            rounded_sigma,
             "PHOTO_ESTIMATED",
             &method,
             did,
@@ -442,4 +455,40 @@ pub fn measure_photo(
     Ok(
         json!({"schema":"fabric-measurements/1", "wearer":{}, "taken_on":null, "records":records, "fused":{}, "photo":report}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measure_photo_preserves_sub_tenth_mm_positive_sigma_instead_of_rounding_to_zero() {
+        // High-resolution sheet (0.05 mm/px) with tight ChArUco-like corners and click_px = 0.2
+        // yields a valid positive sigma (~0.02–0.04 mm) that rounds to 0.0 at 1 decimal place.
+        let reference = json!({
+            "schema": "ftx-photo-reference/1",
+            "reference": "plain_sheet",
+            "paper": "a4",
+            "image_size_px": [6000, 7000],
+            "corners_px": [[100.0, 100.0], [4300.0, 100.0], [4300.0, 6040.0], [100.0, 6040.0]],
+            "corner_sigma_px": 0.1
+        });
+        let scale = super::super::analyze_reference(&reference).unwrap();
+        let points = json!({
+            "chest_width": [[500.0, 1000.0], [3500.0, 1000.0]]
+        });
+        let options = PhotoOptions {
+            click_px: 0.2,
+            bootstrap: 40,
+            seed: 7,
+            ..PhotoOptions::default()
+        };
+        let doc = measure_photo(&scale, &points, &options).unwrap();
+        let rec = &doc["records"][0];
+        let sigma = rec["sigma_mm"].as_f64().unwrap();
+        assert!(
+            sigma > 0.0 && sigma < 0.05,
+            "expected positive unrounded sub-0.05 mm sigma, got {sigma} (record: {rec})"
+        );
+    }
 }
