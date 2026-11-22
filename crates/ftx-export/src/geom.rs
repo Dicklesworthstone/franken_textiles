@@ -409,8 +409,19 @@ fn notch_marks(
 
 /// Point at arclength fraction `s` along `pts` and the unit direction of its segment.
 fn point_on(pts: &[Vec2], s: f64) -> (Vec2, Vec2) {
+    if pts.is_empty() {
+        return (Vec2::ZERO, Vec2::ZERO);
+    }
+    if pts.len() == 1 {
+        return (pts[0], Vec2::ZERO);
+    }
+    let s = if s.is_finite() {
+        s.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let cum = cumulative(pts);
-    let target = s.clamp(0.0, 1.0) * cum[cum.len() - 1];
+    let target = s * cum[cum.len() - 1];
     let left = cum.partition_point(|&c| c < target);
     let k = (left as i64 - 1).clamp(0, pts.len() as i64 - 2) as usize;
     let seg = cum[k + 1] - cum[k];
@@ -480,6 +491,9 @@ pub fn build_geom(
     mitre_limit: f64,
     text_size: f64,
 ) -> Result<Geom, Refusal> {
+    if !text_size.is_finite() || text_size <= 0.0 {
+        return Err(invalid("text size must be finite and positive"));
+    }
     let doc = pattern
         .doc
         .as_ref()
@@ -500,7 +514,10 @@ pub fn build_geom(
         (None, Some(i)) => i,
         (None, None) => unreachable!(),
     };
-    let piece = &doc.pieces[inst.piece_index];
+    let piece = doc
+        .pieces
+        .get(inst.piece_index)
+        .ok_or_else(|| invalid(format!("no piece {}", inst.piece_index)))?;
     let pv = &raw["pieces"][inst.piece_index];
     let on_fold = piece.on_fold().filter(|f| !f.is_empty());
     let fold = if is_inst { None } else { on_fold };
@@ -1048,7 +1065,11 @@ impl<'a> Region<'a> {
             .map(|(t, rel, b)| text_width(t, *rel, *b))
             .fold(f64::NEG_INFINITY, f64::max)
             .max(1e-6);
-        let hsum: f64 = lines.iter().map(|(_, rel, _)| 1.3 * rel).sum();
+        let hsum: f64 = lines
+            .iter()
+            .map(|(_, rel, _)| 1.3 * rel)
+            .sum::<f64>()
+            .max(1e-6);
         let seeds = self.candidates();
         if seeds.first().is_none_or(|c| c.1 < 0.0) && self.inset > 0.0 {
             let whole = Region {
@@ -1058,6 +1079,9 @@ impl<'a> Region<'a> {
             };
             return whole.place(lines, text_size);
         }
+        let Some(&(first_seed, _)) = seeds.first() else {
+            return (centroid(self.sew), 0.0);
+        };
         // the largest size whose block fits at c (0 if none)
         let fits = |c: Vec2, s: f64| self.contains_box(c, 0.53 * wmax * s, 0.53 * hsum * s);
         let diag = 0.53 * (wmax * wmax + hsum * hsum).sqrt();
@@ -1083,7 +1107,7 @@ impl<'a> Region<'a> {
         };
         let slope = 1.0 / (0.53 * wmax.min(hsum));
         let tol = 0.02 * text_size;
-        let mut best = (seeds[0].0, size_at(seeds[0].0));
+        let mut best = (first_seed, size_at(first_seed));
         for &(c, _) in seeds.iter().skip(1).take(4).chain(seeds.last()) {
             let s = size_at(c);
             if s > best.1 + 1e-9 {
@@ -1136,6 +1160,9 @@ impl<'a> Region<'a> {
 /// (5) and decor (half its width + 4); the whole sew polygon when nothing of that is left.
 #[must_use]
 pub fn main_label_fits(g: &Geom, p: Vec2, lines: &[(String, f64, bool)], size: f64) -> bool {
+    if lines.is_empty() || !p.is_finite() || !size.is_finite() || size < 0.0 {
+        return false;
+    }
     let region = Region::new(g, &g.sew);
     let region = if region.candidates().first().is_none_or(|c| c.1 < 0.0) {
         Region {
@@ -1326,5 +1353,31 @@ mod tests {
             let err = ctx.geom(Source::Piece(0), 6.0).unwrap_err();
             assert_eq!(err.code, RefusalCode::InvalidDocument);
         }
+
+        // Degenerate point_on, empty/non-finite main_label_fits, and bad text_size must not panic.
+        assert_eq!(point_on(&[], 0.5), (Vec2::ZERO, Vec2::ZERO));
+        assert_eq!(
+            point_on(&[Vec2::new(3.0, 4.0)], 0.5),
+            (Vec2::new(3.0, 4.0), Vec2::ZERO)
+        );
+        assert_eq!(
+            point_on(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)], f64::NAN).0,
+            Vec2::ZERO
+        );
+        assert!(!main_label_fits(&g, Vec2::new(50.0, 40.0), &[], 6.0));
+        assert!(!main_label_fits(
+            &g,
+            Vec2::new(50.0, 40.0),
+            &[("A".into(), 1.0, true)],
+            f64::NAN
+        ));
+        assert_eq!(
+            ctx.geom(Source::Piece(0), 0.0).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            ctx.geom(Source::Piece(0), f64::NAN).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
     }
 }
