@@ -149,8 +149,12 @@ left one to four sleeve vertices inside the hand, all at the sleeve's end, on th
 8 mm spacing, on a 45 mm cylinder at 12, 8 and 6 mm and on a 55 mm cylinder at 12 mm; a 65 mm cylinder
 left none inside but 213 cloth-on-cloth crossing pairs (05 "Clothing collider" lists each). So the
 whole-hand collider removes the blind spot beyond the knuckle cap but does not by itself give a sleeve
-that covers an open hand a clear start. Neither a placement that puts the sleeve end outside the fingers
-nor a hand pose with the fingers together exists; neither has been tried, so neither is known to work.
+that covers an open hand a clear start. A hand pose with the fingers together does not exist. Since
+`939366c3` a piece's wrap axis can be shifted and tilted by hand (`placement.frame_offset_mm`,
+`frame_rotation`; `docs/fold-inspection.md`), and since `d7ec61b0` `ftx place` checks both preview stages
+against the full displayed body. On a build of that tree the check ran on the 45 mm, 6 mm placement
+above and reported the start crossing the displayed body, as the three vertices inside it imply. No
+adjustment that puts this sleeve's end outside the fingers has been found or tried.
 
 The release check recorded at `bed4e6e3` passed all 16 KAT/contact/fitted-body tests after an
 earlier 80 cm run stalled at 1.413734 mm of offset. At that revision all three pinned native
