@@ -1187,7 +1187,10 @@ impl Solver {
     }
 
     pub(crate) fn cached_factor_solve(&self, rhs: &[f64]) -> Option<Vec<f64>> {
-        self.precond.as_ref().map(|f| f.solve(rhs))
+        self.precond
+            .as_ref()
+            .filter(|f| f.stats().n == rhs.len())
+            .map(|f| f.solve(rhs))
     }
 
     pub(crate) fn factor_and_solve_exact(
@@ -1203,8 +1206,10 @@ impl Solver {
             )
         })?;
         let sol = factor.solve(rhs);
-        if factor.inertia().negative == 0 && self.pcg_iters > 0 {
+        if factor.inertia().negative == 0 {
             self.precond = Some(factor);
+        } else {
+            self.precond = None;
         }
         Ok(sol)
     }
@@ -2051,11 +2056,16 @@ impl Solver {
                 let php: f64 = p.iter().zip(&hp).map(|(a, b)| a * b).sum();
                 model_decrease = -gp - 0.5 * php;
             }
+            let p_norm = p.iter().map(|v| v * v).sum::<f64>().sqrt();
             let trial = self.apply(&self.x, &p, 1.0);
             let trial_energy = match self.potential_ctx(&trial, ctx) {
                 Ok(e) => e,
                 Err(e) if e.code == RefusalCode::OutOfRange => {
-                    delta *= 0.25;
+                    delta = if p_norm > 0.0 {
+                        (0.25 * delta).min(0.25 * p_norm)
+                    } else {
+                        0.25 * delta
+                    };
                     rep.halvings += 1;
                     if delta < min_radius {
                         rep.line_search_failures += 1;
@@ -2085,13 +2095,23 @@ impl Solver {
                     tg.iter().all(|v| v.is_finite())
                         && roundoff_step(energy, trial_energy, 1.0, slope, tslope, res_inf, tres)
                 };
-            if rho < 0.25 && !precision_step {
-                delta *= 0.25;
+            let accepted = (rho > 1e-4 && model_decrease > 0.0) || precision_step;
+            if !accepted {
+                // Shrink relative to the actual rejected step norm so an interior or CCD-clipped
+                // rejection immediately constrains the next Steihaug solve instead of spinning.
+                delta = if p_norm > 0.0 {
+                    (0.25 * delta).min(0.25 * p_norm)
+                } else {
+                    0.25 * delta
+                };
+                rep.halvings += 1;
+            } else if rho < 0.25 && !precision_step {
+                delta = (0.25 * delta).max(min_radius);
                 rep.halvings += 1;
             } else if rho > 0.75 && out.hit_boundary && ccd_alpha == 1.0 {
                 delta = (2.0 * delta).min(max_radius);
             }
-            if (rho > 1e-4 && model_decrease > 0.0) || precision_step {
+            if accepted {
                 self.x = trial;
                 energy = trial_energy;
                 rep.roundoff_steps += usize::from(precision_step);
@@ -2185,6 +2205,7 @@ impl Solver {
         let b: Vec<f64> = g.iter().map(|v| -v).collect();
         if self.pcg_iters > 0
             && let Some(f) = &self.precond
+            && f.stats().n == b.len()
         {
             match pcg(
                 a,
@@ -3649,5 +3670,68 @@ mod strategy_and_integrator_tests {
         };
         let err = tr.step(0.01).unwrap_err();
         assert_eq!(err.code, RefusalCode::NotConverged);
+    }
+
+    #[test]
+    fn trust_region_rejected_interior_step_shrinks_radius_relative_to_step_norm() {
+        // Free triangle above a stiff contact plane with a huge initial trust radius (1_000 m):
+        // the first Newton step is far smaller than `initial_radius` and lands inside the barrier
+        // (or CCD-clipped inside it), causing a rejection. Shrinking `delta` only by `0.25 * delta`
+        // would spin for >=10 identical rejected iterations; shrinking to `min(0.25*delta, 0.25*||p||)`
+        // immediately constrains the next Steihaug step and converges within a tight budget.
+        let body = Body::new(
+            vec![
+                Vec3::new(-0.05, -0.05, -0.002),
+                Vec3::new(0.15, -0.05, -0.002),
+                Vec3::new(-0.05, 0.15, -0.002),
+            ],
+            vec![[0, 1, 2]],
+            0.01,
+        )
+        .unwrap();
+        let params = ContactParams {
+            dhat: 5e-4,
+            thickness: 1e-4,
+            kappa: 1e4,
+            mu: 0.0,
+            eps_v: 1e-3,
+        };
+        let rest = vec![Vec2::ZERO, Vec2::new(0.04, 0.0), Vec2::new(0.0, 0.04)];
+        let x: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(200.0, 200.0, 0.1, 40.0, 0.1),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let mut s = Solver::new(
+            model,
+            x,
+            &[[true; 3], [true; 3], [false; 3]],
+            Vec3::new(0.0, 0.0, -50.0),
+        )
+        .with_contact(body, params)
+        .unwrap();
+        s.tol = 1e-9;
+        s.max_newton = 20;
+        s.newton_strategy = NewtonStrategy::TrustRegionSteihaug {
+            initial_radius: 1_000.0,
+            max_radius: 1_000.0,
+            min_radius: 1e-12,
+            cg_iters: 0,
+        };
+        let rep = s.step(0.05).unwrap();
+        assert!(rep.converged, "{rep:?}");
+        assert!(
+            rep.halvings >= 1 && rep.halvings < 8,
+            "expected at least one rejected-step contraction without spinning on delta=1000m: {rep:?}"
+        );
+        assert!(
+            s.x[2].z > -0.002 + params.thickness,
+            "cloth penetrated contact plane: z={}",
+            s.x[2].z
+        );
     }
 }

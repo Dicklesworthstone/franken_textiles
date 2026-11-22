@@ -722,6 +722,7 @@ mod tests {
         };
         let (e1, e2, nu12, g12, bending) = (320.0, 210.0, 0.24, 55.0, 8e-4);
         let mut base = make(e1, e2, nu12, g12, bending);
+        assert_eq!(base.pcg_iters, 0);
         base.static_solve().unwrap();
 
         // Linear reaction functional: axial force + torque about z at the right clamp (x == 0.12).
@@ -740,6 +741,19 @@ mod tests {
             })
             .collect();
         let grad = base.reaction_gradient(&weights).unwrap();
+        assert!(
+            !grad.adjoint.reused_factor,
+            "first adjoint solve on default pcg_iters == 0 solver populates the exact SPD factor"
+        );
+        // Subsequent channel solves at the same equilibrium must reuse the cached LDLT factor
+        // even when `pcg_iters == 0` (the default for strip and cylinder calibration solvers).
+        let second = base.reaction_gradient(&weights).unwrap();
+        assert!(
+            second.adjoint.reused_factor,
+            "second adjoint solve with default pcg_iters == 0 must reuse cached SPD LDLT factor"
+        );
+        assert_eq!(second.dq, grad.dq);
+        assert_eq!(second.d_bending, grad.d_bending);
         let d_ortho = orthotropic_chain_rule(e1, e2, nu12, g12, grad.dq).unwrap();
         let analytic = [
             d_ortho[0],
