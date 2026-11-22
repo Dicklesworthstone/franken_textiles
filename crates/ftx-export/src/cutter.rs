@@ -40,12 +40,19 @@ pub fn cutter_ring(g: &Geom) -> Result<Vec<Vec2>, Refusal> {
             n.base - n.tangent * 2.0,
         ]);
     }
-    Ok(clean_ring(&union_exterior(&polys).ok_or_else(|| {
+    let ring = clean_ring(&union_exterior(&polys).ok_or_else(|| {
         Refusal::new(
-            ftx_core::RefusalCode::DegenerateGeometry,
+            RefusalCode::DegenerateGeometry,
             format!("{}: no cutter outline", g.iid),
         )
-    })?))
+    })?);
+    if ring.len() < 3 || ring.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            format!("{}: no cutter outline", g.iid),
+        ));
+    }
+    Ok(ring)
 }
 
 /// The cutter SVGs, the report's path and text (`cutter_report.json`) and the manifest's `cutter` entry.
@@ -209,5 +216,37 @@ mod tests {
                 && err.message.contains("front_R"),
             "unexpected refusal: {err:?}"
         );
+    }
+
+    #[test]
+    fn cutter_ring_refuses_sub_epsilon_cut_ring_collapsed_by_clean_ring() {
+        let raw = r#"{
+          "schema":"fabric-pattern/1","style":"TINY","units":"mm",
+          "meta":{"size_label":"2T","sa_mm":10},
+          "pieces":[{
+            "id":"p1",
+            "vertices":{"a":[0,0],"b":[100,0],"c":[100,80],"d":[0,80]},
+            "edges":[
+              {"id":"e0","from":"a","to":"b"},
+              {"id":"e1","from":"b","to":"c"},
+              {"id":"e2","from":"c","to":"d"},
+              {"id":"e3","from":"d","to":"a"}
+            ],
+            "cut":{"qty":1}
+          }]
+        }"#;
+        let pattern = Pattern::new(serde_json::from_str(raw).unwrap());
+        let ctx = Ctx::new(&pattern, ExportOptions::default()).unwrap();
+        let mut g = ctx.geom(crate::Source::Piece(0), 6.0).unwrap();
+        // Edges shorter than clean_ring's 1e-4 mm threshold collapse completely after union_exterior.
+        g.cut = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(5e-5, 0.0),
+            Vec2::new(5e-5, 5e-5),
+            Vec2::new(0.0, 5e-5),
+        ];
+        g.notches.clear();
+        let err = cutter_ring(&g).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
     }
 }
