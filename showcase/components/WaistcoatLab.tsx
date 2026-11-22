@@ -241,7 +241,7 @@ function PieceOutlineSvg({
 
 function WeltTransformationSvg({ stageIndex }: { stageIndex: number }) {
   // Visual engineering cross-diagram showing how the flat 136 mm slash in wc_front
-  // + 136x48 mm silk welt + 136x156 mm linen bags transform into the visible pocket detail.
+  // + 136x48 mm silk welt + 136x140 mm linen bags transform into the visible pocket detail.
   return (
     <svg
       className="wc-welt-svg"
@@ -251,7 +251,7 @@ function WeltTransformationSvg({ stageIndex }: { stageIndex: number }) {
     >
       <rect x="0" y="0" width="560" height="250" fill="#f5f1e4" />
 
-      {/* Left panel: Front silk exterior around y=152 mm */}
+      {/* Left panel: Front silk exterior around y=176 mm */}
       <rect x="24" y="28" width="250" height="196" rx="3" fill="#efe4cf" stroke="#8e6c45" strokeWidth="1.8" />
       <text x="149" y="46" textAnchor="middle" fill="#465558" fontSize="10" fontWeight="700" fontFamily="var(--mono)">
         EXTERIOR SILK FRONT (WC_FRONT)
