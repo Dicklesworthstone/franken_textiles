@@ -62,7 +62,9 @@ const START_STRAIN_RAMP: f64 = 0.15;
 /// called tight there. Measured on the 92 cm bolero of the fitting skill: a 170 mm cuff that has to sit
 /// over the open hand (hull girth 174 to 180 mm) leaves 3.0 and 3.3 % of the two sleeves at the ramp and
 /// the first sewing step never converges; the shortened sleeve that drapes leaves 0.0 %, and ordinary
-/// seam pull at the shoulders leaves 0.3 to 1.3 % of the back.
+/// seam pull at the shoulders leaves 0.3 to 1.3 % of the back. Those are 12 mm meshes. It does not carry
+/// to a finer one: the same long sleeve at 6 mm, refused from a checkpoint at 1225 iterations (p95 0.219),
+/// named the back and both fronts (8, 6.4 and 7.1 %, by the shoulder and neck seams) and not the sleeves.
 const TIGHT_START_PCT: f64 = 2.0;
 const TORSO_LANDMARKS: [&str; 14] = [
     "floor",
@@ -628,8 +630,9 @@ fn write_refused_map(
 /// is wrong with the start: see [`start_condition`].
 ///
 /// No claim: it is not a drape or a fit. Inside-body marking needs the collision body and is not drawn. If
-/// the pictures cannot be written the refusal is returned unchanged: its pictures never replace or delay a
-/// refusal.
+/// the pictures cannot be written (a full disk, an existing `refused/`), the first repair says so with the
+/// error in place of where to look, and what the run knows about its start is still said: the pictures
+/// never replace or delay a refusal, and their absence is not hidden.
 pub(super) fn refused_stills(
     mut refusal: Refusal,
     state: Option<&ftx_drape::run::RefusedRun>,
@@ -643,7 +646,7 @@ pub(super) fn refused_stills(
     let n = state.positions.len();
     let pieces = piece_colours(&state.mesh, &slots, &vec![0.0; n], &vec![false; n]);
     let (strain, summaries) = start_strain(&state.mesh, &state.positions);
-    if write_stage(
+    match write_stage(
         &dir,
         body_obj,
         &state.mesh,
@@ -651,44 +654,54 @@ pub(super) fn refused_stills(
         &pieces,
         &strain,
         size,
-    )
-    .is_ok()
-    {
-        write_refused_map(
-            &mut refusal,
-            &dir,
-            &state.mesh,
-            state.phase,
-            state.accepted_steps,
-            size,
-        );
-        refusal.repairs.insert(
+    ) {
+        Ok(_) => {
+            write_refused_map(
+                &mut refusal,
+                &dir,
+                &state.mesh,
+                state.phase,
+                state.accepted_steps,
+                size,
+            );
+            refusal.repairs.insert(
+                0,
+                format!(
+                    "Look at {}/still_*.png: the cloth after {} accepted {} step(s), the state this refusal \
+                     is about. It is not a drape or a fit; still_strain_* shows edge strain from blue (15 % \
+                     short) through white to red (15 % stretched).",
+                    dir.display(),
+                    state.accepted_steps,
+                    state.phase
+                ),
+            );
+        }
+        // Said, not hidden: a full disk is when a reader most needs to know why `refused/` is missing
+        // or partial (seen: a quota left a 0-byte body.obj and nothing else).
+        Err(error) => refusal.repairs.insert(
             0,
             format!(
-                "Look at {}/still_*.png: the cloth after {} accepted {} step(s), the state this refusal is \
-                 about. It is not a drape or a fit; still_strain_* shows edge strain from blue (15 % short) \
-                 through white to red (15 % stretched).",
-                dir.display(),
-                state.accepted_steps,
-                state.phase
+                "The pictures of the state this refusal is about (the cloth after {} accepted {} step(s)) \
+                 could not be written: {}.",
+                state.accepted_steps, state.phase, error.message
             ),
+        ),
+    }
+    // Only the start the first sewing step began from. Later states are stretched by seams that are
+    // still closing, which says nothing about the size of a piece. It is text, so it does not depend on
+    // the pictures having been written.
+    if state.phase == "sew" && state.accepted_steps == 0 {
+        let tight = tight_instances(
+            state
+                .mesh
+                .instances
+                .iter()
+                .map(String::as_str)
+                .zip(&summaries),
         );
-        // Only the start the first sewing step began from. Later states are stretched by seams that are
-        // still closing, which says nothing about the size of a piece.
-        if state.phase == "sew" && state.accepted_steps == 0 {
-            let tight = tight_instances(
-                state
-                    .mesh
-                    .instances
-                    .iter()
-                    .map(String::as_str)
-                    .zip(&summaries),
-            );
-            if let Some(text) =
-                start_condition(state.start_fallback, &tight, state.start_unrelaxed_p95)
-            {
-                refusal.repairs.insert(1, text);
-            }
+        if let Some(text) = start_condition(state.start_fallback, &tight, state.start_unrelaxed_p95)
+        {
+            refusal.repairs.insert(1, text);
         }
     }
     refusal
@@ -739,7 +752,7 @@ fn start_condition(
              piece short of that part or widen it at that edge.",
             tight.join("; ")
         ));
-        // A checkpoint is above the target by construction and the sentence above already says so.
+        // A checkpoint is above the target by construction; it gets its own sentence below.
         if let (None, Some(p95)) = (fallback, unrelaxed) {
             text.push_str(&format!(
                 " The start's relaxation ran its full {RELAX_MAX_ITERS} iterations and the start is at \
@@ -749,9 +762,16 @@ fn start_condition(
         }
     }
     if fallback.is_some() {
-        text.push_str(
-            " ftx place draws the fully relaxed start: look there for layers lying on each other.",
-        );
+        text.push_str(if tight.is_empty() {
+            " ftx place draws the fully relaxed start: look there for layers lying on each other."
+        } else {
+            // Measured: the long-sleeved bolero at 6 mm, begun from the checkpoint at 1225 iterations (p95
+            // 0.219), had 6 to 8 % of its back and fronts at the ramp by the shoulder and neck seams.
+            " A checkpoint is less relaxed than the full start, so stretch next to a seam can be \
+             unfinished relaxation and not a piece that is too small. ftx place draws the fully relaxed \
+             start and applies the same measure to it: look there for what is still stretched, and for \
+             layers lying on each other."
+        });
     }
     text.push_str(" No solver budget changes the start.");
     Some(text)
@@ -1452,9 +1472,14 @@ mod tests {
             );
         }
 
-        // Nothing to show, or nowhere to write it: the refusal comes back exactly as it was.
-        for unchanged in [
-            super::refused_stills(refusal(), None, &out, body, size),
+        // Nothing to show: the refusal comes back exactly as it was.
+        assert_eq!(
+            super::refused_stills(refusal(), None, &out, body, size).repairs,
+            ["try --time-subdivision"]
+        );
+        // Nowhere to write it: the refusal says so where it would have said where to look, and keeps
+        // its own repairs.
+        for unwritten in [
             super::refused_stills(
                 refusal(),
                 Some(&state),
@@ -1465,7 +1490,16 @@ mod tests {
             // `refused/` already exists here, and a run's files are never overwritten.
             super::refused_stills(refusal(), Some(&state), &out, body, size),
         ] {
-            assert_eq!(unchanged.repairs, ["try --time-subdivision"]);
+            assert_eq!(unwritten.repairs.len(), 2, "{:?}", unwritten.repairs);
+            assert!(
+                unwritten.repairs[0].starts_with(
+                    "The pictures of the state this refusal is about (the cloth after 2 accepted sew \
+                     step(s)) could not be written: "
+                ),
+                "{}",
+                unwritten.repairs[0]
+            );
+            assert_eq!(unwritten.repairs[1], "try --time-subdivision");
         }
     }
 
@@ -1552,6 +1586,11 @@ mod tests {
             tight.repairs[1]
         );
         assert_eq!(tight.repairs[2], "increase the Newton iteration budget");
+        // The diagnosis is text, so it survives pictures that cannot be written (`refused/` now exists).
+        let unwritten = shown("tight", 1.5, 0, None);
+        assert_eq!(unwritten.repairs.len(), 3, "{:?}", unwritten.repairs);
+        assert!(unwritten.repairs[0].contains("could not be written: "));
+        assert_eq!(unwritten.repairs[1], tight.repairs[1]);
 
         // A start that is an earlier checkpoint says so, with both iteration counts and where the fully
         // relaxed one can be seen, whether or not anything is red.
@@ -1884,24 +1923,35 @@ mod tests {
             "{capped}"
         );
         assert!(capped.ends_with("No solver budget changes the start."));
-        // A checkpoint is above the target by construction; its own sentence covers that. (The run never
-        // passes both; the function must still not say both.)
-        assert!(
-            !start_condition(Some((200, 800)), &tight, Some(0.136))
-                .unwrap()
-                .contains("unfinished relaxation")
-        );
+        // A checkpoint gets its own caveat, never the capped start's sentence or its mesh check. (The run
+        // never passes both; the function must still not say both.)
+        let checkpoint = start_condition(Some((200, 800)), &tight, Some(0.136)).unwrap();
+        assert!(!checkpoint.contains("ran its full"));
+        assert!(!checkpoint.contains("--spacing-mm"));
 
         let fb_only = start_condition(Some((200, 800)), &[], None).unwrap();
         assert!(
             fb_only.contains("checkpoint at 200 iterations, not the fully relaxed start at 800")
         );
         assert!(!fb_only.contains("is stretched 15 % or more"));
-        assert!(fb_only.contains("ftx place draws the fully relaxed start"));
+        assert!(!fb_only.contains("unfinished relaxation"));
+        assert!(fb_only.contains(
+            "ftx place draws the fully relaxed start: look there for layers lying on each other."
+        ));
 
         let fb_tight = start_condition(Some((200, 800)), &tight, None).unwrap();
         assert!(fb_tight.contains("The checkpoint is stretched 15 % or more"));
         assert!(!fb_tight.contains("It is stretched 15 % or more"));
+        // What a checkpoint's stretch can be, and where the fully relaxed start's own measure is.
+        assert!(
+            fb_tight.ends_with(
+                " A checkpoint is less relaxed than the full start, so stretch next to a seam can be \
+                 unfinished relaxation and not a piece that is too small. ftx place draws the fully \
+                 relaxed start and applies the same measure to it: look there for what is still \
+                 stretched, and for layers lying on each other. No solver budget changes the start."
+            ),
+            "{fb_tight}"
+        );
         let stretch_pos = fb_tight.find("The checkpoint is stretched").unwrap();
         let place_pos = fb_tight
             .find("ftx place draws the fully relaxed start")
