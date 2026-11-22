@@ -281,6 +281,18 @@
   font: 400 22px/1.2 var(--serif, Georgia, serif);
 }
 
+.sc-card-light .sc-flags {
+  border-top-color: #d7d0c0;
+}
+
+.sc-card-light .sc-flags summary {
+  color: #172b32;
+}
+
+.sc-card-light .sc-flags .sc-note {
+  margin-top: 10px;
+}
+
 .sc-note {
   margin: 0 0 12px;
   font: 400 13.5px/1.55 var(--sans, sans-serif);
