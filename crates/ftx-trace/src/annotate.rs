@@ -192,15 +192,23 @@ pub fn merge_at(piece: &mut Piece, vid: &str) -> Result<(), PyError> {
     let pa = edge_points(piece, &ea.id, 200)?;
     let pb = edge_points(piece, &eb.id, 200)?;
     let (la, lb) = (polyline_length(&pa), polyline_length(&pb));
+    let total = la + lb;
+    if !total.is_finite() || total <= 0.0 {
+        return Err(PyError::Value(format!(
+            "{}: cannot merge zero-length edges at {}",
+            piece.id,
+            py::repr_str(vid)
+        )));
+    }
     let size = outline_size(piece)?;
     let pts: Vec<Vec2> = pa.iter().chain(&pb[1..]).copied().collect();
     let new = edge_from_points(&ea.id, &ea.from, &eb.to, &pts, (1e-3 * size).max(1e-6), &ea)?;
     for nt in piece.notches.iter_mut().flatten() {
         if nt.edge == ea.id {
-            nt.s = py::round(nt.s * la / (la + lb), 4);
+            nt.s = py::round(nt.s * la / total, 4);
         } else if nt.edge == eb.id {
             nt.edge.clone_from(&ea.id);
-            nt.s = py::round((la + nt.s * lb) / (la + lb), 4);
+            nt.s = py::round((la + nt.s * lb) / total, 4);
         }
     }
     piece.edges[i] = new;
@@ -227,7 +235,8 @@ pub fn merge_at(piece: &mut Piece, vid: &str) -> Result<(), PyError> {
 /// vertices are `eid`+`s1`, `s2`, … (r3); notches go to the part that holds them. Returns the new edge ids.
 ///
 /// # Errors
-/// An unknown edge, fractions outside (0, 1), or ids that already exist.
+/// An unknown edge, fractions outside (0, 1), duplicate or > 25 fractions, a degenerate zero-length edge,
+/// or ids that already exist.
 pub fn split_edge(piece: &mut Piece, eid: &str, fractions: &[f64]) -> Result<Vec<String>, PyError> {
     let Some(i) = piece.edges.iter().position(|e| e.id == eid) else {
         return Err(PyError::Value(format!(
@@ -237,10 +246,22 @@ pub fn split_edge(piece: &mut Piece, eid: &str, fractions: &[f64]) -> Result<Vec
         )));
     };
     let mut fr = fractions.to_vec();
-    fr.sort_by(f64::total_cmp);
-    if fr.is_empty() || fr[0] <= 0.0 || fr[fr.len() - 1] >= 1.0 {
+    if fr.is_empty() || fr.iter().any(|f| !f.is_finite() || *f <= 0.0 || *f >= 1.0) {
         return Err(PyError::Value(format!(
             "{}/{eid}: split fractions must lie strictly between 0 and 1",
+            piece.id
+        )));
+    }
+    fr.sort_by(f64::total_cmp);
+    if fr.windows(2).any(|w| w[0] == w[1]) {
+        return Err(PyError::Value(format!(
+            "{}/{eid}: split fractions must be distinct",
+            piece.id
+        )));
+    }
+    if fr.len() > 25 {
+        return Err(PyError::Value(format!(
+            "{}/{eid}: at most 25 split fractions are supported",
             piece.id
         )));
     }
@@ -249,25 +270,28 @@ pub fn split_edge(piece: &mut Piece, eid: &str, fractions: &[f64]) -> Result<Vec
     let s = cumulative(&pts);
     let total = s[s.len() - 1];
     let cuts: Vec<f64> = fr.iter().map(|f| f * total).collect();
+    let mut bounds = vec![0.0];
+    bounds.extend(&cuts);
+    bounds.push(total);
+    if !total.is_finite() || total <= 0.0 || bounds.windows(2).any(|w| !(w[1] > w[0])) {
+        return Err(PyError::Value(format!(
+            "{}/{eid}: cannot split degenerate zero-length edge",
+            piece.id
+        )));
+    }
     let size = outline_size(piece)?;
     let mut vids = vec![e.from.clone()];
     vids.extend((1..=fr.len()).map(|k| format!("{eid}s{k}")));
     vids.push(e.to.clone());
-    let (xs, ys): (Vec<f64>, Vec<f64>) = pts.iter().map(|p| (p.x, p.y)).unzip();
-    for (k, &c) in cuts.iter().enumerate() {
-        if piece.vertices.contains(&vids[k + 1]) {
+    for vid in &vids[1..=fr.len()] {
+        if piece.vertices.contains(vid) {
             return Err(PyError::Value(format!(
                 "{}: vertex id {} already exists",
                 piece.id,
-                py::repr_str(&vids[k + 1])
+                py::repr_str(vid)
             )));
         }
-        let p = Vec2::new(r3(np::interp(c, &s, &xs)), r3(np::interp(c, &s, &ys)));
-        piece.vertices.insert(&vids[k + 1], p);
     }
-    let mut bounds = vec![0.0];
-    bounds.extend(&cuts);
-    bounds.push(total);
     let mut new_ids = vec![eid.to_string()];
     new_ids.extend((0..fr.len()).map(|k| format!("{eid}{}", char::from(b'b' + k as u8))));
     let mut taken: Vec<&str> = piece
@@ -285,18 +309,27 @@ pub fn split_edge(piece: &mut Piece, eid: &str, fractions: &[f64]) -> Result<Vec
             py::repr_str_list(&taken)
         )));
     }
+    let (xs, ys): (Vec<f64>, Vec<f64>) = pts.iter().map(|p| (p.x, p.y)).unzip();
+    let cut_pts: Vec<Vec2> = cuts
+        .iter()
+        .map(|&c| Vec2::new(r3(np::interp(c, &s, &xs)), r3(np::interp(c, &s, &ys))))
+        .collect();
+    let mut endpoints = Vec::with_capacity(vids.len());
+    endpoints.push(vertex(piece, &e.from)?);
+    endpoints.extend_from_slice(&cut_pts);
+    endpoints.push(vertex(piece, &e.to)?);
     let tol = (1e-3 * size).max(1e-6);
     let mut parts = Vec::new();
     for k in 0..bounds.len() - 1 {
         let (a, b) = (bounds[k], bounds[k + 1]);
-        let mut poly = vec![vertex(piece, &vids[k])?];
+        let mut poly = vec![endpoints[k]];
         poly.extend(
             pts.iter()
                 .zip(&s)
                 .filter(|(_, d)| **d > a && **d < b)
                 .map(|(p, _)| *p),
         );
-        poly.push(vertex(piece, &vids[k + 1])?);
+        poly.push(endpoints[k + 1]);
         parts.push(edge_from_points(
             &new_ids[k],
             &vids[k],
@@ -305,6 +338,9 @@ pub fn split_edge(piece: &mut Piece, eid: &str, fractions: &[f64]) -> Result<Vec
             tol,
             &e,
         )?);
+    }
+    for (k, &p) in cut_pts.iter().enumerate() {
+        piece.vertices.insert(&vids[k + 1], p);
     }
     for nt in piece.notches.iter_mut().flatten() {
         if nt.edge == eid {
@@ -687,4 +723,85 @@ pub(crate) fn annotate_twins(
         return Err(format!("annotate failed:\n  {}", problems.join("\n  ")));
     }
     Ok((data, twins))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square_doc() -> PatternDoc {
+        serde_json::from_value(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "meta": {"scale_status": "UNSCALED"},
+            "pieces": [{
+                "id": "p1",
+                "vertices": {
+                    "c1": [0.0, 0.0],
+                    "c2": [100.0, 0.0],
+                    "c3": [100.0, 100.0],
+                    "c4": [0.0, 100.0]
+                },
+                "edges": [
+                    {"id": "e1", "from": "c1", "to": "c2"},
+                    {"id": "e2", "from": "c2", "to": "c3"},
+                    {"id": "e3", "from": "c3", "to": "c4"},
+                    {"id": "e4", "from": "c4", "to": "c1"}
+                ],
+                "notches": [{"edge": "e1", "s": 0.5}]
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn split_edge_rejects_nan_duplicates_overflow_and_preserves_state_on_error() {
+        let doc = square_doc();
+
+        // Non-numeric split entries previously turned into f64::NAN and bypassed the (0, 1) check.
+        let bad_names: Names =
+            serde_json::from_str(r#"{"pieces":{"p1":{"split":{"e1":"bad"}}}}"#).unwrap();
+        let err = annotate(&doc, &bad_names).unwrap_err();
+        assert!(err.contains("strictly between 0 and 1"), "{err}");
+
+        let bad_arr: Names =
+            serde_json::from_str(r#"{"pieces":{"p1":{"split":{"e1":[0.5, null]}}}}"#).unwrap();
+        let err = annotate(&doc, &bad_arr).unwrap_err();
+        assert!(err.contains("strictly between 0 and 1"), "{err}");
+
+        // Direct NaN/inf, duplicates, and >25 splits must refuse cleanly.
+        let mut piece = doc.pieces[0].clone();
+        assert!(split_edge(&mut piece, "e1", &[f64::NAN]).is_err());
+        assert!(split_edge(&mut piece, "e1", &[0.5, f64::INFINITY]).is_err());
+        let err = split_edge(&mut piece, "e1", &[0.5, 0.5])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("distinct"), "{err}");
+        let too_many: Vec<f64> = (1..=26).map(|k| k as f64 / 27.0).collect();
+        let err = split_edge(&mut piece, "e1", &too_many)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("25"), "{err}");
+
+        // Existing split edge id collision must not leave dangling inserted vertices behind.
+        let mut collide = doc.pieces[0].clone();
+        collide.edges[1].id = "e1b".into();
+        let verts_before = collide.vertices.0.clone();
+        let err = split_edge(&mut collide, "e1", &[0.5])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already exist"), "{err}");
+        assert_eq!(collide.vertices.0, verts_before);
+    }
+
+    #[test]
+    fn merge_at_refuses_zero_length_edges_instead_of_producing_nan_notches() {
+        let mut doc = square_doc();
+        let piece = &mut doc.pieces[0];
+        piece.vertices.0[1].1 = Vec2::new(0.0, 0.0); // c2 == c1
+        piece.vertices.0[2].1 = Vec2::new(0.0, 0.0); // c3 == c2 -> e1 and e2 both zero-length
+        let err = merge_at(piece, "c2").unwrap_err().to_string();
+        assert!(err.contains("zero-length"), "{err}");
+        assert!(piece.notches.as_ref().unwrap()[0].s.is_finite());
+    }
 }
