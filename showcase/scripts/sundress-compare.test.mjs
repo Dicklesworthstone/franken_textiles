@@ -7,8 +7,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { chromium } from "playwright-core";
-import { COMMON_WORLD_SCALE_M_PER_UNIT, buildCompareMetrics } from "../public/labs/sundress-compare.mjs";
+import { COMMON_WORLD_SCALE_M_PER_UNIT, buildCompareMetrics, parsePackedDrapeBuffer } from "../public/labs/sundress-compare.mjs";
 
 const site = process.env.FTX_STUDIO_URL || "http://127.0.0.1:3000";
 
@@ -22,6 +23,31 @@ before(async () => {
 
 after(async () => {
   await browser?.close();
+});
+
+function packedFixture(source) {
+  const prefix = new URL(`../public/exhibits/${source}`, import.meta.url);
+  const meta = JSON.parse(readFileSync(new URL(`${prefix.href}.json`), "utf8"));
+  const buffer = Uint8Array.from(gunzipSync(readFileSync(new URL(`${prefix.href}.gz`)))).buffer;
+  return { meta, buffer };
+}
+
+test("Packed drapes match the archived meshes and reject corrupt layout and geometry", () => {
+  for (const source of ["sundress/dress", "sundress-compare/slender"]) {
+    const { meta, buffer } = packedFixture(source);
+    const mesh = parsePackedDrapeBuffer(meta, buffer);
+    assert.equal(mesh.nFrames, meta.frames.length);
+    assert.equal(mesh.clothPos.length, meta.vertices * 3);
+    assert.equal(mesh.bodyIndices.length, meta.body.indices);
+
+    assert.throws(() => parsePackedDrapeBuffer(meta, buffer.slice(0, -4)), /frame counts/);
+    assert.throws(() => parsePackedDrapeBuffer({ ...meta, frames: meta.frames.slice(1) }, buffer), /mesh metadata/);
+    assert.throws(() => parsePackedDrapeBuffer({ ...meta, triangles: [0, 1, meta.vertices] }, buffer), /triangle indices/);
+    new DataView(buffer).setFloat32(buffer.byteLength - 4, NaN, true);
+    assert.throws(() => parsePackedDrapeBuffer(meta, buffer), /non-finite/);
+    new DataView(buffer).setUint32(12, 0, true);
+    assert.throws(() => parsePackedDrapeBuffer(meta, buffer), /frame counts/);
+  }
 });
 
 test("Compare manifest proves identical fixed pattern & solver config, swap symmetry, same-state match, and refusal blocking", () => {
@@ -82,8 +108,15 @@ test("Comparison recovers from failed geometry by changing forms or retrying, an
   });
   try {
     let requests = 0;
-    await page.route("**/exhibits/sundress-compare/slender.gz", route =>
-      ++requests <= 2 ? route.fulfill({ status: 503 }) : route.continue());
+    const { buffer } = packedFixture("sundress-compare/slender");
+    new DataView(buffer).setUint32(12, 0, true);
+    const corrupt = gzipSync(new Uint8Array(buffer));
+    await page.route("**/exhibits/sundress-compare/slender.gz", route => {
+      requests++;
+      if (requests === 1) return route.fulfill({ status: 503 });
+      if (requests === 2) return route.fulfill({ status: 200, body: corrupt });
+      return route.continue();
+    });
     await page.goto(new URL("/wardrobe/sundress/compare/", site).href, { waitUntil: "domcontentloaded" });
     const right = page.locator('[data-side="right"]');
     const loaded = right.locator('[data-drape-loaded="true"]');
@@ -96,7 +129,8 @@ test("Comparison recovers from failed geometry by changing forms or retrying, an
     assert.equal(await right.getByRole("alert").count(), 0);
 
     await page.locator('button[data-pick-right="slender"]').click();
-    await error.waitFor();
+    await right.getByRole("alert").filter({ hasText: /invalid packed drape/i }).waitFor();
+    assert.equal(await right.locator("canvas").isVisible(), false);
     await right.getByRole("button", { name: "Retry 3D view" }).click();
     await loaded.waitFor();
     assert.equal(requests, 3);

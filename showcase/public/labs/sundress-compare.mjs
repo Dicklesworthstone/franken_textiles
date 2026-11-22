@@ -12,11 +12,28 @@
 export const COMMON_WORLD_SCALE_M_PER_UNIT = 1.0;
 
 export function parsePackedDrapeBuffer(meta, rawBuffer) {
+  if (rawBuffer.byteLength < 16) {
+    throw new Error("Invalid packed drape: truncated header.");
+  }
   const view = new DataView(rawBuffer);
   const nBody = view.getUint32(0, true);
   const nBodyIdx = view.getUint32(4, true);
   const nCloth = view.getUint32(8, true);
   const nFrames = view.getUint32(12, true);
+  const size = 16 + 4 * (3 * nBody + nBodyIdx + 2 * nCloth + 3 * nCloth * nFrames);
+  if (!nBody || !nBodyIdx || nBodyIdx % 3 || !nCloth || !nFrames || size !== rawBuffer.byteLength) {
+    throw new Error("Invalid packed drape: mesh or frame counts do not match the archive.");
+  }
+  if (meta?.units !== "m" || meta.body?.vertices !== nBody || meta.body.indices !== nBodyIdx ||
+      meta.vertices !== nCloth || !Array.isArray(meta.frames) || meta.frames.length !== nFrames ||
+      meta.frames[nFrames - 1] !== meta.sourceFrames - 1) {
+    throw new Error("Invalid packed drape: archive counts or units disagree with the mesh metadata.");
+  }
+  const clothTriangles = meta.triangles;
+  if (!Array.isArray(clothTriangles) || !clothTriangles.length || clothTriangles.length % 3 ||
+      clothTriangles.some(index => !Number.isInteger(index) || index < 0 || index >= nCloth)) {
+    throw new Error("Invalid packed drape: invalid garment triangle indices.");
+  }
 
   let off = 16;
   const bodyRaw = new Float32Array(rawBuffer, off, nBody * 3);
@@ -28,6 +45,12 @@ export function parsePackedDrapeBuffer(meta, rawBuffer) {
   // Take final settled physical frame (frame index nFrames - 1)
   const finalFrameOffset = off + (nFrames - 1) * nCloth * 3 * 4;
   const clothRaw = new Float32Array(rawBuffer, finalFrameOffset, nCloth * 3);
+  if (bodyIndices.some(index => index >= nBody)) {
+    throw new Error("Invalid packed drape: invalid body triangle indices.");
+  }
+  if (bodyRaw.some(value => !Number.isFinite(value)) || clothRaw.some(value => !Number.isFinite(value))) {
+    throw new Error("Invalid packed drape: non-finite body or garment positions.");
+  }
 
   // Find sole Z (minimum Z in native z-up Anny world frame) so every form stands on exact Y = 0.000 m floor!
   let minZ = Infinity;
@@ -58,7 +81,7 @@ export function parsePackedDrapeBuffer(meta, rawBuffer) {
     bodyPos,
     bodyIndices,
     clothPos,
-    clothIndices: new Uint32Array(meta.triangles),
+    clothIndices: new Uint32Array(clothTriangles),
     flatUv,
     panels: meta.panels,
   };
