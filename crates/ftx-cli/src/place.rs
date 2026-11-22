@@ -786,7 +786,7 @@ fn start_condition(
     let mut text = match fallback {
         Some((used, rejected)) => format!(
             "This start is the relaxation checkpoint at {used} iterations, not the fully relaxed start at \
-             {rejected}: in that one, cloth layers crossed or lay closer than their contact thickness, so \
+             {rejected}: that start failed contact admission against cloth layers or the displayed body, so \
              the drape began from an earlier and more strained state."
         ),
         None => "Before any sewing step this start was already strained.".to_string(),
@@ -815,14 +815,14 @@ fn start_condition(
     }
     if fallback.is_some() {
         text.push_str(if tight.is_empty() {
-            " ftx place draws the fully relaxed start: look there for layers lying on each other."
+            " ftx place draws the fully relaxed start: look there for cloth contact or a displayed-body crossing."
         } else {
             // Measured: the long-sleeved bolero at 6 mm, begun from the checkpoint at 1225 iterations (p95
             // 0.219), had 6 to 8 % of its back and fronts at the ramp by the shoulder and neck seams.
             " A checkpoint is less relaxed than the full start, so stretch next to a seam can be \
              unfinished relaxation and not a piece that is too small. ftx place draws the fully relaxed \
              start and applies the same measure to it: look there for what is still stretched, and for \
-             layers lying on each other."
+             cloth contact or a displayed-body crossing."
         });
     }
     text.push_str(" No solver budget changes the start.");
@@ -2185,10 +2185,13 @@ mod tests {
         assert!(
             fb_only.contains("checkpoint at 200 iterations, not the fully relaxed start at 800")
         );
+        assert!(
+            fb_only.contains("failed contact admission against cloth layers or the displayed body")
+        );
         assert!(!fb_only.contains("is stretched 15 % or more"));
         assert!(!fb_only.contains("unfinished relaxation"));
         assert!(fb_only.contains(
-            "ftx place draws the fully relaxed start: look there for layers lying on each other."
+            "ftx place draws the fully relaxed start: look there for cloth contact or a displayed-body crossing."
         ));
 
         let fb_tight = start_condition(Some((200, 800)), &tight, None).unwrap();
@@ -2200,7 +2203,7 @@ mod tests {
                 " A checkpoint is less relaxed than the full start, so stretch next to a seam can be \
                  unfinished relaxation and not a piece that is too small. ftx place draws the fully \
                  relaxed start and applies the same measure to it: look there for what is still \
-                 stretched, and for layers lying on each other. No solver budget changes the start."
+                 stretched, and for cloth contact or a displayed-body crossing. No solver budget changes the start."
             ),
             "{fb_tight}"
         );

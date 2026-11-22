@@ -369,16 +369,24 @@ their start position (mass vertex group). The report records `anchor_vertices` =
 The current chart-fitted 92 cm trouser case has a clear welded start at 150 relaxation iterations;
 its ordinary 600-iteration endpoint and earlier complete 200-iteration blocks fail admission
 (`chart_trousers_self_contact_start`). When self-contact is requested and the final start fails its
-intersection audit, the native pipeline first rebuilds earlier completed 200-iteration blocks. If none
+cloth-contact admission or full displayed-body crossing audit, the native pipeline first rebuilds
+earlier completed 200-iteration blocks. If none
 passes, it replays the intermediate 25-iteration push-out checkpoints. Splitting at those boundaries
 performs exactly the same projections and push-outs as the original blocks. Within each search it
 chooses the latest checkpoint passing the unchanged body admission,
-material domains and actual cloth-contact audit, including source-specific offsets. This is a bounded choice of start geometry,
+material domains and actual cloth-contact audit, including source-specific offsets, plus the full
+displayed-body audit at the trajectory's f32 precision. This is a bounded choice of start geometry,
 not a relaxation of collision detection or a new dynamics solver. A recovered start reports the
 original and accepted iteration counts and its actual initial strain, including any partial final
 block's p95 strain; the original reference path, already-admissible starts and existing complete-block
 recoveries remain unchanged. Numerical settling, full body offset and real-person
 fit remain separate requirements.
+
+A display-only crossing can therefore recover through the same checkpoints even when the collision
+proxy's cloth-contact admission passed. The replacement uses the original rest geometry and source
+materials. With no passing checkpoint the original state is retained for the ordinary refusal and
+its pictures. The later trajectory audit remains required; an earlier clear start does not certify
+that sewing or draping will succeed. Body-only requests retain their prior behavior.
 
 If every checkpoint still crosses, opposite leg panels can have relaxed across the centre plane
 below the crotch. On a 92 cm tape-fitted trouser draft the first crossing lay between the two

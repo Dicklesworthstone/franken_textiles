@@ -22,11 +22,13 @@ async function workerModule() {
       return JSON.stringify({ schema: 'ftx-compression-stack-report/1', layers, pressure_pa: 250 });
     },
   };
-  const context = vm.createContext({ TextEncoder, WebAssembly, JSON, Error, self: {}, postMessage: m => sent.push(m) });
+  const context = vm.createContext({ TextEncoder, WebAssembly, JSON, Error, URL, self: {}, postMessage: m => sent.push(m) });
   const stub = new vm.SyntheticModule(Object.keys(imports), function () {
     for (const [name, value] of Object.entries(imports)) this.setExport(name, value);
   }, { context });
-  const module = new vm.SourceTextModule(read('materials-worker.js'), { context });
+  const module = new vm.SourceTextModule(read('materials-worker.js'), {
+    context, initializeImportMeta: meta => { meta.url = 'https://unit.invalid/materials-worker.js'; },
+  });
   await module.link(() => stub); await module.evaluate();
   const send = async data => { await context.self.onmessage({ data }); return sent.at(-1); };
   return {send, called};

@@ -838,6 +838,6 @@ mod tests {
         let model = ExactPronyModel::new(100.0, vec![(40.0, 1.0)]).unwrap();
         let (ep, epp) = model.modulus(1e200);
         assert!(ep.is_finite() && (ep - 140.0).abs() < 1e-12);
-        assert!(epp.is_finite() && epp >= 0.0 && epp < 1e-190);
+        assert!(epp.is_finite() && (0.0..1e-190).contains(&epp));
     }
 }

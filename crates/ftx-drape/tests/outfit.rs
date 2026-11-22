@@ -1299,6 +1299,160 @@ fn a_refused_phase_leaves_the_last_accepted_state_to_look_at() {
 /// A crossing in the accepted proxy start must be found before the sewing/draping schedule runs.
 /// The full display body can retain fingers and feet omitted from that proxy.
 #[test]
+fn a_display_crossing_recovers_the_latest_clear_relaxation_checkpoint() {
+    use ftx_drape::NearestTree;
+    use ftx_drape::animation::{FOLD_FRAMES, ReplayContact, ZIP_FRAMES};
+    use ftx_drape::run::drape;
+    use ftx_drape::start::{RELAX_CLEARANCE, RELAX_PUSH_OUT_ITERS, relax};
+
+    let skin = skin();
+    let pattern = ftx_pattern::Pattern::new(panel(40.0));
+    // A short zero-gravity schedule isolates start admission from later garment motion.
+    let opts = DrapeOptions {
+        sew_steps: 6,
+        drape_steps: 0,
+        step: 1e-7,
+        ..options()
+    };
+    let clear = drape(&pattern, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
+    let original = clear.scene.start.relax_iterations;
+    assert_eq!(original, ftx_drape::start::RELAX_ITERS);
+    assert_eq!(clear.scene.start_backtracked_from, None);
+    let first_physical = FOLD_FRAMES + ZIP_FRAMES - 1;
+    let initial = &clear.fold.frames[first_physical];
+    assert_eq!(initial, &clear.scene.start.relaxed);
+    let tree = NearestTree::new(skin.vertices.clone(), skin.triangles.clone()).unwrap();
+    let early = relax(
+        &clear.scene.mesh,
+        &clear.scene.start.presewn,
+        &clear.scene.start.groups,
+        &tree,
+        RELAX_PUSH_OUT_ITERS,
+        RELAX_CLEARANCE,
+        &clear.scene.start.gather_weights,
+    );
+    let earlier_surface = NearestTree::new(early.clone(), clear.scene.mesh.faces.clone()).unwrap();
+    // Place a small displayed protrusion through a final face, entirely inside a ball that does
+    // not touch the earlier cloth surface. This is a real triangle crossing, not a mocked audit.
+    let (face, middle, separation) = clear
+        .scene
+        .mesh
+        .faces
+        .iter()
+        .map(|face| {
+            let middle = (initial[face[0]] + initial[face[1]] + initial[face[2]]) / 3.0;
+            (*face, middle, earlier_surface.nearest(middle).distance)
+        })
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .unwrap();
+    assert!(
+        separation > 1e-6,
+        "distinct relaxation surfaces: {separation}"
+    );
+    let edge = initial[face[1]] - initial[face[0]];
+    let normal = edge.cross(initial[face[2]] - initial[face[0]]);
+    let radius = separation * 0.25;
+    let tangent = edge * (radius / edge.norm());
+    let normal = normal * (radius / normal.norm());
+    let mut vertices = skin.vertices.clone();
+    let mut triangles = skin.triangles.clone();
+    let n = vertices.len();
+    vertices.extend([
+        middle - normal,
+        middle + normal + tangent,
+        middle + normal - tangent,
+    ]);
+    triangles.push([n, n + 1, n + 2]);
+    let with_protrusion = DrapeBody {
+        frames: &Form,
+        collision: (&skin.vertices, &skin.triangles),
+        display: (&vertices, &triangles),
+        arm_deg: 35.,
+    };
+    let mut audit = ReplayContact::new(&vertices, &triangles).unwrap();
+    audit
+        .check(&early, &clear.scene.mesh.faces, first_physical)
+        .expect("the earlier checkpoint clears the displayed protrusion");
+    assert!(
+        audit
+            .check(initial, &clear.scene.mesh.faces, first_physical)
+            .is_err()
+    );
+
+    let mut expected = None;
+    let mut positions = clear.scene.start.presewn.clone();
+    for iterations in (RELAX_PUSH_OUT_ITERS..original).step_by(RELAX_PUSH_OUT_ITERS) {
+        positions = relax(
+            &clear.scene.mesh,
+            &positions,
+            &clear.scene.start.groups,
+            &tree,
+            RELAX_PUSH_OUT_ITERS,
+            RELAX_CLEARANCE,
+            &clear.scene.start.gather_weights,
+        );
+        if audit
+            .check(&positions, &clear.scene.mesh.faces, first_physical)
+            .is_ok()
+        {
+            expected = Some((iterations, positions.clone()));
+        }
+    }
+    let (iterations, positions) = expected.expect("at least the first checkpoint is clear");
+    let recovered = drape(&pattern, &json!({}), &with_protrusion, &opts, |_| {})
+        .expect("display-only crossing must try existing earlier relaxation checkpoints");
+    assert_eq!(recovered.scene.start_backtracked_from, Some(original));
+    assert_eq!(recovered.scene.start.relax_iterations, iterations);
+    assert_eq!(recovered.fold.frames[first_physical], positions);
+    assert_eq!(recovered.scene.mesh.verts2d, clear.scene.mesh.verts2d);
+    assert_eq!(recovered.scene.mesh.faces, clear.scene.mesh.faces);
+    assert_eq!(recovered.scene.weld, clear.scene.weld);
+    assert_eq!(
+        recovered.scene.solver.model.rest,
+        clear.scene.solver.model.rest
+    );
+    assert_eq!(
+        recovered.scene.solver.model.mass,
+        clear.scene.solver.model.mass
+    );
+    assert_eq!(
+        recovered.report["start_repair"]["rejected_relax_iters"],
+        original
+    );
+    assert_eq!(
+        recovered.report["start_repair"]["accepted_relax_iters"],
+        iterations
+    );
+    for (index, frame) in recovered
+        .fold
+        .frames
+        .iter()
+        .enumerate()
+        .skip(first_physical)
+    {
+        audit
+            .check(frame, &recovered.scene.mesh.faces, index)
+            .unwrap();
+    }
+
+    // The body-only path does not opt into displayed-surface admission or change its start.
+    let body_only = drape(
+        &pattern,
+        &json!({}),
+        &with_protrusion,
+        &DrapeOptions {
+            self_contact: None,
+            ..opts
+        },
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(body_only.scene.start_backtracked_from, None);
+    assert_eq!(body_only.scene.start.relax_iterations, original);
+    assert_eq!(body_only.fold.frames[first_physical], *initial);
+}
+
+#[test]
 fn an_initial_display_crossing_refuses_before_sewing_and_returns_the_exact_start() {
     use ftx_core::RefusalCode;
     use ftx_drape::animation::{FOLD_FRAMES, ZIP_FRAMES};

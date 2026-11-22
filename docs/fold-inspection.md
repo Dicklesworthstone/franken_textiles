@@ -40,6 +40,10 @@ including fingers omitted from a trimmed collision proxy, and against the cloth 
 A clear preview means only that these two drawn stages have no proper triangle crossings;
 it does not establish thickness clearance or validate intervening motion. A drape may choose
 an earlier contact-admitted relaxation checkpoint than the fully relaxed start drawn here.
+When self-contact is enabled, that checkpoint must also clear the full displayed-body audit.
+The same bounded search now runs when a finger omitted from the proxy crosses the fully relaxed
+start. The drape reports the chosen iteration count and its actual strain; if no checkpoint
+passes, the original refusal is retained.
 Run the revised pattern through the ordinary drape, with the same body and collider options,
 to test its actual contact and convergence.
 No particular adjustment here qualifies the 385 mm sleeve or establishes physical fit.
