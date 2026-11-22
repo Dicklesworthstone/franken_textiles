@@ -92,9 +92,27 @@ test("Wrap skirt page compares two tie settings, neutral vs seated poses, serves
     assert.notEqual(ovA, ovB, "Setting A and Setting B must display distinct front overlaps");
     assert.equal(await page.locator('[data-metric="status-a"]').innerText(), "SECURE");
 
+    const arcsInsideBody = () => page.locator(".ws-svg").evaluate(svg => {
+      const body = svg.querySelector(".ws-body-slice");
+      const arcs = svg.querySelectorAll(".ws-wrap-main, [class^='ws-overlap-']");
+      return [...arcs].some(arc => {
+        const length = arc.getTotalLength();
+        for (let t = 0; t <= length; t += 3) {
+          if (body.isPointInFill(arc.getPointAtLength(t))) return true;
+        }
+        return false;
+      });
+    });
+    assert.equal(await arcsInsideBody(), false, "wrap sketch must remain outside the standing body slice");
+
     // Switching to Seated posture explicitly surfaces limits.
     await page.locator('button[data-posture="seated"]').click();
     await page.waitForFunction(() => Number(document.querySelector(".ws-limits")?.getAttribute("data-limits-count") ?? "0") >= 1);
+    assert.equal(await arcsInsideBody(), false, "wrap sketch must remain outside the seated body slice");
+    assert.equal(await page.locator(".ws-overlap-gap").count(), 1);
+    assert.ok(await page.locator(".ws-wrap-main").evaluate(arc =>
+      arc.getPointAtLength(arc.getTotalLength()).x - arc.getPointAtLength(0).x > 20,
+    ), "seated single-layer arc leaves an opening at centre front");
 
     // Switching wearer form to Full (82/106 cm) reduces front overlap while pattern stays fixed.
     await page.locator('button[data-form="full"]').click();

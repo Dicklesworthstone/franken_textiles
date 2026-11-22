@@ -76,7 +76,7 @@ function WrapCrossSectionSvg({
     if (!hull.length) {
       return { vb: "-260 -260 520 520", bodyPath: "", cx: 0, cy: 0, rx: 140, ry: 110, spanX: 520 };
     }
-    // Native Anny body faces -y; render wearer facing DOWN (+y in SVG) so front wrap sits clearly at bottom!
+    // Anny faces -y. The front is at the bottom (+y) in the diagram.
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     const pts = hull.map(([x, y]) => [x, -y] as [number, number]);
     for (const [x, y] of pts) {
@@ -87,11 +87,18 @@ function WrapCrossSectionSvg({
     }
     const cx0 = (minX + maxX) / 2;
     const cy0 = (minY + maxY) / 2;
-    const rx0 = (maxX - minX) / 2;
-    const ry0 = (maxY - minY) / 2;
+    const halfWidth = (maxX - minX) / 2;
+    const halfDepth = (maxY - minY) / 2;
+    // An ellipse through the axis extrema can still cut across the hull at the sides.
+    const hullScale = pts.reduce(
+      (scale, [x, y]) => Math.max(scale, Math.hypot((x - cx0) / halfWidth, (y - cy0) / halfDepth)),
+      1,
+    );
+    const rx0 = halfWidth * hullScale;
+    const ry0 = halfDepth * hullScale;
     const pad = 74;
-    const spanX0 = Math.max(maxX - minX + pad * 2, 460);
-    const spanY0 = Math.max(maxY - minY + pad * 2, 420);
+    const spanX0 = Math.max((rx0 + pad) * 2, 460);
+    const spanY0 = Math.max((ry0 + pad) * 2, 420);
     return {
       vb: `${(cx0 - spanX0 / 2).toFixed(1)} ${(cy0 - spanY0 / 2).toFixed(1)} ${spanX0.toFixed(1)} ${spanY0.toFixed(1)}`,
       bodyPath: pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ") + " Z",
@@ -132,7 +139,7 @@ function WrapCrossSectionSvg({
     <svg
       className="ws-svg"
       role="img"
-      aria-label={`Horizontal ${sliceLevel} cross-section of native Anny ${evalA.posture} pose showing Setting A and Setting B wrap skirt overlap`}
+      aria-label={`Native Anny ${evalA.posture} ${sliceLevel} slice with schematic arcs for both wrap settings`}
       viewBox={vb}
     >
       <defs>
@@ -144,11 +151,12 @@ function WrapCrossSectionSvg({
       <rect x="-1500" y="-1500" width="3000" height="3000" fill={`url(#${uid}g)`} />
 
       {/* Real native Anny horizontal slice hull */}
-      {bodyPath && <path d={bodyPath} fill="#c4a78b" fillOpacity="0.58" stroke="#7d5e42" strokeWidth="2.2" />}
+      {bodyPath && <path className="ws-body-slice" d={bodyPath} fill="#c4a78b" fillOpacity="0.58" stroke="#7d5e42" strokeWidth="2.2" />}
 
       {/* Back & single-layer side wrap (Setting A) */}
       <path
-        d={arcPath(rxUnder, ryUnder, frontAngle + Math.max(0, halfAngleA), frontAngle + Math.PI * 2 - Math.max(0, halfAngleA))}
+        className="ws-wrap-main"
+        d={arcPath(rxUnder, ryUnder, frontAngle + Math.abs(halfAngleA), frontAngle + Math.PI * 2 - Math.abs(halfAngleA))}
         fill="none"
         stroke="#274754"
         strokeWidth="3.2"
@@ -204,7 +212,7 @@ function WrapCrossSectionSvg({
       <text x={cx} y={cy + ry + 54} textAnchor="middle" fill={overlapA < 0 ? "#a92914" : "#1c2e34"} fontSize={Math.max(11.5, spanX * 0.024).toFixed(1)} fontWeight="700" fontFamily="var(--mono)">
         {overlapA >= 0
           ? `FRONT OVERLAP · A: ${overlapA.toFixed(0)} MM · B: ${overlapB.toFixed(0)} MM`
-          : `FRONT PARTS BY ${Math.abs(overlapA).toFixed(0)} MM (LAP EXCEEDS FIXED SWEEP)`}
+          : `FRONT PARTS BY ${Math.abs(overlapA).toFixed(0)} MM · INSUFFICIENT FLAT SWEEP`}
       </text>
     </svg>
   );
@@ -471,7 +479,7 @@ export default function WrapSkirtLab() {
                     <WrapCrossSectionSvg evalA={evalA} evalB={evalB} sliceLevel={sliceLevel} />
                   </div>
                   <div className="ws-legend">
-                    <span><i className="sw-under" /> Underwrap (front.L)</span>
+                    <span><i className="sw-under" /> Schematic underwrap (front.L)</span>
                     <span><i className="sw-over" /> Overwrap (front.R · Setting A)</span>
                     <span><i className="sw-b" /> Setting B comparison arc</span>
                     <span><i className="sw-gap" /> Negative overlap / parting gap</span>
