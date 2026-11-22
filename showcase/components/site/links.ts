@@ -14,6 +14,8 @@ export const exhibits: SiteLink[] = [
   { href: "/#wardrobe", label: "Wardrobe", note: "A sundress and Swedish hussars of 1761 and 1765" },
   { href: "/wardrobe/sundress/redraft/", label: "Sundress ease redraft", note: "Redraft the sundress after a bust or waist ease warning and pin both outlines" },
   { href: "/wardrobe/hussar/embroidery/", label: "Hussar embroidery trace", note: "Trace registered Tajima DST stitches onto the solved 3D dolman chest" },
+  { href: "/wardrobe/waistcoat/", label: "1780s waistcoat", note: "Separate silk fronts, linen lining, and welt pockets from V&A 256-1880" },
+  { href: "/wardrobe/waistcoat/inside-out/", label: "Lined garment inside out", note: "Rotate shell, facing, and lining together with invariant native seam indices" },
   { href: "/#studio", label: "Studios", note: "Draft a pattern, lay it on the roll, follow the needle, or repair a seam" },
   { href: "/studies/tiling/", label: "A4 tile assembly", note: "Assemble a real tiled A4 PDF on a virtual floor with alignment diamonds" },
   { href: "/studies/sewing/", label: "Jacket sewing order", note: "Play all ten native sewing operations across the flat cut and 3D bolero" },

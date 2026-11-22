@@ -15,6 +15,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     page("/wardrobe/sundress/redraft/", .7),
     page("/wardrobe/hussar/", .8),
     page("/wardrobe/hussar/embroidery/", .7),
+    page("/wardrobe/waistcoat/", .8),
+    page("/wardrobe/waistcoat/inside-out/", .7),
     page("/studies/trousers/", .8),
     page("/studies/skirt/", .9),
     page("/studies/wrap-skirt/", .7),
