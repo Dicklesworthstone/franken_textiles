@@ -80,13 +80,6 @@ impl Wearer {
             bad("the measurement file has no wearer.age_months")
                 .repair("add the wearer's age in months")
         })?;
-        let stature = w["stature_mm"]
-            .as_f64()
-            .or_else(|| meas["fused"]["stature"]["value_mm"].as_f64())
-            .ok_or_else(|| {
-                bad("the measurement file has no stature (wearer.stature_mm or a fused stature)")
-                    .repair("measure the stature, or fuse a stature prior")
-            })?;
         let positive = |key: &str| -> Result<Option<f64>, Refusal> {
             match &w[key] {
                 Value::Null => Ok(None),
@@ -96,9 +89,28 @@ impl Wearer {
                 },
             }
         };
+        let stature = match positive("stature_mm")? {
+            Some(s) => s,
+            None => meas["fused"]["stature"]["value_mm"]
+                .as_f64()
+                .filter(|x| x.is_finite() && *x > 0.0)
+                .ok_or_else(|| {
+                    bad("the measurement file has no stature (wearer.stature_mm or a fused stature)")
+                        .repair("measure the stature, or fuse a stature prior")
+                })?,
+        };
         let weight_kg = match positive("weight_kg")? {
             Some(kg) => Some(kg),
-            None => positive("bmi")?.map(|bmi| bmi * (stature / 1000.0).powi(2)),
+            None => match positive("bmi")? {
+                Some(bmi) => {
+                    let kg = bmi * (stature / 1000.0).powi(2);
+                    if !kg.is_finite() || kg <= 0.0 {
+                        return Err(bad("wearer.bmi and stature produce a non-finite weight"));
+                    }
+                    Some(kg)
+                }
+                None => None,
+            },
         };
         Ok(Self {
             years: months / 12.0,
@@ -1358,6 +1370,13 @@ mod tests {
         );
         assert!(with(serde_json::json!({"weight_kg": -2.0})).is_err());
         assert!(with(serde_json::json!({"bmi": "high"})).is_err());
+        assert!(with(serde_json::json!({"bmi": 1e308, "stature_mm": 2000.0})).is_err());
+        // Malformed explicit wearer.stature_mm refuses rather than silently falling back to fused.
+        let malformed_stature = serde_json::json!({
+            "wearer": {"age_months": 30.0, "stature_mm": "tall"},
+            "fused": {"stature": {"value_mm": 920.0}}
+        });
+        assert!(Wearer::from_measurements(&malformed_stature).is_err());
     }
 
     #[test]
