@@ -1,5 +1,16 @@
 # ftx-body contract
 
+**Authored thumb poses (ftx-jnqs).** `ThumbPose` records independent left/right source-local
+axis-angle vectors in radians for `finger1-1.L/R`. Validation refuses nonfinite components,
+rotation magnitudes above pi, absent requested bones and malformed participating rest data.
+`pose_deltas_with_thumbs` preserves the original arm/leg arithmetic and only changes authored
+nonzero thumb deltas; zero vectors preserve the old result exactly. Existing FK and LBS/DQS move
+the source vertices and descendant joints. `pose_rotation_vectors_with_thumbs` supplies those
+same exact local vectors to source-pose interpolation, without a rest-frame roundtrip.
+`joint_rotations_with_thumbs` exposes the corresponding rest-world axes for inspection.
+The caller must use the same posed surface for display and collision. No default tucked pose,
+anatomical safety, measured hand posture or successful long-sleeve drape is claimed.
+
 **Capture model choices.** `correspondence::capture` owns the model catalogue and
 `ModelChoices::configuration` conversion shared by native capture setup and portable still-photo
 drafts. Shape names come from the actual loaded model; choices explicitly fix or bound each

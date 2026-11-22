@@ -904,7 +904,29 @@ and at 42.5 and 45 mm the body crossings were untangled and the cloth then cross
 `Knuckle` on the 45 mm tilt, one per cuff, and failed the display audit at frame 87. What stops the long
 sleeve is therefore the start procedure at an open hand with its thumb out, not where the wrap is placed.
 A hand pose with the thumb in, a convex stand-in for the hand in the collider, and a start that closes
-the cuff under contact are untried.
+the cuff under contact have not been qualified on this unchanged long sleeve.
+
+**Authored thumb-base rotations (FrankenTextiles, not upstream parity).** The source rig above and
+the bone list in Appendix B identify `finger1-1.L/R` as the thumb bases, parented to the corresponding
+wrist, with the remaining thumb joints as descendants. `ThumbPose` supplies
+`left_rotation_vector_rad` and `right_rotation_vector_rad`, each a three-element source-local
+axis-angle vector. Its direction is the rotation axis in that bone's local frame and its magnitude
+is the angle in radians. Every component must be finite and each vector's magnitude must be at most
+pi; unsupported bones and malformed participating rest data refuse. There is no inferred left/right
+sign convention and no automatic "tucked" or anatomically safe pose.
+
+`pose_deltas_with_thumbs` retains the existing arm/leg deltas and applies the two authored vectors
+directly to those thumb-base bones, scaled by the ordinary pose-ramp fraction. It uses the existing
+forward kinematics and selected LBS/DQS operator; descendants move with their parent. It does not
+reshape, translate, remove or replace hand vertices. Zero vectors retain the existing pose exactly.
+The exact source-local vectors are also exposed for motion sampling, avoiding an inverse roundtrip
+through the float32-derived rest frame.
+
+A caller must derive display and collision surfaces from that same posed source body and keep the
+ordinary body, cloth and full-display intersection gates. Hand collision trimming remains a separate
+choice. These controls permit explicitly recorded dressing experiments; they do not establish a
+successful 385 mm sleeve start, anatomical range of motion, measured hand posture, or real fit.
+The `ftx-jnqs` full-source-body sleeve replay remains required.
 
 ## Appendix A. Local-change labels (index j; blend-shape rows 624 + 2j and 625 + 2j)
 
