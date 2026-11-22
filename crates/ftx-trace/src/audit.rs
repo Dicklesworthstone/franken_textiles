@@ -468,12 +468,33 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
                                   "expected": "gathered (design ratio, not checked)", "ok": true}));
             continue;
         }
-        let band = band.filter(|b| truthy(Some(b))).and_then(Value::as_array);
-        let (target, dev_units, expected, lo_hi) = match band {
+        let band_raw = band.filter(|b| truthy(Some(b)));
+        let (target, dev_units, expected, lo_hi) = match band_raw {
             Some(b) => {
-                let lo = b.first().and_then(Value::as_f64).unwrap_or(f64::NAN);
-                let hi = b.get(1).and_then(Value::as_f64).unwrap_or(f64::NAN);
-                let target = ratio.max(lo).min(hi);
+                let parsed = b.as_array().filter(|a| a.len() == 2).and_then(|a| {
+                    let lo = a[0].as_f64()?;
+                    let hi = a[1].as_f64()?;
+                    (lo.is_finite() && hi.is_finite() && lo <= hi).then_some((lo, hi))
+                });
+                let Some((lo, hi)) = parsed else {
+                    seam_rows.push(json!({
+                        "id": s.get("id"), "a": sa, "b": sb,
+                        "len_a": py::round(la, 3), "len_b": py::round(lb, 3),
+                        "len_a_mm": py::round(la * mpu, 1), "len_b_mm": py::round(lb * mpu, 1),
+                        "ratio": py::round(ratio, 4), "expected": {"band": b},
+                        "dev_mm": Value::Null, "dev_pct": Value::Null, "ok": false
+                    }));
+                    f.add(
+                        "T",
+                        "seam_band",
+                        format!("Seam {id}: ratio_band must be an ordered numeric pair [lo, hi]."),
+                        vec![sa, sb],
+                        "error",
+                        vec![],
+                    );
+                    continue;
+                };
+                let target = ratio.clamp(lo, hi);
                 (
                     target,
                     la - target * lb,
@@ -489,7 +510,7 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
         } else {
             (ratio / target - 1.0) * 100.0
         };
-        let ok = dev_mm.abs() <= o.tol_mm;
+        let ok = dev_mm.is_finite() && dev_mm.abs() <= o.tol_mm;
         seam_rows.push(json!({"id": s.get("id"), "a": sa, "b": sb, "len_a": py::round(la, 3),
             "len_b": py::round(lb, 3), "len_a_mm": py::round(la * mpu, 1), "len_b_mm": py::round(lb * mpu, 1),
             "ratio": py::round(ratio, 4), "expected": expected, "dev_mm": py::round(dev_mm, 2),
@@ -567,15 +588,35 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
             }
         };
         let ratio = if lb == 0.0 { f64::INFINITY } else { la / lb };
-        let (lo, hi, target) = match c
-            .get("band")
-            .filter(|b| truthy(Some(b)))
-            .and_then(Value::as_array)
-        {
+        let (lo, hi, target) = match c.get("band").filter(|b| truthy(Some(b))) {
             Some(b) => {
-                let lo = b.first().and_then(Value::as_f64).unwrap_or(f64::NAN);
-                let hi = b.get(1).and_then(Value::as_f64).unwrap_or(f64::NAN);
-                (lo, hi, ratio.max(lo).min(hi))
+                let parsed = b.as_array().filter(|a| a.len() == 2).and_then(|a| {
+                    let lo = a[0].as_f64()?;
+                    let hi = a[1].as_f64()?;
+                    (lo.is_finite() && hi.is_finite() && lo <= hi).then_some((lo, hi))
+                });
+                let Some((lo, hi)) = parsed else {
+                    seam_rows.push(json!({
+                        "id": c.get("id"), "a": c.get("a"), "b": c.get("b"),
+                        "len_a": py::round(la, 3), "len_b": py::round(lb, 3),
+                        "ratio": py::round(ratio, 4), "expected": {"band": b},
+                        "dev_mm": Value::Null, "ok": false, "check": true
+                    }));
+                    let refs: Vec<Value> = ra.iter().chain(&rb).map(|r| json!(r)).collect();
+                    f.add(
+                        "T",
+                        "check_band",
+                        format!(
+                            "Check {}: band must be an ordered numeric pair [lo, hi].",
+                            py_str(c.get("id"))
+                        ),
+                        refs,
+                        "error",
+                        vec![],
+                    );
+                    continue;
+                };
+                (lo, hi, ratio.clamp(lo, hi))
             }
             None => {
                 let r = c.get("ratio").and_then(Value::as_f64).unwrap_or(1.0);
@@ -583,12 +624,13 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
             }
         };
         let dev_mm = (la - target * lb) * mpu;
+        let ok = dev_mm.is_finite() && dev_mm.abs() <= o.tol_mm;
         seam_rows.push(
             json!({"id": c.get("id"), "a": c.get("a"), "b": c.get("b"), "len_a": py::round(la, 3),
             "len_b": py::round(lb, 3), "ratio": py::round(ratio, 4), "expected": {"band": [lo, hi]},
-            "dev_mm": py::round(dev_mm, 2), "ok": dev_mm.abs() <= o.tol_mm, "check": true}),
+            "dev_mm": py::round(dev_mm, 2), "ok": ok, "check": true}),
         );
-        if dev_mm.abs() > o.tol_mm {
+        if !ok {
             let what = c
                 .get("note")
                 .filter(|n| truthy(Some(n)))
@@ -1039,5 +1081,53 @@ mod tests {
                 .unwrap()
                 .is_finite()
         );
+    }
+
+    #[test]
+    fn audit_flags_malformed_or_inverted_ratio_bands_instead_of_silently_passing() {
+        for bad_band in [json!([1.0]), json!(["bad", "bad"]), json!([1.2, 0.8])] {
+            let mut doc = square_doc();
+            doc.meta = Some(
+                json!({"scale_status": "FITTED"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            doc.seams = vec![
+                serde_json::from_value(json!({
+                    "id": "s1",
+                    "a": "p1/e1",
+                    "b": "p1/e2",
+                    "ratio_band": bad_band
+                }))
+                .unwrap(),
+            ];
+            doc.extra.insert(
+                "checks".into(),
+                json!([{
+                    "id": "c1",
+                    "a": ["p1/e1"],
+                    "b": ["p1/e2"],
+                    "band": bad_band
+                }]),
+            );
+            let report = audit(&doc, None, &AuditOptions::default());
+            assert_eq!(
+                report["summary"]["ok"],
+                json!(false),
+                "band={bad_band}: {report}"
+            );
+            let rows = report["seams"].as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().all(|r| r["ok"] == json!(false)), "{rows:?}");
+            let kinds: Vec<&str> = report["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|x| x["kind"].as_str())
+                .collect();
+            assert!(kinds.contains(&"seam_band"), "{kinds:?}");
+            assert!(kinds.contains(&"check_band"), "{kinds:?}");
+        }
     }
 }
