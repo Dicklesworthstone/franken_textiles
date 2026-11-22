@@ -89,18 +89,18 @@ const HELVETICA: [u32; 95] = [
 /// Width of `s` (mm) in Helvetica at `size` mm, × 1.06 when bold; characters outside 32..126 count 556.
 #[must_use]
 pub fn text_width(s: &str, size: f64, bold: bool) -> f64 {
-    let units: u32 = s
+    let units: u64 = s
         .chars()
         .map(|c| {
             let cp = u32::from(c);
             if (32..127).contains(&cp) {
-                HELVETICA[(cp - 32) as usize]
+                u64::from(HELVETICA[(cp - 32) as usize])
             } else {
                 556
             }
         })
         .sum();
-    let w = f64::from(units) / 1000.0 * size;
+    let w = (units as f64) / 1000.0 * size;
     if bold { w * 1.06 } else { w }
 }
 
@@ -260,11 +260,13 @@ pub fn stroke_text(
 #[must_use]
 pub fn column_letters(c: usize) -> String {
     let mut s = Vec::new();
-    let mut c = c + 1;
-    while c > 0 {
-        let r = (c - 1) % 26;
-        c = (c - 1) / 26;
-        s.push(b'A' + r as u8);
+    let mut c = c;
+    loop {
+        s.push(b'A' + (c % 26) as u8);
+        if c < 26 {
+            break;
+        }
+        c = c / 26 - 1;
     }
     s.reverse();
     String::from_utf8(s).unwrap_or_default()
@@ -277,7 +279,7 @@ pub fn page_list(nums: &[i64]) -> String {
     let mut i = 0;
     while i < nums.len() {
         let mut j = i;
-        while j + 1 < nums.len() && nums[j + 1] == nums[j] + 1 {
+        while j + 1 < nums.len() && nums[j].checked_add(1) == Some(nums[j + 1]) {
             j += 1;
         }
         out.push(if i == j {
@@ -331,9 +333,17 @@ mod tests {
         );
         assert_eq!(safe_name("___", 20), "X");
         assert_eq!(safe_name("920 mm stature", 20), "920_mm_stature");
+        assert_eq!(column_letters(0), "A");
+        assert_eq!(column_letters(25), "Z");
+        assert_eq!(column_letters(26), "AA");
         assert_eq!(column_letters(701), "ZZ");
         assert_eq!(column_letters(702), "AAA");
+        assert!(!column_letters(usize::MAX).is_empty());
         assert_eq!(page_list(&[2, 3, 4, 6, 8, 9]), "2-4, 6, 8-9");
+        assert_eq!(
+            page_list(&[i64::MAX, i64::MIN]),
+            format!("{}, {}", i64::MAX, i64::MIN)
+        );
         assert!((text_width("PLACE ON FOLD", 4.0, true) - 33.92848).abs() < 1e-12);
         assert!((text_width("Front bodice", 6.0, true) - 35.34888).abs() < 1e-12);
     }
