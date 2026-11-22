@@ -498,7 +498,10 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   the wrap and fully relaxed start against the full displayed body and the cloth itself with
   the replay audit's f32 rounding and proper-crossing rule. A crossing stage also carries
   `cloth_instances`, the piece instances that own the cloth triangles its message names, and the
-  `FULL DISPLAY CROSSING` line prints them. A malformed mesh yields an
+  `FULL DISPLAY CROSSING` line prints them. When the `start` stage crosses the body, a further line
+  says that this preview is not untangled, so the start can still drape unless the part crossed is
+  left out of the collider (measured: the 350 to 360 mm bolero sleeves cross here and drape with
+  `--hands full`). A malformed mesh yields an
   `unavailable` result, never a clear verdict. This preview does not check thickness or later
   dynamics, and does not replace the contact-admitted checkpoint selected by a drape.
 - `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`

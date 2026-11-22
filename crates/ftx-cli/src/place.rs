@@ -1297,6 +1297,18 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if let Some(message) = report["display_contact"]["unavailable"]["message"].as_str() {
         text.push_str(&format!("  full display check unavailable: {message}\n"));
     }
+    // Measured: the 92 cm bolero's 350 to 360 mm sleeves cross the hand in this preview's start and
+    // drape with --hands full, no gating flags; from 361 mm the drape's own untangling fails.
+    if report["display_contact"]["start"]["refusal"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("displayed body triangle"))
+    {
+        text.push_str(
+            "    This preview is not untangled: a drape first pushes its start out of the collision body, so \
+             a start that crosses here can still drape. It cannot where the part crossed is left out of \
+             the collider (fingers beyond the --hands cap; --hands full keeps the whole hand).\n",
+        );
+    }
     for i in report["instances"].as_array().into_iter().flatten() {
         text.push_str(&format!(
             "  {:<24} {:<7} R {:>6} mm  θ {:>7}..{:<7}  h {:>7}..{:<7} mm  inside wrap/start {}/{}  start strain x {} % y {} % (p95 {} %)\n",
