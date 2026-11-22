@@ -67,13 +67,36 @@ pub fn pcg(
                 .sum::<f64>()
                 .sqrt()
     };
+    let mut b_max = 0.0f64;
+    for &bi in b {
+        if !bi.is_finite() {
+            return Err(PcgFailure::NotConverged(0));
+        }
+        b_max = b_max.max(bi.abs());
+    }
     let bnorm_raw = norm(b);
     if !bnorm_raw.is_finite() {
         return Err(PcgFailure::NotConverged(0));
     }
     let bnorm = bnorm_raw.max(f64::MIN_POSITIVE);
+    // Scale extreme right-hand sides internally so `rᵀz` and `pᵀAp` neither overflow nor
+    // underflow; normal RHS magnitudes stay at scale 1.0 for bit-identical trajectories.
+    let b_scale = if b_max > 0.0 && !(1e-60..=1e60).contains(&b_max) {
+        b_max
+    } else {
+        1.0
+    };
+    let mut r: Vec<f64> = if b_scale == 1.0 {
+        b.to_vec()
+    } else {
+        b.iter().map(|&bi| bi / b_scale).collect()
+    };
+    let work_bnorm = if b_scale == 1.0 {
+        bnorm
+    } else {
+        norm(&r).max(f64::MIN_POSITIVE)
+    };
     let mut x = vec![0.0f64; n];
-    let mut r = b.to_vec();
     let mut z = m(&r);
     if z.len() != n {
         return Err(PcgFailure::NotConverged(0));
@@ -82,11 +105,16 @@ pub fn pcg(
     let mut rz: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
     let mut ap = vec![0.0f64; n];
     for it in 0..max_iters {
-        let rel = norm(&r) / bnorm;
+        let rel = norm(&r) / work_bnorm;
         if !rel.is_finite() || !rz.is_finite() {
             return Err(PcgFailure::NotConverged(it));
         }
         if rel <= tol {
+            if b_scale != 1.0 {
+                for xi in &mut x {
+                    *xi *= b_scale;
+                }
+            }
             return accept(a, b, x, it, tol, bnorm, &norm);
         }
         if rz <= 0.0 {
@@ -109,15 +137,26 @@ pub fn pcg(
             r[i] -= alpha * ap[i];
         }
         z = m(&r);
+        if z.len() != n {
+            return Err(PcgFailure::NotConverged(it + 1));
+        }
         let rz_new: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
         let beta = rz_new / rz;
+        if !beta.is_finite() {
+            return Err(PcgFailure::NotConverged(it + 1));
+        }
         rz = rz_new;
         for i in 0..n {
             p[i] = beta * p[i] + z[i];
         }
     }
-    let rel = norm(&r) / bnorm;
+    let rel = norm(&r) / work_bnorm;
     if rel.is_finite() && rel <= tol {
+        if b_scale != 1.0 {
+            for xi in &mut x {
+                *xi *= b_scale;
+            }
+        }
         accept(a, b, x, max_iters, tol, bnorm, &norm)
     } else {
         Err(PcgFailure::NotConverged(max_iters))
@@ -230,5 +269,22 @@ mod tests {
             pcg(&spd, &[f64::NAN, 1.0], |r: &[f64]| r.to_vec(), 1e-12, 10).unwrap_err(),
             PcgFailure::NotConverged(0)
         );
+        // Extreme RHS magnitudes must not overflow or underflow `rᵀz`.
+        for scale in [1e-160_f64, 1e160_f64] {
+            let (xs, rep) = pcg(
+                &spd,
+                &[2.0 * scale, 6.0 * scale],
+                |r: &[f64]| r.to_vec(),
+                1e-12,
+                10,
+            )
+            .unwrap();
+            assert!(rep.rel_residual <= 1e-12);
+            assert!(
+                ((xs[0] - scale).abs() / scale) < 1e-12
+                    && ((xs[1] - 2.0 * scale).abs() / (2.0 * scale)) < 1e-12,
+                "scale={scale:e}: xs={xs:?}"
+            );
+        }
     }
 }
