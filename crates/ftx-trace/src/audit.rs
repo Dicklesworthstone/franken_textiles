@@ -136,6 +136,10 @@ pub fn label_consensus(pattern: &Pattern, labels: &[Value], tol: f64) -> Value {
             unparseable.push(json!({"text": text, "ref": lab.get("ref").cloned().unwrap_or(Value::Null), "why": why}));
             continue;
         };
+        if !v.is_finite() || v <= 0.0 {
+            unparseable.push(json!({"text": text, "ref": r, "why": "length must be positive"}));
+            continue;
+        }
         let measured = match measure_ref(pattern, r.as_str().unwrap_or_default()) {
             Ok(l) => l,
             Err(e) => {
@@ -143,13 +147,20 @@ pub fn label_consensus(pattern: &Pattern, labels: &[Value], tol: f64) -> Value {
                 continue;
             }
         };
-        if measured <= 0.0 {
+        if !measured.is_finite() || measured <= 0.0 {
+            continue;
+        }
+        let ratio = v / measured;
+        if !ratio.is_finite() || ratio <= 0.0 {
+            unparseable.push(
+                json!({"text": text, "ref": r, "why": "implied scale must be finite and positive"}),
+            );
             continue;
         }
         let unit = if says_inches(&text) { "in" } else { "mm" };
-        implied.push(v / measured);
+        implied.push(ratio);
         let row = json!({"text": text, "ref": r, "value_mm": v, "measured_units": py::round(measured, 4),
-                         "implied_mm_per_unit": v / measured, "unit": unit});
+                         "implied_mm_per_unit": ratio, "unit": unit});
         rows.push(row.as_object().cloned().unwrap_or_default());
     }
     let mut out = Map::new();
@@ -185,13 +196,7 @@ pub fn label_consensus(pattern: &Pattern, labels: &[Value], tol: f64) -> Value {
             )
         })
         .collect();
-    cands.sort_by(|a, b| {
-        b.0.0.cmp(&a.0.0).then(
-            b.0.1
-                .partial_cmp(&a.0.1)
-                .unwrap_or(std::cmp::Ordering::Equal),
-        )
-    });
+    cands.sort_by(|a, b| b.0.0.cmp(&a.0.0).then_with(|| b.0.1.total_cmp(&a.0.1)));
     let (best, inl) = (cands[0].0, cands[0].1.clone());
     let rival = cands[1..]
         .iter()
@@ -255,6 +260,9 @@ pub fn label_consensus(pattern: &Pattern, labels: &[Value], tol: f64) -> Value {
 /// Unit tangent (direction of travel) at the start or end of a polyline: the chord angles over `dist`
 /// and `dist / 2` Richardson-extrapolated (`2·a(s/2) − a(s)`).
 fn end_tangent(pts: &[Vec2], at_start: bool, dist: f64) -> Vec2 {
+    if pts.len() < 2 {
+        return Vec2::new(1.0, 0.0);
+    }
     let s = cumulative(pts);
     let total = s[s.len() - 1];
     if total <= 0.0 {
@@ -393,11 +401,18 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
             json!({"kind": "LABELS", "mm_per_unit": sc, "n_labels": n}),
         )
     } else {
-        let mut ref_len: Vec<f64> = lens.iter().map(|(_, l)| *l).collect();
+        let mut ref_len: Vec<f64> = lens
+            .iter()
+            .map(|(_, l)| *l)
+            .filter(|l| l.is_finite() && *l > 0.0)
+            .collect();
         if ref_len.is_empty() {
             for inst in &pattern.instances {
                 for e in &inst.edges {
-                    if let Ok(l) = inst.edge_length(&e.id) {
+                    if let Ok(l) = inst.edge_length(&e.id)
+                        && l.is_finite()
+                        && l > 0.0
+                    {
                         ref_len.push(l);
                     }
                 }
@@ -661,6 +676,9 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
             continue;
         }
         let Ok(o80) = outline(p, 80) else { continue };
+        if o80.is_empty() {
+            continue;
+        }
         let ang = match p.grain.as_ref().and_then(Grain::points) {
             Some([g0, g1]) => det::atan2(g1.y - g0.y, g1.x - g0.x),
             None => 90.0 * (std::f64::consts::PI / 180.0),
@@ -962,4 +980,64 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
         report["suggested_scale"] = json!({"mm_per_unit": sc, "note": "label consensus; prefer known body/seam targets for scale-fit"});
     }
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square_doc() -> PatternDoc {
+        serde_json::from_value(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "meta": {"scale_status": "UNSCALED"},
+            "pieces": [{
+                "id": "p1",
+                "vertices": {
+                    "c1": [0.0, 0.0],
+                    "c2": [100.0, 0.0],
+                    "c3": [100.0, 100.0],
+                    "c4": [0.0, 100.0]
+                },
+                "edges": [
+                    {"id": "e1", "from": "c1", "to": "c2"},
+                    {"id": "e2", "from": "c2", "to": "c3"},
+                    {"id": "e3", "from": "c3", "to": "c4"},
+                    {"id": "e4", "from": "c4", "to": "c1"}
+                ]
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn label_consensus_excludes_non_positive_values_without_poisoning_scale() {
+        let doc = square_doc();
+        let pat = Pattern::from_doc(doc.clone());
+        let labels = vec![
+            json!({"text": "0 cm", "ref": "p1/e1"}),
+            json!({"text": "-50 mm", "value_mm": -50.0, "ref": "p1/e2"}),
+            json!({"text": "200 mm", "value_mm": 200.0, "ref": "p1/e3"}),
+            json!({"text": "200 mm", "value_mm": 200.0, "ref": "p1/e4"}),
+        ];
+        let consensus = label_consensus(&pat, &labels, 0.03);
+        let scale = consensus["scale_mm_per_unit"].as_f64().unwrap();
+        assert!((scale - 2.0).abs() < 1e-12, "got {consensus}");
+        assert_eq!(consensus["unparseable"].as_array().unwrap().len(), 2);
+        assert_eq!(consensus["inliers"].as_array().unwrap().len(), 2);
+
+        // Also ensure audit() produces finite nominal scale and never panics on empty symmetric pieces.
+        let mut degenerate = doc;
+        degenerate.pieces[0].edges.clear();
+        degenerate.pieces[0]
+            .extra
+            .insert("symmetric".into(), json!(true));
+        let report = audit(&degenerate, None, &AuditOptions::default());
+        assert!(
+            report["scale_basis"]["mm_per_unit"]
+                .as_f64()
+                .unwrap()
+                .is_finite()
+        );
+    }
 }
