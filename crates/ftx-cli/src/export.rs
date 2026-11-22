@@ -96,12 +96,12 @@ fn checks_json(items: &[CheckItem]) -> Value {
 
 /// `ftx check DIR [--pattern-ref P]` (also `ftx export check DIR`): every acceptance check over an export
 /// directory; exit 0 when all pass, 2 otherwise (the reference exits 1).
-pub(super) fn cmd_check(
-    args: &Args,
-    dir: Option<&String>,
-) -> Result<(Value, i32, String), Refusal> {
+pub(super) fn cmd_check(args: &Args, dirs: &[String]) -> Result<(Value, i32, String), Refusal> {
     known_options(args, "check", &["pattern-ref"])?;
-    let dir = dir.ok_or_else(|| bad_input("ftx check needs an export directory"))?;
+    if dirs.len() != 1 {
+        return Err(bad_input("ftx check needs exactly one export directory"));
+    }
+    let dir = &dirs[0];
     let pattern = args
         .options
         .get("pattern-ref")
@@ -122,7 +122,7 @@ pub(super) fn cmd_check(
 pub(super) fn cmd_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let target = args.positional.get(1).map_or("", String::as_str);
     if target == "check" {
-        return cmd_check(args, args.positional.get(2));
+        return cmd_check(args, args.positional.get(2..).unwrap_or(&[]));
     }
     known_options(
         args,

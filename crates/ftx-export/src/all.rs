@@ -134,8 +134,14 @@ pub fn export_targets(
 ) -> Result<ExportSet, Refusal> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     let mut man = match existing {
+        None => PyJson::Dict(Vec::new()),
         Some(m @ PyJson::Dict(_)) => m,
-        _ => PyJson::Dict(Vec::new()),
+        Some(_) => {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "existing export manifest must be a JSON object",
+            ));
+        }
     };
     man.set("schema", PyJson::str("fabric-pattern-export/1"));
     man.set("style", PyJson::str(&ctx.style));
@@ -145,8 +151,15 @@ pub fn export_targets(
         "source_schema",
         PyJson::from_value(ctx.pattern.raw().get("schema").unwrap_or(&Value::Null)),
     );
-    if man.get("files").is_none() {
-        man.set("files", PyJson::Dict(Vec::new()));
+    match man.get("files") {
+        None => man.set("files", PyJson::Dict(Vec::new())),
+        Some(PyJson::Dict(_)) => {}
+        Some(_) => {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "existing export manifest 'files' field must be a JSON object",
+            ));
+        }
     }
     let pieces = ctx.piece_reference()?;
     man.set("pieces", pieces.clone());
@@ -272,7 +285,7 @@ pub fn check_files(
     pattern: Option<&Pattern>,
 ) -> Vec<CheckItem> {
     let mut out = Vec::new();
-    let Some((_, man_bytes)) = files
+    let Some((man_name, man_bytes)) = files
         .iter()
         .find(|(k, _)| !k.contains('/') && k.ends_with("_export_manifest.json"))
     else {
@@ -283,20 +296,38 @@ pub fn check_files(
             detail: "no *_export_manifest.json".into(),
         }];
     };
-    let man: Value = serde_json::from_slice(man_bytes).unwrap_or(Value::Null);
-    // the manifest's own order of its files (serde_json sorts keys)
-    let order: Vec<String> = match crate::pyjson::PyJson::parse(&String::from_utf8_lossy(man_bytes))
-    {
-        Ok(PyJson::Dict(items)) => items
-            .into_iter()
-            .find(|(k, _)| k == "files")
-            .and_then(|(_, f)| match f {
-                PyJson::Dict(fi) => Some(fi.into_iter().map(|(k, _)| k).collect()),
-                _ => None,
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
+    let Ok(man @ Value::Object(_)) = serde_json::from_slice::<Value>(man_bytes) else {
+        return vec![CheckItem {
+            check: "manifest".into(),
+            file: man_name.clone(),
+            ok: false,
+            detail: "manifest is not a valid JSON object".into(),
+        }];
     };
+    let Some(listed) = man["files"].as_object() else {
+        return vec![CheckItem {
+            check: "manifest".into(),
+            file: man_name.clone(),
+            ok: false,
+            detail: "manifest 'files' field is not a JSON object".into(),
+        }];
+    };
+    // the manifest's own order of its files (serde_json sorts keys)
+    let mut order: Vec<String> =
+        match crate::pyjson::PyJson::parse(&String::from_utf8_lossy(man_bytes)) {
+            Ok(PyJson::Dict(items)) => items
+                .into_iter()
+                .find(|(k, _)| k == "files")
+                .and_then(|(_, f)| match f {
+                    PyJson::Dict(fi) => Some(fi.into_iter().map(|(k, _)| k).collect()),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+    if order.is_empty() && !listed.is_empty() {
+        order = listed.keys().cloned().collect();
+    }
     let missing = |name: &str| CheckItem {
         check: "file.missing".into(),
         file: name.into(),
@@ -322,8 +353,6 @@ pub fn check_files(
         }
         sew_ref = Some(Value::Object(m));
     }
-    let empty = serde_json::Map::new();
-    let listed = man["files"].as_object().unwrap_or(&empty);
     let path_of = |info: &Value| info["file"].as_str().unwrap_or("").to_string();
     for key in ["dxf_astm", "dxf_aama"] {
         if let Some(info) = listed.get(key) {
@@ -345,11 +374,24 @@ pub fn check_files(
         }
     }
     let mut master_pts = None;
-    if let Some(m) = man.get("master")
-        && let Some(b) = files.get(&path_of(m))
-    {
-        out.extend(check_svg(&text(b), &path_of(m), false));
-        master_pts = Some(svg_cut_points(&text(b)));
+    let master_file = man
+        .get("master")
+        .map(path_of)
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            listed
+                .get("svg_master")
+                .map(path_of)
+                .filter(|p| !p.is_empty())
+        });
+    if let Some(mfile) = master_file {
+        match files.get(&mfile) {
+            Some(b) => {
+                out.extend(check_svg(&text(b), &mfile, false));
+                master_pts = Some(svg_cut_points(&text(b)));
+            }
+            None => out.push(missing(&mfile)),
+        }
     }
     for key in &order {
         let Some(info) = listed.get(key) else {
@@ -362,15 +404,24 @@ pub fn check_files(
                 .flatten()
                 .filter_map(Value::as_f64)
                 .collect();
-            match files.get(&path_of(info)) {
-                Some(b) if paper.len() == 2 => out.extend(check_pdf(
-                    b,
-                    &path_of(info),
-                    [paper[0], paper[1]],
-                    info["kind"].as_str().unwrap_or(""),
-                    master_pts.as_deref(),
-                )),
-                _ => out.push(missing(&path_of(info))),
+            let pdf_file = path_of(info);
+            match files.get(&pdf_file) {
+                Some(b) if paper.len() == 2 && paper.iter().all(|v| v.is_finite() && *v > 0.0) => {
+                    out.extend(check_pdf(
+                        b,
+                        &pdf_file,
+                        [paper[0], paper[1]],
+                        info["kind"].as_str().unwrap_or(""),
+                        master_pts.as_deref(),
+                    ))
+                }
+                Some(_) => out.push(CheckItem {
+                    check: "manifest".into(),
+                    file: pdf_file,
+                    ok: false,
+                    detail: format!("manifest entry {key} has invalid paper_mm"),
+                }),
+                None => out.push(missing(&pdf_file)),
             }
         }
     }
@@ -379,13 +430,82 @@ pub fn check_files(
         let dir_prefix = report
             .rsplit_once('/')
             .map_or(String::new(), |(d, _)| format!("{d}/"));
-        for (name, b) in files.range(dir_prefix.clone()..) {
-            if !name.starts_with(&dir_prefix) {
-                break;
+        if report.is_empty() || dir_prefix.is_empty() {
+            out.push(CheckItem {
+                check: "manifest".into(),
+                file: man_name.clone(),
+                ok: false,
+                detail: "manifest entry cutter has invalid report path".into(),
+            });
+        } else {
+            let mut reported_missing = false;
+            match files.get(&report) {
+                Some(raw) => match serde_json::from_slice::<Value>(raw) {
+                    Ok(doc) => {
+                        if let Some(pieces) = doc["pieces"].as_array() {
+                            if let Some(expected) = info["count"].as_u64()
+                                && expected as usize != pieces.len()
+                            {
+                                out.push(CheckItem {
+                                    check: "cutter.report".into(),
+                                    file: report.clone(),
+                                    ok: false,
+                                    detail: format!(
+                                        "cutter report lists {} piece(s), manifest expects {expected}",
+                                        pieces.len()
+                                    ),
+                                });
+                                reported_missing = true;
+                            }
+                            for piece in pieces {
+                                let pfile = path_of(piece);
+                                if pfile.is_empty() || !files.contains_key(&pfile) {
+                                    out.push(missing(if pfile.is_empty() {
+                                        &report
+                                    } else {
+                                        &pfile
+                                    }));
+                                    reported_missing = true;
+                                }
+                            }
+                        } else {
+                            out.push(CheckItem {
+                                check: "cutter.report".into(),
+                                file: report.clone(),
+                                ok: false,
+                                detail: "cutter report lacks a pieces array".into(),
+                            });
+                            reported_missing = true;
+                        }
+                    }
+                    Err(_) => {
+                        out.push(CheckItem {
+                            check: "cutter.report".into(),
+                            file: report.clone(),
+                            ok: false,
+                            detail: "cutter report is not valid JSON".into(),
+                        });
+                        reported_missing = true;
+                    }
+                },
+                None => {
+                    out.push(missing(&report));
+                    reported_missing = true;
+                }
             }
-            let base = &name[dir_prefix.len()..];
-            if !base.contains('/') && base.ends_with(".svg") {
-                out.extend(check_svg(&text(b), base, true));
+            let mut svg_count = 0usize;
+            for (name, b) in files.range(dir_prefix.clone()..) {
+                if !name.starts_with(&dir_prefix) {
+                    break;
+                }
+                let base = &name[dir_prefix.len()..];
+                if !base.contains('/') && base.ends_with(".svg") {
+                    svg_count += 1;
+                    out.extend(check_svg(&text(b), base, true));
+                }
+            }
+            if svg_count == 0 && !reported_missing && info["count"].as_u64().unwrap_or(1) > 0 {
+                out.push(missing(&format!("{dir_prefix}*.svg")));
             }
         }
     }

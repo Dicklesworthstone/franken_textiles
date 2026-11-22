@@ -1456,7 +1456,7 @@ fn main() -> ExitCode {
         Some("check") => emit(
             "check",
             args.json,
-            export::cmd_check(&args, args.positional.get(1)),
+            export::cmd_check(&args, args.positional.get(1..).unwrap_or(&[])),
         ),
         other => emit(
             other.unwrap_or("ftx"),

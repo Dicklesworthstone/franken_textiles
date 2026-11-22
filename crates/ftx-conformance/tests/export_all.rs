@@ -179,4 +179,78 @@ fn a_missing_manifest_or_file_is_a_failed_item() {
             .iter()
             .any(|i| i.check == "file.missing" && i.file == "TESTBODICE_plot.plt" && !i.ok)
     );
+
+    // Deleting the master SVG fails explicitly instead of silently skipping SVG & PDF restitch checks.
+    let mut no_master: BTreeMap<String, Vec<u8>> = set.files.iter().cloned().collect();
+    assert!(no_master.remove("TESTBODICE_master_mm.svg").is_some());
+    let items = check_files(&no_master, "out", None);
+    assert!(
+        items
+            .iter()
+            .any(|i| i.check == "file.missing" && i.file == "TESTBODICE_master_mm.svg" && !i.ok),
+        "missing master SVG must emit file.missing, got {items:?}"
+    );
+
+    // Deleting the cutter report or any cutter piece SVG fails explicitly instead of passing silently.
+    let mut no_cutter_report: BTreeMap<String, Vec<u8>> = set.files.iter().cloned().collect();
+    assert!(
+        no_cutter_report
+            .remove("TESTBODICE_cutter/cutter_report.json")
+            .is_some()
+    );
+    let items = check_files(&no_cutter_report, "out", None);
+    assert!(
+        items.iter().any(|i| i.check == "file.missing"
+            && i.file == "TESTBODICE_cutter/cutter_report.json"
+            && !i.ok),
+        "missing cutter_report.json must emit file.missing"
+    );
+
+    let mut missing_cutter_svg: BTreeMap<String, Vec<u8>> = set.files.iter().cloned().collect();
+    let victim = missing_cutter_svg
+        .keys()
+        .find(|k| k.starts_with("TESTBODICE_cutter/") && k.ends_with(".svg"))
+        .unwrap()
+        .clone();
+    missing_cutter_svg.remove(&victim);
+    let items = check_files(&missing_cutter_svg, "out", None);
+    assert!(
+        items
+            .iter()
+            .any(|i| i.check == "file.missing" && i.file == victim && !i.ok),
+        "missing cutter piece SVG {victim} must emit file.missing"
+    );
+
+    let mut corrupt_cutter_report: BTreeMap<String, Vec<u8>> = set.files.iter().cloned().collect();
+    corrupt_cutter_report.insert(
+        "TESTBODICE_cutter/cutter_report.json".into(),
+        b"{not json".to_vec(),
+    );
+    let items = check_files(&corrupt_cutter_report, "out", None);
+    assert!(
+        items.iter().any(|i| i.check == "cutter.report" && !i.ok),
+        "corrupt cutter_report.json must emit cutter.report failure"
+    );
+
+    // Corrupt or non-object manifests fail with `manifest`, never `check.nothing_checked`.
+    for bad in [b"{not json".as_slice(), b"[]", b"{\"files\": []}"] {
+        let mut m = BTreeMap::new();
+        m.insert("TESTBODICE_export_manifest.json".into(), bad.to_vec());
+        let items = check_files(&m, "out", None);
+        assert_eq!(
+            (items.len(), items[0].check.as_str(), items[0].ok),
+            (1, "manifest", false),
+            "bad manifest {bad:?} gave {items:?}"
+        );
+    }
+
+    // `export_targets` refuses malformed existing manifests instead of discarding them or no-oping.
+    for existing in [
+        ftx_export::PyJson::List(vec![]),
+        ftx_export::PyJson::dict(vec![("files", ftx_export::PyJson::List(vec![]))]),
+    ] {
+        let err = ftx_export::export_targets(&ctx, &[ftx_export::Target::Svg], Some(existing))
+            .unwrap_err();
+        assert_eq!(err.code, ftx_core::RefusalCode::InvalidDocument);
+    }
 }

@@ -207,4 +207,36 @@ fn bad_targets_options_and_directories_are_refused_or_failed() {
     std::fs::create_dir(dir.join("empty")).unwrap();
     let r = run(&dir, &["check", "empty"], 2);
     assert_eq!(r["result"]["failures"][0]["check"], "manifest");
+
+    // Extra positional args to `check` / `export check` are refused rather than silently ignored.
+    let r = run(&dir, &["check", "empty", "extra"], 3);
+    assert_eq!(r["refusal"]["code"], "invalid_document");
+    let r = run(&dir, &["export", "check", "empty", "extra"], 3);
+    assert_eq!(r["refusal"]["code"], "invalid_document");
+
+    // Corrupt existing manifest is refused before writing any export outputs.
+    std::fs::create_dir(dir.join("bad_manifest")).unwrap();
+    std::fs::write(
+        dir.join("bad_manifest/TESTBODICE_export_manifest.json"),
+        "{\"files\": []}\n",
+    )
+    .unwrap();
+    let r = run(
+        &dir,
+        &[
+            "export",
+            "svg",
+            "pattern.json",
+            "--out",
+            "bad_manifest",
+            "--created",
+            "2026-10-11T12:00",
+        ],
+        3,
+    );
+    assert_eq!(r["refusal"]["code"], "invalid_document");
+    assert!(
+        !dir.join("bad_manifest/TESTBODICE_master_mm.svg").exists(),
+        "refused export on corrupt manifest must not write target outputs"
+    );
 }
