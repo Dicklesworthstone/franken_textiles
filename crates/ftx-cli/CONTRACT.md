@@ -325,9 +325,12 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   `ftx render`); `ftx round --stills --res` hands the drape its own size, so a pixel names the same place
   in a refused round's pictures as in a completed round's stills, and `refused_pose.width`/`height` in the
   map beside them say that size. A refusal for cloth crossing the displayed body or other cloth
-  (`intersecting_trajectory`) names its cloth only by triangle index, so its pictures paint that triangle
-  yellow and the first repair names the piece instance or instances that own it; the check stops at its
-  first crossing, so one place is marked, not every place (unit-tested; not yet seen from a built binary).
+  (`intersecting_trajectory`) names its cloth only by triangle index, so its pictures paint the cloth
+  within 30 mm of that triangle (magenta where cloth crosses the body, yellow where it crosses cloth) and
+  the first repair names the piece instance or instances that own it; the check stops at its first
+  crossing, so one place is marked, not every place. Run on a build of `298a7a17`, the 385 mm sleeve with
+  `--hands knuckle` was refused at frame 87 and named `sleeve.R`; that build painted the one triangle only,
+  which was 3 to 4 pixels wide in an 840 by 620 still and went unseen, hence the 30 mm.
   When the refused state is the start itself (no sewing step accepted),
   the second repair says what the run knows about that start, because no solver budget changes it: that
   it is an earlier relaxation checkpoint, with both iteration counts, when the fully relaxed start was not

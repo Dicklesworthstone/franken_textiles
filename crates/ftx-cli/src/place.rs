@@ -58,6 +58,10 @@ const BODY_AUDIT_PAIRS: usize = 1_000_000;
 /// Edge strain that saturates the `start/` strain view. A kinematic start is far outside the ±3 %
 /// ramp used for a finished drape.
 const START_STRAIN_RAMP: f64 = 0.15;
+/// How far round the cloth triangle a crossing refusal names its pictures mark cloth, in millimetres. One
+/// triangle alone does not show: on the 92 cm bolero at 12 mm spacing it was 3 to 4 pixels wide in an 840
+/// by 620 whole-figure still and went unseen.
+const CROSSING_MARK_MM: f64 = 30.0;
 /// Share of an instance's vertices at or past [`START_STRAIN_RAMP`], in percent, from which a start is
 /// called tight there. Measured on the 92 cm bolero of the fitting skill: a 170 mm cuff that has to sit
 /// over the open hand (hull girth 174 to 180 mm) leaves 3.0 and 3.3 % of the two sleeves at the ramp and
@@ -651,20 +655,38 @@ pub(super) fn refused_stills(
     } else {
         Vec::new()
     };
-    let mut marked = vec![false; n];
+    // Cloth crossing the body takes the colour `place` gives cloth inside the body; cloth crossing cloth
+    // takes its crossing colour.
+    let on_body = refusal.message.contains("displayed body triangle");
+    let reach = CROSSING_MARK_MM * 0.001;
+    let mut near = vec![false; n];
     for &triangle in &named {
-        for vertex in state.mesh.faces[triangle] {
-            marked[vertex] = true;
+        for corner in state.mesh.faces[triangle] {
+            let at = state.positions[corner];
+            for (mark, p) in near.iter_mut().zip(&state.positions) {
+                let (dx, dy, dz) = (p.x - at.x, p.y - at.y, p.z - at.z);
+                *mark |= dx * dx + dy * dy + dz * dz <= reach * reach;
+            }
         }
     }
     let named_in = (!named.is_empty()).then(|| {
+        let (triangles, are) = if named.len() == 1 {
+            ("triangle", "is")
+        } else {
+            ("triangles", "are")
+        };
         format!(
-            "the cloth triangle{} the refusal names, in {}",
-            if named.len() == 1 { "" } else { "s" },
+            "the cloth within {CROSSING_MARK_MM} mm of the cloth {triangles} the refusal names, which \
+             {are} in {}",
             triangle_instances(&state.mesh, &named).join(" and ")
         )
     });
-    let pieces = piece_colours(&state.mesh, &slots, &vec![0.0; n], &marked);
+    let depth: Vec<f64> = near
+        .iter()
+        .map(|&mark| if mark && on_body { -1.0 } else { 0.0 })
+        .collect();
+    let crossing: Vec<bool> = near.iter().map(|&mark| mark && !on_body).collect();
+    let pieces = piece_colours(&state.mesh, &slots, &depth, &crossing);
     let (strain, summaries) = start_strain(&state.mesh, &state.positions);
     match write_stage(
         &dir,
@@ -694,8 +716,9 @@ pub(super) fn refused_stills(
                     state.accepted_steps,
                     state.phase,
                     named_in.as_ref().map_or(String::new(), |named_in| format!(
-                        " Yellow marks {named_in}; the check stops at the first crossing it finds, so \
-                         there can be others."
+                        " {} marks {named_in}; the check stops at the first crossing it finds, so \
+                         there can be others.",
+                        if on_body { "Magenta" } else { "Yellow" }
                     ))
                 ),
             );
@@ -1585,27 +1608,68 @@ mod tests {
         assert_eq!(crossing.repairs.len(), 2, "{:?}", crossing.repairs);
         assert!(
             crossing.repairs[0].ends_with(
-                " Yellow marks the cloth triangle the refusal names, in panel; the check stops at the \
-                 first crossing it finds, so there can be others."
+                " Magenta marks the cloth within 30 mm of the cloth triangle the refusal names, which \
+                 is in panel; the check stops at the first crossing it finds, so there can be others."
             ),
             "{}",
             crossing.repairs[0]
         );
-        let yellow = |file: &std::path::Path| -> Vec<usize> {
+        let coloured = |file: &std::path::Path, colour: &str| -> Vec<usize> {
             std::fs::read_to_string(file)
                 .unwrap()
                 .lines()
                 .filter(|line| line.starts_with("v "))
                 .enumerate()
-                .filter(|(_, line)| line.ends_with(" 1 0.86 0"))
+                .filter(|(_, line)| line.ends_with(colour))
                 .map(|(vertex, _)| vertex)
                 .collect()
         };
-        let mut named = state.mesh.faces[1].to_vec();
-        named.sort_unstable();
-        assert_eq!(yellow(&crossing_out.join("refused/garment.obj")), named);
+        let (magenta, yellow) = (" 1 0 1", " 1 0.86 0");
+        // The named triangle and the cloth round it, enough to see in a whole-figure still, and nothing
+        // further than 30 mm from one of its corners.
+        let marked = coloured(&crossing_out.join("refused/garment.obj"), magenta);
+        let within = |corners: [usize; 3], vertex: usize| {
+            corners.iter().any(|&corner| {
+                let (p, q) = (state.positions[vertex], state.positions[corner]);
+                let (dx, dy, dz) = (p.x - q.x, p.y - q.y, p.z - q.z);
+                dx * dx + dy * dy + dz * dz <= 0.03 * 0.03 + 1e-12
+            })
+        };
+        let corners = state.mesh.faces[1];
+        assert!(corners.iter().all(|corner| marked.contains(corner)));
+        assert!(marked.len() > 3 && marked.len() < state.positions.len());
+        assert!(marked.iter().all(|&vertex| within(corners, vertex)));
+        assert!(coloured(&crossing_out.join("refused/garment.obj"), yellow).is_empty());
         // The ordinary refusal above marked nothing.
-        assert!(yellow(&out.join("refused/garment.obj")).is_empty());
+        for colour in [magenta, yellow] {
+            assert!(coloured(&out.join("refused/garment.obj"), colour).is_empty());
+        }
+        // Cloth crossing cloth takes the other colour, and both triangles are marked and owned.
+        let cloth_out = out.join("cloth");
+        std::fs::create_dir_all(&cloth_out).unwrap();
+        let cloth = super::refused_stills(
+            Refusal::new(
+                RefusalCode::IntersectingTrajectory,
+                "physical frame 90: cloth triangle 0 crosses cloth triangle 1",
+            ),
+            Some(&state),
+            &cloth_out,
+            body,
+            size,
+        );
+        assert!(
+            cloth.repairs[0].ends_with(
+                " Yellow marks the cloth within 30 mm of the cloth triangles the refusal names, which \
+                 are in panel; the check stops at the first crossing it finds, so there can be others."
+            ),
+            "{}",
+            cloth.repairs[0]
+        );
+        let marked = coloured(&cloth_out.join("refused/garment.obj"), yellow);
+        for corners in [state.mesh.faces[0], state.mesh.faces[1]] {
+            assert!(corners.iter().all(|corner| marked.contains(corner)));
+        }
+        assert!(coloured(&cloth_out.join("refused/garment.obj"), magenta).is_empty());
         // With nowhere to write, the piece is still named.
         let unwritten = super::refused_stills(
             Refusal::new(RefusalCode::IntersectingTrajectory, crossing_message),
@@ -1616,7 +1680,8 @@ mod tests {
         );
         assert!(
             unwritten.repairs[0].ends_with(
-                " They would have marked the cloth triangle the refusal names, in panel."
+                " They would have marked the cloth within 30 mm of the cloth triangle the refusal \
+                 names, which is in panel."
             ),
             "{}",
             unwritten.repairs[0]
