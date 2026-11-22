@@ -30,10 +30,19 @@ fn dist(a: Vec2, b: Vec2) -> f64 {
 
 /// GEOS `Distance::pointToSegment`.
 fn point_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    if !p.is_finite() || !a.is_finite() || !b.is_finite() {
+        return f64::NAN;
+    }
     if a == b {
         return dist(p, a);
     }
     let len2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
+    if len2 == 0.0 {
+        return dist(p, a);
+    }
+    if !len2.is_finite() {
+        return f64::NAN;
+    }
     let r = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / len2;
     if r <= 0.0 {
         return dist(p, a);
@@ -304,13 +313,22 @@ impl SegGen {
 /// GEOS's raw left offset curve of an open line at distance `d` (mitre joins, `limit`), open (the ring closure
 /// GEOS appends is left out).
 fn raw_left_offset(line: &[Vec2], d: f64, limit: f64) -> Vec<Vec2> {
+    if !d.is_finite() || d <= 0.0 || !limit.is_finite() || limit <= 0.0 {
+        return Vec::new();
+    }
     let mut clean: Vec<Vec2> = Vec::with_capacity(line.len());
     for &p in line {
         if p.is_finite() && clean.last() != Some(&p) {
             clean.push(p);
         }
     }
+    if clean.len() < 2 {
+        return Vec::new();
+    }
     let simp = simplify_left(&clean, d / 100.0);
+    if simp.len() < 2 {
+        return Vec::new();
+    }
     let mut g = SegGen {
         d,
         limit,
@@ -339,6 +357,9 @@ fn distance_to_line(p: Vec2, line: &[Vec2]) -> f64 {
 /// Splits a polyline where it meets `cutters` (pairs of segment endpoints) or itself (`cutters` None): the
 /// pieces in order, each a polyline.
 fn split(line: &[Vec2], cutters: Option<&[Vec2]>) -> Vec<Vec<Vec2>> {
+    if line.len() < 2 {
+        return Vec::new();
+    }
     let m = line.len() - 1;
     let mut cuts: Vec<Vec<(f64, Vec2)>> = vec![Vec::new(); m];
     let seg_t = |a: Vec2, b: Vec2, x: Vec2| {
@@ -363,7 +384,7 @@ fn split(line: &[Vec2], cutters: Option<&[Vec2]>) -> Vec<Vec<Vec2>> {
                 }
             }
         }
-        Some(ring) => {
+        Some(ring) if ring.len() >= 2 => {
             let k = ring.len();
             for i in 0..m {
                 for j in 0..k {
@@ -374,6 +395,7 @@ fn split(line: &[Vec2], cutters: Option<&[Vec2]>) -> Vec<Vec<Vec2>> {
                 }
             }
         }
+        Some(_) => {}
     }
     // pieces: break at every cut point
     let mut pieces: Vec<Vec<Vec2>> = Vec::new();
@@ -420,6 +442,9 @@ fn midpoint(piece: &[Vec2]) -> Vec2 {
 /// sections, each in the line's direction.
 #[must_use]
 pub fn offset_curve(line: &[Vec2], d: f64, limit: f64) -> Vec<Vec<Vec2>> {
+    if !d.is_finite() || d <= 0.0 || !limit.is_finite() || limit <= 0.0 {
+        return Vec::new();
+    }
     let raw = raw_left_offset(line, d, limit);
     if raw.len() < 2 {
         return Vec::new();
@@ -443,6 +468,13 @@ fn inside(p: Vec2, ring: &[Vec2]) -> bool {
 /// `Polygon(ring).intersection(line)`'s line parts, in the line's direction.
 #[must_use]
 pub fn clip_inside(line: &[Vec2], ring: &[Vec2]) -> Vec<Vec<Vec2>> {
+    if line.len() < 2
+        || ring.len() < 3
+        || line.iter().any(|p| !p.is_finite())
+        || ring.iter().any(|p| !p.is_finite())
+    {
+        return Vec::new();
+    }
     let pieces: Vec<Vec<Vec2>> = split(line, Some(ring))
         .into_iter()
         .filter(|p| inside(midpoint(p), ring))
@@ -461,10 +493,22 @@ pub fn length(line: &[Vec2]) -> f64 {
 /// line within a few hundredths of a millimetre of the limit may be judged differently).
 #[must_use]
 pub fn keeps_clear(line: &[Vec2], ring: &[Vec2], clear: f64) -> bool {
+    if line.is_empty()
+        || ring.len() < 3
+        || !clear.is_finite()
+        || clear < 0.0
+        || line.iter().any(|p| !p.is_finite())
+        || ring.iter().any(|p| !p.is_finite())
+    {
+        return false;
+    }
     if !line.iter().all(|&p| inside(p, ring)) {
         return false;
     }
     let k = ring.len();
+    if line.len() == 1 {
+        return (0..k).all(|j| point_to_segment(line[0], ring[j], ring[(j + 1) % k]) > clear);
+    }
     let seg_seg = |a: Vec2, b: Vec2, c: Vec2, d: Vec2| {
         if segment_intersection(a, b, c, d).is_some() {
             return 0.0;
@@ -565,5 +609,48 @@ mod tests {
             &ring,
             3.0
         ));
+    }
+
+    #[test]
+    fn degenerate_and_non_finite_inputs_do_not_panic() {
+        let ring = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        let pt = Vec2::new(1.0, 2.0);
+        assert!(offset_curve(&[], 1.0, 3.0).is_empty());
+        assert!(offset_curve(&[pt], 1.0, 3.0).is_empty());
+        assert!(offset_curve(&[pt, pt], 1.0, 3.0).is_empty());
+        assert!(offset_curve(&[pt, Vec2::new(f64::NAN, 2.0)], 1.0, 3.0).is_empty());
+        assert!(offset_curve(&[Vec2::ZERO, Vec2::new(10.0, 0.0)], 0.0, 3.0).is_empty());
+        assert!(offset_curve(&[Vec2::ZERO, Vec2::new(10.0, 0.0)], f64::NAN, 3.0).is_empty());
+        assert!(offset_curve(&[Vec2::ZERO, Vec2::new(10.0, 0.0)], 1.0, 0.0).is_empty());
+
+        assert!(clip_inside(&[], &ring).is_empty());
+        assert!(clip_inside(&[pt], &ring).is_empty());
+        assert!(clip_inside(&[Vec2::ZERO, Vec2::new(5.0, 5.0)], &[]).is_empty());
+        assert!(clip_inside(&[Vec2::ZERO, Vec2::new(f64::NAN, 5.0)], &ring).is_empty());
+
+        let nan_ring = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+            Vec2::new(f64::NAN, 5.0),
+        ];
+        assert!(clip_inside(&[Vec2::new(1.0, 1.0), Vec2::new(9.0, 9.0)], &nan_ring).is_empty());
+
+        assert!(!keeps_clear(&[], &ring, 1.0));
+        assert!(!keeps_clear(&[Vec2::new(5.0, 5.0)], &ring, f64::NAN));
+        assert!(!keeps_clear(&[Vec2::new(5.0, 5.0)], &ring, -1.0));
+        assert!(!keeps_clear(
+            &[Vec2::new(4.0, 4.0), Vec2::new(6.0, 6.0)],
+            &nan_ring,
+            1.0
+        ));
+        assert!(keeps_clear(&[Vec2::new(5.0, 5.0)], &ring, 4.0));
+        assert!(!keeps_clear(&[Vec2::new(0.5, 5.0)], &ring, 1.0));
     }
 }
