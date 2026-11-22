@@ -634,6 +634,14 @@ fn panel(
     })
 }
 
+fn vec3(v: &Value, at: &str) -> Result<[f64; 3], Refusal> {
+    let a = array(v, at)?;
+    if a.len() != 3 {
+        return Err(invalid(format!("{at}: expected [front, lat, up]")));
+    }
+    Ok([number(&a[0], at)?, number(&a[1], at)?, number(&a[2], at)?])
+}
+
 fn nonnegative(v: &Value, at: &str) -> Result<(), Refusal> {
     let x = number(v, at)?;
     if !(0.0..=MAX_MM).contains(&x) {
@@ -682,6 +690,8 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
                         "theta_deg",
                         "radius_mm",
                         "clearance_mm",
+                        "frame_offset_mm",
+                        "frame_rotation",
                     ],
                     "placement",
                 )?;
@@ -708,6 +718,31 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
                             }
                         }
                         "clearance_mm" => nonnegative(value, key)?,
+                        "frame_offset_mm" => {
+                            vec3(value, "placement frame_offset_mm")?;
+                        }
+                        "frame_rotation" => {
+                            keys(value, &["axis", "angle_deg"], "placement frame_rotation")?;
+                            let fields = object(value, "placement frame_rotation")?;
+                            if fields.len() != 2 {
+                                return Err(invalid(
+                                    "placement frame_rotation must contain axis and angle_deg",
+                                ));
+                            }
+                            let axis = vec3(&fields["axis"], "placement frame_rotation.axis")?;
+                            if axis[0].abs().max(axis[1].abs()).max(axis[2].abs()) == 0.0 {
+                                return Err(invalid(
+                                    "placement frame_rotation.axis must be nonzero",
+                                ));
+                            }
+                            let angle =
+                                number(&fields["angle_deg"], "placement frame_rotation.angle_deg")?;
+                            if !(-180.0..=180.0).contains(&angle) {
+                                return Err(invalid(
+                                    "placement frame_rotation.angle_deg must be within -180 to 180 degrees",
+                                ));
+                            }
+                        }
                         _ => {
                             number(value, key)?;
                         }
@@ -1740,6 +1775,91 @@ mod tests {
             let a = json!({"schema":"fabric-garmentcode-annotations/1",
                 "panels":{"front.R":{"placement":{"part":part,"side":side}}}});
             assert!(import_garmentcode(&source(), Some(&a)).is_err());
+        }
+    }
+
+    #[test]
+    fn authored_rigid_frame_placement_annotations_preserve_valid_and_refuse_malformed() {
+        let valid = json!({
+            "schema": "fabric-garmentcode-annotations/1",
+            "panels": {
+                "front.R": {
+                    "placement": {
+                        "part": "torso",
+                        "y0_landmark": "waist",
+                        "frame_offset_mm": [8.0, -3.0, 2.5],
+                        "frame_rotation": {"axis": [1.0e308, -1.0e308, 1.0e308], "angle_deg": -37.5}
+                    },
+                    "sim": true
+                },
+                "back on fold": {
+                    "placement": {
+                        "part": "arm",
+                        "side": "L",
+                        "frame_offset_mm": [0.0, 12.0, -4.0],
+                        "frame_rotation": {"axis": [0.0, 1.0, 0.0], "angle_deg": 180.0}
+                    },
+                    "sim": true
+                }
+            }
+        });
+        let imported = import_garmentcode(&source(), Some(&valid)).unwrap();
+        assert_eq!(
+            imported.pattern["pieces"][0]["placement"],
+            valid["panels"]["front.R"]["placement"]
+        );
+        assert_eq!(
+            imported.pattern["pieces"][1]["placement"],
+            valid["panels"]["back on fold"]["placement"]
+        );
+
+        for (key, bad) in [
+            ("frame_offset_mm", json!(null)),
+            ("frame_offset_mm", json!(30.0)),
+            ("frame_offset_mm", json!([1.0, 2.0])),
+            ("frame_offset_mm", json!([1.0, 2.0, 3.0, 4.0])),
+            ("frame_offset_mm", json!([1.0, "2", 3.0])),
+            ("frame_rotation", json!(null)),
+            ("frame_rotation", json!([0.0, 0.0, 90.0])),
+            ("frame_rotation", json!({"axis": [0.0, 1.0, 0.0]})),
+            ("frame_rotation", json!({"angle_deg": 90.0})),
+            (
+                "frame_rotation",
+                json!({"axis": [0.0, 1.0, 0.0], "angle_deg": 90.0, "extra": 1.0}),
+            ),
+            (
+                "frame_rotation",
+                json!({"axis": [0.0, 0.0, 0.0], "angle_deg": 0.0}),
+            ),
+            (
+                "frame_rotation",
+                json!({"axis": [0.0, 1.0], "angle_deg": 90.0}),
+            ),
+            (
+                "frame_rotation",
+                json!({"axis": [0.0, 1.0, 0.0], "angle_deg": 180.5}),
+            ),
+            (
+                "frame_rotation",
+                json!({"axis": [0.0, 1.0, 0.0], "angle_deg": -180.5}),
+            ),
+            (
+                "frame_rotation",
+                json!({"axis": [0.0, 1.0, 0.0], "angle_deg": "90"}),
+            ),
+        ] {
+            let mut placement = json!({"part": "torso"});
+            placement[key] = bad.clone();
+            let a = json!({
+                "schema": "fabric-garmentcode-annotations/1",
+                "panels": {"front.R": {"placement": placement, "sim": true}}
+            });
+            let err = import_garmentcode(&source(), Some(&a)).unwrap_err();
+            assert_eq!(
+                err.code,
+                RefusalCode::InvalidDocument,
+                "expected InvalidDocument for {key}={bad}, got {err:?}"
+            );
         }
     }
 

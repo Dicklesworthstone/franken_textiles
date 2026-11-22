@@ -258,7 +258,8 @@ mapping. Import checks those references against the emitted pattern; ordinary va
 the points and their measurement targets. Unknown panel or
 stitch annotation fields and source references refuse, as do geometry-changing cut overrides.
 `sim: true` requires explicit native placement. Torso placement and explicit physical arm/leg
-placement are admitted. Limb placement requires `placement.side: "R" | "L"`; panel names and roles
+placement are admitted, including spec 04 §3.4 `placement.frame_offset_mm` and
+`placement.frame_rotation` (validated fail-closed on import). Limb placement requires `placement.side: "R" | "L"`; panel names and roles
 never infer it. The native extension is valid only for cut quantity one without unfolding. It selects
 the corresponding body frame and fit landmarks while retaining the physical panel's vertices,
 curves, grain, instance ID and seam references. Its instance remains `C`, unmirrored. `x0` and
