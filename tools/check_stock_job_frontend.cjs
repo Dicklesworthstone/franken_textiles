@@ -8,13 +8,15 @@ const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'web/materials-worker.js'), 'utf8');
 async function worker(bindings) {
   const messages = [];
-  const context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error,
+  const context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error, URL,
     self: {}, postMessage: m => messages.push(m) });
   const exports = { default: () => Promise.resolve(), ...bindings };
   const imports = new vm.SyntheticModule(Object.keys(exports), function () {
     for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
   }, { context });
-  const module = new vm.SourceTextModule(source, { context });
+  const module = new vm.SourceTextModule(source, {
+    context, initializeImportMeta: meta => { meta.url = 'https://unit.invalid/materials-worker.js'; },
+  });
   await module.link(() => imports); await module.evaluate();
   return async msg => { await context.self.onmessage({ data: msg }); return messages.at(-1); };
 }

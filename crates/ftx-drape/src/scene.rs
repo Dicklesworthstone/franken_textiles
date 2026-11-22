@@ -337,7 +337,7 @@ pub struct Scene {
     pub triangle_owner: Vec<usize>,
     /// Start crossings untangled, per round.
     pub untangled: Vec<usize>,
-    /// Rejected final relaxation count when an earlier self-contact-clear start was selected.
+    /// Rejected final relaxation count when an earlier contact-clear start was selected.
     /// `start.relax_iterations` and `start.block_p95` describe the accepted checkpoint.
     pub start_backtracked_from: Option<usize>,
     /// Own-side leg start repair, as moved welded vertices and maximum displacement in mm.
@@ -774,11 +774,12 @@ pub(crate) fn build_scene_resolved(
     pattern: &Pattern,
     mesh: GarmentMesh,
     frames: &dyn PartFrames,
-    skin_vertices: &[Vec3],
-    skin_triangles: &[[usize; 3]],
+    collision: (&[Vec3], &[[usize; 3]]),
     material: &crate::material::MaterialInputs,
     elastics: &[ElasticCasing],
+    mut display_contact: Option<&mut crate::animation::ReplayContact>,
 ) -> Result<Scene, Refusal> {
+    let (skin_vertices, skin_triangles) = collision;
     let build = |mesh, start| {
         build_scene_inner(
             pattern,
@@ -799,21 +800,34 @@ pub(crate) fn build_scene_resolved(
     };
     let mut scene = build(mesh, None)?;
     if let Some(params) = material.options.self_contact {
-        let admit = |candidate: &Scene| {
+        let mut admit = |candidate: &Scene| -> Result<(), Refusal> {
             candidate
                 .solver
                 .contact
                 .as_ref()
                 .expect("body contact exists")
                 .clone()
-                .with_self_contact(&candidate.solver.x, params)
-                .map(|_| ())
+                .with_self_contact(&candidate.solver.x, params)?;
+            if let Some(display) = display_contact.as_deref_mut() {
+                display.check(
+                    &candidate.positions(),
+                    &candidate.mesh.faces,
+                    crate::animation::FOLD_FRAMES + crate::animation::ZIP_FRAMES - 1,
+                )?;
+            }
+            Ok(())
         };
         match admit(&scene) {
-            Err(e) if e.code == RefusalCode::IntersectingStart => {
+            Err(e)
+                if matches!(
+                    e.code,
+                    RefusalCode::IntersectingStart | RefusalCode::IntersectingTrajectory
+                ) =>
+            {
                 // Replay at existing push-out boundaries, preserving the original relaxation path.
                 // Rebuilding rechecks body clearance, material domains and source-owned contact
-                // before any constitutive history is initialized.
+                // before any constitutive history is initialized. The displayed body can retain
+                // hands or feet omitted by the collider; every candidate must clear both surfaces.
                 let original = scene.start.relax_iterations;
                 let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
                 let mut replacement = None;

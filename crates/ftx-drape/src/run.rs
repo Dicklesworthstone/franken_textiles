@@ -382,9 +382,9 @@ pub struct RefusedRun {
     pub phase: &'static str,
     /// Nominal steps of that phase accepted when the state was reached.
     pub accepted_steps: usize,
-    /// Set when the run began from an earlier relaxation checkpoint because its fully relaxed start had
-    /// cloth layers crossing or closer than their contact thickness: the relaxation iterations of the
-    /// checkpoint used, then of the start that was not admitted. The checkpoint is the more strained.
+    /// Set when the run began from an earlier relaxation checkpoint because its fully relaxed start
+    /// failed cloth contact or displayed-surface admission: the relaxation iterations of the checkpoint
+    /// used, then of the start that was not admitted. The checkpoint is the more strained.
     pub start_fallback: Option<(usize, usize)>,
     /// Set when the start's relaxation ran its full [`crate::start::RELAX_MAX_ITERS`] iterations and the
     /// start's plain edges are still above [`crate::start::RELAX_TARGET_P95`]: their p95 absolute strain,
@@ -471,14 +471,18 @@ pub fn drape_observed(
             "no piece has a fold-up placement: nothing to drape (the pattern is judged flat)",
         ));
     }
+    let mut display_contact = opts
+        .self_contact
+        .map(|_| crate::animation::ReplayContact::new(body.display.0, body.display.1))
+        .transpose()?;
     let mut scene = crate::scene::build_scene_resolved(
         pattern,
         mesh,
         body.frames,
-        body.collision.0,
-        body.collision.1,
+        body.collision,
         &material,
         &elastics,
+        display_contact.as_mut(),
     )?;
     if let Some(p) = opts.self_contact {
         scene.solver = scene.solver.with_self_contact(p)?;
@@ -499,25 +503,23 @@ pub fn drape_observed(
         scene.start.relax_iterations,
         scene.start.block_p95.last().copied().unwrap_or(f64::NAN),
         // Said here because a run that refuses never reaches the report that records it.
-        scene.start_backtracked_from.map_or(String::new(), |rejected| format!(
-            " (an earlier checkpoint: the start relaxed for {rejected} iterations had cloth layers \
-             crossing or closer than their contact thickness)"
-        ))
+        scene
+            .start_backtracked_from
+            .map_or(String::new(), |rejected| format!(
+                " (an earlier checkpoint: the start relaxed for {rejected} iterations failed cloth \
+             contact or displayed-surface admission)"
+            ))
     ));
     let initial_positions = scene.positions();
     let first_sewn = FOLD_FRAMES + ZIP_FRAMES;
-    let mut display_contact = if opts.self_contact.is_some() {
-        let mut display = crate::animation::ReplayContact::new(body.display.0, body.display.1)?;
+    if let Some(display) = &mut display_contact {
         // The collider may omit fingers or feet retained by the displayed wearer. Check the exact
         // welded start before spending any work on a trajectory that must already be refused.
         if let Err(refusal) = display.check(&initial_positions, &scene.mesh.faces, first_sewn - 1) {
             *refused = refused_run(&scene, std::slice::from_ref(&initial_positions), "sew", 1);
             return Err(refusal);
         }
-        Some(display)
-    } else {
-        None
-    };
+    }
     let board = board_layout(&scene.mesh);
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
     if opts.self_contact.is_some() {
@@ -1202,7 +1204,7 @@ fn add_run_fields(
         o.insert(
             "start_repair".into(),
             json!({
-                "basis":"earlier_self_contact_clear_relaxation",
+                "basis":"earlier_contact_clear_relaxation",
                 "rejected_relax_iters":original,
                 "accepted_relax_iters":scene.start.relax_iterations,
             }),
@@ -1211,7 +1213,7 @@ fn add_run_fields(
             .and_then(Value::as_array_mut)
             .expect("metrics flags exist")
             .push(json!(
-                "start restored to an earlier self-contact-clear relaxation block"
+                "start restored to an earlier contact-clear relaxation checkpoint"
             ));
     }
     if let Some((moved, max_mm)) = scene.start_leg_separation {

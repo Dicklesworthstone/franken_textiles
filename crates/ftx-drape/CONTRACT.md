@@ -598,18 +598,25 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   The last zip frame, initial strain and girth-line travel use the welded, untangled start.
   Corner drop and elastic-band travel use the last sewing endpoint, or that same start when
   gravity acts from the first step. Hem rise uses the original wrapped pattern level.
-- Self-contact start recovery: if the final relaxed start fails cloth self-contact admission, the
+- Contact start recovery: when self-contact is requested, if the final relaxed start fails cloth
+  contact admission or the full displayed-body crossing audit, the
   resolved pipeline first replays earlier complete 200-iteration blocks, retaining existing recoveries.
   If none passes, it replays intermediate 25-iteration push-out checkpoints and selects the latest
-  one passing the ordinary scene builder and actual contact policy. Rebuilding retains body
+  one passing the ordinary scene builder, actual contact policy and the same f32 displayed-body
+  audit used for the trajectory. Fingers omitted from the proxy cannot qualify a replacement
+  that crosses the displayed surface. Rebuilding retains body
   clearance, rest/material domains, welds and source-owned contact; constitutive histories bind only
   after selection. Earlier-block recovery records rejected and accepted iteration counts in
-  `start_repair`, and
+  `start_repair` with basis `earlier_contact_clear_relaxation`, and
   `initial_strain_pct`, `relax_iters` and the advisory describe the accepted start, with the actual
   p95 strain for a partial final block, even above the reference's
   12% strain heuristic. The chart-trouser regression uses production tape uncertainties, runs actual
   2 mm self-contact and retains a 50 mm offset refusal control. This is start admission, not settling,
   independent anatomy, measured fabric or physical-fit qualification.
+  If no replacement passes, the original selected state remains available to the existing refusal
+  observer; the full-display check is not suppressed. Body-only requests preserve their existing
+  initialization path. `tests/outfit.rs` exercises a final-state displayed protrusion with an
+  earlier clear checkpoint, unchanged rest geometry/mass, and initial/later refusal snapshots.
 - After all relaxation checkpoints fail, a leg crossing the centre plane can recover its own-side
   placement. Only welds owned exclusively by the same leg move, by at most one mesh spacing.
   The rebuilt start passes the same body, material and cloth-contact checks. The report records

@@ -287,11 +287,13 @@ test('all four browser workers reject missing or mismatched wasm_interface_stamp
     {
       const sent = [];
       const values = { default: () => Promise.resolve(), initSync: () => {}, ...stampExport };
-      const context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error, self: {}, postMessage: m => sent.push(m) });
+      const context = vm.createContext({ Uint8Array, TextEncoder, WebAssembly, JSON, Error, URL, self: {}, postMessage: m => sent.push(m) });
       const imports = new vm.SyntheticModule(Object.keys(values), function () {
         for (const [k, v] of Object.entries(values)) this.setExport(k, v);
       }, { context });
-      const mod = new vm.SourceTextModule(read('materials-worker.js'), { context });
+      const mod = new vm.SourceTextModule(read('materials-worker.js'), {
+        context, initializeImportMeta: meta => { meta.url = 'https://unit.invalid/materials-worker.js'; },
+      });
       await mod.link(() => imports); await mod.evaluate();
       await new Promise(resolve => setImmediate(resolve));
       if (mode === 'match') {
