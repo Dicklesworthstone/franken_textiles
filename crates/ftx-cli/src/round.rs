@@ -49,6 +49,7 @@ const SIM_OPTIONS: &[&str] = &[
     "self-contact-mm",
     "self-mu",
     "arm-deg",
+    "thumb-pose",
     "legs",
     "leg-fraction",
     "skinning",
@@ -377,6 +378,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "self-contact-mm",
             "self-mu",
             "arm-deg",
+            "thumb-pose",
             "legs",
             "leg-fraction",
             "skinning",
@@ -407,6 +409,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let run_options = super::drape_options(args)?;
         super::two_start::options(args, &run_options)?;
         super::drape_pose(args)?;
+        super::parse_thumb_pose(args)?;
         super::parse_skinning(args)?;
         super::parse_hands(args)?;
     } else if let Some(key) = SIM_OPTIONS
@@ -827,8 +830,11 @@ fn simulate(
         Err(refusal) => {
             let budget = refusal.code == RefusalCode::BudgetExceeded;
             let flag = format!("simulation failed: {}", refusal.message);
-            let report = json!({"flags":[flag], "gating":[flag], "advisory":[],
+            let mut report = json!({"flags":[flag], "gating":[flag], "advisory":[],
                 "settled":false, "verdict":"FAILED", "refusal":refusal});
+            if let Some(thumbs) = super::parse_thumb_pose(args)? {
+                report["body"] = json!({"thumb_pose": thumbs});
+            }
             write_json(&rd.join("sim_failure.json"), &report)?;
             Ok((
                 Some(report),

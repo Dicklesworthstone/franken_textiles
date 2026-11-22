@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ftx_body::{
-    BodyFrames, HandCollider, SkinningMode, clothing_skin_with_hands, pose_deltas, skin_mesh,
+    BodyFrames, HandCollider, SkinningMode, ThumbPose, clothing_skin_with_hands, skin_mesh,
 };
 use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
@@ -54,7 +54,7 @@ const CROSSING_CLOTH: [f64; 3] = [1.0, 0.86, 0.0];
 /// Wrap-stage seam travel that saturates the red end of the `wrap/` strain-view ramp (m).
 const GAP_RAMP_M: f64 = 0.15;
 /// Overlapping-triangle budget of the drape's static body-surface audit (`ftx_drape::scene::build_scene`).
-const BODY_AUDIT_PAIRS: usize = 1_000_000;
+pub(super) const BODY_AUDIT_PAIRS: usize = 1_000_000;
 /// Edge strain that saturates the `start/` strain view. A kinematic start is far outside the ±3 %
 /// ramp used for a finished drape.
 const START_STRAIN_RAMP: f64 = 0.15;
@@ -1034,6 +1034,14 @@ pub(super) struct Staging<'a> {
     pub skinning: SkinningMode,
     /// Which hand collider `collision` was built with; reported when it is not the reference's.
     pub hands: HandCollider,
+    pub thumbs: Option<ThumbPose>,
+}
+
+fn body_surface_report(surface: (&[Vec3], &[[usize; 3]])) -> Value {
+    match ftx_drape::collider::audit_surface(surface.0, surface.1, BODY_AUDIT_PAIRS) {
+        Ok(_) => json!({"admitted": true}),
+        Err(refusal) => json!({"admitted": false, "refusal": refusal}),
+    }
 }
 
 /// Writes `out/wrap`, `out/start` and `out/placement.json` into the existing, empty directory `out`, with
@@ -1053,6 +1061,7 @@ fn stages(
         display: full,
         skinning,
         hands,
+        thumbs,
     } = *staging;
     // The same scope rule as a drape: an unplaced attachment refuses instead of vanishing.
     let scope = ftx_drape::garment::simulation_scope(source)?;
@@ -1090,10 +1099,7 @@ fn stages(
     }
     // The drape refuses a posed body whose own surface crosses itself (arms against the trunk, a deep
     // squat) before it places any cloth. Report that here instead of stopping: the pictures still help.
-    let body_surface = match ftx_drape::collider::audit_surface(skin.0, skin.1, BODY_AUDIT_PAIRS) {
-        Ok(_) => json!({"admitted": true}),
-        Err(refusal) => json!({"admitted": false, "refusal": refusal}),
-    };
+    let body_surface = body_surface_report(skin);
     let tree = NearestTree::new(skin.0.to_vec(), skin.1.to_vec())?;
     let start = start_state(&mesh, wrapped.clone(), &tree);
     let depth = |x: &[Vec3]| -> Vec<f64> { x.iter().map(|p| tree.signed_distance(*p)).collect() };
@@ -1195,6 +1201,12 @@ fn stages(
     if !hands.is_wrist() {
         report["hand_collider"] = json!(hands.as_str());
     }
+    if let Some(thumbs) = thumbs {
+        report["body"]["thumb_pose"] = json!(thumbs);
+        if thumbs != ThumbPose::default() {
+            report["display_body_surface"] = body_surface_report(full);
+        }
+    }
     workspace::write_json(&out.join("placement.json"), &report)?;
     Ok((report, mesh))
 }
@@ -1210,6 +1222,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "body-fit",
             "spacing-mm",
             "arm-deg",
+            "thumb-pose",
             "legs",
             "leg-fraction",
             "skinning",
@@ -1219,6 +1232,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     )?;
     let opts = super::drape_options(args)?;
     let pose = super::drape_pose(args)?;
+    let thumbs = super::parse_thumb_pose(args)?;
     let skinning = super::parse_skinning(args)?;
     let hands = super::parse_hands(args)?;
     let pattern_path = args
@@ -1240,8 +1254,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let body_source::PreparedBody { model, params, .. } =
         body_source::prepare_bound(args, Some(&meas), None)?;
     let rest = model.rest(&params)?;
-    let posed =
-        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
+    let posed = super::pose_fitted_body(&model, &rest, &pose, skinning, thumbs)?;
     let skin = clothing_skin_with_hands(&model, &posed.vertices, hands)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let frames = BodyFrames::new(&model, &posed)?;
@@ -1256,6 +1269,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             display: (&full.vertices, &full.triangles),
             skinning,
             hands,
+            thumbs,
         },
         size,
         &out,
@@ -1284,6 +1298,11 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if let Some(message) = report["body_surface"]["refusal"]["message"].as_str() {
         text.push_str(&format!(
             "  BODY POSE NOT ADMITTED by the drape's surface audit: {message}\n"
+        ));
+    }
+    if let Some(message) = report["display_body_surface"]["refusal"]["message"].as_str() {
+        text.push_str(&format!(
+            "  FULL DISPLAY BODY POSE NOT ADMITTED: {message}\n"
         ));
     }
     if let Some(pairs) = report["cloth_contact"]["crossing_triangle_pairs"].as_u64() {
@@ -2134,6 +2153,7 @@ mod tests {
             display: (&vertices, &triangles),
             skinning: ftx_body::SkinningMode::LinearBlend,
             hands: ftx_body::HandCollider::Palm,
+            thumbs: None,
         };
         let refusal = || {
             Refusal::new(

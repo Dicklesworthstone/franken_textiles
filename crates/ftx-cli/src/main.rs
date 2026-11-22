@@ -40,9 +40,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, FREE, HandCollider, Legs, Pose, SkinningMode, TAPE_FIELDS, TapeFit,
-    Wearer, clothing_skin_with_hands, default_model_path, fit_tape, pose_deltas, skin_mesh,
-    tape_targets,
+    AnnyModel, BodyFrames, FREE, HandCollider, Legs, Pose, PosedBody, RestBody, SkinningMode,
+    TAPE_FIELDS, TapeFit, ThumbPose, Wearer, clothing_skin_with_hands, default_model_path,
+    fit_tape, pose_deltas, pose_deltas_with_thumbs, skin_mesh, tape_targets,
 };
 use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
@@ -64,7 +64,7 @@ const USAGE: &str = "usage:
   ftx validate PATTERN --measurements M [--fit F] [--model PATH] [--body-fit REPORT] [--flat-body] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
             [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N] [--res WIDTHxHEIGHT]
-            [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
+            [--thumb-pose JSON] [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
@@ -72,7 +72,7 @@ const USAGE: &str = "usage:
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--compression F] [--self-contact-mm MM] [--self-mu MU] [--json]
-            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N]
+            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--max-settle-steps N]
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
@@ -83,7 +83,7 @@ const USAGE: &str = "usage:
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
-            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--res 960x540] [--json] (start-state stills and numbers; no drape)
+            [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--res 960x540] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--json]
   ftx render DRAPE_DIR --compare REVISED_DIR --view VIEW --out NEW_DIR [--res 960x540] [--json]
   ftx inspect-pixel ROUND_DIR --view front|side|back|three_quarter|strain_front|strain_back --pixel X,Y [--json]
@@ -965,6 +965,30 @@ fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
     Ok(pose)
 }
 
+fn parse_thumb_pose(args: &Args) -> Result<Option<ThumbPose>, Refusal> {
+    let Some(value) = args.options.get("thumb-pose") else {
+        return Ok(None);
+    };
+    let thumbs: ThumbPose =
+        serde_json::from_str(value).map_err(|err| bad_input(format!("--thumb-pose: {err}")))?;
+    thumbs.validate()?;
+    Ok(Some(thumbs))
+}
+
+fn pose_fitted_body(
+    model: &AnnyModel,
+    rest: &RestBody,
+    pose: &Pose,
+    skinning: SkinningMode,
+    thumbs: Option<ThumbPose>,
+) -> Result<PosedBody, Refusal> {
+    let deltas = match thumbs {
+        Some(thumbs) => pose_deltas_with_thumbs(model, rest, pose, 1.0, &thumbs),
+        None => pose_deltas(model, rest, pose, 1.0),
+    }?;
+    model.pose_with_skinning(rest, &deltas, skinning)
+}
+
 /// Claim a fresh destination before fitting/solving. A failed retry must not leave a previous
 /// successful run at the path the caller will inspect for its new result.
 fn reserve_drape_output(out: &std::path::Path) -> Result<(), Refusal> {
@@ -1040,6 +1064,7 @@ fn cmd_drape_bound(
             "elastic-ea",
             "elastic-hold-steps",
             "arm-deg",
+            "thumb-pose",
             "legs",
             "leg-fraction",
             "skinning",
@@ -1057,6 +1082,7 @@ fn cmd_drape_bound(
     let opts = drape_options(args)?;
     let pair = two_start::options(args, &opts)?;
     let pose = drape_pose(args)?;
+    let thumbs = parse_thumb_pose(args)?;
     let skinning = parse_skinning(args)?;
     let hands = parse_hands(args)?;
     // A drape writes no stills of its own. This is the size of the pictures a refusal leaves, which a
@@ -1103,10 +1129,25 @@ fn cmd_drape_bound(
     } = body_source::prepare_bound(args, Some(&meas), expected_model_sha256)?;
     let rest = model.rest(&params)?;
     let rest_skin = clothing_skin_with_hands(&model, &rest.vertices, hands)?;
-    let posed =
-        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
+    let posed = pose_fitted_body(&model, &rest, &pose, skinning, thumbs)?;
     let skin = clothing_skin_with_hands(&model, &posed.vertices, hands)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
+    let display_body_surface = if thumbs.is_some_and(|pose| pose != ThumbPose::default()) {
+        Some(
+            ftx_drape::collider::audit_surface(
+                &full.vertices,
+                &full.triangles,
+                place::BODY_AUDIT_PAIRS,
+            )
+            .map_err(|refusal| {
+                refusal.repair(
+                    "Check the full displayed body with ftx place, then revise --thumb-pose.",
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     let frames = BodyFrames::new(&model, &posed)?;
     let pattern = Pattern::new(pat);
     let body = DrapeBody {
@@ -1166,6 +1207,7 @@ fn cmd_drape_bound(
                 display: (&full.vertices, &full.triangles),
                 skinning,
                 hands,
+                thumbs,
             },
             &out,
             refusal_size,
@@ -1203,6 +1245,15 @@ fn cmd_drape_bound(
         }
         if skinning != SkinningMode::LinearBlend {
             b.insert("skinning".into(), json!(skinning.as_str()));
+        }
+        if let Some(thumbs) = thumbs {
+            b.insert("thumb_pose".into(), json!(thumbs));
+        }
+        if let Some(audit) = display_body_surface {
+            b.insert(
+                "display_surface_pairs_tested".into(),
+                json!(audit.pairs_tested),
+            );
         }
         o.insert("body".into(), Value::Object(b));
     }
@@ -1327,6 +1378,9 @@ fn cmd_drape_bound(
     }
     if let Some(hand_collider) = report.get("hand_collider") {
         result["hand_collider"] = hand_collider.clone();
+    }
+    if let Some(thumbs) = thumbs {
+        result["thumb_pose"] = json!(thumbs);
     }
     append_drape_constitutive_summary(&report, None, Some(&mut result));
     if let Some(composition) = report.get("outfit") {
@@ -1769,6 +1823,33 @@ mod tests {
                 parse(&["drape", "absent.json", "--arm-deg", angle].map(String::from)).unwrap();
             assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
         }
+    }
+
+    #[test]
+    fn authored_thumb_pose_is_validated_before_reading_inputs() {
+        let absent = parse(&["drape".into()]).unwrap();
+        assert_eq!(parse_thumb_pose(&absent).unwrap(), None);
+        let valid =
+            r#"{"left_rotation_vector_rad":[0.2,0,-0.3],"right_rotation_vector_rad":[0.2,0,0.3]}"#;
+        let args =
+            parse(&["drape", "absent.json", "--thumb-pose", valid].map(String::from)).unwrap();
+        let pose = parse_thumb_pose(&args).unwrap().unwrap();
+        assert_eq!(pose.left_rotation_vector_rad, [0.2, 0.0, -0.3]);
+        assert_eq!(pose.right_rotation_vector_rad, [0.2, 0.0, 0.3]);
+        for input in [
+            r#"{"left_rotation_vector_rad":[0,0,0]}"#,
+            r#"{"left_rotation_vector_rad":[0,0],"right_rotation_vector_rad":[0,0,0]}"#,
+            r#"{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[0,1e999,0]}"#,
+        ] {
+            let args =
+                parse(&["drape", "absent.json", "--thumb-pose", input].map(String::from)).unwrap();
+            let refusal = cmd_drape(&args).unwrap_err();
+            assert!(refusal.message.contains("--thumb-pose"), "{refusal:?}");
+        }
+        let outside = r#"{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[2,2,2]}"#;
+        let args =
+            parse(&["drape", "absent.json", "--thumb-pose", outside].map(String::from)).unwrap();
+        assert_eq!(cmd_drape(&args).unwrap_err().code, RefusalCode::OutOfRange);
     }
 
     #[test]

@@ -59,6 +59,13 @@ linear blend skinning (`lbs`, omitted from default JSON), and fixed sewing/gravi
 Opt-in `--skinning dqs` switches posing to deterministic Dual-Quaternion Skinning (also accepted by
 `ftx body`, `ftx qualify`, and `ftx place`), recording `"skinning": "dqs"` in the report when non-default.
 Leg posture is independent of `--arm-deg`; fitting and nappy calibration retain their reference pose.
+`ftx place`, `ftx drape` and `ftx round --sim|--stills` also accept `--thumb-pose JSON`,
+for example `'{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[0,0,0]}'`.
+Each vector is expressed in that thumb root's source-local axes, with magnitude at most π radians.
+This is an authored rotation. The tape fit stays in its reference pose. For a nonzero thumb vector,
+the solver audits the full displayed body surface before advancing, including hands omitted from a
+collision proxy. `ftx place` reports this audit as `display_body_surface` alongside its start
+diagnostics. The chosen vectors appear under `body.thumb_pose` in the placement or simulation report.
 Extra settling continues the same sewn cloth at the original time step until the shared numerical
 quiet window or the declared cap. Reports and animations retain all accepted steps and actual
 duration, including both starts when requested. Invalid settings refuse before file I/O. History
