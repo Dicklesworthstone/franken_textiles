@@ -464,6 +464,31 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             if let Some(hands) = sim["hand_collider"].as_str() {
                 let _ = write!(out, " Hand collider: {}.", xml_escape(hands));
             }
+            if let Some(thumbs) = sim["body"]["thumb_pose"].as_object() {
+                let fmt_vec = |key: &str| {
+                    thumbs
+                        .get(key)
+                        .and_then(Value::as_array)
+                        .filter(|a| a.len() == 3)
+                        .and_then(|a| {
+                            a.iter()
+                                .map(|v| v.as_f64().filter(|x| x.is_finite()).map(|x| fnum(x, 4)))
+                                .collect::<Option<Vec<_>>>()
+                        })
+                        .map(|vs| format!("[{}]", vs.join(", ")))
+                };
+                if let (Some(l), Some(r)) = (
+                    fmt_vec("left_rotation_vector_rad"),
+                    fmt_vec("right_rotation_vector_rad"),
+                ) {
+                    let _ = write!(out, " Thumb pose (rad): L {l}, R {r}");
+                    if let Some(pairs) = sim["body"]["authored_hand_surface_pairs_tested"].as_u64()
+                    {
+                        let _ = write!(out, " ({pairs} hand-surface pairs audited)");
+                    }
+                    out.push('.');
+                }
+            }
             if let Some(scheme) = sim["membrane_history"]["integration"]
                 .as_str()
                 .filter(|s| *s != "backward_euler")
@@ -766,6 +791,7 @@ mod tests {
         assert!(!default_html.contains("Leg posture:"));
         assert!(!default_html.contains("Skinning:"));
         assert!(!default_html.contains("Hand collider:"));
+        assert!(!default_html.contains("Thumb pose (rad):"));
         assert!(!default_html.contains("Relaxation integration:"));
         assert!(!default_html.contains("Membrane damage:"));
         assert!(!default_html.contains("Newton solver:"));
@@ -804,6 +830,13 @@ mod tests {
             "sim": {
                 "settled": true,
                 "self_contact": {"enabled": true},
+                "body": {
+                    "thumb_pose": {
+                        "left_rotation_vector_rad": [0.0, 0.0, 0.1745],
+                        "right_rotation_vector_rad": [0.0, 0.0, -0.1745]
+                    },
+                    "authored_hand_surface_pairs_tested": 4200
+                },
                 "hand_collider": "knuckle",
                 "numerical": {
                     "settling": {"steps": 4, "max_steps": 12, "stop_reason": "quiet_window"},
@@ -829,6 +862,9 @@ mod tests {
         });
         let ext_html = render(Path::new("."), &[extended]).unwrap();
         assert!(ext_html.contains("Hand collider: knuckle."));
+        assert!(ext_html.contains(
+            "Thumb pose (rad): L [0, 0, 0.1745], R [0, 0, -0.1745] (4200 hand-surface pairs audited)."
+        ));
         assert!(ext_html.contains("Extra settling: 4/12 steps (quiet_window)."));
         assert!(
             ext_html
@@ -862,6 +898,12 @@ mod tests {
             "sim": {
                 "settled": true,
                 "self_contact": {"enabled": true},
+                "body": {
+                    "thumb_pose": {
+                        "left_rotation_vector_rad": [0.1, 0.0, 0.0],
+                        "right_rotation_vector_rad": [-0.1, 0.0, 0.0]
+                    }
+                },
                 "static_equilibrium": {
                     "status": "refused",
                     "refusal": {"message": "history <law> refused"}
@@ -871,6 +913,8 @@ mod tests {
             }
         });
         let ref_html = render(Path::new("."), &[refused_eq]).unwrap();
+        assert!(ref_html.contains("Thumb pose (rad): L [0.1, 0, 0], R [-0.1, 0, 0]."));
+        assert!(!ref_html.contains("hand-surface pairs audited"));
         assert!(ref_html.contains(
             "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: refused — history &lt;law&gt; refused. Dynamic trajectory and flags remain authoritative.</p>"
         ));
