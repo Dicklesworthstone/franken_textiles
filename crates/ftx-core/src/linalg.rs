@@ -23,8 +23,34 @@ pub fn lstsq<const N: usize>(a: &[[f64; N]], b: &[f64]) -> [f64; N] {
     if m == 0 || N == 0 {
         return [0.0; N];
     }
-    // u holds the columns of A, rotated in place until they are mutually orthogonal (u = UΣ).
-    let mut u: [Vec<f64>; N] = std::array::from_fn(|j| a.iter().map(|row| row[j]).collect());
+    // Scale extreme-magnitude systems so squared column norms and `alpha * beta` neither overflow
+    // to infinity (silently skipping Jacobi rotations) nor underflow to zero. Normal-magnitude
+    // systems stay at scale 1.0 to preserve bit-identical trajectories.
+    let a_max = a
+        .iter()
+        .flatten()
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    let a_scale = if a_max.is_finite() && a_max > 0.0 && !(1e-60..=1e60).contains(&a_max) {
+        a_max
+    } else {
+        1.0
+    };
+    let b_max = b.iter().copied().map(f64::abs).fold(0.0_f64, f64::max);
+    let b_scale = if b_max.is_finite() && b_max > 0.0 && !(1e-60..=1e60).contains(&b_max) {
+        b_max
+    } else {
+        1.0
+    };
+    // u holds the columns of A (scaled by 1/a_scale), rotated in place until mutually orthogonal (u = UΣ).
+    let mut u: [Vec<f64>; N] = std::array::from_fn(|j| {
+        if a_scale == 1.0 {
+            a.iter().map(|row| row[j]).collect()
+        } else {
+            a.iter().map(|row| row[j] / a_scale).collect()
+        }
+    });
     let mut v = [[0.0; N]; N];
     for (i, row) in v.iter_mut().enumerate() {
         row[i] = 1.0;
@@ -39,7 +65,7 @@ pub fn lstsq<const N: usize>(a: &[[f64; N]], b: &[f64]) -> [f64; N] {
                     beta += u[q][i] * u[q][i];
                     gamma += u[p][i] * u[q][i];
                 }
-                if gamma == 0.0 || gamma.abs() <= f64::EPSILON * (alpha * beta).sqrt() {
+                if gamma == 0.0 || gamma.abs() <= f64::EPSILON * (alpha.sqrt() * beta.sqrt()) {
                     continue;
                 }
                 rotated = true;
@@ -71,11 +97,25 @@ pub fn lstsq<const N: usize>(a: &[[f64; N]], b: &[f64]) -> [f64; N] {
         if sigma[j] <= cutoff {
             continue;
         }
-        // x += V[:, j] · (u_j · b) / σ_j²  (u_j = σ_j · U[:, j]).
-        let proj: f64 =
-            u[j].iter().zip(b).map(|(ui, bi)| ui * bi).sum::<f64>() / (sigma[j] * sigma[j]);
+        // x += V[:, j] · (u_j · b_scaled) / σ_j²  (u_j = σ_j · U[:, j]).
+        let dot: f64 = if b_scale == 1.0 {
+            u[j].iter().zip(b).map(|(ui, bi)| ui * bi).sum()
+        } else {
+            u[j].iter().zip(b).map(|(ui, bi)| ui * (bi / b_scale)).sum()
+        };
+        let proj = dot / (sigma[j] * sigma[j]);
         for (k, xk) in x.iter_mut().enumerate() {
             *xk += v[k][j] * proj;
+        }
+    }
+    if a_scale != 1.0 || b_scale != 1.0 {
+        let ratio = b_scale / a_scale;
+        for xk in &mut x {
+            if ratio.is_finite() && ratio > 0.0 {
+                *xk *= ratio;
+            } else {
+                *xk = (*xk * b_scale) / a_scale;
+            }
         }
     }
     x
@@ -135,5 +175,22 @@ mod tests {
     fn zero_matrix_gives_zero() {
         assert_eq!(lstsq(&[[0.0, 0.0], [0.0, 0.0]], &[1.0, 2.0]), [0.0, 0.0]);
         assert_eq!(lstsq::<3>(&[], &[]), [0.0; 3]);
+    }
+
+    #[test]
+    fn extreme_scales_do_not_skip_jacobi_rotations_or_underflow() {
+        for scale in [1e-200, 1e-80, 1e80, 1e200] {
+            let a = [
+                [1.0 * scale, 1.0 * scale],
+                [1.0 * scale, 2.0 * scale],
+                [2.0 * scale, 3.0 * scale],
+            ];
+            let b = [3.0 * scale, 5.0 * scale, 8.0 * scale];
+            let x = lstsq(&a, &b);
+            assert!(
+                (x[0] - 1.0).abs() < 1e-13 && (x[1] - 2.0).abs() < 1e-13,
+                "scale={scale:e}: got {x:?}"
+            );
+        }
     }
 }
