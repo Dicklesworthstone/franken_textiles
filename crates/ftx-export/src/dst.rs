@@ -13,6 +13,10 @@ use crate::text::{ascii_text, safe_name};
 
 const STEPS: [i64; 5] = [81, 27, 9, 3, 1];
 const MAX_STEPS: i64 = 121;
+/// Maximum absolute coordinate (0.1 mm units) representable in DST's 5-digit `+X`/`-X`/`+Y`/`-Y`/`AX`/`AY` fields.
+const MAX_COORD_STEPS: i64 = 99_999;
+const MAX_STOPS: usize = 999;
+const MAX_RECORDS: usize = 9_999_999;
 const JUMP: u8 = 0x80;
 const STOP: u8 = 0xC0;
 /// The END record.
@@ -166,14 +170,46 @@ pub fn write_dst(label: &str, blocks: &[Block]) -> Result<(Vec<u8>, DstInfo), Re
     for blk in blocks {
         match blk {
             Block::Stop => {
+                if stops >= MAX_STOPS {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("DST stop count exceeds 3-digit header limit ({MAX_STOPS})"),
+                    ));
+                }
                 recs.push(dst_record(0, 0, STOP)?);
                 stops += 1;
             }
             Block::Run(pts) => {
-                let steps: Vec<(i64, i64)> = pts
-                    .iter()
-                    .map(|p| (round_i(p.x / 0.1), round_i(p.y / 0.1)))
-                    .collect();
+                if pts.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::DegenerateGeometry,
+                        "DST run must contain at least one point",
+                    ));
+                }
+                let mut steps = Vec::with_capacity(pts.len());
+                for p in pts {
+                    Refusal::finite("DST point x", p.x)?;
+                    Refusal::finite("DST point y", p.y)?;
+                    let (sx, sy) = (p.x / 0.1, p.y / 0.1);
+                    let limit = MAX_COORD_STEPS as f64 + 0.5;
+                    let (ix, iy) = if sx.abs() <= limit && sy.abs() <= limit {
+                        (round_i(sx), round_i(sy))
+                    } else {
+                        (MAX_COORD_STEPS + 1, MAX_COORD_STEPS + 1)
+                    };
+                    if ix.abs() > MAX_COORD_STEPS || iy.abs() > MAX_COORD_STEPS {
+                        return Err(Refusal::new(
+                            RefusalCode::OutOfRange,
+                            format!(
+                                "DST coordinate ({}, {}) mm exceeds 5-digit header limit (±{:.1} mm)",
+                                p.x,
+                                p.y,
+                                MAX_COORD_STEPS as f64 * 0.1
+                            ),
+                        ));
+                    }
+                    steps.push((ix, iy));
+                }
                 sewn.push(0.0);
                 go(steps[0], JUMP, &mut pos, &mut recs, &mut sewn)?;
                 recs.push(dst_record(0, 0, 0)?);
@@ -197,6 +233,15 @@ pub fn write_dst(label: &str, blocks: &[Block]) -> Result<(Vec<u8>, DstInfo), Re
                     go(end, 0, &mut pos, &mut recs, &mut sewn)?;
                 }
             }
+        }
+        if recs.len() > MAX_RECORDS {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "DST record count {} exceeds 7-digit header limit ({MAX_RECORDS})",
+                    recs.len()
+                ),
+            ));
         }
     }
     let name: String = ascii_text(label).chars().take(16).collect();
@@ -291,6 +336,9 @@ pub fn read_dst(data: &[u8]) -> DstRead {
 
 /// Points evenly spaced along a polyline at most `step` mm apart (closed lines are closed first).
 fn resample(pts: &[Vec2], step: f64, closed: bool) -> Vec<Vec2> {
+    if pts.is_empty() {
+        return Vec::new();
+    }
     let mut p = pts.to_vec();
     if closed && (p[0] - p[p.len() - 1]).norm() > 1e-6 {
         p.push(p[0]);
@@ -581,5 +629,44 @@ mod tests {
                 && err.message.contains("front_R"),
             "unexpected refusal: {err:?}"
         );
+    }
+
+    #[test]
+    fn write_dst_refuses_empty_run_non_finite_and_out_of_header_coordinates() {
+        let empty = write_dst("EMPTY", &[Block::Run(vec![])]).unwrap_err();
+        assert_eq!(empty.code, RefusalCode::DegenerateGeometry);
+
+        for bad in [
+            Vec2::new(f64::NAN, 0.0),
+            Vec2::new(0.0, f64::INFINITY),
+            Vec2::new(f64::NEG_INFINITY, 0.0),
+        ] {
+            let err = write_dst("BAD", &[Block::Run(vec![bad])]).unwrap_err();
+            assert_eq!(err.code, RefusalCode::NonFinite, "bad={bad:?}: {err:?}");
+        }
+
+        for huge in [
+            Vec2::new(10_000.0, 0.0),
+            Vec2::new(0.0, -10_000.0),
+            Vec2::new(1e12, 0.0),
+        ] {
+            let err = write_dst("HUGE", &[Block::Run(vec![huge])]).unwrap_err();
+            assert_eq!(err.code, RefusalCode::OutOfRange, "huge={huge:?}: {err:?}");
+        }
+
+        // Valid small run still writes and round-trips cleanly.
+        let (bytes, info) = write_dst(
+            "OK",
+            &[Block::Run(vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(20.0, 0.0),
+                Vec2::new(20.0, 15.0),
+            ])],
+        )
+        .unwrap();
+        let parsed = read_dst(&bytes);
+        assert!(parsed.ended);
+        assert_eq!(parsed.moves.len(), info.records);
+        assert_eq!(info.extent_mm, [20.0, 15.0]);
     }
 }
