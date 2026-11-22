@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
-import { gunzipSync, gzipSync } from "node:zlib";
+import { gunzipSync } from "node:zlib";
 import { chromium } from "playwright-core";
 import { COMMON_WORLD_SCALE_M_PER_UNIT, buildCompareMetrics, parsePackedDrapeBuffer } from "../public/labs/sundress-compare.mjs";
 
@@ -101,26 +101,54 @@ test("Compare manifest proves identical fixed pattern & solver config, swap symm
   assert.equal(withRefusal.deltas, null);
 });
 
-test("Comparison recovers from failed geometry by changing forms or retrying, and downloads the fixed cut at full scale", async () => {
+test("Comparison refuses swapped replay files, recovers on retry, and downloads the fixed cut at full scale", async () => {
   const page = await browser.newPage({
     reducedMotion: "reduce",
     userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
   });
   try {
-    let requests = 0;
-    const { buffer } = packedFixture("sundress-compare/slender");
-    new DataView(buffer).setUint32(12, 0, true);
-    const corrupt = gzipSync(new Uint8Array(buffer));
-    await page.route("**/exhibits/sundress-compare/slender.gz", route => {
-      requests++;
-      if (requests === 1) return route.fulfill({ status: 503 });
-      if (requests === 2) return route.fulfill({ status: 200, body: corrupt });
+    const manifestPath = "/exhibits/sundress-compare/compare.json";
+    const reference = "/exhibits/sundress/dress";
+    const petite = "/exhibits/sundress-compare/slender";
+    const assets = [manifestPath, `${reference}.json`, `${reference}.gz`, `${petite}.json`, `${petite}.gz`];
+    const bytes = path => readFileSync(new URL(`../public${path}`, import.meta.url));
+    const requested = new Map();
+    await page.addInitScript(path => {
+      const fetch = window.fetch;
+      window.replayCacheModes = [];
+      window.fetch = function (input, init) {
+        if (typeof input === "string" && input.split("?")[0] === path) {
+          window.replayCacheModes.push(init?.cache ?? "default");
+        }
+        return fetch.call(this, input, init);
+      };
+    }, `${petite}.gz`);
+    page.on("request", request => {
+      const url = new URL(request.url());
+      if (assets.includes(url.pathname)) requested.set(url.pathname, url.searchParams.get("v"));
+    });
+    let replayResponse = "unavailable";
+    const swapped = [];
+    await page.route(url => url.pathname === `${petite}.gz`, route => {
+      if (replayResponse === "unavailable") return route.fulfill({ status: 503 });
+      if (replayResponse === "wrong replay") {
+        swapped.push("geometry");
+        return route.fulfill({ status: 200, body: bytes(`${reference}.gz`) });
+      }
+      return route.continue();
+    });
+    await page.route(url => url.pathname === `${petite}.json`, route => {
+      if (replayResponse === "wrong layout") {
+        swapped.push("layout");
+        return route.fulfill({ status: 200, body: bytes(`${reference}.json`) });
+      }
       return route.continue();
     });
     await page.goto(new URL("/wardrobe/sundress/compare/", site).href, { waitUntil: "domcontentloaded" });
     const right = page.locator('[data-side="right"]');
     const loaded = right.locator('[data-drape-loaded="true"]');
     const error = right.getByRole("alert").filter({ hasText: /could not fetch native drape/i });
+    const retry = right.getByRole("button", { name: "Retry 3D view" });
     await error.waitFor();
     assert.equal(await right.locator("canvas").isVisible(), false);
 
@@ -128,14 +156,24 @@ test("Comparison recovers from failed geometry by changing forms or retrying, an
     await loaded.waitFor();
     assert.equal(await right.getByRole("alert").count(), 0);
 
+    replayResponse = "wrong replay";
     await page.locator('button[data-pick-right="slender"]').click();
-    await right.getByRole("alert").filter({ hasText: /invalid packed drape/i }).waitFor();
+    await error.waitFor();
     assert.equal(await right.locator("canvas").isVisible(), false);
-    await right.getByRole("button", { name: "Retry 3D view" }).click();
+    replayResponse = "wrong layout";
+    await retry.click();
+    await error.waitFor();
+    assert.equal(await right.locator("canvas").isVisible(), false);
+    replayResponse = "correct";
+    await retry.click();
     await loaded.waitFor();
-    assert.equal(requests, 3);
     assert.equal(await right.locator("canvas").count(), 1);
     assert.equal(await right.getByRole("alert").count(), 0);
+    assert.deepEqual(swapped, ["geometry", "layout"]);
+    assert.deepEqual(await page.evaluate(() => window.replayCacheModes), ["default", "default", "reload", "reload"]);
+    for (const path of assets) {
+      assert.equal(requested.get(path), `sha256-${createHash("sha256").update(bytes(path)).digest("base64")}`, path);
+    }
 
     const download = page.getByRole("link", { name: /full-size sewing pattern PDF/i });
     const response = await page.request.get(new URL(await download.getAttribute("href"), site).href);

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { publishedGeometry } from "../replayAsset";
 import { COMMON_WORLD_SCALE_M_PER_UNIT, parsePackedDrapeBuffer } from "../../public/labs/sundress-compare.mjs";
 
 export type CompareCameraPreset = "Full length" | "Hem elevation" | "Waist profile" | "Back";
@@ -34,17 +35,18 @@ async function gunzipBytes(buf: ArrayBuffer): Promise<ArrayBuffer> {
   throw new Error("Browser lacks DecompressionStream for gzip drape geometry.");
 }
 
-function loadPackedDrape(sourceBase: string): Promise<ParsedMesh> {
+function loadPackedDrape(sourceBase: string, retry: boolean): Promise<ParsedMesh> {
   let pending = packedCache.get(sourceBase);
   if (!pending) {
     pending = (async () => {
+      // The HTTP cache can retain a response even when the integrity check rejects it.
+      const cache = retry ? "reload" : undefined;
       const [metaRes, gzRes] = await Promise.all([
-        fetch(`${sourceBase}.json`),
-        fetch(`${sourceBase}.gz`),
-      ]);
-      if (!metaRes.ok || !gzRes.ok) {
-        throw new Error(`Could not fetch native drape ${sourceBase}`);
-      }
+        publishedGeometry(`${sourceBase}.json`, undefined, cache),
+        publishedGeometry(`${sourceBase}.gz`, undefined, cache),
+      ]).catch(() => {
+        throw new Error("Could not fetch native drape. A replay file is unavailable or differs from the published copy.");
+      });
       const [meta, gzBuf] = await Promise.all([metaRes.json(), gzRes.arrayBuffer()]);
       const raw = await gunzipBytes(gzBuf);
       return parsePackedDrapeBuffer(meta, raw);
@@ -138,7 +140,7 @@ export default function SundressCompareScene({
 
     let rafId = 0;
     // Load native packed drape at exact COMMON_WORLD_SCALE_M_PER_UNIT (1.0)
-    loadPackedDrape(sourceBase)
+    loadPackedDrape(sourceBase, attempt > 0)
       .then(parsed => {
         if (!alive) return;
         const bodyGeom = new THREE.BufferGeometry();

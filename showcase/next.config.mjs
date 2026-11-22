@@ -14,7 +14,7 @@ const revisions = Object.fromEntries(
     }),
 );
 
-// These older studies ship coordinates separately from the report imported by the page.
+// These studies fetch coordinates separately from the report shown on the page.
 // Bind both to the same static build, including hosts that decode a precompressed body in transit.
 const geometryAssets = {};
 const sri = bytes => "sha256-" + createHash("sha256").update(bytes).digest("base64");
@@ -22,6 +22,8 @@ for (const [folder, files, allowDecoded] of [
   ["atelier", /(?:\.gz|-mesh\.json)$/, true],
   ["exhibits", /^(?:bolero|trousers)\.(?:json|bin)$/, false],
   ["exhibits/trouser-study", /(?:\.gz|-topology\.json)$/, false],
+  ["exhibits/sundress", /^dress\.(?:json|gz)$/, false],
+  ["exhibits/sundress-compare", /^(?:compare\.json|slender\.(?:json|gz))$/, false],
   ["fitted-bodies", /\.(?:gz|json)$/, true],
 ]) {
   const dir = new URL("./public/" + folder + "/", import.meta.url);

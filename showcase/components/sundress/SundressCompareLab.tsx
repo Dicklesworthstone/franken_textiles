@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import SiteHeader from "../site/SiteHeader";
 import SiteFooter from "../site/SiteFooter";
 import Crumbs from "../site/Crumbs";
+import { publishedGeometry } from "../replayAsset";
 import { COMMON_WORLD_SCALE_M_PER_UNIT, buildCompareMetrics } from "../../public/labs/sundress-compare.mjs";
 import { COMPARE_CAMERAS, type CompareCameraPreset, type SharedCameraState } from "./SundressCompareScene";
 import "./sundress-compare.css";
@@ -333,17 +334,16 @@ export default function SundressCompareLab() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/exhibits/sundress-compare/compare.json", { signal: controller.signal })
-      .then(r => {
-        if (!r.ok) throw new Error(`Could not load comparison manifest (${r.status}).`);
-        return r.json() as Promise<CompareManifest>;
-      })
-      .then(data => {
+    async function loadManifest() {
+      try {
+        const response = await publishedGeometry("/exhibits/sundress-compare/compare.json", controller.signal, "no-cache");
+        const data: CompareManifest = await response.json();
         if (!controller.signal.aborted) setManifest(data);
-      })
-      .catch(err => {
-        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
-      });
+      } catch {
+        if (!controller.signal.aborted) setError("Could not load the published comparison data.");
+      }
+    }
+    void loadManifest();
     return () => controller.abort();
   }, []);
 
