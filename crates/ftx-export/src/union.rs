@@ -153,8 +153,11 @@ impl Indexed {
     }
 }
 
-/// Without repeated points; `None` without area.
+/// Without repeated points; `None` without area or with non-finite coordinates.
 fn normalize(poly: &[Vec2]) -> Option<Vec<Vec2>> {
+    if poly.iter().any(|p| !p.is_finite()) {
+        return None;
+    }
     let mut ring: Vec<Vec2> = Vec::with_capacity(poly.len());
     for &p in poly {
         if ring.last() != Some(&p) {
@@ -169,9 +172,12 @@ fn normalize(poly: &[Vec2]) -> Option<Vec<Vec2>> {
     }
     // no area: every point on the line through the first two distinct ones
     let (o, d) = (ring[0], ring[1] - ring[0]);
-    if !ring
-        .iter()
-        .any(|&p| cross(d, p - o).abs() > 1e-12 * d.norm().max(1.0))
+    let d_norm = d.norm();
+    if !d_norm.is_finite()
+        || !ring.iter().any(|&p| {
+            let c = cross(d, p - o).abs();
+            c.is_finite() && c > 1e-12 * d_norm.max(1.0)
+        })
     {
         return None;
     }
@@ -198,6 +204,15 @@ pub fn union_exterior(polys: &[Vec<Vec2>]) -> Option<Vec<Vec2>> {
     let mean = segs.iter().map(|s| (s.b - s.a).norm()).sum::<f64>() / segs.len() as f64;
     let extent = (hi.x - lo.x).max(hi.y - lo.y);
     let cell = (2.0 * mean).max(extent / 1024.0).max(1e-6);
+    if !lo.is_finite()
+        || !hi.is_finite()
+        || !extent.is_finite()
+        || !mean.is_finite()
+        || !cell.is_finite()
+        || cell <= 0.0
+    {
+        return None;
+    }
 
     // split points per segment: (parameter, point)
     let mut splits: Vec<Vec<(f64, Vec2)>> =
@@ -245,8 +260,10 @@ pub fn union_exterior(polys: &[Vec<Vec2>]) -> Option<Vec<Vec2>> {
                     let ti = d1 / (d1 - d2);
                     let tj = d3 / (d3 - d4);
                     let p = si.a + di * ti;
-                    splits[i].push((ti, p));
-                    splits[j].push((tj, p));
+                    if ti.is_finite() && tj.is_finite() && p.is_finite() {
+                        splits[i].push((ti, p));
+                        splits[j].push((tj, p));
+                    }
                     continue;
                 }
                 for p in [sj.a, sj.b] {
@@ -293,22 +310,22 @@ pub fn union_exterior(polys: &[Vec<Vec2>]) -> Option<Vec<Vec2>> {
     let inside = |p: Vec2| pgrid.at(p).iter().any(|&i| indexed[i].contains(p));
     let mut boundary: Vec<(usize, usize)> = pieces
         .into_iter()
-        .filter(|&(a, b)| {
+        .filter_map(|(a, b)| {
             let (pa, pb) = (nodes[a], nodes[b]);
             let d = pb - pa;
             let len = d.norm();
+            if !len.is_finite() || len == 0.0 {
+                return None;
+            }
             let m = Vec2::new(0.5 * (pa.x + pb.x), 0.5 * (pa.y + pb.y));
             let r = Vec2::new(d.y / len, -d.x / len) * PROBE.min(0.25 * len);
-            inside(m + r) != inside(m - r)
-        })
-        .map(|(a, b)| {
+            let left_in = inside(m - r);
+            let right_in = inside(m + r);
+            if left_in == right_in {
+                return None;
+            }
             // oriented with the union on its left
-            let (pa, pb) = (nodes[a], nodes[b]);
-            let d = pb - pa;
-            let len = d.norm();
-            let m = Vec2::new(0.5 * (pa.x + pb.x), 0.5 * (pa.y + pb.y));
-            let r = Vec2::new(d.y / len, -d.x / len) * PROBE.min(0.25 * len);
-            if inside(m - r) { (a, b) } else { (b, a) }
+            Some(if left_in { (a, b) } else { (b, a) })
         })
         .collect();
     boundary.sort_unstable();
@@ -477,5 +494,28 @@ mod tests {
         let u = union_exterior(&[ring]).unwrap();
         // the 3 × 3 square less its top-right unit square; the overlap (winding 2) counts once
         assert!((signed_area(&u) - 8.0).abs() < 1e-12, "{u:?}");
+    }
+
+    #[test]
+    fn non_finite_or_overflowing_polygons_return_none() {
+        let nan_poly = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(f64::NAN, 1.0),
+        ];
+        let inf_poly = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(f64::INFINITY, 0.0),
+            Vec2::new(0.0, 1.0),
+        ];
+        let huge_poly = vec![
+            Vec2::new(-1e308, 0.0),
+            Vec2::new(1e308, 0.0),
+            Vec2::new(0.0, 1e308),
+        ];
+        assert!(union_exterior(&[nan_poly]).is_none());
+        assert!(union_exterior(&[inf_poly]).is_none());
+        assert!(union_exterior(&[huge_poly]).is_none());
     }
 }
