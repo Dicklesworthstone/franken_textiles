@@ -34,7 +34,13 @@ export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { voi
   if (!revisions[`${id}-1080.mp4`]) return () => {};
   const small = filmFile(id+"-1080");
   let pending: number | undefined;
+  let onMeta: (() => void) | undefined;
+  let onSeeked: (() => void) | undefined;
   let wasPlaying = !el.paused;
+  function clearStepDownListeners() {
+    if (onMeta) { el.removeEventListener("loadedmetadata", onMeta); onMeta = undefined; }
+    if (onSeeked) { el.removeEventListener("seeked", onSeeked); onSeeked = undefined; }
+  }
   function onPlay() { wasPlaying = true; }
   function onPause() { if (!el.error) wasPlaying = false; }
   function stepDown() {
@@ -45,11 +51,39 @@ export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { voi
     pending = window.setTimeout(() => {
       pending = undefined;
       if (el.getAttribute("src") !== source) return;
+      const shouldResume = wasPlaying;
       uhd = Promise.resolve(false);
       try { sessionStorage.setItem(REMEMBERED, "1"); } catch {}
-      el.src = small;
-      if (at > 0) el.currentTime = at;
-      if (wasPlaying) resume();
+      clearStepDownListeners();
+      if (at > 0) {
+        // Setting currentTime right after el.src=small seeks the outgoing resource before the microtask load
+        // resets playback to 0. Wait for the 1080p metadata, seek cleanly, then resume without flashing t=0.
+        const prevPreload = el.getAttribute("preload");
+        el.preload = "auto";
+        onMeta = () => {
+          onMeta = undefined;
+          if (prevPreload === null) el.removeAttribute("preload");
+          else el.setAttribute("preload", prevPreload);
+          if (el.getAttribute("src") !== small) return;
+          el.currentTime = Number.isFinite(el.duration) ? Math.min(at, el.duration) : at;
+          if (!shouldResume) return;
+          if (el.seeking) {
+            onSeeked = () => {
+              onSeeked = undefined;
+              if (el.getAttribute("src") === small) resume();
+            };
+            el.addEventListener("seeked", onSeeked, { once: true });
+          } else {
+            resume();
+          }
+        };
+        el.addEventListener("loadedmetadata", onMeta, { once: true });
+        el.src = small;
+        el.load();
+      } else {
+        el.src = small;
+        if (shouldResume) resume();
+      }
     });
   }
   // Dropped frames are judged over windows of at least 120 frames (two seconds), and only two bad windows in a
@@ -71,6 +105,7 @@ export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { voi
   el.addEventListener("error", stepDown); el.addEventListener("timeupdate", onProgress);
   return () => {
     window.clearTimeout(pending);
+    clearStepDownListeners();
     el.removeEventListener("play", onPlay); el.removeEventListener("pause", onPause);
     el.removeEventListener("error", stepDown); el.removeEventListener("timeupdate", onProgress);
   };
