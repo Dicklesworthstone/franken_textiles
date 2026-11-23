@@ -7,7 +7,7 @@
 //                    { type: "move", id, left, right, seconds }          (degrees from vertical, cloth time)
 //   worker -> page   { type: "progress", line }
 //                    { type: "ready", summary, seconds, cloth, triangles, flat, display, displayTriangles,
-//                      raised, frames, shoulders }
+//                      raised, frames, shoulders, form }
 //                    { type: "posed", left, right, display }
 //                    { type: "moved", id, left, right, samples, display, milliseconds }
 //                    { type: "refused", id, message }                    (the session is where it was)
@@ -52,9 +52,10 @@ async function start({ body, pattern, fit, settings }) {
   // The sewing and draping frames of the opening fold-up, for a short replay.
   const all = session.replay(), stride = summary.cloth_vertices * 3;
   const frames = all.slice((summary.frames.fold + summary.frames.zip - 1) * stride);
-  const frames_ = JSON.parse(header).frames;
+  const baked = JSON.parse(header);
   postMessage({ type: "ready", summary, seconds, cloth, triangles, flat, display, displayTriangles, raised, frames,
-    shoulders: { left: frames_.arm_L.origin, right: frames_.arm_R.origin } },
+    shoulders: { left: baked.frames.arm_L.origin, right: baked.frames.arm_R.origin },
+    form: { floorMm: baked.floor_mm, cutAboveFloorMm: baked.trunk_cut_above_floor_mm ?? null } },
     [cloth.buffer, triangles.buffer, flat.buffer, display.buffer, displayTriangles.buffer, frames.buffer, ...raised.map(a => a.buffer)]);
 }
 
