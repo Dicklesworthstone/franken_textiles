@@ -76,8 +76,33 @@ pub(super) fn on_body(m: &dyn DraftBody, style: Option<&Value>) -> Result<(Value
     let rho_b = slant * r_base / (r_base - r_top);
     let rho_t = rho_b - slant;
     let phi = 2.0 * PI * r_base / rho_b;
+    let mid = 0.5 * (rho_b + rho_t);
+    if ![
+        d_head,
+        r_base,
+        r_top,
+        height,
+        slant,
+        rho_b,
+        rho_t,
+        phi,
+        mid,
+        -mid - 0.3 * slant,
+        -mid + 0.3 * slant,
+        round(rho_b, 3),
+        round(2.0 * PI * r_base, 1),
+        round(2.0 * PI * r_top, 1),
+    ]
+    .iter()
+    .all(|v| v.is_finite())
+    {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "fez dimensions overflow finite geometry",
+        ));
+    }
     let n: usize = if phi <= PI { 2 } else { 4 };
-    if !phi.is_finite() || phi <= 0.0 || phi > 2.0 * PI * 0.9 {
+    if phi <= 0.0 || phi > 2.0 * PI * 0.9 {
         return Err(out_of_range(
             "taper too strong for a one-piece crown: raise top_frac or the height",
         ));
@@ -125,7 +150,6 @@ pub(super) fn on_body(m: &dyn DraftBody, style: Option<&Value>) -> Result<(Value
         }
     }
     c.line("back_l", "t0", "b0");
-    let mid = 0.5 * (rho_b + rho_t);
     c.set(
         "grain",
         json!([[0.0, -mid - 0.3 * slant], [0.0, -mid + 0.3 * slant]]),

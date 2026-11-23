@@ -129,8 +129,19 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
         ));
     }
     let y_hip = m.landmark_h("torso", "hip")? - m.landmark_h("torso", "waist")?;
-    let y_cr = -(m.get("body_rise")? + sf(&s, "rise_ease")? + nappy_mm);
-    let ext_f = sf(&s, "front_ext_frac")? * seat;
+    let rise_depth = positive(
+        "crotch rise depth",
+        m.get("body_rise")? + sf(&s, "rise_ease")? + nappy_mm,
+    )?;
+    let y_cr = -rise_depth;
+    let front_ext_frac = sf(&s, "front_ext_frac")?;
+    if !front_ext_frac.is_finite() || front_ext_frac < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("front_ext_frac must be finite and >= 0, got {front_ext_frac}"),
+        ));
+    }
+    let ext_f = front_ext_frac * seat;
     let cuff_level = s["cuff_level"]
         .as_str()
         .ok_or_else(|| {
@@ -151,6 +162,12 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
     let cuff_h = positive("cuff_height", sf(&s, "cuff_height")?)?;
     let z_cuff_top = m.landmark_h("torso", &cuff_level)? + cuff_h / 2.0;
     let y_hem = (z_cuff_top - m.landmark_h("torso", "waist")?) - sf(&s, "blouse_drop")?;
+    if !y_hem.is_finite() || y_hem >= y_cr {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("trouser hem y={y_hem} must be finite and below crotch y={y_cr}"),
+        ));
+    }
     let leg_origin = m.frame_origin("leg_R")?;
     let h_waist = m.landmark_h("leg_R", "waist")?;
     let mut r_wrap = f64::NEG_INFINITY;
@@ -244,7 +261,10 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
     };
 
     let fp = front_piece()?;
-    let target_crotch = m.get("total_crotch_length")? + sf(&s, "crotch_ease")? + nappy_mm;
+    let target_crotch = positive(
+        "crotch target",
+        m.get("total_crotch_length")? + sf(&s, "crotch_ease")? + nappy_mm,
+    )?;
     let crotch_total = |ext_b: f64| -> Result<f64, Refusal> {
         let pat = one(vec![fp.clone(), back_piece(ext_b, 0.0, 0.0)?]);
         Ok(edge_len(&pat, "tr_front.R", "crotch")?
@@ -273,6 +293,12 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
     let mut v = [0.0f64, 0.0];
     for _ in 0..25 {
         let r = leg_resid(v)?;
+        if !r[0].is_finite() || !r[1].is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "trouser leg truing residual is not finite",
+            ));
+        }
         if r[0].abs().max(r[1].abs()) < 0.05 {
             break;
         }
@@ -290,6 +316,12 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
             (-r[0] * j[1][1] + r[1] * j[0][1]) / det,
             (-r[1] * j[0][0] + r[0] * j[1][0]) / det,
         ];
+        if !step[0].is_finite() || !step[1].is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "trouser leg truing step is not finite",
+            ));
+        }
         v = [
             v[0] + step[0].clamp(-40.0, 40.0),
             v[1] + step[1].clamp(-40.0, 40.0),
@@ -489,6 +521,10 @@ mod tests {
             json!({"elastic_frac": 0.0}),
             json!({"elastic_overlap": -10.0}),
             json!({"fullness": -500.0}),
+            json!({"rise_ease": -500.0}),
+            json!({"front_ext_frac": -0.1}),
+            json!({"blouse_drop": -2000.0}),
+            json!({"crotch_ease": -2000.0}),
         ] {
             let err = zouave_trousers(&meas, Some(&bad_style)).unwrap_err();
             assert_eq!(err.code, RefusalCode::OutOfRange, "style={bad_style}");

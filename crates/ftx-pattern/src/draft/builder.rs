@@ -94,7 +94,7 @@ impl PieceBuilder {
     /// `cubic_abs(eid, a, b, c1, c2, **meta)`: controls given absolute, stored relative to the chord (0.00001).
     ///
     /// # Errors
-    /// `degenerate_geometry` for an edge whose ends coincide.
+    /// `degenerate_geometry` for an edge whose ends coincide; `non_finite` if an endpoint or control is missing/non-finite.
     pub fn cubic_abs(
         &mut self,
         id: &str,
@@ -105,11 +105,27 @@ impl PieceBuilder {
         meta: Option<Value>,
     ) -> Result<(), Refusal> {
         let (pa, pb) = (self.vertex(a), self.vertex(b));
+        if !pa.is_finite() || !pb.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("edge {id}: missing or non-finite endpoint ({a}, {b})"),
+            ));
+        }
         let rel = |c: Vec2| -> Result<Value, Refusal> {
+            if !c.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    format!("edge {id}: non-finite cubic control point"),
+                ));
+            }
             let th = abs_to_rel(pa, pb, c).map_err(|e| {
                 Refusal::new(RefusalCode::DegenerateGeometry, format!("edge {id}: {e}"))
             })?;
-            Ok(json!([py::round(th[0], 5), py::round(th[1], 5)]))
+            let r0 = py::round(th[0], 5);
+            let r1 = py::round(th[1], 5);
+            Refusal::finite(&format!("edge {id} cubic control t"), r0)?;
+            Refusal::finite(&format!("edge {id} cubic control h"), r1)?;
+            Ok(json!([r0, r1]))
         };
         let curve = json!({"type": "cubic", "c": [rel(c1)?, rel(c2)?]});
         self.e(id, a, b, Some(curve), meta);
@@ -144,18 +160,25 @@ pub fn bisect(
     lo: f64,
     hi: f64,
 ) -> Result<f64, Refusal> {
+    Refusal::finite("bisect lo", lo)?;
+    Refusal::finite("bisect hi", hi)?;
     let (mut lo, mut hi) = (lo, hi);
     let mut flo = f(lo)?;
+    Refusal::finite("bisect f(lo)", flo)?;
     for _ in 0..60 {
         let mid = 0.5 * (lo + hi);
+        Refusal::finite("bisect mid", mid)?;
         let fm = f(mid)?;
+        Refusal::finite("bisect f(mid)", fm)?;
         if (fm > 0.0) == (flo > 0.0) {
             (lo, flo) = (mid, fm);
         } else {
             hi = mid;
         }
     }
-    Ok(0.5 * (lo + hi))
+    let out = 0.5 * (lo + hi);
+    Refusal::finite("bisect result", out)?;
+    Ok(out)
 }
 
 /// `_unit(v)`.
@@ -295,5 +318,62 @@ mod tests {
         assert_eq!(pat_false["meta"]["style"]["head_ease"], json!(false));
         assert_eq!(pat_false["meta"]["solved"], pat_zero["meta"]["solved"]);
         assert_eq!(pat_false["pieces"], pat_zero["pieces"]);
+    }
+
+    #[test]
+    fn bisect_cubic_abs_and_fez_refuse_non_finite_inputs_and_overflows() {
+        assert_eq!(
+            bisect(|x| Ok(x), f64::NAN, 1.0).unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            bisect(|x| Ok(if x > 0.25 { f64::NAN } else { -1.0 }), 0.0, 1.0)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+
+        let mut pb = PieceBuilder::new("p", "P", json!({}));
+        pb.v("a", 0.0, 0.0);
+        pb.v("b", 10.0, 0.0);
+        assert_eq!(
+            pb.cubic_abs(
+                "missing",
+                "a",
+                "nope",
+                Vec2::new(3.0, 1.0),
+                Vec2::new(7.0, 1.0),
+                None
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            pb.cubic_abs(
+                "nan_ctrl",
+                "a",
+                "b",
+                Vec2::new(f64::NAN, 1.0),
+                Vec2::new(7.0, 1.0),
+                None
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::NonFinite
+        );
+
+        assert_eq!(
+            draft("fez", &json!({"head": 1e155}), None)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            draft("fez", &json!({"head": 1e307}), None)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
     }
 }
