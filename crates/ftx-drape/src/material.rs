@@ -248,6 +248,26 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
             "uncalibrated construction mass/bending multipliers cannot override a characterized material record",
         ));
     }
+    let has_panel_bending = inputs.piece_fabrics.as_ref().map_or_else(
+        || inputs.fabric.panel_bending.is_some(),
+        |pieces| {
+            pieces
+                .iter()
+                .any(|f| f.is_some_and(|fab| fab.panel_bending.is_some()))
+        },
+    );
+    if has_panel_bending && inputs.options.bending_model == crate::BendingModel::DiscreteShells {
+        return Err(invalid(
+            "orthotropic panel-bending patches do not implement BendingModel::DiscreteShells",
+        )
+        .repair("Use BendingModel::Quadratic with orthotropic characterized bending materials, or use an isotropic scalar bending law with DiscreteShells."));
+    }
+    if permanent && inputs.options.compression_model == crate::CompressionModel::Principal {
+        return Err(invalid(
+            "membrane plasticity does not implement CompressionModel::Principal",
+        )
+        .repair("Use CompressionModel::AxisAligned with membrane plasticity, or remove the plastic law to use Principal compression softening."));
+    }
     Ok(inputs)
 }
 
@@ -460,5 +480,186 @@ mod grain_tests {
             raw["sim_scale"] = scale;
             assert!(grain_direction(&raw, true).is_err());
         }
+    }
+
+    #[test]
+    fn resolve_refuses_incompatible_constitutive_options_before_scene_setup() {
+        let orthotropic_selection: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-panel-bending.json"
+        ))
+        .unwrap();
+        let nonlinear_record: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-nonlinear.json"
+        ))
+        .unwrap();
+        let nonlinear_selection = json!({
+            "id": nonlinear_record["id"],
+            "record": nonlinear_record,
+            "allow_estimates": true
+        });
+        let relaxation_selection: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-relaxation.json"
+        ))
+        .unwrap();
+        let plasticity_selection: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-membrane-plasticity.json"
+        ))
+        .unwrap();
+
+        let pattern_with_selection = |selection: &Value| {
+            Pattern::new(json!({
+                "schema": "fabric-pattern/1",
+                "units": "mm",
+                "fabric": { "material": selection },
+                "pieces": [{
+                    "id": "panel",
+                    "cut": {"qty": 1},
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 100], "d": [0, 100]},
+                    "edges": [
+                        {"id": "bottom", "from": "a", "to": "b"},
+                        {"id": "right", "from": "b", "to": "c"},
+                        {"id": "top", "from": "c", "to": "d"},
+                        {"id": "left", "from": "d", "to": "a"}
+                    ],
+                    "grain": [[50, 10], [50, 90]],
+                    "placement": {"part": "torso"}
+                }],
+                "seams": []
+            }))
+        };
+
+        let ortho_pat = pattern_with_selection(&orthotropic_selection);
+        assert!(resolve(&ortho_pat, &DrapeOptions::default()).is_ok());
+
+        let ds_opts = DrapeOptions {
+            bending_model: crate::BendingModel::DiscreteShells,
+            ..DrapeOptions::default()
+        };
+        let ds_err = resolve(&ortho_pat, &ds_opts)
+            .err()
+            .expect("DiscreteShells with orthotropic bending must refuse");
+        assert_eq!(ds_err.code, RefusalCode::InvalidDocument);
+        assert!(ds_err.message.contains("DiscreteShells"), "{ds_err}");
+
+        let mut rb_opts = DrapeOptions::default();
+        rb_opts.damping.rayleigh_bending_s = 1e-4;
+        assert!(
+            resolve(&ortho_pat, &rb_opts).is_ok(),
+            "objective Rayleigh bending damping is supported on orthotropic panel-bending patches"
+        );
+
+        let pr_default_opts = DrapeOptions {
+            compression_model: crate::CompressionModel::Principal,
+            ..DrapeOptions::default()
+        };
+        for (label, sel) in [
+            ("nonlinear", &nonlinear_selection),
+            ("relaxation", &relaxation_selection),
+        ] {
+            let pat = pattern_with_selection(sel);
+            assert!(
+                resolve(&pat, &pr_default_opts).is_ok(),
+                "{label} must remain admitted under CompressionModel::Principal"
+            );
+        }
+
+        let pl_pat = pattern_with_selection(&plasticity_selection);
+        let pl_base = DrapeOptions {
+            compression: 1.0,
+            ..DrapeOptions::default()
+        };
+        assert!(resolve(&pl_pat, &pl_base).is_ok());
+        let pr_opts = DrapeOptions {
+            compression_model: crate::CompressionModel::Principal,
+            ..pl_base
+        };
+        let pr_err = resolve(&pl_pat, &pr_opts)
+            .err()
+            .expect("Principal compression with membrane plasticity must refuse");
+        assert_eq!(pr_err.code, RefusalCode::InvalidDocument);
+        assert!(pr_err.message.contains("Principal"), "{pr_err}");
+
+        // Per-piece active characterized sheet must also fail fast; excluded (`sim: false`) piece must not.
+        let mut linear_selection = orthotropic_selection.clone();
+        linear_selection["id"] = json!("synthetic-linear-scalar");
+        let rec = linear_selection["record"].as_object_mut().unwrap();
+        rec["id"] = json!("synthetic-linear-scalar");
+        rec.remove("structure");
+        let props = rec["properties"].as_object_mut().unwrap();
+        for k in [
+            "bending_warp",
+            "bending_weft",
+            "bending_coupling",
+            "bending_twist",
+        ] {
+            props.remove(k);
+        }
+        let per_piece_pattern = |first_selection: Option<&Value>,
+                                 second_sim: bool,
+                                 second_selection: &Value| {
+            let mut first = json!({
+                "id": "active_panel",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 100], "d": [0, 100]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "grain": [[50, 10], [50, 90]],
+                "placement": {"part": "torso"}
+            });
+            if let Some(sel) = first_selection {
+                first["fabric"] = json!({ "material": sel });
+            }
+            Pattern::new(json!({
+                "schema": "fabric-pattern/1",
+                "units": "mm",
+                "pieces": [
+                    first,
+                    {
+                        "id": "second_panel",
+                        "sim": second_sim,
+                        "cut": {"qty": 1},
+                        "fabric": { "material": second_selection },
+                        "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 100], "d": [0, 100]},
+                        "edges": [
+                            {"id": "bottom", "from": "a", "to": "b"},
+                            {"id": "right", "from": "b", "to": "c"},
+                            {"id": "top", "from": "c", "to": "d"},
+                            {"id": "left", "from": "d", "to": "a"}
+                        ],
+                        "grain": [[50, 10], [50, 90]],
+                        "placement": {"part": "torso"}
+                    }
+                ],
+                "seams": []
+            }))
+        };
+        let active_ortho = per_piece_pattern(Some(&linear_selection), true, &orthotropic_selection);
+        let active_ds_err = resolve(&active_ortho, &ds_opts)
+            .err()
+            .expect("active per-piece DiscreteShells must refuse");
+        assert_eq!(active_ds_err.code, RefusalCode::InvalidDocument);
+        assert!(
+            active_ds_err.message.contains("DiscreteShells"),
+            "{active_ds_err}"
+        );
+        assert!(resolve(&active_ortho, &rb_opts).is_ok());
+        let active_pl = per_piece_pattern(Some(&linear_selection), true, &plasticity_selection);
+        let active_pr_err = resolve(&active_pl, &pr_opts)
+            .err()
+            .expect("active per-piece Principal compression with plasticity must refuse");
+        assert_eq!(active_pr_err.code, RefusalCode::InvalidDocument);
+        assert!(
+            active_pr_err.message.contains("Principal"),
+            "{active_pr_err}"
+        );
+
+        let excluded_ortho = per_piece_pattern(None, false, &orthotropic_selection);
+        assert!(resolve(&excluded_ortho, &ds_opts).is_ok());
+        let excluded_pl = per_piece_pattern(None, false, &plasticity_selection);
+        assert!(resolve(&excluded_pl, &pr_opts).is_ok());
     }
 }

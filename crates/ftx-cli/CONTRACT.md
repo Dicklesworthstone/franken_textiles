@@ -5,7 +5,8 @@ the body and garment endpoint. Pixels are zero-based from the original PNG's upp
 hit names the physical instance, authored piece, nearest sampled boundary in posed 3D, its distance
 in mm and the authored edge endpoints in flat millimetres. A body or background hit has no pattern
 edge. The round retains its original gating flags. Older completed rounds with native stills work
-from their existing OBJ files and mesh map.
+from their existing OBJ files and mesh map, and completed `--shading legible` rounds resolve their
+published `still_<view>_legible.png` automatically (using the same pixel-centre camera ray).
 
 After a solver refusal, pick from `sim/refused/still_VIEW.png`. If the initial placement was
 rejected, pick from the view listed in the placement report at `sim/refused/start/still_VIEW.png`.
@@ -252,9 +253,10 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   use exclusive creation; the review permits only this round's six known paths and no symlinks.
   When `--sim` runs on a workspace, `WS/qualification/qualify.json` is checked (`check_qualification`):
   a missing, failed or stale qualification keeps tightness flags advisory. The native engine requires matching
-  `qualification_basis` identities for the posed collision body (`body_sha256`) and either the resolved uniform
+  `qualification_basis` identities for the posed collision body (`body_sha256`), either the resolved uniform
   material (`material_sha256`) or all active simulated piece materials (`piece_material_sha256s`), including
-  body-contact parameters. Older reports require rerunning `ftx qualify`. Even when collider bands pass
+  body-contact parameters, and (whenever non-default bending, compression, damping, adaptive-barrier,
+  stick-slip, or construction physics options are enabled) `physics_sha256`. Older reports require rerunning `ftx qualify`. Even when collider bands pass
   (`collider_tightness_qualified: true`), wearer-blocking tightness promotion (`tightness_qualified: true`)
   requires `|posed_chest_girth_mm - input_chest_mm| <= 5.0` mm and `|residual_mm| <= 5.0` mm on measured
   girth targets at any `tightness_gating` landmark; larger residuals or `MODEL_FIT` priors demote those

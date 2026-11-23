@@ -283,6 +283,30 @@ fn sheet_material_sha256(
     ]))
 }
 
+/// Digest of non-default constitutive, damping, adaptive-barrier, stick-slip, and construction
+/// physics options. Omitted (`None`) when all options match legacy defaults so existing
+/// `qualify.json` receipts remain byte-compatible.
+fn physics_model_sha256(options: &crate::run::DrapeOptions) -> Result<Option<String>, Refusal> {
+    if options.bending_model.is_default()
+        && options.compression_model.is_default()
+        && options.damping.is_default()
+        && options.adaptive_barrier.is_none()
+        && options.stick_slip.is_none()
+        && options.construction.is_default()
+    {
+        return Ok(None);
+    }
+    digest(&json!({
+        "bending_model": options.bending_model,
+        "compression_model": options.compression_model,
+        "damping": options.damping,
+        "adaptive_barrier": options.adaptive_barrier,
+        "stick_slip": options.stick_slip,
+        "construction": options.construction,
+    }))
+    .map(Some)
+}
+
 /// Returns the active simulated per-piece fabric selectors (`(piece_id, fabric_selector)`) when
 /// `pattern` enters per-piece characterization (`piece.fabric` present on any piece or
 /// `fabric.interfaces` present, with at least one active piece carrying a source-bearing selector).
@@ -388,11 +412,15 @@ pub fn qualification_basis(
         }
         shas.sort_unstable();
         shas.dedup();
-        return Ok(json!({
+        let mut basis = json!({
             "body_sha256": body_sha256,
             "material_sha256": Value::Null,
             "piece_material_sha256s": shas,
-        }));
+        });
+        if let Some(physics_sha256) = physics_model_sha256(&material.options)? {
+            basis["physics_sha256"] = json!(physics_sha256);
+        }
+        return Ok(basis);
     }
     let material_sha256 = sheet_material_sha256(
         &material.report["record_sha256"],
@@ -400,7 +428,11 @@ pub fn qualification_basis(
         material.options.compression,
         material.options.contact,
     )?;
-    Ok(json!({"body_sha256": body_sha256, "material_sha256": Some(material_sha256)}))
+    let mut basis = json!({"body_sha256": body_sha256, "material_sha256": Some(material_sha256)});
+    if let Some(physics_sha256) = physics_model_sha256(&material.options)? {
+        basis["physics_sha256"] = json!(physics_sha256);
+    }
+    Ok(basis)
 }
 
 fn is_sha256(value: &Value) -> bool {
@@ -518,6 +550,21 @@ pub fn check_qualification(
                 ));
             }
         }
+    }
+    let current_physics = current_basis.get("physics_sha256").filter(|v| !v.is_null());
+    let recorded_physics = rec["qualification_basis"]
+        .get("physics_sha256")
+        .filter(|v| !v.is_null());
+    if let Some(req_phys) = current_physics {
+        if !is_sha256(req_phys) || recorded_physics != Some(req_phys) {
+            return QualificationStatus::unqualified(
+                "non-default drape physics options are not covered by this qualification: tightness flags remain advisory unless qualified under the same physics model",
+            );
+        }
+    } else if recorded_physics.is_some() {
+        return QualificationStatus::unqualified(
+            "the drape physics model differs from the qualification run: rerun `ftx qualify`",
+        );
     }
 
     if rec.get("posed_chest_girth_mm").is_some() {
@@ -1058,5 +1105,86 @@ mod tests {
         assert_eq!(sim["gating"], json!([chest_flag]));
         assert_eq!(sim["advisory"], json!([hip_flag]));
         assert!(note.contains("hip body-fit residual (-9.4 mm) exceeds ±5.0 mm"));
+    }
+
+    #[test]
+    fn qualification_basis_binds_non_default_physics_options_while_preserving_legacy_digests() {
+        let defaults = crate::run::DrapeOptions::default();
+        assert_eq!(physics_model_sha256(&defaults).unwrap(), None);
+
+        let mut discrete = defaults;
+        discrete.bending_model = crate::BendingModel::DiscreteShells;
+        let ds_sha = physics_model_sha256(&discrete)
+            .unwrap()
+            .expect("non-default bending model must produce physics_sha256");
+        assert_eq!(ds_sha.len(), 64);
+
+        let mut principal = defaults;
+        principal.compression_model = crate::CompressionModel::Principal;
+        let pr_sha = physics_model_sha256(&principal).unwrap().unwrap();
+        assert_ne!(ds_sha, pr_sha);
+
+        let fab = json!({"areal_g_m2": 260, "tensile_N_m": 8000, "bending_Nm": 3e-5});
+        let legacy_basis = json!({"body_sha256":"b".repeat(64),"material_sha256":"a".repeat(64)});
+        let legacy_doc = json!({
+            "pass": true,
+            "measurements_sha256": "abc",
+            "fabric_key": [260, 8000, 3e-5],
+            "engine": "ftx",
+            "qualification_basis": legacy_basis
+        });
+        let mut ds_basis = legacy_basis.clone();
+        ds_basis["physics_sha256"] = json!(ds_sha);
+
+        // A legacy qualification must not promote tightness gating for non-default physics.
+        let unqual = check_qualification(
+            Some(Ok(&legacy_doc)),
+            "q",
+            "ws",
+            "abc",
+            Some(&fab),
+            &ds_basis,
+        );
+        assert!(!unqual.pass && !unqual.collider_pass);
+        assert!(unqual.why.contains("non-default drape physics"));
+
+        // Matching physics_sha256 qualifies; mismatched or legacy-against-physics does not.
+        let mut ds_doc = legacy_doc.clone();
+        ds_doc["qualification_basis"] = ds_basis.clone();
+        assert!(
+            check_qualification(Some(Ok(&ds_doc)), "q", "ws", "abc", Some(&fab), &ds_basis).pass
+        );
+        assert!(
+            !check_qualification(
+                Some(Ok(&ds_doc)),
+                "q",
+                "ws",
+                "abc",
+                Some(&fab),
+                &legacy_basis
+            )
+            .pass
+        );
+
+        let mut pr_basis = legacy_basis;
+        pr_basis["physics_sha256"] = json!(pr_sha);
+        assert!(
+            !check_qualification(Some(Ok(&ds_doc)), "q", "ws", "abc", Some(&fab), &pr_basis).pass
+        );
+
+        // Per-piece assemblies enforce the same physics_sha256 binding.
+        let m1 = "1".repeat(64);
+        let pp_legacy = json!({"body_sha256":"b".repeat(64),"material_sha256":null,"piece_material_sha256s":[m1]});
+        let pp_doc = json!({
+            "pass": true,
+            "measurements_sha256": "abc",
+            "fabric_key": [null, null, null],
+            "engine": "ftx",
+            "qualification_basis": pp_legacy,
+            "piece_materials": [{"material_sha256": m1, "pass": true}]
+        });
+        let mut pp_ds = pp_legacy;
+        pp_ds["physics_sha256"] = json!(ds_sha);
+        assert!(!check_qualification(Some(Ok(&pp_doc)), "q", "ws", "abc", None, &pp_ds).pass);
     }
 }

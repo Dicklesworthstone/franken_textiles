@@ -228,7 +228,8 @@ mod tests {
         assert!(rd_leg.join("sim/still_front_legible.png").is_file());
         let entry_leg =
             json!({"round":7,"dir":"rounds/007","sim":sim,"rendering":rep_leg,"images":imgs_leg});
-        let html_leg = super::super::report::render(ws_leg, &[entry_leg]).unwrap();
+        let html_leg =
+            super::super::report::render(ws_leg, std::slice::from_ref(&entry_leg)).unwrap();
         assert_eq!(html_leg.matches("loading=\"lazy\"").count(), 6);
         assert!(html_leg.contains("src=\"rounds/007/sim/still_front_legible.png\""));
         assert!(html_leg.contains("legible shading"));
@@ -253,6 +254,35 @@ mod tests {
         assert_eq!(html_both.matches("loading=\"lazy\"").count(), 12);
         assert!(html_both.contains("src=\"rounds/007/sim/still_front.png\""));
         assert!(html_both.contains("src=\"rounds/007/sim/still_front_legible.png\""));
+
+        // inspect-pixel must work on legible-only rounds (which publish only still_<view>_legible.png)
+        // and trace the exact same panel/edge as a standard still.
+        super::super::write_json(&rd_leg.join("round.json"), &entry_leg).unwrap();
+        super::super::write_json(
+            &rd_leg.join("pattern.json"),
+            &json!({"schema":"fabric-pattern/1","units":"mm","pieces":[{
+            "id":"panel","cut":{"qty":2},"vertices":{"A":[0,0],"B":[60,0],"C":[60,70],"D":[0,70]},
+            "edges":[{"id":"hem","from":"A","to":"B"},{"id":"outer","from":"B","to":"C"},
+            {"id":"upper","from":"C","to":"D"},{"id":"inner","from":"D","to":"A"}]}],"seams":[]}),
+        )
+        .unwrap();
+        super::super::write_json(&rd_leg.join("sim/mesh_map.json"), &json!({"vertices":4,"inst_range":{"panel.L":[0,4]},
+            "edges":{"panel.L/hem":[0,1],"panel.L/outer":[1,2],"panel.L/upper":[2,3],"panel.L/inner":[3,0]}})).unwrap();
+        let leg_argv = [
+            "inspect-pixel",
+            rd_leg.to_str().unwrap(),
+            "--view",
+            "front",
+            "--pixel",
+            "24,25",
+        ]
+        .map(String::from);
+        let leg_pick = crate::inspect_pixel::run(&crate::parse(&leg_argv).unwrap())
+            .unwrap()
+            .0;
+        assert_eq!(leg_pick["image"], "rounds/007/sim/still_front_legible.png");
+        assert_eq!(leg_pick["hit"]["instance"], "panel.L");
+        assert_eq!(leg_pick["hit"]["nearest_edge"]["source_edge"], "hem");
     }
 
     #[test]

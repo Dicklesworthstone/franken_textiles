@@ -114,7 +114,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .as_u64()
         .ok_or_else(|| bad_input("missing round number"))?;
     let refused = round["sim"]["refusal"].is_object();
-    let file = format!("still_{view}.png");
+    let standard_file = format!("still_{view}.png");
     crate::round::regular(&dir.join("sim"), true)?;
     let folder = if refused {
         let diagnosis = dir.join("sim/refused");
@@ -124,7 +124,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             && crate::round::regular(&placement, false)?
         {
             let (report, _) = fold::document(&placement)?;
-            let expected = Path::new("start").join(&file);
+            let expected = Path::new("start").join(&standard_file);
             if !report["stills"]["start"].as_array().is_some_and(|names| {
                 names
                     .iter()
@@ -144,19 +144,35 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
     let start = folder == "sim/refused/start";
     let scene = dir.join(folder);
-    let image = format!("rounds/{n:03}/{folder}/{file}");
-    if !refused
-        && (round["rendering"]["status"] != "PASS"
+    let (file, image) = if refused {
+        let image = format!("rounds/{n:03}/{folder}/{standard_file}");
+        (standard_file, image)
+    } else {
+        if round["rendering"]["status"] != "PASS"
             || !round["sim"].is_object()
             || round["sim"].get("refusal").is_some()
-            || !round["images"]
-                .as_array()
-                .is_some_and(|v| v.iter().any(|v| v == &image)))
-    {
-        return Err(bad_input(
-            "this round did not publish the requested still; run a fresh round with --stills",
-        ));
-    }
+        {
+            return Err(bad_input(
+                "this round did not publish the requested still; run a fresh round with --stills",
+            ));
+        }
+        let images = round["images"].as_array();
+        let has = |candidate: &str| {
+            images.is_some_and(|list| list.iter().any(|entry| entry == candidate))
+        };
+        let standard_image = format!("rounds/{n:03}/{folder}/{standard_file}");
+        let legible_file = format!("still_{view}_legible.png");
+        let legible_image = format!("rounds/{n:03}/{folder}/{legible_file}");
+        if has(&standard_image) {
+            (standard_file, standard_image)
+        } else if has(&legible_image) {
+            (legible_file, legible_image)
+        } else {
+            return Err(bad_input(
+                "this round did not publish the requested still; run a fresh round with --stills",
+            ));
+        }
+    };
     crate::round::regular(&scene, true)?;
     let path = scene.join(&file);
     crate::round::regular(&path, false)?;
