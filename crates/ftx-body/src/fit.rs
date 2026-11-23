@@ -448,12 +448,19 @@ fn local_prior_sigma(template: &[Vec3], stature_mm: f64) -> Result<f64, Refusal>
 
 /// The fullest (`max`) or narrowest girth `g(h)` over `lo..=hi` in [`SEARCH_STEP_MM`] steps.
 fn extreme(lo: f64, hi: f64, max: bool, g: impl Fn(f64) -> Option<f64>) -> Option<f64> {
+    if !lo.is_finite() || !hi.is_finite() {
+        return None;
+    }
     let mut best: Option<f64> = None;
     let mut h = lo;
     while h <= hi {
         let v = g(h)?;
         best = Some(best.map_or(v, |b| if max { b.max(v) } else { b.min(v) }));
-        h += SEARCH_STEP_MM;
+        let next = h + SEARCH_STEP_MM;
+        if !next.is_finite() || next <= h {
+            return None;
+        }
+        h = next;
     }
     best
 }
@@ -722,6 +729,9 @@ pub(crate) fn selected_tape_readings(
         if selected[14] {
             readings[14] = (|| {
                 let (waist_h, c7_h) = (lm("waist")?, lm("c7")?);
+                if waist_h >= c7_h {
+                    return None;
+                }
                 let mut back = 0.0;
                 let mut prev: Option<(f64, f64)> = None;
                 let mut h = waist_h;
@@ -734,7 +744,11 @@ pub(crate) fn selected_tape_readings(
                     if h >= c7_h {
                         break;
                     }
-                    h = (h + SEARCH_STEP_MM).min(c7_h);
+                    let next = (h + SEARCH_STEP_MM).min(c7_h);
+                    if !next.is_finite() || next <= h {
+                        return None;
+                    }
+                    h = next;
                 }
                 Some(back)
             })();
@@ -2330,5 +2344,15 @@ mod tests {
             read(&sparse.free, &[true; N_TAPE]).unwrap(),
             complete.readings
         );
+    }
+
+    #[test]
+    fn extreme_and_back_neck_search_terminate_on_non_finite_or_stagnant_heights() {
+        assert_eq!(extreme(f64::NAN, 100.0, true, |_| Some(1.0)), None);
+        assert_eq!(extreme(0.0, f64::INFINITY, true, |_| Some(1.0)), None);
+        // At 1e18, 1e18 + 2.0 == 1e18 in f64; extreme must bail out instead of looping forever.
+        assert_eq!(extreme(1e18, 1e18 + 1024.0, true, |_| Some(1.0)), None);
+        assert_eq!(extreme(10.0, 14.0, true, Some), Some(14.0));
+        assert_eq!(extreme(10.0, 14.0, false, Some), Some(10.0));
     }
 }

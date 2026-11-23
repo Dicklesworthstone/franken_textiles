@@ -204,12 +204,16 @@ pub fn union_exterior(polys: &[Vec<Vec2>]) -> Option<Vec<Vec2>> {
     let mean = segs.iter().map(|s| (s.b - s.a).norm()).sum::<f64>() / segs.len() as f64;
     let extent = (hi.x - lo.x).max(hi.y - lo.y);
     let cell = (2.0 * mean).max(extent / 1024.0).max(1e-6);
+    // Snapping divides coordinates by SNAP (1e-9) into i64 keys; reject inputs whose coordinates
+    // would saturate i64 instead of silently collapsing distinct vertices to one node.
+    const MAX_SNAP_COORD: f64 = 4e9;
     if !lo.is_finite()
         || !hi.is_finite()
         || !extent.is_finite()
         || !mean.is_finite()
         || !cell.is_finite()
         || cell <= 0.0
+        || lo.x.abs().max(hi.x.abs()).max(lo.y.abs()).max(hi.y.abs()) > MAX_SNAP_COORD
     {
         return None;
     }
@@ -514,8 +518,11 @@ mod tests {
             Vec2::new(1e308, 0.0),
             Vec2::new(0.0, 1e308),
         ];
+        // Coordinates > 9.22e9 mm would saturate (p / SNAP) as i64 and collapse all vertices.
+        let snap_overflow_poly = rect(1e10, 1e10, 1e10 + 100.0, 1e10 + 100.0);
         assert!(union_exterior(&[nan_poly]).is_none());
         assert!(union_exterior(&[inf_poly]).is_none());
         assert!(union_exterior(&[huge_poly]).is_none());
+        assert!(union_exterior(&[snap_overflow_poly]).is_none());
     }
 }
