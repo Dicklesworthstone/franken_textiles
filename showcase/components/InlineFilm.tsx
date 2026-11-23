@@ -36,10 +36,12 @@ export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { voi
   let pending: number | undefined;
   let onMeta: (() => void) | undefined;
   let onSeeked: (() => void) | undefined;
+  let restorePreload: (() => void) | undefined;
   let wasPlaying = !el.paused;
   function clearStepDownListeners() {
     if (onMeta) { el.removeEventListener("loadedmetadata", onMeta); onMeta = undefined; }
     if (onSeeked) { el.removeEventListener("seeked", onSeeked); onSeeked = undefined; }
+    if (restorePreload) { restorePreload(); restorePreload = undefined; }
   }
   function onPlay() { wasPlaying = true; }
   function onPause() { if (!el.error) wasPlaying = false; }
@@ -59,11 +61,14 @@ export function watchFilm(el: HTMLVideoElement, id: string, resume = () => { voi
         // Setting currentTime right after el.src=small seeks the outgoing resource before the microtask load
         // resets playback to 0. Wait for the 1080p metadata, seek cleanly, then resume without flashing t=0.
         const prevPreload = el.getAttribute("preload");
+        restorePreload = () => {
+          if (prevPreload === null) el.removeAttribute("preload");
+          else el.setAttribute("preload", prevPreload);
+        };
         el.preload = "auto";
         onMeta = () => {
           onMeta = undefined;
-          if (prevPreload === null) el.removeAttribute("preload");
-          else el.setAttribute("preload", prevPreload);
+          if (restorePreload) { restorePreload(); restorePreload = undefined; }
           if (el.getAttribute("src") !== small) return;
           el.currentTime = Number.isFinite(el.duration) ? Math.min(at, el.duration) : at;
           if (!shouldResume) return;
