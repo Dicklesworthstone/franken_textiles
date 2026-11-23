@@ -54,7 +54,7 @@ const commands = [
   ["ftx body", "Fit the Anny 0.6.1 body model to tape measurements or multi-frame reports (supports --skinning lbs|dqs)."],
   ["ftx place", "Preview wrapped and pre-sewn starting placements as stills in seconds, without running the solver."],
   ["ftx drape", "Sew a pattern or multi-garment outfit with IPC contact, friction, --time-subdivision and --hands knuckle."],
-  ["ftx render", "Draw a finished drape's six stills. --shading legible adds a second set for reading folds and panel edges: a drawing aid that describes no fabric."],
+  ["ftx render", "Draw a finished drape's six stills. --shading legible adds a second set for reading folds and hems: a drawing aid that describes no fabric."],
   ["ftx inspect-pixel", "Map any rendered PNG pixel deterministically back to its physical panel and nearest flat pattern edge."],
   ["ftx viewer", "Build an offline 3D fold-up HTML page or audit every recorded frame with --check-contact."],
   ["ftx qualify", "Run three chest qualification bands (−20 / 0 / +20 mm) around a fitted torso collider."],

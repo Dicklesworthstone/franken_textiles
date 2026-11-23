@@ -18,8 +18,8 @@
 //! folds and edges by eye. One ray a pixel aliases a fine wrinkle and a matte surface under 8 ambient
 //! rays flattens it, so it casts four rays a pixel on a fixed rotated grid and averages them in linear
 //! light, takes 16 stratified ambient directions a ray (64 different ones a pixel), and on cloth adds a
-//! highlight that grows as the view grazes the surface and a dark line just inside every panel edge
-//! (a hem, an opening, and a seam where the mesh keeps the two panels' vertices apart). Where the
+//! highlight that grows as the view grazes the surface and a dark line just inside every hem and
+//! opening. A seam gets no line: it carries its seam colour, which the line would dim. Where the
 //! cloth's colours are the strain scale it adds neither, because there the colour is the reading. It is
 //! a drawing aid and not a picture of a fabric: its constants are fixed here, come from no material
 //! record and are the same for every cloth. The standard still is untouched by it, bit for bit, and a
@@ -391,10 +391,11 @@ impl Scene {
             / dirs.len() as f64
     }
 
-    /// The edges that belong to exactly one of the triangles from `first_cloth` on: where the cloth's
-    /// mesh ends. That is a hem or an opening, and also a seam wherever the mesh keeps the two panels'
-    /// vertices apart, as a drape's `garment.obj` does.
-    fn panel_edges(&self, first_cloth: usize) -> PanelEdges {
+    /// The cloth's open edges: a hem or an opening. An edge is open if it belongs to exactly one of the
+    /// triangles from `first_cloth` on and no other such edge lies on the same two points. That second
+    /// test leaves seams out: a drape's `garment.obj` keeps the two sides of a seam as vertices of their
+    /// own at the same welded positions, and a seam carries its seam colour, which a line would dim.
+    fn open_edges(&self, first_cloth: usize) -> OpenEdges {
         let mut sides: Vec<[usize; 2]> = Vec::new();
         for tri in self.tris.iter().skip(first_cloth) {
             for k in 0..3 {
@@ -404,7 +405,7 @@ impl Scene {
         }
         // sorted, never hashed: the same edges in the same order on every run and every target
         sides.sort_unstable();
-        let mut edges = Vec::new();
+        let mut rim = Vec::new();
         let mut i = 0;
         while i < sides.len() {
             let mut j = i + 1;
@@ -412,10 +413,31 @@ impl Scene {
                 j += 1;
             }
             if j == i + 1 {
-                edges.push(sides[i]);
+                rim.push(sides[i]);
             }
             i = j;
         }
+        // where an edge lies: its two points as bits (−0 read as 0), the lesser first
+        let place = |e: &[usize; 2]| {
+            let [a, b] = e.map(|v| self.p[v].map(|x| (x + 0.0).to_bits()));
+            if a <= b { [a, b] } else { [b, a] }
+        };
+        let mut placed: Vec<([[u64; 3]; 2], [usize; 2])> =
+            rim.iter().map(|e| (place(e), *e)).collect();
+        placed.sort_unstable();
+        let mut edges = Vec::new();
+        let mut i = 0;
+        while i < placed.len() {
+            let mut j = i + 1;
+            while j < placed.len() && placed[j].0 == placed[i].0 {
+                j += 1;
+            }
+            if j == i + 1 {
+                edges.push(placed[i].1);
+            }
+            i = j;
+        }
+        edges.sort_unstable();
         let mut start = vec![0usize; self.p.len() + 1];
         for e in &edges {
             for &v in e {
@@ -433,19 +455,19 @@ impl Scene {
                 next[v] += 1;
             }
         }
-        PanelEdges { edges, start, at }
+        OpenEdges { edges, start, at }
     }
 
-    /// Distance (m) from the hit to the nearest panel edge that ends at a corner of the hit's triangle;
+    /// Distance (m) from the hit to the nearest open edge that ends at a corner of the hit's triangle;
     /// `None` if no such edge does. Exact for a line narrower than the mesh's triangles.
-    fn panel_edge_distance(&self, panel: &PanelEdges, h: &Hit) -> Option<f64> {
+    fn open_edge_distance(&self, open: &OpenEdges, h: &Hit) -> Option<f64> {
         let corner = |v: usize| Vec3::new(self.p[v][0], self.p[v][1], self.p[v][2]);
         let t = self.tris[h.tri];
         let p = corner(t[0]) * h.bary[0] + corner(t[1]) * h.bary[1] + corner(t[2]) * h.bary[2];
         let mut nearest: Option<f64> = None;
         for &v in &t {
-            for &e in &panel.at[panel.start[v]..panel.start[v + 1]] {
-                let [a, b] = panel.edges[e].map(corner);
+            for &e in &open.at[open.start[v]..open.start[v + 1]] {
+                let [a, b] = open.edges[e].map(corner);
                 let along = b - a;
                 let length2 = along.dot(along);
                 let s = if length2 > 0.0 {
@@ -461,8 +483,8 @@ impl Scene {
     }
 }
 
-/// The edges where the cloth's mesh ends, and which of them end at each vertex.
-struct PanelEdges {
+/// The cloth's hems and openings, and which of those edges end at each vertex.
+struct OpenEdges {
     /// Each edge's two vertices.
     edges: Vec<[usize; 2]>,
     /// `at[start[v]..start[v + 1]]` are the edges that end at vertex `v`.
@@ -521,7 +543,7 @@ pub enum Shading {
     #[default]
     Standard,
     /// For reading folds and edges by eye: four rays a pixel, 16 ambient rays a ray, and on cloth a
-    /// grazing highlight and a dark line inside panel edges. A drawing aid whose constants describe no
+    /// grazing highlight and a dark line inside hems and openings. A drawing aid whose constants describe no
     /// fabric.
     Legible,
 }
@@ -570,7 +592,7 @@ const SUB_PIXELS: [[f64; 2]; 4] = [
 /// chosen by eye on a dark bolero: enough to show a fold's flank, short of washing the seam colours out.
 const HIGHLIGHT: f64 = 2.0;
 
-/// The legible still darkens cloth within this distance (m) of a panel edge, by up to `EDGE_DARKENING`
+/// The legible still darkens cloth within this distance (m) of a hem or opening, by up to `EDGE_DARKENING`
 /// at the edge itself: about three pixels of a default 960-pixel still, whose camera stands 2 m away.
 const EDGE_LINE_M: f64 = 0.005;
 const EDGE_DARKENING: f64 = 0.45;
@@ -718,7 +740,7 @@ fn render_with(
         Vec::new()
     };
     let first_cloth = scene.first.get(cloth).copied().unwrap_or(scene.tris.len());
-    let panel = (legible && mark_cloth).then(|| scene.panel_edges(first_cloth));
+    let open_edges = (legible && mark_cloth).then(|| scene.open_edges(first_cloth));
     let detailed = |x: usize, y: usize| -> [u8; 3] {
         let mut sum = [0.0; 3];
         for (offset, dirs) in SUB_PIXELS.iter().zip(&hemispheres) {
@@ -731,7 +753,7 @@ fn render_with(
                     let (from_key, from_fill) = (scene.lit(&s, key), s.n.dot(fill).max(0.0));
                     let light = 0.30 * open + 0.75 * from_key + 0.25 * from_fill;
                     let mut rgb = s.col.map(|c| c * light);
-                    if let Some(panel) = panel.as_ref().filter(|_| h.tri >= first_cloth) {
+                    if let Some(hems) = open_edges.as_ref().filter(|_| h.tri >= first_cloth) {
                         // the highlight takes half the cloth's colour and fades in a crease as the
                         // ambient light does
                         let glance = HIGHLIGHT
@@ -741,7 +763,7 @@ fn render_with(
                         for (c, base) in rgb.iter_mut().zip(s.col) {
                             *c += glance * (0.5 * base + 0.5);
                         }
-                        if let Some(distance) = scene.panel_edge_distance(panel, &h)
+                        if let Some(distance) = scene.open_edge_distance(hems, &h)
                             && distance < EDGE_LINE_M
                         {
                             let keep = 1.0 - EDGE_DARKENING * (1.0 - distance / EDGE_LINE_M);
@@ -1271,8 +1293,24 @@ mod tests {
         m
     }
 
+    /// `left` with `right` beside it, moved `shift` (m) along x and keeping vertices of its own: where
+    /// the two meet they share positions and no vertex, as the two sides of a seam do in `garment.obj`.
+    fn sewn_beside(mut left: ColouredMesh, right: &ColouredMesh, shift: f64) -> ColouredMesh {
+        let base = left.vertices.len();
+        left.triangles
+            .extend(right.triangles.iter().map(|t| t.map(|v| v + base)));
+        left.vertices.extend(
+            right
+                .vertices
+                .iter()
+                .map(|v| Vec3::new(v.x + shift, v.y, v.z)),
+        );
+        left.colours.extend(right.colours.iter().copied());
+        left
+    }
+
     #[test]
-    fn panel_edges_are_where_the_cloth_mesh_ends_and_never_the_bodys() {
+    fn open_edges_are_hems_and_openings_and_never_a_seam_or_the_body() {
         // an open body triangle, then a 3 x 3 sheet: 12 edges round the sheet, none of the body's
         let body = ColouredMesh {
             vertices: vec![
@@ -1286,13 +1324,13 @@ mod tests {
         let cloth = sheet(3, 0.03, [0.5; 3]);
         let scene = Scene::new(&[&body, &cloth]);
         assert_eq!(scene.first, [0, 1]);
-        let panel = scene.panel_edges(scene.first[1]);
-        assert_eq!(panel.edges.len(), 12);
-        assert!(panel.edges.iter().all(|e| e[0] >= 3 && e[1] >= 3));
-        assert_eq!(panel.at.len(), 24);
-        assert_eq!(panel.start[..4], [0; 4]);
+        let open = scene.open_edges(scene.first[1]);
+        assert_eq!(open.edges.len(), 12);
+        assert!(open.edges.iter().all(|e| e[0] >= 3 && e[1] >= 3));
+        assert_eq!(open.at.len(), 24);
+        assert_eq!(open.start[..4], [0; 4]);
         // each of the sheet's 12 rim vertices ends two of them, each of its 4 inner vertices none
-        let ends = |v: usize| panel.start[v + 1] - panel.start[v];
+        let ends = |v: usize| open.start[v + 1] - open.start[v];
         let rim = |i: usize, j: usize| i == 0 || i == 3 || j == 0 || j == 3;
         for j in 0..4 {
             for i in 0..4 {
@@ -1309,7 +1347,7 @@ mod tests {
             tri: touching,
             bary: [0.9, 0.05, 0.05],
         };
-        let d = scene.panel_edge_distance(&panel, &near).unwrap();
+        let d = scene.open_edge_distance(&open, &near).unwrap();
         assert!((d - 0.001).abs() < 1e-12, "{d}");
         // the middle cell touches no rim vertex
         let inner = Hit {
@@ -1317,26 +1355,24 @@ mod tests {
             tri: 1 + 2 * 4,
             bary: [0.3, 0.3, 0.4],
         };
-        assert_eq!(scene.panel_edge_distance(&panel, &inner), None);
+        assert_eq!(scene.open_edge_distance(&open, &inner), None);
 
-        // two sheets that meet with vertices of their own, as a drape writes a seam: both sides are edges
-        let mut pair = sheet(1, 0.01, [0.5; 3]);
-        let second = sheet(1, 0.01, [0.5; 3]);
-        pair.triangles
-            .extend(second.triangles.iter().map(|t| t.map(|v| v + 4)));
-        pair.vertices.extend(
-            second
-                .vertices
-                .iter()
-                .map(|v| Vec3::new(v.x + 0.01, 0.0, v.z)),
-        );
-        pair.colours.extend(second.colours);
+        // two squares sewn side by side: of their 8 rim edges the two on the seam are not open, and the
+        // 6 that are open are the outline of the pair
+        let square = sheet(1, 0.01, [0.5; 3]);
+        let pair = sewn_beside(square.clone(), &square, 0.01);
         let scene = Scene::new(&[&body, &pair]);
-        assert_eq!(scene.panel_edges(1).edges.len(), 8);
+        let open = scene.open_edges(1);
+        assert_eq!(open.edges.len(), 6);
+        let on_seam = |v: usize| scene.p[v][0] == 0.01;
+        assert!(open.edges.iter().all(|e| !(on_seam(e[0]) && on_seam(e[1]))));
+        // moved a hair apart, the two sides are no longer one place and both are open
+        let apart = sewn_beside(square.clone(), &square, 0.010_001);
+        assert_eq!(Scene::new(&[&body, &apart]).open_edges(1).edges.len(), 8);
     }
 
     #[test]
-    fn the_legible_still_draws_a_dark_line_inside_a_panel_edge() {
+    fn the_legible_still_draws_a_dark_line_inside_a_hem_and_none_at_a_seam() {
         // a 10 cm sheet seen square on from 0.3 m: about 1.1 mm a pixel at 192 across
         let cloth = sheet(8, 0.1, [0.5; 3]);
         let nothing = ColouredMesh::default();
@@ -1361,6 +1397,16 @@ mod tests {
         // none where the colours are the strain scale
         let plain = row(Shading::Legible, true);
         assert_eq!(plain[first + 1], plain[96]);
+
+        // a second sheet sewn to the right side: that side is now a seam and loses its line on both
+        // sides, while the left side is still a hem
+        let sewn = sewn_beside(cloth.clone(), &cloth, 0.1);
+        let img = still(&nothing, &sewn, cam, [192, 144], Shading::Legible, false);
+        let seamed: Vec<u8> = (0..192).map(|x| img[(72 * 192 + x) * 3]).collect();
+        for x in [last - 1, last, last + 1, last + 2] {
+            assert!(seamed[x].abs_diff(seamed[96]) <= 2, "{x} {seamed:?}");
+        }
+        assert!(seamed[first + 1] + 8 < seamed[96], "{seamed:?}");
     }
 
     #[test]

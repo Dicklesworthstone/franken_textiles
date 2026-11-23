@@ -489,9 +489,9 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   `ftx_drape::render` holds to what they were before the option existed. The legible set draws the same
   geometry through the same cameras for reading folds and edges by eye: four rays a pixel, 16 ambient
   rays a ray and, on the four construction views only, a highlight that grows as the view grazes the
-  cloth and a dark line inside every panel edge (hems, openings, and seams, whose two sides the drape's
-  mesh keeps apart). The strain views get the extra rays and nothing else, because there the colour is
-  the reading. It is a drawing aid with no reference counterpart: its constants are fixed in code, come
+  cloth and a dark line inside every hem and opening. Seams get no line, so their seam colours stay as
+  the standard still shows them. The strain views get the extra rays and nothing else, because there
+  the colour is the reading. It is a drawing aid with no reference counterpart: its constants are fixed in code, come
   from no material record and are the same for every cloth, so it shows no fabric's sheen and supports
   no physics or fit claim. `inspect-pixel` names the same place for a pixel of either set. The JSON
   envelope carries `"shading"`; an unknown shading is refused (`invalid_document`).
