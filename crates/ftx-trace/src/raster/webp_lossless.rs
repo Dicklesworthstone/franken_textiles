@@ -272,54 +272,84 @@ fn read_code(
     if br.bits(1) == 1 {
         let num_symbols = br.bits(1) + 1;
         let first_len_code = br.bits(1);
-        let symbol = br.bits(if first_len_code == 0 { 1 } else { 8 }) as usize;
-        lengths[symbol] = 1;
-        if num_symbols == 2 {
-            lengths[br.bits(8) as usize] = 1;
+        let sym0 = br.bits(if first_len_code == 0 { 1 } else { 8 }) as usize;
+        if sym0 >= alphabet {
+            return Err(BAD.into());
         }
-    } else {
-        let mut cl_lengths = [0usize; 19];
-        let num_codes = br.bits(4) as usize + 4;
-        for &k in &CODE_LENGTH_ORDER[..num_codes] {
-            cl_lengths[k] = br.bits(3) as usize;
-        }
-        let table = build_table(LENGTHS_TABLE_BITS, &cl_lengths).ok_or(BAD)?;
-        let mut max_symbol = if br.bits(1) == 1 {
-            let length_nbits = 2 + 2 * br.bits(3);
-            let m = 2 + br.bits(length_nbits) as usize;
-            if m > alphabet {
+        let sym1 = if num_symbols == 2 {
+            let s = br.bits(8) as usize;
+            if s >= alphabet {
                 return Err(BAD.into());
             }
-            m
+            Some(s)
         } else {
-            alphabet
+            None
         };
-        let (mut symbol, mut prev) = (0usize, 8usize);
-        while symbol < alphabet {
-            if max_symbol == 0 {
-                break;
+        if br.eos {
+            return Err(BAD.into());
+        }
+        // vp8l_dec.c `ReadHuffmanCode` simple-code path (RFC 9649 §4.2.2): 1 symbol takes 0 bits;
+        // 2 symbols always assign code 0 -> sym0 and code 1 -> sym1 (1 bit each), even if
+        // sym0 >= sym1.
+        let root_size = 1usize << HUFFMAN_TABLE_BITS;
+        let table = match sym1 {
+            None => vec![
+                HCode {
+                    bits: 0,
+                    value: sym0 as u16,
+                };
+                root_size
+            ],
+            Some(s1) => (0..root_size)
+                .map(|k| HCode {
+                    bits: 1,
+                    value: if k & 1 == 0 { sym0 as u16 } else { s1 as u16 },
+                })
+                .collect(),
+        };
+        return Ok(table);
+    }
+    let mut cl_lengths = [0usize; 19];
+    let num_codes = br.bits(4) as usize + 4;
+    for &k in &CODE_LENGTH_ORDER[..num_codes] {
+        cl_lengths[k] = br.bits(3) as usize;
+    }
+    let table = build_table(LENGTHS_TABLE_BITS, &cl_lengths).ok_or(BAD)?;
+    let mut max_symbol = if br.bits(1) == 1 {
+        let length_nbits = 2 + 2 * br.bits(3);
+        let m = 2 + br.bits(length_nbits) as usize;
+        if m > alphabet {
+            return Err(BAD.into());
+        }
+        m
+    } else {
+        alphabet
+    };
+    let (mut symbol, mut prev) = (0usize, 8usize);
+    while symbol < alphabet {
+        if max_symbol == 0 {
+            break;
+        }
+        max_symbol -= 1;
+        br.fill();
+        let p = table[(br.prefetch() & ((1 << LENGTHS_TABLE_BITS) - 1)) as usize];
+        br.bit_pos += u32::from(p.bits);
+        let code_len = usize::from(p.value);
+        if code_len < 16 {
+            lengths[symbol] = code_len;
+            symbol += 1;
+            if code_len != 0 {
+                prev = code_len;
             }
-            max_symbol -= 1;
-            br.fill();
-            let p = table[(br.prefetch() & ((1 << LENGTHS_TABLE_BITS) - 1)) as usize];
-            br.bit_pos += u32::from(p.bits);
-            let code_len = usize::from(p.value);
-            if code_len < 16 {
-                lengths[symbol] = code_len;
-                symbol += 1;
-                if code_len != 0 {
-                    prev = code_len;
-                }
-            } else {
-                let slot = code_len - 16;
-                let repeat = br.bits([2, 3, 7][slot]) as usize + [3, 3, 11][slot];
-                if symbol + repeat > alphabet {
-                    return Err(BAD.into());
-                }
-                let v = if code_len == 16 { prev } else { 0 };
-                lengths[symbol..symbol + repeat].fill(v);
-                symbol += repeat;
+        } else {
+            let slot = code_len - 16;
+            let repeat = br.bits([2, 3, 7][slot]) as usize + [3, 3, 11][slot];
+            if symbol + repeat > alphabet {
+                return Err(BAD.into());
             }
+            let v = if code_len == 16 { prev } else { 0 };
+            lengths[symbol..symbol + repeat].fill(v);
+            symbol += repeat;
         }
     }
     if br.eos {
@@ -921,4 +951,133 @@ pub(super) fn decode_alpha(data: &[u8], w: usize, h: usize) -> Result<Vec<u8>, S
     let mut br = BitReader::new(data);
     let argb = decode_stream(&mut br, w, h, Level::Alpha)?;
     Ok(argb.iter().map(|&p| (p >> 8) as u8).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct BitWriter {
+        bytes: Vec<u8>,
+        acc: u64,
+        bits: u32,
+    }
+
+    impl BitWriter {
+        fn new() -> Self {
+            Self {
+                bytes: Vec::new(),
+                acc: 0,
+                bits: 0,
+            }
+        }
+
+        fn put(&mut self, val: u32, n: u32) {
+            self.acc |= u64::from(val & ((1u32 << n) - 1)) << self.bits;
+            self.bits += n;
+            while self.bits >= 8 {
+                self.bytes.push(self.acc as u8);
+                self.acc >>= 8;
+                self.bits -= 8;
+            }
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            if self.bits > 0 {
+                self.bytes.push(self.acc as u8);
+            }
+            self.bytes
+        }
+    }
+
+    fn write_vp8l_header(bw: &mut BitWriter, w: usize, h: usize) {
+        bw.put(0x2f, 8);
+        bw.put((w - 1) as u32, 14);
+        bw.put((h - 1) as u32, 14);
+        bw.put(0, 1); // alpha
+        bw.put(0, 3); // version
+        bw.put(0, 1); // no transforms
+        bw.put(0, 1); // no color cache
+        bw.put(0, 1); // no meta huffman
+    }
+
+    fn write_simple_1(bw: &mut BitWriter, sym: u32) {
+        bw.put(1, 1); // simple
+        bw.put(0, 1); // 1 symbol
+        if sym < 2 {
+            bw.put(0, 1);
+            bw.put(sym, 1);
+        } else {
+            bw.put(1, 1);
+            bw.put(sym, 8);
+        }
+    }
+
+    fn write_simple_2(bw: &mut BitWriter, sym0: u32, sym1: u32) {
+        bw.put(1, 1); // simple
+        bw.put(1, 1); // 2 symbols
+        if sym0 < 2 {
+            bw.put(0, 1);
+            bw.put(sym0, 1);
+        } else {
+            bw.put(1, 1);
+            bw.put(sym0, 8);
+        }
+        bw.put(sym1, 8);
+    }
+
+    #[test]
+    fn simple_two_symbol_code_preserves_stream_order_duplicate_width_and_alphabet_bounds() {
+        // 1. sym0 > sym1: bit 0 must decode to sym0 (20) and bit 1 to sym1 (5), never sorted.
+        let mut bw = BitWriter::new();
+        write_vp8l_header(&mut bw, 2, 1);
+        write_simple_2(&mut bw, 20, 5); // green
+        for _ in 0..4 {
+            write_simple_1(&mut bw, 0); // R, B, A, distance
+        }
+        bw.put(0, 1); // pixel 0 green -> sym0 (20)
+        bw.put(1, 1); // pixel 1 green -> sym1 (5)
+        let pixels = decode_image(&bw.finish(), 2, 1).unwrap();
+        assert_eq!((pixels[0] >> 8) & 0xff, 20);
+        assert_eq!((pixels[1] >> 8) & 0xff, 5);
+
+        // 2. sym0 == sym1: 2-symbol simple code must still consume 1 bit per symbol so subsequent
+        // channel bits stay aligned.
+        let mut bw = BitWriter::new();
+        write_vp8l_header(&mut bw, 2, 1);
+        write_simple_2(&mut bw, 7, 7); // green: always 7, consumes 1 bit
+        write_simple_2(&mut bw, 10, 99); // red: bit 0 -> 10, bit 1 -> 99
+        write_simple_1(&mut bw, 0); // blue
+        write_simple_1(&mut bw, 255); // alpha
+        write_simple_1(&mut bw, 0); // distance
+        // Pixel 0: green bit = 1 (consumed -> 7), red bit = 1 (-> 99)
+        // Pixel 1: green bit = 0 (consumed -> 7), red bit = 0 (-> 10)
+        bw.put(1, 1);
+        bw.put(1, 1);
+        bw.put(0, 1);
+        bw.put(0, 1);
+        let pixels = decode_image(&bw.finish(), 2, 1).unwrap();
+        assert_eq!((pixels[0] >> 8) & 0xff, 7);
+        assert_eq!((pixels[0] >> 16) & 0xff, 99);
+        assert_eq!((pixels[1] >> 8) & 0xff, 7);
+        assert_eq!((pixels[1] >> 16) & 0xff, 10);
+
+        // 3. Out-of-alphabet symbol on the 40-symbol distance tree must be refused even when the
+        // first symbol is in range.
+        let mut bw = BitWriter::new();
+        write_vp8l_header(&mut bw, 1, 1);
+        for _ in 0..4 {
+            write_simple_1(&mut bw, 0);
+        }
+        write_simple_2(&mut bw, 0, 200); // 200 >= NUM_DISTANCE_CODES (40)
+        assert!(decode_image(&bw.finish(), 1, 1).is_err());
+
+        let mut bw = BitWriter::new();
+        write_vp8l_header(&mut bw, 1, 1);
+        for _ in 0..4 {
+            write_simple_1(&mut bw, 0);
+        }
+        write_simple_1(&mut bw, 40); // 40 >= NUM_DISTANCE_CODES (40)
+        assert!(decode_image(&bw.finish(), 1, 1).is_err());
+    }
 }
