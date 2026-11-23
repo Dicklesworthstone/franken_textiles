@@ -882,8 +882,8 @@ mod tests {
 
         let settings: SessionSettings = serde_json::from_value(json!({
             "spacing_mm": 12.0,
-            "sew_steps": 4,
-            "drape_steps": 4,
+            "sew_steps": 24,
+            "drape_steps": 0,
             "self_contact_mm": 2.0,
             "bending_model": "discrete_shells",
             "compression_model": "principal",
@@ -914,22 +914,24 @@ mod tests {
             "start_self_repulsion": { "min_separation_m": 0.004, "stiffness": 0.5, "period": 5 }
         }))
         .unwrap();
+        let pattern: Value = serde_json::from_str(PATTERN).unwrap();
         let (header, data) = baked(0.015);
         let body = PosableBody::parse(&header, &data).unwrap();
-        let mut live = Session::start(body, &band(), &json!({}), settings, |_| {}).unwrap();
+        let mut live = Session::start(body, &pattern, &json!({}), settings, |_| {}).unwrap();
+        live.scene.solver.gravity = Vec3::ZERO;
         let samples = live.advance(40.0, 35.0, 0.15).unwrap();
         assert!(!samples.is_empty());
         assert_eq!(live.arms(), [40.0, 35.0]);
 
         // Fail-closed: self_stick_slip without self_contact_mm > 0 must be refused.
         let bad: SessionSettings = serde_json::from_value(json!({
-            "sew_steps": 4,
-            "drape_steps": 4,
+            "sew_steps": 12,
+            "drape_steps": 0,
             "self_contact_mm": 0.0,
             "self_stick_slip": { "mu_s": 0.5, "mu_k": 0.3, "transition_v_m_s": 0.02 }
         }))
         .unwrap();
         let body2 = PosableBody::parse(&header, &data).unwrap();
-        assert!(Session::start(body2, &band(), &json!({}), bad, |_| {}).is_err());
+        assert!(Session::start(body2, &pattern, &json!({}), bad, |_| {}).is_err());
     }
 }
