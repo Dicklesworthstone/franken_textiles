@@ -983,7 +983,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         DEFAULT_BAND_HEIGHT_MM, QUALIFY_DRAPE_STEPS, QUALIFY_EASES, QUALIFY_SEW_STEPS,
         band_fit_spec, band_pattern_from_girth, evaluate_band, fabric_key,
     };
-    use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
+    use ftx_drape::run::{DrapeBody, drape, viewer};
 
     known_options(
         args,
@@ -1002,6 +1002,29 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             "leg-fraction",
             "skinning",
             "hands",
+            "compression",
+            "newton-strategy",
+            "integrator",
+            "rho-inf",
+            "bending-model",
+            "compression-model",
+            "air-drag",
+            "air-cn",
+            "air-ct",
+            "air-rho",
+            "rayleigh-membrane-s",
+            "rayleigh-bending-s",
+            "adaptive-barrier",
+            "stick-slip-mus",
+            "stick-slip-muk",
+            "stick-slip-v",
+            "construction-standard",
+            "hem-width-mm",
+            "hem-mass-mult",
+            "hem-bending-mult",
+            "seam-width-mm",
+            "seam-mass-mult",
+            "seam-bending-mult",
         ],
     )?;
     if args.positional.len() > 2 || (args.options.contains_key("ws") && args.positional.len() > 1) {
@@ -1018,6 +1041,10 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     let thumbs = super::parse_thumb_pose(args)?;
     let skinning = super::parse_skinning(args)?;
     let hands = super::parse_hands(args)?;
+    let mut opts = super::drape_options(args)?;
+    opts.sew_steps = QUALIFY_SEW_STEPS;
+    opts.drape_steps = QUALIFY_DRAPE_STEPS;
+    opts.validate()?;
     let fabric_override = super::fabric::load(args)?;
 
     let (data, meas_bytes, mut pat, published, _ws_lock) = if let Some(ws) = ws_arg.as_deref() {
@@ -1059,13 +1086,6 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         }
         selected.apply(&mut pat)?;
     }
-
-    let opts = DrapeOptions {
-        sew_steps: QUALIFY_SEW_STEPS,
-        drape_steps: QUALIFY_DRAPE_STEPS,
-        ..DrapeOptions::default()
-    };
-    opts.validate()?;
 
     let super::body_source::PreparedBody {
         model,
@@ -1504,6 +1524,112 @@ mod tests {
                 err.code,
                 RefusalCode::Io,
                 "invalid --compression {bad} must refuse before reading workspace"
+            );
+        }
+    }
+
+    #[test]
+    fn qualify_accepts_physics_options_and_validates_before_workspace_io() {
+        // Valid physics/constitutive options must pass option preflight and reach workspace I/O.
+        let valid = super::super::parse(
+            &[
+                "qualify",
+                "--measurements",
+                "no-such-measurements.json",
+                "--out",
+                "no-such-out",
+                "--compression",
+                "0.25",
+                "--bending-model",
+                "discrete-shells",
+                "--compression-model",
+                "principal",
+                "--air-drag",
+                "--air-cn",
+                "1.1",
+                "--rayleigh-membrane-s",
+                "0.002",
+                "--rayleigh-bending-s",
+                "0.003",
+                "--adaptive-barrier",
+                "--stick-slip-mus",
+                "0.6",
+                "--stick-slip-muk",
+                "0.3",
+                "--stick-slip-v",
+                "0.02",
+                "--construction-standard",
+                "--newton-strategy",
+                "adaptive-ilu",
+                "--integrator",
+                "generalized-alpha",
+                "--rho-inf",
+                "0.5",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let err = cmd_qualify(&valid).unwrap_err();
+        assert_eq!(
+            err.code,
+            RefusalCode::Io,
+            "valid qualify physics options must pass option parsing/validation before reading files, got: {err}"
+        );
+
+        // Invalid physics options must refuse fail-closed BEFORE any workspace/file I/O.
+        for bad_args in [
+            vec!["qualify", "no-such-ws", "--compression", "0"],
+            vec!["qualify", "no-such-ws", "--bending-model", "bogus"],
+            vec!["qualify", "no-such-ws", "--compression-model", "bogus"],
+            vec!["qualify", "no-such-ws", "--air-cn", "1.0"],
+            vec!["qualify", "no-such-ws", "--rayleigh-membrane-s", "-0.1"],
+            vec![
+                "qualify",
+                "no-such-ws",
+                "--stick-slip-mus",
+                "0.2",
+                "--stick-slip-muk",
+                "0.5",
+            ],
+            vec!["qualify", "no-such-ws", "--hem-mass-mult", "2.0"],
+            vec!["qualify", "no-such-ws", "--rho-inf", "0.5"],
+        ] {
+            let argv: Vec<String> = bad_args.into_iter().map(String::from).collect();
+            let parsed = super::super::parse(&argv).unwrap();
+            let err = cmd_qualify(&parsed).unwrap_err();
+            assert_ne!(
+                err.code,
+                RefusalCode::Io,
+                "invalid qualify option {argv:?} must refuse before reading workspace"
+            );
+        }
+
+        // Schedule and self-contact flags remain rejected on `ftx qualify` (spec 04 §7.1 fixes
+        // the three body-only zero-gravity chest bands at 70 sewing / 0 gravity steps).
+        for disallowed in [
+            vec!["qualify", "no-such-ws", "--sew", "12"],
+            vec!["qualify", "no-such-ws", "--drape", "10"],
+            vec!["qualify", "no-such-ws", "--self-contact-mm", "2"],
+            vec![
+                "qualify",
+                "no-such-ws",
+                "--self-stick-slip-mus",
+                "0.5",
+                "--self-stick-slip-muk",
+                "0.3",
+            ],
+        ] {
+            let argv: Vec<String> = disallowed.into_iter().map(String::from).collect();
+            let parsed = super::super::parse(&argv).unwrap();
+            let err = cmd_qualify(&parsed).unwrap_err();
+            assert_eq!(
+                err.code,
+                RefusalCode::InvalidDocument,
+                "disallowed qualify flag {argv:?} must be refused as unknown"
+            );
+            assert!(
+                err.message.contains("unknown option"),
+                "expected unknown-option refusal for {argv:?}, got: {err}"
             );
         }
     }
