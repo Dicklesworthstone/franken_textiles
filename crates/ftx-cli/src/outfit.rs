@@ -324,12 +324,7 @@ fn add_hat(outfit: &mut Outfit, path: &Path, measurements: &Value) -> Result<(),
     Ok(())
 }
 
-fn shots(
-    outfit: &Outfit,
-    width: usize,
-    height: usize,
-    shading: Shading,
-) -> Vec<(String, Vec<u8>)> {
+fn shots(outfit: &Outfit, width: usize, height: usize, shading: Shading) -> Vec<(String, Vec<u8>)> {
     let meshes: Vec<_> = std::iter::once(&outfit.body)
         .chain(outfit.garments.iter().map(|g| &g.mesh))
         .chain(outfit.hat.iter().map(|(mesh, _)| mesh))
@@ -414,7 +409,15 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "outfit",
-        &["measurements", "sim", "out", "seams", "res", "hat", "shading"],
+        &[
+            "measurements",
+            "sim",
+            "out",
+            "seams",
+            "res",
+            "hat",
+            "shading",
+        ],
     )?;
     if args.positional.len() != 1 {
         return Err(bad_input(

@@ -212,15 +212,22 @@ mod tests {
         // Legible-only round writes still_<view>_legible.png and shows the legible section in report.html.
         let rd_leg = scene();
         let ws_leg = rd_leg.parent().unwrap().parent().unwrap();
-        let (rep_leg, imgs_leg) =
-            publish(&rd_leg, 7, Some(&sim), Some((48, 32)), RoundShading::Legible).unwrap();
+        let (rep_leg, imgs_leg) = publish(
+            &rd_leg,
+            7,
+            Some(&sim),
+            Some((48, 32)),
+            RoundShading::Legible,
+        )
+        .unwrap();
         assert_eq!(rep_leg["status"], "PASS");
         assert_eq!(rep_leg["shading"], "legible");
         assert_eq!(imgs_leg.len(), 6);
         assert_eq!(imgs_leg[0], "rounds/007/sim/still_front_legible.png");
         assert!(!rd_leg.join("sim/still_front.png").exists());
         assert!(rd_leg.join("sim/still_front_legible.png").is_file());
-        let entry_leg = json!({"round":7,"dir":"rounds/007","sim":sim,"rendering":rep_leg,"images":imgs_leg});
+        let entry_leg =
+            json!({"round":7,"dir":"rounds/007","sim":sim,"rendering":rep_leg,"images":imgs_leg});
         let html_leg = super::super::report::render(ws_leg, &[entry_leg]).unwrap();
         assert_eq!(html_leg.matches("loading=\"lazy\"").count(), 6);
         assert!(html_leg.contains("src=\"rounds/007/sim/still_front_legible.png\""));
@@ -236,8 +243,12 @@ mod tests {
         assert_eq!(imgs_both.len(), 12);
         let std_bytes = std::fs::read(rd_both.join("sim/still_front.png")).unwrap();
         let leg_bytes = std::fs::read(rd_both.join("sim/still_front_legible.png")).unwrap();
-        assert_ne!(std_bytes, leg_bytes, "legible still must differ from standard still");
-        let entry_both = json!({"round":7,"dir":"rounds/007","sim":sim,"rendering":rep_both,"images":imgs_both});
+        assert_ne!(
+            std_bytes, leg_bytes,
+            "legible still must differ from standard still"
+        );
+        let entry_both =
+            json!({"round":7,"dir":"rounds/007","sim":sim,"rendering":rep_both,"images":imgs_both});
         let html_both = super::super::report::render(ws_both, &[entry_both]).unwrap();
         assert_eq!(html_both.matches("loading=\"lazy\"").count(), 12);
         assert!(html_both.contains("src=\"rounds/007/sim/still_front.png\""));

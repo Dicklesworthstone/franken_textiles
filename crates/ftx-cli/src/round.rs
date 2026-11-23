@@ -642,8 +642,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         (None, "not run".to_string(), None, false)
     };
-    let (rendering, images) =
-        stills::publish(&rd, n, sim.as_ref(), render_size, render_shading)?;
+    let (rendering, images) = stills::publish(&rd, n, sim.as_ref(), render_size, render_shading)?;
     let mut exports = None;
     let mut export_basis = "not run".to_string();
     if args.options.contains_key("export") {
