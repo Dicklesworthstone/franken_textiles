@@ -220,7 +220,10 @@ fn optimize(
     let mut damping = 1e-3;
     for _ in 0..160 {
         let (gram, rhs, scales) = normal(&e, n);
-        if scales.iter().any(|v| !v.is_finite()) {
+        if scales.iter().any(|v| !v.is_finite())
+            || rhs.iter().any(|v| !v.is_finite())
+            || !e.cost.is_finite()
+        {
             return None;
         }
         let gradient = rhs.iter().map(|v| v.abs()).fold(0., f64::max);
@@ -240,10 +243,10 @@ fn optimize(
                 delta[j] = scaled[j] / scales[j].max(f64::MIN_POSITIVE);
             }
             // Numerical trust region in log parameters; physical inputs are never clamped.
-            let size = delta.iter().map(|v| v.abs()).fold(0., f64::max);
-            if !size.is_finite() {
+            if delta.iter().any(|v| !v.is_finite()) {
                 return None;
             }
+            let size = delta.iter().map(|v| v.abs()).fold(0., f64::max);
             let fraction = if size > 1. { 1. / size } else { 1. };
             let trial = std::array::from_fn(|j| p[j] + fraction * delta[j]);
             let allowed = bounds

@@ -1206,6 +1206,10 @@ fn optimize<const N: usize>(
                 let delta = lstsq(&rows, &rhs);
                 std::array::from_fn(|j| (x[j] + delta[j] / scales[j].max(1e-12)).clamp(0.0, 1.0))
             };
+            if trial.iter().any(|v| !v.is_finite()) {
+                lambda *= 10.0;
+                continue;
+            }
             let step = (0..N).map(|j| (trial[j] - x[j]).abs()).fold(0.0, f64::max);
             if step <= 1e-12 {
                 lambda *= 10.0;
