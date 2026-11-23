@@ -9,6 +9,7 @@
 .dr-intro h1,.dr-intro h2{font:400 clamp(64px,6.6vw,112px)/.86 var(--serif);letter-spacing:-.044em;margin:0;color:#fbf6ea}
 .dr-intro h1 em,.dr-intro h2 em{font-weight:400;color:var(--lime)}
 .dr-deck{font-size:clamp(15.5px,1.2vw,18px);line-height:1.58;max-width:36ch;color:#d3d6d2;margin:22px 0 25px}
+.dr-deck a{color:#f3efe3;text-decoration:underline;text-decoration-color:#6f7f86;text-underline-offset:4px}.dr-deck a:hover{color:var(--lime)}
 .dr-settings{width:min(342px,100%);padding-bottom:4px}
 .dr-settings fieldset{margin:0 0 16px;border:0;padding:0;min-width:0}
 .dr-settings legend{font-weight:600;font-size:13px;margin-bottom:7px;padding:0}

@@ -69,7 +69,7 @@ export default function DrapeRoom({home=false}:{home?:boolean}){
     <div className="wrap dr-layout">
       <div className="dr-intro"><p className="dr-eyebrow"><i/>The drape room</p>
         <Heading id="room-title">Cloth in<br/><em>motion.</em></Heading>
-        <p className="dr-deck">Raise the arms to see where the bolero pulls closer. Choose the coupled outfit to watch the jacket hem and trouser waistband settle against each other.</p>
+        <p className="dr-deck">Raise the arms to see where the bolero pulls closer. Choose the coupled outfit to watch the jacket hem and trouser waistband settle against each other. To set each arm yourself, use the <a href="/studies/pose/">posing room</a>, where the solver sews the jacket on in your browser.</p>
       </div>
       <div className="dr-settings">
         <fieldset><legend>Chest target <small>cm</small></legend><div className="dr-options">{chests.map(c=><button key={c} aria-label={c+" centimetre chest"} aria-pressed={chest===c} onClick={()=>{if(c!==chest){beginChange();setChest(c);}}}>{c}</button>)}</div></fieldset>

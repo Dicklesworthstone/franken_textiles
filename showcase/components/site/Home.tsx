@@ -57,6 +57,7 @@ const tools = [
 const more = [
   ["/sections/wardrobe/", "Wardrobe", "A sundress, two hussar uniforms and an 18th-century waistcoat"],
   ["/sections/studies/", "Drape room", "Raise the arms, change the size, watch a jacket being sewn"],
+  ["/studies/pose/", "Posing room", "Drag an arm and the solver sews the jacket on again, in your browser"],
   ["/sections/studio/", "Studios", "Draft a pattern, lay it on the roll, follow an embroidery needle"],
   ["/sections/materials/", "Materials", "Pull, twist, wash and heat cloth and see what changes"],
   ["/sections/tracing/", "Tracing", "Recover cut lines from a drawn pattern sheet"],

@@ -8,53 +8,113 @@ import { fullControls } from "../atelier3d/viewControls";
 import { dressCloth } from "../atelier3d/garment";
 import { fabrics } from "../atelier3d/weave";
 
-// The posing room: a bolero sewn and draped by the production cloth solver, running in this tab as
-// WebAssembly in a worker (public/labs/pose-worker.mjs), on a baked synthetic form whose arms the
-// visitor drags. Every cloth state shown after the opening is one the solver accepted while moving the
-// body: nothing here is animated by hand.
+// The posing room. The visitor poses a baked synthetic form by dragging its arms; the page moves the form
+// itself, from the same baked arm samples the solver uses. When the pose is set, a worker
+// (public/labs/pose-worker.mjs) sews and drapes the bolero onto the form in that pose with the production
+// cloth solver compiled to WebAssembly, and the page replays what the solver did, from the flat pieces to
+// the hung jacket. Nothing shown on the cloth is animated by hand.
 
 export type PoseStatus = {
-  phase: "loading" | "sewing" | "replay" | "ready" | "solving" | "failed";
+  phase: "loading" | "sewing" | "replay" | "ready" | "failed";
   lines: string[];
   message?: string;
-  openingSeconds?: number;
+  /** The angles the form's arms were sampled at; a pose is sewn with each arm at one of them. */
+  angles: number[];
+  /** The form's pose now, left then right (degrees from the arm hanging down). */
+  shown: [number, number];
+  /** The pose the jacket on show was sewn in. */
+  sewn?: [number, number];
+  /** How long the last sew took in this tab (s). */
+  sewSeconds?: number;
+  /** When the running sew began (performance.now()). */
+  sewingSince?: number;
   clothVertices?: number;
-  range?: [number, number];
-  arms: [number, number];
-  target: [number, number];
-  last?: { degrees: number; clothSeconds: number; steps: number; milliseconds: number };
-  refused?: string;
+  /** The solver's own warnings about the jacket on show (its gating flags), word for word. */
+  flags?: string[];
 };
 
-export type PoseCommand = { kind: "arms"; left: number; right: number } | { kind: "settle" };
+export type PoseCommand = { kind: "arms"; left: number; right: number };
 
-type Ready = {
+type Sewn = {
+  left: number; right: number; seconds: number;
   summary: {
-    cloth_vertices: number; base_arm_deg: number; arm_range_deg: [number, number];
+    cloth_vertices: number; frames: { fold: number; zip: number; sew: number; drape: number };
     pieces: { id: string; first: number; end: number }[];
     seams: { side_a: number[]; side_b: number[] }[];
+    report?: { gating?: string[] };
   };
-  seconds: number; cloth: Float32Array; triangles: Uint32Array; flat: Float32Array; display: Float32Array;
-  displayTriangles: Uint32Array; raised: Float32Array[]; frames: Float32Array;
-  shoulders: { left: number[]; right: number[] }; form: { floorMm: number; cutAboveFloorMm: number | null };
+  cloth: Float32Array; triangles: Uint32Array; flat: Float32Array; frames: Float32Array;
+};
+
+type Arm = { indices: Uint32Array; offsets: Float32Array[] };
+type Form = {
+  base: Float32Array; triangles: Uint32Array; angles: number[]; arms: [Arm, Arm];
+  shoulders: [THREE.Vector3, THREE.Vector3]; floorMm: number; cutMm: number | null; baseDeg: number;
+  /** Side-neck point above the floor (mm): the form ends a little above it, under a cap, like the films' forms. */
+  neckMm: number;
 };
 
 const BODY = "/exhibits/pose/child-520";
 const PATTERN = "/exhibits/poses/bolero-start.json";
 const FIT = "/exhibits/poses/fit-spec.json";
-// The opening drape: the drape room's bolero settings with the browser's step budget.
-const SETTINGS = { spacing_mm: 12, sew_steps: 12, drape_steps: 36, max_settle_steps: 0, time_subdivision: true,
-  self_contact_mm: 0, motion_step_s: 1 / 30 };
-// A drag is followed in steps of at most STEP degrees, each moved at SPEED degrees per second of cloth time.
-const STEP = 10, SPEED = 60;
+// The drape room's bolero, at the browser's step budget.
+// Settling stops as soon as the cloth is quiet; raised arms need a few more steps than hanging ones.
+const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_steps: 48, time_subdivision: true, self_contact_mm: 0 };
+const same = (a?: [number, number] | null, b?: [number, number] | null) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
 
 /** Solver frame (z up, the wearer facing -y) to three.js (y up, the wearer facing +z). */
-function toThree(source: ArrayLike<number>, target = new Float32Array(source.length)) {
+function toThree(source: ArrayLike<number>, target: Float32Array = new Float32Array(source.length)) {
   for (let i = 0; i < source.length; i += 3) {
     target[i] = source[i]; target[i + 1] = source[i + 2]; target[i + 2] = -source[i + 1];
   }
   return target;
 }
+
+/** The baked form (ftx-posable-body/1) as the page needs it: the displayed surface and each arm's samples. */
+async function readForm(): Promise<Form> {
+  const [header, packed] = await Promise.all([
+    fetch(BODY + ".json").then(r => { if (!r.ok) throw Error("Could not load the form"); return r.json(); }),
+    fetch(BODY + ".bin.gz").then(r => { if (!r.ok || !r.body) throw Error("Could not load the form"); return r.body; }),
+  ]);
+  const bytes = await new Response(packed.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const array = (name: string) => {
+    const entry = header.arrays[name];
+    return entry.dtype === "u32" ? new Uint32Array(bytes, entry.offset, entry.count) : new Float32Array(bytes, entry.offset, entry.count);
+  };
+  const angles: number[] = header.arm_angles_deg;
+  const arm = (side: string): Arm => {
+    const indices = array(`${side}_display_indices`) as Uint32Array, all = array(`${side}_display_offsets`) as Float32Array;
+    const stride = indices.length * 3;
+    return { indices, offsets: angles.map((_, s) => all.subarray(s * stride, (s + 1) * stride)) };
+  };
+  const shoulder = (part: string) => { const o = header.frames[part].origin; return new THREE.Vector3(o[0] / 1000, o[2] / 1000, -o[1] / 1000); };
+  return {
+    base: array("display_vertices") as Float32Array, triangles: array("display_triangles") as Uint32Array, angles,
+    arms: [arm("left"), arm("right")], shoulders: [shoulder("arm_L"), shoulder("arm_R")],
+    floorMm: header.floor_mm, cutMm: header.trunk_cut_above_floor_mm ?? null, baseDeg: header.base_arm_deg,
+    neckMm: header.landmarks.torso.snp,
+  };
+}
+
+/** The form's displayed surface with the arms at these angles, as the session interpolates its samples. */
+function posed(form: Form, left: number, right: number, out = new Float32Array(form.base.length)) {
+  out.set(form.base);
+  const { angles } = form;
+  for (const [arm, angle] of [[form.arms[0], left], [form.arms[1], right]] as const) {
+    const a = THREE.MathUtils.clamp(angle, angles[0], angles[angles.length - 1]);
+    let upper = angles.findIndex(x => x >= a);
+    upper = Math.max(1, upper < 0 ? angles.length - 1 : upper);
+    const t = (a - angles[upper - 1]) / (angles[upper] - angles[upper - 1]);
+    const from = arm.offsets[upper - 1], to = arm.offsets[upper];
+    for (let k = 0; k < arm.indices.length; k++) {
+      const v = arm.indices[k] * 3;
+      for (let c = 0; c < 3; c++) out[v + c] += from[k * 3 + c] * (1 - t) + to[k * 3 + c] * t;
+    }
+  }
+  return out;
+}
+
+const nearest = (angles: number[], a: number) => angles.reduce((best, x) => Math.abs(x - a) < Math.abs(best - a) ? x : best, angles[0]);
 
 export default function PoseScene({ onStatus, command }: {
   onStatus: (status: PoseStatus) => void;
@@ -67,8 +127,8 @@ export default function PoseScene({ onStatus, command }: {
   useEffect(() => {
     const surface = host.current;
     if (!surface) return;
-    const status: PoseStatus = { phase: "loading", lines: [], arms: [35, 35], target: [35, 35] };
-    const publish = () => report.current({ ...status, lines: [...status.lines] });
+    const status: PoseStatus = { phase: "loading", lines: [], angles: [], shown: [35, 35] };
+    const publish = () => report.current({ ...status, lines: [...status.lines], shown: [...status.shown] });
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
@@ -80,7 +140,7 @@ export default function PoseScene({ onStatus, command }: {
     const canvas = renderer.domElement;
     canvas.style.cssText = "width:100%;height:100%;display:block";
     canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", "A bolero on a child's form. Drag an arm up or down to pose it; the cloth is solved again as the arm moves. Drag elsewhere to turn the view, right-drag to move it, scroll or pinch to zoom.");
+    canvas.setAttribute("aria-label", "A child's form wearing a bolero. Drag an arm up or down to pose it; when you let go the jacket is sewn on again in that pose. Drag elsewhere to turn the view, right-drag to move it, scroll or pinch to zoom.");
     surface.appendChild(canvas);
     prepareRenderer(renderer);
     renderer.setClearColor(0, 0);
@@ -99,7 +159,7 @@ export default function PoseScene({ onStatus, command }: {
     const homeTarget = new THREE.Vector3(0, 0.75, 0);
     const home = () => {
       orbit.target.copy(homeTarget);
-      camera.position.copy(homeTarget).add(new THREE.Vector3(0.55, 0.12, 1.75));
+      camera.position.copy(homeTarget).add(new THREE.Vector3(0.55, 0.1, 1.75));
       orbit.update();
       paint();
     };
@@ -107,7 +167,6 @@ export default function PoseScene({ onStatus, command }: {
     const look = fullControls(orbit, canvas, { paint, home, turnKeys: true });
     // An arm is dragged with one finger, so the view keeps every touch on the canvas.
     canvas.style.touchAction = "none";
-
     const resize = () => {
       const w = surface.clientWidth, h = surface.clientHeight;
       if (!w || !h) return;
@@ -121,177 +180,154 @@ export default function PoseScene({ onStatus, command }: {
     resize();
 
     const disposables: { dispose(): void }[] = [];
-    const worker = new Worker("/labs/pose-worker.mjs", { type: "module" });
+    let form: Form | null = null;
+    let bodyGeometry: THREE.BufferGeometry | null = null, bodyMesh: THREE.Mesh | null = null;
+    let armOf = Uint8Array.from([]);
+    let garment: ReturnType<typeof dressCloth> | null = null;
+    let sewn: Sewn | null = null;
+    let replay: { began: number } | null = null;
+    let worker: Worker | null = null, sewing: [number, number] | null = null;
     let raf = 0;
 
-    // Everything below needs the first drape.
-    let ready: Ready | null = null;
-    let bodyGeometry: THREE.BufferGeometry | null = null, bodyMesh: THREE.Mesh | null = null;
-    let garment: ReturnType<typeof dressCloth> | null = null;
-    let armOf = Uint8Array.from([]);
-    let shownBody: Float32Array = Float32Array.from([]);
-    const shoulders: THREE.Vector3[] = [];
-    let range: [number, number] = [35, 135];
-    let reached: [number, number] = [35, 35];
-    const target: [number, number] = [35, 35];
-    let busy = false, pendingSettle = false, moveId = 0;
-    type Play = { from: Float32Array; to: Float32Array; samples: Float32Array; seconds: number; began: number };
-    const plays: Play[] = [];
-    let replay: { frames: Float32Array; count: number; began: number } | null = null;
-
-    function stopReplay() {
-      if (!replay || !ready || !garment) return;
-      replay = null;
-      garment.update(toThree(ready.cloth));
-      if (status.phase === "replay") { status.phase = "ready"; publish(); }
+    function setBody(left: number, right: number) {
+      if (!form || !bodyGeometry) return;
+      const attribute = bodyGeometry.getAttribute("position") as THREE.BufferAttribute;
+      toThree(posed(form, left, right), attribute.array as Float32Array);
+      attribute.needsUpdate = true;
+      bodyGeometry.computeVertexNormals();
+      bodyGeometry.computeBoundingSphere();
+      status.shown = [left, right];
+      // The jacket on show belongs to one pose; in any other it would cut through the arms.
+      if (garment) garment.mesh.visible = same(status.shown, status.sewn ?? null) || !!replay;
       paint();
     }
 
-    const guide = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: "#a24628", dashSize: 0.012, gapSize: 0.008 }));
-    guide.visible = false;
-    scene.add(guide);
-    disposables.push(guide.geometry, guide.material as THREE.Material);
-    let armLength = 0.3;
-    function showGuide(side: number) {
-      const s = shoulders[side];
-      const a = THREE.MathUtils.degToRad(target[side]), sign = Math.sign(s.x) || 1;
-      const end = s.clone().add(new THREE.Vector3(sign * Math.sin(a), -Math.cos(a), 0).multiplyScalar(armLength));
-      guide.geometry.setFromPoints([s, end]);
-      guide.computeLineDistances();
-      guide.visible = true;
-      paint();
-    }
-
-    function pump() {
-      if (busy || !ready) return;
-      const d0 = target[0] - reached[0], d1 = target[1] - reached[1];
-      const most = Math.max(Math.abs(d0), Math.abs(d1));
-      if (most < 0.5) {
-        if (pendingSettle && !dragging) {
-          pendingSettle = false;
-          settle();
-          return;
-        }
-        if (!dragging && plays.length === 0) { status.phase = "ready"; publish(); }
+    function sew(pose: [number, number]) {
+      if (same(pose, sewing)) return;
+      if (same(pose, status.sewn ?? null) && !sewing) {
+        if (garment) garment.mesh.visible = true;
+        status.phase = "ready";
+        publish();
         return;
       }
-      const k = Math.min(1, STEP / most);
-      const next: [number, number] = [reached[0] + d0 * k, reached[1] + d1 * k];
-      busy = true;
-      status.phase = "solving";
-      status.target = [...target];
+      // A sew in progress is for a pose the visitor has left: drop it and start this one.
+      worker?.terminate();
+      worker = new Worker("/labs/pose-worker.mjs", { type: "module" });
+      worker.onmessage = onWorker;
+      worker.onerror = (e) => { Object.assign(status, { phase: "failed", message: e.message || "The solver worker stopped." }); publish(); };
+      sewing = pose;
+      replay = null;
+      Object.assign(status, { phase: "sewing", sewingSince: performance.now(), lines: [], message: undefined });
       publish();
-      worker.postMessage({ type: "move", id: ++moveId, left: next[0], right: next[1], seconds: Math.max(0.08, most * k / SPEED) });
-    }
-
-    function settle() {
-      if (!ready) return;
-      stopReplay();
-      if (busy) { pendingSettle = true; return; }
-      busy = true;
-      status.phase = "solving";
-      publish();
-      worker.postMessage({ type: "move", id: ++moveId, left: reached[0], right: reached[1], seconds: 0.5 });
+      worker.postMessage({ type: "sew", body: BODY, pattern: PATTERN, fit: FIT, settings: SETTINGS, left: pose[0], right: pose[1] });
     }
 
     command.current = (c) => {
-      if (!ready) return;
-      if (c.kind === "settle") { settle(); return; }
-      stopReplay();
-      pendingSettle = false;
-      target[0] = THREE.MathUtils.clamp(c.left, range[0], range[1]);
-      target[1] = THREE.MathUtils.clamp(c.right, range[0], range[1]);
-      status.target = [...target];
-      status.refused = undefined;
-      publish();
-      pump();
+      if (!form) return;
+      const pose: [number, number] = [nearest(form.angles, c.left), nearest(form.angles, c.right)];
+      setBody(pose[0], pose[1]);
+      sew(pose);
     };
 
-    function setBody(points: Float32Array) {
-      if (!bodyGeometry) return;
-      (bodyGeometry.getAttribute("position") as THREE.BufferAttribute).copyArray(points).needsUpdate = true;
-      bodyGeometry.computeVertexNormals();
-      bodyGeometry.computeBoundingSphere();
-      shownBody = points;
-    }
-
-    worker.onmessage = (event: MessageEvent) => {
+    function onWorker(event: MessageEvent) {
       if (!alive) return;
       const reply = event.data;
       if (reply.type === "progress") {
-        status.lines = [...status.lines.slice(-5), reply.line];
-        if (status.phase === "loading" && /^start:|^sew/.test(reply.line)) status.phase = "sewing";
+        status.lines = [...status.lines.slice(-4), reply.line];
         publish();
       } else if (reply.type === "failed") {
-        Object.assign(status, { phase: "failed", message: reply.message });
+        if (!same([reply.left, reply.right], sewing)) return;
+        sewing = null;
+        Object.assign(status, { phase: "ready", message: `The solver refused to sew the jacket on in this pose: ${reply.message}` });
         publish();
-      } else if (reply.type === "ready") {
-        ready = reply as Ready;
-        build(ready);
-      } else if (reply.type === "moved" && ready) {
-        const stride = 1 + ready.summary.cloth_vertices * 3;
-        const degrees = Math.max(Math.abs(reply.left - reached[0]), Math.abs(reply.right - reached[1]));
-        reached = [reply.left, reply.right];
-        const to = toThree(reply.display);
-        const seconds = reply.samples.length ? reply.samples[reply.samples.length - stride] : 0;
-        plays.push({ from: plays.length ? plays[plays.length - 1].to : shownBody, to, samples: reply.samples, seconds, began: -1 });
-        status.arms = [...reached];
-        status.last = { degrees, clothSeconds: seconds, steps: reply.samples.length / stride, milliseconds: reply.milliseconds };
-        busy = false;
-        pump();
-        publish();
-      } else if (reply.type === "refused") {
-        busy = false;
-        pendingSettle = false;
-        target[0] = reached[0];
-        target[1] = reached[1];
-        Object.assign(status, { phase: "ready", refused: reply.message, target: [...reached] });
-        publish();
+      } else if (reply.type === "sewn") {
+        if (!same([reply.left, reply.right], sewing)) return;
+        sewing = null;
+        dress(reply as Sewn);
       }
-    };
-    worker.onerror = (e) => {
-      Object.assign(status, { phase: "failed", message: e.message || "The solver worker stopped." });
-      publish();
-    };
-    worker.postMessage({ type: "start", body: BODY, pattern: PATTERN, fit: FIT, settings: SETTINGS });
+    }
 
-    function build(r: Ready) {
-      const n = r.summary.cloth_vertices;
-      range = r.summary.arm_range_deg;
-      reached = [r.summary.base_arm_deg, r.summary.base_arm_deg];
-      target[0] = target[1] = r.summary.base_arm_deg;
-      // The body: a plain tailor's form, cut below the waist, on a turned stand.
-      const display = toThree(r.display);
+    function dress(next: Sewn) {
+      const n = next.summary.cloth_vertices;
+      if (!garment || !sewn || sewn.summary.cloth_vertices !== n) {
+        if (garment) { scene.remove(garment.mesh); garment.dispose(); }
+        garment = dressCloth({
+          vertices: n, triangles: next.triangles,
+          seams: next.summary.seams.map(s => ({ side_a: s.side_a, side_b: s.side_b })),
+          panels: Object.fromEntries(next.summary.pieces.map(p => [p.id, [p.first, p.end] as [number, number]])),
+        }, Float32Array.from(next.flat, v => v / 1000), fabrics.greenWool, { sewn: toThree(next.cloth), edge: "braid" });
+        garment.tintAmount.value = 0;
+        scene.add(garment.mesh);
+      }
+      sewn = next;
+      garment.mesh.visible = true;
+      Object.assign(status, {
+        sewn: [next.left, next.right], sewSeconds: next.seconds, clothVertices: n, sewingSince: undefined,
+        flags: next.summary.report?.gating ?? [],
+      });
+      if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        replay = { began: -1 };
+        status.phase = "replay";
+      } else {
+        garment.update(toThree(next.cloth));
+        status.phase = "ready";
+      }
+      publish();
+      paint();
+    }
+
+    readForm().then(f => {
+      if (!alive) return;
+      form = f;
+      status.angles = f.angles;
+      // The form: a plain tailor's form, cut below the waist, on a turned stand.
       bodyGeometry = new THREE.BufferGeometry();
-      bodyGeometry.setAttribute("position", new THREE.BufferAttribute(display.slice(), 3));
-      bodyGeometry.setIndex(new THREE.BufferAttribute(r.displayTriangles, 1));
-      bodyGeometry.computeVertexNormals();
-      shownBody = display;
+      bodyGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(f.base.length), 3));
+      bodyGeometry.setIndex(new THREE.BufferAttribute(f.triangles, 1));
       const plaster = formMaterial(undefined, { inset: 0.0025 });
       bodyMesh = new THREE.Mesh(bodyGeometry, plaster);
       bodyMesh.castShadow = bodyMesh.receiveShadow = true;
       scene.add(bodyMesh);
       disposables.push(bodyGeometry, plaster);
-      // Which displayed vertices belong to each arm: those the baked arm samples move.
-      armOf = new Uint8Array(display.length / 3);
-      for (let v = 0; v < armOf.length; v++) {
-        for (const [side, raised] of [[1, r.raised[0]], [2, r.raised[1]]] as const) {
-          const dx = raised[v * 3] - r.display[v * 3], dy = raised[v * 3 + 1] - r.display[v * 3 + 1], dz = raised[v * 3 + 2] - r.display[v * 3 + 2];
-          if (dx * dx + dy * dy + dz * dz > 1e-6) armOf[v] = side;
+      armOf = new Uint8Array(f.base.length / 3);
+      f.arms.forEach((arm, side) => arm.indices.forEach(v => { armOf[v] = side + 1; }));
+      setBody(f.baseDeg, f.baseDeg);
+      // A tailor's form has no head: it ends a little above the side-neck point under a turned cap. The head's
+      // triangles are left out (not clipped by a plane, which would also cut off a raised arm); the cap
+      // covers the stepped edge they leave.
+      const floorY = f.floorMm / 1000, neckY = floorY + (f.neckMm + 30) / 1000;
+      {
+        const at = bodyGeometry.getAttribute("position") as THREE.BufferAttribute;
+        const head = (v: number) => !armOf[v] && at.getY(v) > neckY + 0.006;
+        const kept: number[] = [];
+        for (let t = 0; t < f.triangles.length; t += 3) {
+          const [a, b, c] = [f.triangles[t], f.triangles[t + 1], f.triangles[t + 2]];
+          if (!(head(a) || head(b) || head(c))) kept.push(a, b, c);
         }
+        bodyGeometry.setIndex(kept);
       }
-      for (const s of [r.shoulders.left, r.shoulders.right]) shoulders.push(new THREE.Vector3(s[0] / 1000, s[2] / 1000, -s[1] / 1000));
-      // Arm length from the shoulder to the farthest arm vertex.
-      for (let v = 0; v < armOf.length; v++) if (armOf[v]) {
-        const s = shoulders[armOf[v] - 1];
-        armLength = Math.max(armLength, Math.hypot(display[v * 3] - s.x, display[v * 3 + 1] - s.y, display[v * 3 + 2] - s.z) * 0.92);
+      const positions = bodyGeometry.getAttribute("position") as THREE.BufferAttribute;
+      const box = new THREE.Box3().setFromBufferAttribute(positions);
+      box.max.y = Math.min(box.max.y, neckY);
+      const neck = new THREE.Box3();
+      for (let v = 0; v < positions.count; v++) {
+        if (Math.abs(positions.getY(v) - neckY) < 0.006 && !armOf[v]) neck.expandByPoint(new THREE.Vector3().fromBufferAttribute(positions, v));
       }
-      const box = new THREE.Box3().setFromBufferAttribute(bodyGeometry.getAttribute("position") as THREE.BufferAttribute);
-      const floorY = r.form.floorMm / 1000;
-      const cutY = r.form.cutAboveFloorMm === null ? box.min.y : floorY + r.form.cutAboveFloorMm / 1000;
+      const walnut = new THREE.MeshStandardMaterial({ color: "#4a3a31", roughness: 0.5 });
+      if (!neck.isEmpty()) {
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(1, 1.04, 0.017, 64), walnut);
+        const size = neck.getSize(new THREE.Vector3()), mid = neck.getCenter(new THREE.Vector3());
+        cap.scale.set(size.x / 2 * 1.05, 1, size.z / 2 * 1.05);
+        cap.position.set(mid.x, neckY + 0.0045, mid.z);
+        cap.castShadow = cap.receiveShadow = true;
+        scene.add(cap);
+        disposables.push(cap.geometry);
+      }
+      disposables.push(walnut);
+      const cutY = f.cutMm === null ? box.min.y : floorY + f.cutMm / 1000;
+      const centre = box.getCenter(new THREE.Vector3());
       const brass = new THREE.MeshStandardMaterial({ color: "#a08255", metalness: 0.5, roughness: 0.42 });
       const lacquer = new THREE.MeshStandardMaterial({ color: "#423b34", roughness: 0.52 });
-      const centre = box.getCenter(new THREE.Vector3());
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, cutY - floorY, 48), brass);
       pole.position.set(centre.x, (cutY + floorY) / 2, centre.z);
       const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.11, 0.014, 80), lacquer);
@@ -306,98 +342,93 @@ export default function PoseScene({ onStatus, command }: {
       home();
       look.setHome();
       studio.frame(new THREE.Vector3(centre.x, (box.max.y + floorY) / 2, centre.z), Math.max(0.5, (box.max.y - floorY) * 0.7));
-      // The cloth: the solver's own surface, drawn with the site's woven-cloth material.
-      const sewn = toThree(r.cloth);
-      garment = dressCloth({
-        vertices: n, triangles: r.triangles,
-        seams: r.summary.seams.map(s => ({ side_a: s.side_a, side_b: s.side_b })),
-        panels: Object.fromEntries(r.summary.pieces.map(p => [p.id, [p.first, p.end] as [number, number]])),
-      }, Float32Array.from(r.flat, v => v / 1000), fabrics.greenWool, { sewn, edge: "braid" });
-      garment.tintAmount.value = 0;
-      scene.add(garment.mesh);
-      disposables.push(garment);
-      Object.assign(status, { openingSeconds: r.seconds, clothVertices: n, range, arms: [...reached], target: [...target] });
-      // Replay the sewing and the drape the solver has just done, then hand the figure over.
-      const count = r.frames.length / (n * 3);
-      if (count > 1 && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        replay = { frames: r.frames, count, began: -1 };
-        status.phase = "replay";
-      } else {
-        garment.update(sewn);
-        status.phase = "ready";
-      }
+      sew([f.baseDeg, f.baseDeg]);
+    }).catch(error => {
+      Object.assign(status, { phase: "failed", message: String(error?.message ?? error) });
       publish();
-      paint();
-    }
+    });
 
-    // Dragging an arm.
+    // Dragging an arm moves the form at once; letting go sews the jacket on in the nearest sampled pose.
     const pointer = new THREE.Vector2(), ray = new THREE.Raycaster(), plane = new THREE.Plane(), hit = new THREE.Vector3();
     let dragging = 0, dragFrom = { y: 0, angle: 0 }, hover = 0;
-    const armAt = (event: PointerEvent) => {
-      if (!bodyMesh || !bodyGeometry) return 0;
+    const aim = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return 0;
+      if (!rect.width || !rect.height) return false;
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
       ray.setFromCamera(pointer, camera);
+      return true;
+    };
+    // An arm is picked by a direct hit, or else by the arm point nearest the pointer's ray within 3.5 cm:
+    // a child's arm is thin, and a visitor aims at the sleeve over it as often as at the arm itself.
+    const point = new THREE.Vector3();
+    const armAt = (event: PointerEvent) => {
+      if (!form || !bodyMesh || !bodyGeometry || !aim(event)) return 0;
       const found = ray.intersectObject(bodyMesh, false)[0];
-      if (!found || found.faceIndex == null) return 0;
-      const index = bodyGeometry.getIndex()!;
-      return armOf[index.getX(found.faceIndex * 3)];
+      if (found && found.faceIndex != null) {
+        const arm = armOf[bodyGeometry.getIndex()!.getX(found.faceIndex * 3)];
+        if (arm) return arm;
+      }
+      const positions = bodyGeometry.getAttribute("position") as THREE.BufferAttribute;
+      let best = 0, nearest = 0.035 * 0.035;
+      for (const [side, arm] of form.arms.entries()) {
+        for (let k = 0; k < arm.indices.length; k += 2) {
+          point.fromBufferAttribute(positions, arm.indices[k]);
+          const d = ray.ray.distanceSqToPoint(point);
+          // Not an arm seen through the torso.
+          if (d < nearest && (!found || ray.ray.origin.distanceTo(point) < found.distance + 0.03)) { nearest = d; best = side + 1; }
+        }
+      }
+      return best;
     };
     const angleAt = (event: PointerEvent, side: number) => {
-      const rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return target[side];
-      pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
-      ray.setFromCamera(pointer, camera);
-      const s = shoulders[side];
+      if (!form || !aim(event)) return status.shown[side];
+      const s = form.shoulders[side];
       // The arms swing in the body's frontal plane. Seen nearly edge-on, follow the pointer's height instead.
       if (Math.abs(ray.ray.direction.z) < 0.3) return dragFrom.angle + (dragFrom.y - event.clientY) * 0.45;
       plane.set(new THREE.Vector3(0, 0, 1), -s.z);
-      if (!ray.ray.intersectPlane(plane, hit)) return target[side];
+      if (!ray.ray.intersectPlane(plane, hit)) return status.shown[side];
       const outward = (hit.x - s.x) * (Math.sign(s.x) || 1), down = s.y - hit.y;
       return THREE.MathUtils.radToDeg(Math.atan2(outward, down));
     };
     const down = (event: PointerEvent) => {
-      if (event.button !== 0 || !event.isPrimary || status.phase === "loading" || status.phase === "sewing" || status.phase === "failed") return;
+      if (event.button !== 0 || !event.isPrimary || !form) return;
       const arm = armAt(event);
       if (!arm) return;
-      stopReplay();
-      pendingSettle = false;
       dragging = arm;
-      dragFrom = { y: event.clientY, angle: target[arm - 1] };
+      dragFrom = { y: event.clientY, angle: status.shown[arm - 1] };
       orbit.enabled = false;
       canvas.setPointerCapture(event.pointerId);
       canvas.style.cursor = "grabbing";
-      status.refused = undefined;
       event.stopImmediatePropagation();
       event.preventDefault();
-      showGuide(arm - 1);
     };
     const move = (event: PointerEvent) => {
       if (!dragging) {
         if (event.pointerType === "mouse" && !event.buttons) {
           const arm = armAt(event);
-          if (arm !== hover) { hover = arm; canvas.style.cursor = arm ? "grab" : ""; }
+          // Over an arm the cursor is a pointing hand ready to lift it; elsewhere the view's own grab cursor.
+          if (arm !== hover) { hover = arm; canvas.style.cursor = arm ? "pointer" : "grab"; canvas.dataset.arm = String(arm); }
         }
         return;
       }
-      const side = dragging - 1;
-      target[side] = THREE.MathUtils.clamp(angleAt(event, side), range[0], range[1]);
-      status.target = [...target];
+      if (!form) return;
+      const side = dragging - 1, angles = form.angles;
+      const angle = THREE.MathUtils.clamp(angleAt(event, side), angles[0], angles[angles.length - 1]);
+      const pose: [number, number] = [...status.shown];
+      pose[side] = angle;
+      setBody(pose[0], pose[1]);
       publish();
-      showGuide(side);
-      pump();
       event.preventDefault();
     };
     const up = (event: PointerEvent) => {
-      if (!dragging) return;
+      if (!dragging || !form) return;
       dragging = 0;
       orbit.enabled = true;
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-      canvas.style.cursor = "";
-      guide.visible = false;
-      paint();
-      pump();
+      canvas.style.cursor = "pointer";
+      const pose: [number, number] = [nearest(form.angles, status.shown[0]), nearest(form.angles, status.shown[1])];
+      setBody(pose[0], pose[1]);
+      sew(pose);
     };
     canvas.addEventListener("pointerdown", down, true);
     canvas.addEventListener("pointermove", move);
@@ -410,57 +441,31 @@ export default function PoseScene({ onStatus, command }: {
     };
     canvas.addEventListener("webglcontextlost", lost);
 
-    // One loop draws only when something changed: the camera, a replay, or accepted solver samples.
-    let blend = Float32Array.from([]), bodyBlend = Float32Array.from([]);
+    // The replay: the solver's own frames, the flat pieces' journey to the form quickly, the sewing and the
+    // hang at a pace the eye can follow.
+    let blend = Float32Array.from([]);
     function frame(now: number) {
       raf = requestAnimationFrame(frame);
       if (orbit.update()) dirty = true;
-      if (ready && garment && replay) {
+      if (sewn && garment && replay) {
         if (replay.began < 0) replay.began = now;
-        const n = ready.summary.cloth_vertices * 3, t = Math.min(1, (now - replay.began) / 3600);
-        const at = t * (replay.count - 1), i = Math.min(replay.count - 2, Math.floor(at)), f = at - i;
+        const n = sewn.summary.cloth_vertices * 3, count = sewn.frames.length / n;
+        const { fold, zip, sew: sewing_ } = sewn.summary.frames;
+        const seconds = (now - replay.began) / 1000;
+        const keys: [number, number][] = [[0, 0], [1.6, fold + zip - 1], [3.0, fold + zip + sewing_ - 1], [4.6, count - 1]];
+        let k = 1;
+        while (k < keys.length - 1 && seconds > keys[k][0]) k++;
+        const [t0, f0] = keys[k - 1], [t1, f1] = keys[k];
+        const at = Math.min(count - 1, f0 + (f1 - f0) * Math.min(1, Math.max(0, (seconds - t0) / (t1 - t0))));
+        const i = Math.min(count - 2, Math.floor(at)), f = at - i;
         if (blend.length !== n) blend = new Float32Array(n);
-        for (let k = 0; k < n; k++) blend[k] = replay.frames[i * n + k] * (1 - f) + replay.frames[(i + 1) * n + k] * f;
+        for (let j = 0; j < n; j++) blend[j] = sewn.frames[i * n + j] * (1 - f) + sewn.frames[(i + 1) * n + j] * f;
         garment.update(toThree(blend, new Float32Array(n)));
         dirty = true;
-        if (t >= 1) {
+        if (seconds >= keys[keys.length - 1][0]) {
           replay = null;
-          garment.update(toThree(ready.cloth));
+          garment.update(toThree(sewn.cloth));
           if (status.phase === "replay") { status.phase = "ready"; publish(); }
-        }
-      } else if (ready && garment && plays.length) {
-        const play = plays[0], n = ready.summary.cloth_vertices * 3, stride = n + 1;
-        if (play.began < 0) play.began = now;
-        const count = Math.floor(play.samples.length / stride);
-        if (count === 0) {
-          setBody(play.to);
-          dirty = true;
-          plays.shift();
-          if (!plays.length && !busy) pump();
-        } else {
-          const span = Math.max(play.seconds, 0.12) * 1000, t = Math.min(1, (now - play.began) / span) * play.seconds;
-          // The sample before and after the clock, and the body between the move's two ends as the solver moved it.
-          let k = 0;
-          while (k < count - 1 && play.samples[k * stride] < t) k++;
-          const t1 = play.samples[k * stride], t0 = k ? play.samples[(k - 1) * stride] : 0;
-          const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
-          if (blend.length !== n) blend = new Float32Array(n);
-          for (let j = 0; j < n; j++) {
-            const b = play.samples[k * stride + 1 + j];
-            const a = k ? play.samples[(k - 1) * stride + 1 + j] : b;
-            blend[j] = a * (1 - f) + b * f;
-          }
-          garment.update(toThree(blend, new Float32Array(n)));
-          const g = play.seconds > 0 ? t / play.seconds : 1;
-          if (bodyBlend.length !== play.to.length) bodyBlend = new Float32Array(play.to.length);
-          for (let j = 0; j < play.to.length; j++) bodyBlend[j] = play.from[j] * (1 - g) + play.to[j] * g;
-          setBody(bodyBlend.slice());
-          dirty = true;
-          if (t >= play.seconds) {
-            setBody(play.to);
-            plays.shift();
-            if (!plays.length && !busy) pump();
-          }
         }
       }
       if (dirty && alive) {
@@ -475,7 +480,7 @@ export default function PoseScene({ onStatus, command }: {
       alive = false;
       command.current = null;
       cancelAnimationFrame(raf);
-      worker.terminate();
+      worker?.terminate();
       observer.disconnect();
       look.dispose();
       orbit.dispose();
@@ -484,6 +489,7 @@ export default function PoseScene({ onStatus, command }: {
       canvas.removeEventListener("pointerup", up);
       canvas.removeEventListener("pointercancel", up);
       canvas.removeEventListener("webglcontextlost", lost);
+      garment?.dispose();
       for (const item of disposables) item.dispose();
       studio.dispose();
       renderer.dispose();

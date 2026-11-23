@@ -383,9 +383,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut admitted = Vec::new();
     let mut refused = Vec::new();
     let mut samples = Vec::new();
+    // Each arm's own frame and landmark heights at every admitted angle: what a drape places a sleeve by
+    // when it starts with the arms in that pose. A frame depends only on its own arm's angle.
+    let mut arm_frames: [Vec<Value>; 2] = [Vec::new(), Vec::new()];
+    let arm_frame = |posed: &ftx_body::PosedBody, part: &str| -> Result<Value, Box<dyn Error>> {
+        let frames = BodyFrames::new(&model, posed)?;
+        let f = frames.frame(part).ok_or("an arm frame is missing")?;
+        let vector = |v: Vec3| json!([v.x, v.y, v.z]);
+        let heights: Map<String, Value> = ["shoulder_tip", "elbow", "wrist"]
+            .iter()
+            .filter_map(|name| frames.landmark_h(part, name).map(|h| ((*name).to_string(), json!(h))))
+            .collect();
+        Ok(json!({"origin": vector(f.origin), "up": vector(f.up), "front": vector(f.front), "lat": vector(f.lat),
+                  "landmarks": heights, "radius_mm": frames.section_radius(part, 0.0)}))
+    };
     for &angle in &requested {
-        let (_, left_c, left_d) = posed_at(angle, base)?;
-        let (_, right_c, right_d) = posed_at(base, angle)?;
+        let (left_posed, left_c, left_d) = posed_at(angle, base)?;
+        let (right_posed, right_c, right_d) = posed_at(base, angle)?;
         let (left_c, left_d) = surfaces(&left_c, &left_d);
         let (right_c, right_d) = surfaces(&right_c, &right_d);
         if crossings(&left_c)?.is_some() || crossings(&right_c)?.is_some() {
@@ -393,6 +407,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             admitted.push(angle);
             samples.push([left_c, left_d, right_c, right_d]);
+            arm_frames[0].push(arm_frame(&left_posed, "arm_L")?);
+            arm_frames[1].push(arm_frame(&right_posed, "arm_R")?);
         }
     }
     if admitted.len() < 2 {
@@ -422,6 +438,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "note": "A synthetic body baked for the browser's posing session: frames in mm, surfaces in metres (z up, facing -y), single precision.",
         "base_arm_deg": base,
         "arm_angles_deg": admitted,
+        "arm_frames": {"arm_L": arm_frames[0], "arm_R": arm_frames[1]},
         "arm_angles_refused_deg": refused,
         "hands": "wrist",
         "form": if upper { "upper" } else { "whole" },

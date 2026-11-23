@@ -1014,6 +1014,40 @@ impl WebDrapeSession {
         .map_err(|e| JsError::new(&e))
     }
 
+    /// As the constructor, with the left and right arm at sampled angles (degrees from vertical): the
+    /// pieces are placed by the arms in that pose and sewn and hung there.
+    ///
+    /// # Errors
+    /// As the constructor, and an angle that is not one of the body's samples.
+    pub fn posed(
+        body_header: &str,
+        body_data: &[u8],
+        pattern: &str,
+        fit_spec: &str,
+        settings_json: &str,
+        left_deg: f64,
+        right_deg: f64,
+    ) -> Result<WebDrapeSession, JsError> {
+        let parse = |name: &str, text: &str| -> Result<serde_json::Value, JsError> {
+            serde_json::from_str(text).map_err(|e| JsError::new(&format!("{name}: {e}")))
+        };
+        let settings = serde_json::from_str(settings_json)
+            .map_err(|e| JsError::new(&format!("session settings: {e}")))?;
+        let body = crate::session::PosableBody::parse(body_header, body_data)
+            .map_err(|e| JsError::new(&e))?;
+        crate::session::Session::start_posed(
+            body,
+            &parse("pattern", pattern)?,
+            &parse("fit specification", fit_spec)?,
+            settings,
+            left_deg,
+            right_deg,
+            ftx_progress,
+        )
+        .map(|inner| WebDrapeSession { inner })
+        .map_err(|e| JsError::new(&e))
+    }
+
     /// Counts, pieces, the opening drape's phases and its report (`ftx-drape-session/1`) as JSON text.
     #[must_use]
     pub fn summary(&self) -> String {

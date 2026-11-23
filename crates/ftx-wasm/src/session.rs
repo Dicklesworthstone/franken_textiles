@@ -50,6 +50,16 @@ struct ArrayDoc {
     count: usize,
 }
 
+/// One arm's frame and landmark heights with that arm at one sampled angle.
+#[derive(Deserialize)]
+struct ArmFrameDoc {
+    origin: [f64; 3],
+    up: [f64; 3],
+    front: [f64; 3],
+    lat: [f64; 3],
+    landmarks: BTreeMap<String, f64>,
+}
+
 #[derive(Deserialize)]
 struct Header {
     schema: String,
@@ -58,6 +68,9 @@ struct Header {
     radius_h0_mm: f64,
     frames: BTreeMap<String, FrameDoc>,
     landmarks: BTreeMap<String, BTreeMap<String, f64>>,
+    /// `arm_L` and `arm_R`, one entry per sampled angle. Without them a drape can only start in the base pose.
+    #[serde(default)]
+    arm_frames: BTreeMap<String, Vec<ArmFrameDoc>>,
     arrays: BTreeMap<String, ArrayDoc>,
 }
 
@@ -78,6 +91,9 @@ struct Surface {
     right: Arm,
 }
 
+/// One arm at one sampled angle: its frame and its landmark heights (mm).
+type ArmSample = (PartFrame, BTreeMap<String, f64>);
+
 /// A baked synthetic body (`ftx-posable-body/1`): what a drape places pieces by, collides with and shows,
 /// with each arm sampled at a list of abduction angles.
 #[derive(Debug)]
@@ -86,10 +102,56 @@ pub struct PosableBody {
     angles: Vec<f64>,
     frames: BTreeMap<String, PartFrame>,
     landmarks: BTreeMap<String, BTreeMap<String, f64>>,
+    /// `arm_L` / `arm_R` → per sampled angle, that arm's frame and landmark heights.
+    arm_frames: BTreeMap<String, Vec<ArmSample>>,
     radius: BTreeMap<String, Vec<f64>>,
     radius_h0: f64,
     collision: Surface,
     display: Surface,
+}
+
+/// The frames a drape starts from with each arm at a sampled angle: the base pose's, with each arm's own
+/// frame and landmarks taken from its sample.
+struct PosedFrames<'a> {
+    body: &'a PosableBody,
+    /// Sample index of the left and right arm.
+    arms: [usize; 2],
+}
+
+impl PosedFrames<'_> {
+    fn arm(&self, part: &str) -> Option<&ArmSample> {
+        let side = match part {
+            "arm_L" => 0,
+            "arm_R" => 1,
+            _ => return None,
+        };
+        self.body.arm_frames.get(part)?.get(self.arms[side])
+    }
+}
+
+impl PartFrames for PosedFrames<'_> {
+    fn frame(&self, part: &str) -> Option<PartFrame> {
+        self.arm(part)
+            .map(|(frame, _)| *frame)
+            .or_else(|| self.body.frame(part))
+    }
+
+    fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+        match self.arm(part) {
+            Some((_, heights)) => heights.get(name).copied(),
+            None => self.body.landmark_h(part, name),
+        }
+    }
+
+    // An arm's section radius is its upper arm's, which does not change as the arm turns.
+    fn section_radius(&self, part: &str, h: f64) -> f64 {
+        self.body.section_radius(part, h)
+    }
+
+    // Each arm is at its own sampled angle, so the mirrored sleeve goes round the left arm itself.
+    fn independent_limbs(&self) -> bool {
+        true
+    }
 }
 
 fn bytes_of<'a>(
@@ -266,6 +328,32 @@ impl PosableBody {
         {
             return Err("posable body: a landmark height is not finite".into());
         }
+        let mut arm_frames = BTreeMap::new();
+        for (part, docs) in &header.arm_frames {
+            if !matches!(part.as_str(), "arm_L" | "arm_R") || docs.len() != angles.len() {
+                return Err(format!(
+                    "posable body: arm frames {part} must be arm_L or arm_R with one per sampled angle"
+                ));
+            }
+            let mut samples = Vec::with_capacity(docs.len());
+            for doc in docs {
+                let frame = PartFrame {
+                    origin: vector(doc.origin),
+                    up: vector(doc.up),
+                    front: vector(doc.front),
+                    lat: vector(doc.lat),
+                };
+                if ![frame.origin, frame.up, frame.front, frame.lat]
+                    .iter()
+                    .all(|v| v.is_finite())
+                    || doc.landmarks.values().any(|h| !h.is_finite())
+                {
+                    return Err(format!("posable body: an {part} frame is not finite"));
+                }
+                samples.push((frame, doc.landmarks.clone()));
+            }
+            arm_frames.insert(part.clone(), samples);
+        }
         Ok(Self {
             base_deg: header.base_arm_deg,
             radius_h0: header.radius_h0_mm,
@@ -274,8 +362,38 @@ impl PosableBody {
             angles,
             frames,
             landmarks: header.landmarks,
+            arm_frames,
             radius,
         })
+    }
+
+    /// The angles each arm was sampled at (degrees from vertical). A drape can start with either arm at
+    /// any of them; moves go anywhere in between.
+    #[must_use]
+    pub fn arm_angles(&self) -> &[f64] {
+        &self.angles
+    }
+
+    // The frames for a drape that starts with the arms at these sampled angles.
+    fn frames_at(&self, left: f64, right: f64) -> Result<PosedFrames<'_>, String> {
+        let sample = |angle: f64| {
+            self.angles
+                .iter()
+                .position(|&a| (a - angle).abs() < 1e-9)
+                .ok_or_else(|| {
+                    format!("a drape starts with each arm at a sampled angle, not {angle}°")
+                })
+        };
+        let arms = [sample(left)?, sample(right)?];
+        let at_base = |side: usize| self.angles[arms[side]] == self.base_deg;
+        for (side, part) in [(0, "arm_L"), (1, "arm_R")] {
+            if !at_base(side) && !self.arm_frames.contains_key(part) {
+                return Err(format!(
+                    "this body has no baked {part} frames, so a drape can only start in its base pose"
+                ));
+            }
+        }
+        Ok(PosedFrames { body: self, arms })
     }
 
     /// The smallest and largest arm angle the body was sampled at (degrees from vertical).
@@ -445,6 +563,26 @@ impl Session {
         pattern: &Value,
         fit_spec: &Value,
         settings: SessionSettings,
+        progress: impl FnMut(&str),
+    ) -> Result<Self, String> {
+        let base = body.base_arm_deg();
+        Self::start_posed(body, pattern, fit_spec, settings, base, base, progress)
+    }
+
+    /// Sews and drapes `pattern` on `body` with the left and right arm at these sampled angles (degrees
+    /// from vertical): the pieces are placed by the arms' frames in that pose, as `ftx drape --arm-deg`
+    /// places them, and sewn and hung there.
+    ///
+    /// # Errors
+    /// An angle that is not one of the body's samples, a body without baked arm frames for a pose other
+    /// than its base, settings out of range or over the page's work budget, and every refusal of the drape.
+    pub fn start_posed(
+        body: PosableBody,
+        pattern: &Value,
+        fit_spec: &Value,
+        settings: SessionSettings,
+        left_deg: f64,
+        right_deg: f64,
         mut progress: impl FnMut(&str),
     ) -> Result<Self, String> {
         let SessionSettings {
@@ -507,21 +645,25 @@ impl Session {
         options.validate().map_err(|refusal| refusal.to_string())?;
         let pattern = Pattern::new(pattern.clone());
         let base = body.base_arm_deg();
-        let collision = body.collision_at(base, base);
-        let display = body.display_at(base, base);
-        let run = drape(
-            &pattern,
-            fit_spec,
-            &DrapeBody {
-                frames: &body,
-                collision: (&collision, &body.collision.triangles),
-                display: (&display, &body.display.triangles),
-                arm_deg: base,
-            },
-            &options,
-            &mut progress,
-        )
-        .map_err(|refusal| refusal.to_string())?;
+        let collision = body.collision_at(left_deg, right_deg);
+        let display = body.display_at(left_deg, right_deg);
+        let run = {
+            let frames = body.frames_at(left_deg, right_deg)?;
+            drape(
+                &pattern,
+                fit_spec,
+                &DrapeBody {
+                    frames: &frames,
+                    collision: (&collision, &body.collision.triangles),
+                    display: (&display, &body.display.triangles),
+                    // The report's single pose angle; the arms may differ, and each is placed by its own frame.
+                    arm_deg: left_deg.max(right_deg),
+                },
+                &options,
+                &mut progress,
+            )
+            .map_err(|refusal| refusal.to_string())?
+        };
         let mesh = &run.scene.mesh;
         let pieces: Vec<Value> = mesh
             .instances
@@ -546,6 +688,8 @@ impl Session {
                        "sew": run.fold.sew, "drape": run.fold.drape},
             "base_arm_deg": base,
             "arm_range_deg": [low, high],
+            "arm_angles_deg": body.arm_angles(),
+            "arms_deg": [left_deg, right_deg],
             "report": run.report,
         });
         let replay = run
@@ -557,7 +701,7 @@ impl Session {
         Ok(Self {
             body,
             scene: run.scene,
-            arms: [base, base],
+            arms: [left_deg, right_deg],
             replay,
             summary,
             motion: MotionOptions {
@@ -809,6 +953,72 @@ mod tests {
     }
 
     #[test]
+    fn a_drape_can_start_with_the_arms_at_any_sampled_pose_that_has_its_frames() {
+        let (header, data) = baked(0.004);
+        let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+        let settings = SessionSettings {
+            sew_steps: 24,
+            drape_steps: 0,
+            ..SessionSettings::default()
+        };
+        let start = |header: &str, left: f64| {
+            let body = PosableBody::parse(header, &data).unwrap();
+            Session::start_posed(body, &pattern, &json!({}), settings, left, 35.0, |_| {})
+        };
+        // Without baked arm frames only the base pose can start, and only sampled angles ever can.
+        assert!(
+            start(&header, 45.0)
+                .err()
+                .unwrap()
+                .contains("no baked arm_L frames")
+        );
+        assert!(
+            start(&header, 40.0)
+                .err()
+                .unwrap()
+                .contains("sampled angle")
+        );
+
+        // With them, a drape starts on the body posed at the sample: here the cylinder carried 4 mm.
+        let mut doc: Value = serde_json::from_str(&header).unwrap();
+        let frame = |x: f64| {
+            json!({"origin": [x, 0, 0], "up": [0, 0, 1], "front": [0, -1, 0], "lat": [1, 0, 0],
+                   "landmarks": {"shoulder_tip": 100.0}})
+        };
+        doc["arm_frames"] =
+            json!({"arm_L": [frame(0.0), frame(4.0)], "arm_R": [frame(0.0), frame(0.0)]});
+        let posed = start(&doc.to_string(), 45.0).unwrap();
+        assert_eq!(posed.arms(), [45.0, 35.0]);
+        assert_eq!(posed.summary()["arms_deg"], json!([45.0, 35.0]));
+        assert_eq!(posed.summary()["arm_angles_deg"], json!([35.0, 45.0]));
+        let shifted = PosableBody::parse(&doc.to_string(), &data)
+            .unwrap()
+            .display_at(45.0, 35.0);
+        let shown: Vec<f32> = shifted
+            .iter()
+            .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+            .collect();
+        assert_eq!(posed.display(45.0, 35.0), shown);
+        let inradius = 0.03 * det::cos(std::f64::consts::PI / RING as f64);
+        assert!(
+            posed
+                .cloth()
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .all(|p| (f64::from(p[0]) - 0.004).hypot(f64::from(p[1])) > inradius),
+            "the band was sewn round the carried cylinder"
+        );
+        // A frame list that does not match the samples is refused.
+        doc["arm_frames"]["arm_L"] = json!([frame(0.0)]);
+        assert!(
+            PosableBody::parse(&doc.to_string(), &data)
+                .unwrap_err()
+                .contains("one per sampled angle")
+        );
+    }
+
+    #[test]
     fn a_session_moves_the_body_under_the_draped_cloth_with_the_checked_solver_step() {
         // The band's radius is 40 mm, so a 30 mm cylinder carried 15 mm sideways must push it.
         let mut session = session(0.015);
@@ -915,9 +1125,21 @@ mod tests {
         }))
         .unwrap();
         let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+        let mut uncharacterized = pattern.clone();
+        uncharacterized.as_object_mut().unwrap().remove("fabric");
         let (header, data) = baked(0.015);
+
+        // Characterized material records refuse uniform stick-slip / construction overrides fail-closed.
+        let body_char = PosableBody::parse(&header, &data).unwrap();
+        let err = Session::start(body_char, &pattern, &json!({}), settings, |_| {})
+            .err()
+            .expect("characterized material record must refuse uniform stick-slip override");
+        assert!(err.contains("characterized material record"), "{err}");
+
+        // Uncharacterized pattern exercises all opt-in FTX-27 options live through start + advance.
         let body = PosableBody::parse(&header, &data).unwrap();
-        let mut live = Session::start(body, &pattern, &json!({}), settings, |_| {}).unwrap();
+        let mut live =
+            Session::start(body, &uncharacterized, &json!({}), settings, |_| {}).unwrap();
         live.scene.solver.gravity = Vec3::ZERO;
         let samples = live.advance(40.0, 35.0, 0.15).unwrap();
         assert!(!samples.is_empty());
@@ -932,6 +1154,6 @@ mod tests {
         }))
         .unwrap();
         let body2 = PosableBody::parse(&header, &data).unwrap();
-        assert!(Session::start(body2, &pattern, &json!({}), bad, |_| {}).is_err());
+        assert!(Session::start(body2, &uncharacterized, &json!({}), bad, |_| {}).is_err());
     }
 }

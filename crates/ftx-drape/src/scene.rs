@@ -36,6 +36,25 @@ pub trait PartFrames {
     fn landmark_h(&self, part: &str, name: &str) -> Option<f64>;
     /// Largest distance from the part axis to the body near `h` (mm).
     fn section_radius(&self, part: &str, h: f64) -> f64;
+    /// True for a body whose left and right limbs are posed independently (one arm raised, the other
+    /// down). A generated mirror pair's mirrored instance then wraps the left limb itself, not the
+    /// reflection of the right limb's wrap, which is the reference convention and assumes a symmetric
+    /// pose. The two agree exactly when the left frame is the right frame's reflection.
+    fn independent_limbs(&self) -> bool {
+        false
+    }
+}
+
+/// A frame reflected through the sagittal plane `x = 0`, `lat` negated so it stays right-handed: the
+/// left limb's frame written in the right limb's convention, which a mirrored instance's wrap uses.
+fn reflected(f: PartFrame) -> PartFrame {
+    let r = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+    PartFrame {
+        origin: r(f.origin),
+        up: r(f.up),
+        front: r(f.front),
+        lat: -r(f.lat),
+    }
 }
 
 // Physical panels select their actual posed limb. Generated mirror pairs still select the right
@@ -245,14 +264,22 @@ pub fn placements(
             .as_str()
             .ok_or_else(|| bad(format!("{id}: placement has no part")))?;
         let physical = physical_side(piece).map_err(|e| bad(format!("{id}: {}", e.message())))?;
+        // On independently posed limbs a mirrored limb instance wraps the left limb: its frame is written
+        // in the right-hand convention the wrap and the placement adjustments use, and the completed wrap
+        // is reflected back as for every mirrored instance (see `PartFrames::independent_limbs`).
+        let own_limb =
+            part != "torso" && inst.mirrored && physical.is_none() && frames.independent_limbs();
         let key = if part == "torso" {
             "torso".to_string()
+        } else if own_limb {
+            format!("{part}_{}", Side::L.as_str())
         } else {
             format!("{part}_{}", physical.unwrap_or(Side::R).as_str())
         };
         let frame = frames
             .frame(&key)
             .ok_or_else(|| bad(format!("{id}: unknown part {part}")))?;
+        let frame = if own_limb { reflected(frame) } else { frame };
         let landmark = pl
             .get("y0_landmark")
             .and_then(Value::as_str)
@@ -3176,6 +3203,79 @@ mod grain_tests {
             let r = wrap_points(&[Vec2::new(23., 7.)], &places[0])[0];
             let l = wrap_points(&[Vec2::new(-23., 7.)], &places[1])[0];
             assert_eq!(l, reflect(r));
+        }
+    }
+
+    /// A body's frames with its limbs declared independently posed.
+    struct IndependentLimbs<'a>(&'a BodyFrames);
+
+    impl PartFrames for IndependentLimbs<'_> {
+        fn frame(&self, part: &str) -> Option<PartFrame> {
+            PartFrames::frame(self.0, part)
+        }
+        fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+            PartFrames::landmark_h(self.0, part, name)
+        }
+        fn section_radius(&self, part: &str, h: f64) -> f64 {
+            PartFrames::section_radius(self.0, part, h)
+        }
+        fn independent_limbs(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn mirrored_limb_instances_wrap_their_own_limb_when_limbs_are_posed_independently() {
+        let mut piece = physical_panel("pair", "arm", None);
+        piece["cut"]["qty"] = json!(2);
+        piece["placement"]["y0_landmark"] = json!("shoulder_tip");
+        let pattern = Pattern::new(
+            json!({"schema":"fabric-pattern/1","units":"mm","pieces":[piece],"seams":[]}),
+        );
+        let mesh = build_garment(&pattern, 12.).unwrap();
+        let (lo, hi) = mesh.inst_range[1];
+        // Each wrapped point of the mirrored instance (mm) and its distance from a limb's axis.
+        let off_axis = |place: &WrapPlacement, limb: PartFrame| {
+            wrap_points(&mesh.verts2d[lo..hi], place)
+                .into_iter()
+                .map(|p| {
+                    let d = p / MM - limb.origin;
+                    (d - limb.up * d.dot(limb.up)).norm()
+                })
+                .collect::<Vec<_>>()
+        };
+        for asymmetric in [false, true] {
+            let (model, posed) = posed_limb_model(asymmetric);
+            let frames = BodyFrames::new(&model, &posed).unwrap();
+            let left = PartFrames::frame(&frames, "arm_L").unwrap();
+            let reference = placements(&pattern, &mesh, &frames).unwrap();
+            let own = placements(&pattern, &mesh, &IndependentLimbs(&frames)).unwrap();
+            // The right instance is placed as before; the mirrored one stays a mirrored instance.
+            assert_eq!(own[0].frame, reference[0].frame);
+            assert!(own[1].mirrored && !own[1].own_side);
+            if !asymmetric {
+                // A symmetric pose: the same placement, bit for bit.
+                assert_eq!(own[1].frame, reference[1].frame);
+                assert_eq!(
+                    wrapped_positions(&mesh, &own),
+                    wrapped_positions(&mesh, &reference)
+                );
+            } else {
+                // The left sleeve lies on its wrap cylinder round the left arm itself...
+                for d in off_axis(&own[1], left) {
+                    assert!(
+                        (d - own[1].radius).abs() < 1e-9 * own[1].radius,
+                        "{d} vs {}",
+                        own[1].radius
+                    );
+                }
+                // ...where the reference puts it round the reflection of the right arm.
+                assert!(
+                    off_axis(&reference[1], left)
+                        .iter()
+                        .any(|d| (d - reference[1].radius).abs() > 1.)
+                );
+            }
         }
     }
 
