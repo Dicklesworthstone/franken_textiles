@@ -12,6 +12,8 @@ use ftx_pattern::material_bending::BendingTensor;
 use crate::elements::Local;
 
 mod normal;
+mod rate;
+pub(crate) use rate::PanelRateState;
 
 fn bad(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::DegenerateGeometry, message).repair(

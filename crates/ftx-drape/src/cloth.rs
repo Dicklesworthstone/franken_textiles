@@ -1674,6 +1674,19 @@ impl Solver {
                     scatter(&h.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
                 }
             }
+            for (i, patch) in self.model.panel_bending_patches().iter().enumerate() {
+                if let Some(mut l) = damping.rayleigh_panel_local(&self.model, i, x) {
+                    scatter(
+                        &patch.v,
+                        &l.grad,
+                        &mut l.hess,
+                        l.psd,
+                        1.0,
+                        &mut sink,
+                        &mut g,
+                    );
+                }
+            }
         }
         for (i, &m) in self.model.mass.iter().enumerate() {
             for k in 0..3 {
@@ -2557,7 +2570,7 @@ impl Solver {
         Ok(())
     }
 
-    /// Refuses fail-closed when the requested bending, damping, or compression formulation would be
+    /// Refuses fail-closed when the requested bending or compression formulation would be
     /// silently bypassed by the bound constitutive law (orthotropic panel-bending patches
     /// or membrane plasticity).
     ///
@@ -2565,13 +2578,6 @@ impl Solver {
     /// [`RefusalCode::InvalidDocument`] on an incompatible constitutive combination.
     pub fn check_constitutive_models(&self) -> Result<(), Refusal> {
         self.check_bending_model()?;
-        if self.damping.rayleigh_bending_s > 0.0 && !self.model.panel_bending_patches().is_empty() {
-            return Err(Refusal::new(
-                RefusalCode::InvalidDocument,
-                "orthotropic panel-bending patches do not implement scalar Rayleigh hinge bending damping",
-            )
-            .repair("Set rayleigh_bending_s = 0 with orthotropic characterized bending materials, or use an isotropic scalar bending law with Rayleigh bending damping."));
-        }
         if self.model.compression_model == CompressionModel::Principal
             && self.membrane_plasticity.is_some()
         {
@@ -4467,25 +4473,10 @@ mod strategy_and_integrator_tests {
         pb_model.bending_model = BendingModel::Quadratic;
         let mut pb_rayleigh = Solver::new(pb_model.clone(), x.clone(), &fixed, Vec3::ZERO);
         pb_rayleigh.damping.rayleigh_bending_s = 0.002;
-        assert_eq!(
-            pb_rayleigh.check_constitutive_models().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            pb_rayleigh.step(0.01).unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            pb_rayleigh
-                .step_with_guess(0.01, Some(&x))
-                .unwrap_err()
-                .code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            pb_rayleigh.static_solve().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
+        pb_rayleigh.check_constitutive_models().unwrap();
+        pb_rayleigh.step(0.01).unwrap();
+        pb_rayleigh.step_with_guess(0.01, Some(&x)).unwrap();
+        pb_rayleigh.static_solve().unwrap();
 
         let mut pb_ok = Solver::new(pb_model, x, &fixed, Vec3::ZERO);
         pb_ok.check_constitutive_models().unwrap();

@@ -66,7 +66,12 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
 - **Anisotropic aerodynamic drag & SE(3)-invariant Rayleigh damping (`FTX-27b`)**: `damping::AirDrag`
   (variational strictly convex PSD normal/tangential crossflow and skin-friction drag supporting both
   `ImplicitEuler` and `GeneralizedAlpha`) and stiffness-proportional Green-strain-rate / dihedral-rate
-  Rayleigh damping (`DampingOptions`), exerting exact zero drag on rigid 3D translation and rotation.
+  Rayleigh damping (`DampingOptions`). Internal damping also follows characterized panel curvature:
+  normal-projected patches use signed raw curvature increments; vector-Hessian patches use a
+  differentiated corotating source-triangle frame. Both preserve the source tensor and reference
+  area, ignore preferred-curvature offsets, and dissipate no rigid translation or rotation.
+  Replaced scalar hinges are not counted again. Internal rates use endpoint backward differences
+  under both integrators; this is not a second-order Kelvin–Voigt discretization under GeneralizedAlpha.
 - **Principal-strain tension-field softening (`FTX-27c`)**: `CompressionModel::Principal` applies
   the `C²` `tanh` blend to Green-strain eigenvalues through a shared spectral transform for linear
   and characterized nonlinear membranes, Maxwell histories, and homogeneous elastic adjoints.
