@@ -189,8 +189,12 @@ fn to_i64(c: &[Pt]) -> Vec<(i64, i64)> {
 
 /// `_odd(n, lo)`: `round(n)`, at least `lo`, made odd upwards.
 fn odd(n: f64, lo: i64) -> i64 {
-    let n = lo.max(round_int(n));
-    if n % 2 != 0 { n } else { n + 1 }
+    let n = if n.is_finite() {
+        lo.max(round_int(n))
+    } else {
+        lo
+    };
+    if n % 2 != 0 { n } else { n.saturating_add(1) }
 }
 
 // ================================================================================== image -> mask
@@ -430,8 +434,15 @@ pub fn find_piece_contours(
     stroke: Option<f64>,
     open_px: Option<i64>,
 ) -> Vec<Entry> {
+    if mask.w == 0
+        || mask.h == 0
+        || mask.w.checked_mul(mask.h) != Some(mask.data.len())
+        || !min_area_frac.is_finite()
+    {
+        return Vec::new();
+    }
     let (w, h) = (mask.w, mask.h);
-    let stroke = stroke.filter(|&s| s != 0.0); // the reference tests `if stroke:`
+    let stroke = stroke.filter(|&s| s.is_finite() && s != 0.0); // the reference tests `if stroke:`
     let found = contours::find_contours(mask, Mode::CComp);
     let (cs, hier) = (&found.contours, &found.hierarchy);
     let areas: Vec<f64> = cs.iter().map(|c| contours::area(c)).collect();
@@ -527,11 +538,21 @@ pub fn find_piece_contours(
 /// `_resample_closed`: `n = max(16, round(L/ds))` points at arclength `i·L/n` of the closed loop.
 #[must_use]
 pub fn resample_closed(p: &[Vec2], ds: f64) -> Vec<Vec2> {
+    if p.is_empty() {
+        return Vec::new();
+    }
+    if !ds.is_finite() || ds <= 0.0 || p.iter().any(|pt| !pt.is_finite()) {
+        return p.to_vec();
+    }
     let mut q = p.to_vec();
     q.push(p[0]);
     let s = polyline::cumulative(&q);
     let total = s[s.len() - 1];
-    let n = round_int(total / ds).max(16) as usize;
+    let ratio = total / ds;
+    if !total.is_finite() || !ratio.is_finite() || ratio > 10_000_000.0 {
+        return p.to_vec();
+    }
+    let n = round_int(ratio).max(16) as usize;
     let step = total / n as f64;
     let (xs, ys): (Vec<f64>, Vec<f64>) = q.iter().map(|p| (p.x, p.y)).unzip();
     (0..n)
@@ -545,10 +566,14 @@ pub fn resample_closed(p: &[Vec2], ds: f64) -> Vec<Vec2> {
 /// `_smooth_closed`: a Gaussian of `sigma` samples, wrapped.
 #[must_use]
 pub fn smooth_closed(p: &[Vec2], sigma: f64) -> Vec<Vec2> {
-    if sigma <= 0.0 || p.len() < 8 {
+    if !sigma.is_finite() || sigma <= 0.0 || p.len() < 8 {
         return p.to_vec();
     }
-    let r = (3.0 * sigma).ceil() as usize;
+    let r_f = (3.0 * sigma).ceil();
+    if !r_f.is_finite() || r_f > 100_000.0 {
+        return p.to_vec();
+    }
+    let r = r_f as usize;
     let mut k: Vec<f64> = (-(usize_i64(r))..=usize_i64(r))
         .map(|j| {
             let u = j as f64 / sigma;
@@ -558,11 +583,10 @@ pub fn smooth_closed(p: &[Vec2], sigma: f64) -> Vec<Vec2> {
     let sum = np::pairwise_sum(&k);
     k.iter_mut().for_each(|v| *v /= sum);
     let n = p.len();
-    let ext: Vec<Vec2> = p[n.saturating_sub(r)..]
-        .iter()
-        .chain(p)
-        .chain(&p[..r.min(n)])
-        .copied()
+    let n_i64 = usize_i64(n);
+    let r_i64 = usize_i64(r);
+    let ext: Vec<Vec2> = (-r_i64..n_i64 + r_i64)
+        .map(|idx| p[idx.rem_euclid(n_i64) as usize])
         .collect();
     let (xs, ys): (Vec<f64>, Vec<f64>) = ext.iter().map(|p| (p.x, p.y)).unzip();
     np::convolve_valid(&xs, &k)
@@ -637,7 +661,19 @@ pub fn detect_corners(
     soft_deg: f64,
 ) -> (Vec<usize>, Vec<Option<&'static str>>, Vec<f64>) {
     let n = q.len();
-    let k = round_int(8.0f64.max(0.02 * size) / ds).max(2) as usize;
+    if n == 0 {
+        return (Vec::new(), Vec::new(), Vec::new());
+    }
+    let k = if ds.is_finite() && ds > 0.0 && size.is_finite() {
+        let raw = 8.0f64.max(0.02 * size) / ds;
+        if raw.is_finite() {
+            round_int(raw).clamp(2, 1_000_000) as usize
+        } else {
+            2
+        }
+    } else {
+        2
+    };
     let turn = turning(q, k);
     let absd: Vec<f64> = turn.iter().map(|t| t.abs()).collect();
     let mut chosen: Vec<usize> = Vec::new();
@@ -653,7 +689,7 @@ pub fn detect_corners(
         }
     }
     let k3 = 3 * k;
-    if soft_deg != 0.0 && n > 4 * k3 {
+    if soft_deg.is_finite() && soft_deg > 0.0 && n > 4 * k3 {
         let t3: Vec<f64> = turning(q, k3).iter().map(|t| t.abs()).collect();
         let neg3: Vec<f64> = t3.iter().map(|a| -a).collect();
         for i in np::argsort(&neg3) {
@@ -666,7 +702,8 @@ pub fn detect_corners(
             }
         }
     }
-    while chosen.len() < 3 {
+    let target = 3.min(n);
+    while chosen.len() < target {
         let i = if chosen.is_empty() {
             first_max_by(q, |p| p.y)
         } else {
@@ -778,6 +815,12 @@ pub fn edges_from_loop(
     size: f64,
     simplify_frac: f64,
 ) -> Result<(Verts, Vec<PyJson>), String> {
+    if !size.is_finite() || !simplify_frac.is_finite() {
+        return Err("edge simplification parameters must be finite".into());
+    }
+    if vidx.iter().any(|&i| i >= q.len()) {
+        return Err("corner index out of range".into());
+    }
     let line_tol = 1.5f64.max(simplify_frac * size);
     let curve_tol = 0.3f64.max(simplify_frac * size / 6.0);
     let n = vidx.len();
@@ -1106,7 +1149,12 @@ fn detect_marks(
         };
         let aligned: Vec<Vec2> = members.iter().map(|m| m.u * sign(m.u.dot(u0))).collect();
         let mut u = mean_rows(&aligned);
-        u = u / u.dot(u).sqrt();
+        let u_norm = u.dot(u).sqrt();
+        if u_norm > 0.0 {
+            u = u / u_norm;
+        } else {
+            u = u0;
+        }
         let centres: Vec<Vec2> = members.iter().map(|m| m.c).collect();
         let ctr = mean_rows(&centres);
         let t: Vec<f64> = members.iter().map(|m| (m.c - ctr).dot(u)).collect();
@@ -1306,35 +1354,38 @@ fn detect_marks(
         edge_lines.push((s("id"), pts));
     }
     let mut n_id = 0;
-    for (k, c) in comps.iter().enumerate() {
-        if used[k] || c.dmin > inset + 2.0 || c.long > 2.5 * depth || c.dmed > inset + depth {
-            continue;
+    if !edge_lines.is_empty() {
+        for (k, c) in comps.iter().enumerate() {
+            if used[k] || c.dmin > inset + 2.0 || c.long > 2.5 * depth || c.dmed > inset + depth {
+                continue;
+            }
+            if (c.area as f64) < 6.0f64.max(0.5 * w * w) || c.solidity < 0.6 {
+                continue;
+            }
+            let q = Vec2::from(to_pat(c.c));
+            let (eid, line) = &edge_lines[first_min_by(&edge_lines, |(_, l)| line_distance(l, q))];
+            let s = line_project_normalized(line, q);
+            if !(0.02..=0.98).contains(&s) {
+                continue; // blobs at corners are usually stroke joins
+            }
+            let tri = contours::approx_poly_dp(&hull_of(&c.pts), 0.15 * c.long, true).len() == 3;
+            n_id += 1;
+            notches.push(PyJson::dict(vec![
+                ("id", PyJson::str(format!("n{n_id}"))),
+                ("edge", PyJson::str(eid)),
+                ("s", f(py::round(s, 4))),
+                ("type", PyJson::str("V")),
+                (
+                    "confidence",
+                    f(py::round(
+                        0.45 + if tri { 0.25 } else { 0.0 }
+                            + if c.solidity > 0.8 { 0.1 } else { 0.0 },
+                        2,
+                    )),
+                ),
+                ("source", PyJson::str("trace")),
+            ]));
         }
-        if (c.area as f64) < 6.0f64.max(0.5 * w * w) || c.solidity < 0.6 {
-            continue;
-        }
-        let q = Vec2::from(to_pat(c.c));
-        let (eid, line) = &edge_lines[first_min_by(&edge_lines, |(_, l)| line_distance(l, q))];
-        let s = line_project_normalized(line, q);
-        if !(0.02..=0.98).contains(&s) {
-            continue; // blobs at corners are usually stroke joins
-        }
-        let tri = contours::approx_poly_dp(&hull_of(&c.pts), 0.15 * c.long, true).len() == 3;
-        n_id += 1;
-        notches.push(PyJson::dict(vec![
-            ("id", PyJson::str(format!("n{n_id}"))),
-            ("edge", PyJson::str(eid)),
-            ("s", f(py::round(s, 4))),
-            ("type", PyJson::str("V")),
-            (
-                "confidence",
-                f(py::round(
-                    0.45 + if tri { 0.25 } else { 0.0 } + if c.solidity > 0.8 { 0.1 } else { 0.0 },
-                    2,
-                )),
-            ),
-            ("source", PyJson::str("trace")),
-        ]));
     }
     Ok(Marks {
         notches,
@@ -1362,6 +1413,9 @@ fn box_iou(a: Rect, b: Rect) -> f64 {
 /// the mask and the number of runs drawn.
 #[must_use]
 pub fn bridge_dashes(mask: &Gray) -> (Gray, usize) {
+    if mask.w == 0 || mask.h == 0 || mask.w.checked_mul(mask.h) != Some(mask.data.len()) {
+        return (mask.clone(), 0);
+    }
     let (w, h) = (mask.w, mask.h);
     let s = w.min(h) as f64;
     let lines = hough_lines_p(
@@ -1442,6 +1496,40 @@ fn paint(img: &mut Bgr, erased: &[bool], bg: [f64; 3]) {
     }
 }
 
+fn validate_trace_options(opts: &TraceOptions) -> Result<(), String> {
+    if !opts.min_area_frac.is_finite() || opts.min_area_frac < 0.0 {
+        return Err("min_area_frac must be a finite non-negative number".into());
+    }
+    if !opts.smooth_px.is_finite() || opts.smooth_px < 0.0 {
+        return Err("smooth_px must be a finite non-negative number".into());
+    }
+    if !opts.simplify_frac.is_finite() || opts.simplify_frac < 0.0 {
+        return Err("simplify_frac must be a finite non-negative number".into());
+    }
+    if !opts.corner_deg.is_finite() || !opts.soft_deg.is_finite() {
+        return Err("corner thresholds must be finite".into());
+    }
+    if let Some(s) = opts.stroke
+        && (!s.is_finite() || s < 0.0)
+    {
+        return Err("stroke width must be a finite non-negative number".into());
+    }
+    if let Some(rgb) = opts.bg_rgb
+        && rgb.iter().any(|v| !v.is_finite())
+    {
+        return Err("bg_rgb values must be finite".into());
+    }
+    if let Some(c) = opts.crop
+        && c.iter().any(|v| !v.is_finite())
+    {
+        return Err("crop coordinates must be finite".into());
+    }
+    if opts.erase.iter().any(|r| r.iter().any(|v| !v.is_finite())) {
+        return Err("erase rectangles must be finite".into());
+    }
+    Ok(())
+}
+
 /// `trace_image`: the draft, diagnostics, mask and piece polygons of a pattern sheet. `source` is the
 /// image's resolved path when it came from a file (`meta.source.image`, and the draft's name).
 ///
@@ -1450,12 +1538,19 @@ fn paint(img: &mut Bgr, erased: &[bool], bg: [f64; 3]) {
 /// fails the structure checks.
 #[allow(clippy::too_many_lines)]
 pub fn trace_image(full: &Bgr, source: Option<&str>, opts: &TraceOptions) -> Result<Trace, String> {
+    validate_trace_options(opts)?;
+    if full.w.checked_mul(full.h).and_then(|n| n.checked_mul(3)) != Some(full.data.len()) {
+        return Err("the image raster buffer size does not match w * h * 3".into());
+    }
     let (wf, hf) = (usize_i64(full.w), usize_i64(full.h));
     let (x0, y0, mut img) = match opts.crop {
         Some(c) => {
             let r = c.map(round_int);
             let (x0, y0) = (r[0].max(0), r[1].max(0));
-            let (cw, ch) = (r[2].min(wf - x0), r[3].min(hf - y0));
+            let (cw, ch) = (
+                r[2].min(wf.saturating_sub(x0)),
+                r[3].min(hf.saturating_sub(y0)),
+            );
             if cw <= 0 || ch <= 0 {
                 return Err("the crop is empty".into());
             }
@@ -1482,10 +1577,10 @@ pub fn trace_image(full: &Bgr, source: Option<&str>, opts: &TraceOptions) -> Res
     let mut erased = vec![false; w * h];
     for r in &opts.erase {
         let [ex, ey, ew, eh] = r.map(round_int);
-        let (xa, ya) = ((ex - x0).max(0), (ey - y0).max(0));
+        let (xa, ya) = (ex.saturating_sub(x0).max(0), ey.saturating_sub(y0).max(0));
         let (xb, yb) = (
-            (ex - x0 + ew).min(usize_i64(w)),
-            (ey - y0 + eh).min(usize_i64(h)),
+            ex.saturating_sub(x0).saturating_add(ew).min(usize_i64(w)),
+            ey.saturating_sub(y0).saturating_add(eh).min(usize_i64(h)),
         );
         if xb > xa && yb > ya {
             for y in ya as usize..yb as usize {
@@ -1577,6 +1672,14 @@ pub struct MaskSource<'a> {
 /// # Errors
 /// As [`trace_image`] after the channel stage.
 pub fn trace_mask(mask: Gray, src: &MaskSource<'_>, opts: &TraceOptions) -> Result<Trace, String> {
+    validate_trace_options(opts)?;
+    if mask.w == 0 || mask.h == 0 || mask.w.checked_mul(mask.h) != Some(mask.data.len()) {
+        return Err("trace_mask needs a nonempty, correctly sized grayscale mask".into());
+    }
+    let expected_pixels = mask.w * mask.h;
+    if !src.erased.is_empty() && src.erased.len() != expected_pixels {
+        return Err("erased mask length must match mask w * h".into());
+    }
     let retries = src.retries.iter().map(PyJson::str).collect();
     let mut diag = PyJson::dict(vec![("retries", PyJson::List(retries))]);
     let entries = piece_entries(&mask, opts, &mut diag);
@@ -1587,7 +1690,7 @@ pub fn trace_mask(mask: Gray, src: &MaskSource<'_>, opts: &TraceOptions) -> Resu
     );
     diag.set("n_candidates", int(usize_i64(entries.len())));
     let erased = if src.erased.is_empty() {
-        vec![false; mask.w * mask.h]
+        vec![false; expected_pixels]
     } else {
         src.erased.clone()
     };
@@ -1690,10 +1793,13 @@ fn build_draft(
     for (n, (e, (bx, by, bw, bh), _, _)) in placed.iter().enumerate() {
         let pid = format!("p{}", n + 1);
         let poly = px_polygon(e, opts.smooth_px)?;
-        let mut q: Vec<Vec2> = poly.shell[..poly.shell.len() - 1]
+        let mut q: Vec<Vec2> = poly.shell[..poly.shell.len().saturating_sub(1)]
             .iter()
             .map(|p| Vec2::new(p.x, hf64 - p.y))
             .collect();
+        if q.len() < 3 {
+            return Err(format!("{pid}: traced polygon has fewer than 3 vertices"));
+        }
         if polyline::signed_area(&q) < 0.0 {
             q.reverse();
         }
@@ -1701,10 +1807,12 @@ fn build_draft(
         let ds = 0.5f64.max(size / 1500.0);
         let q = resample_closed(&q, ds);
         let (mut vidx, kinds, turn) = detect_corners(&q, ds, size, opts.corner_deg, opts.soft_deg);
-        let mnx = q.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
-        let mxy = q.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
-        let start = first_min_by(&vidx, |&i| (q[i].x - mnx) + (mxy - q[i].y));
-        vidx.rotate_left(start);
+        if !vidx.is_empty() {
+            let mnx = q.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+            let mxy = q.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+            let start = first_min_by(&vidx, |&i| (q[i].x - mnx) + (mxy - q[i].y));
+            vidx.rotate_left(start);
+        }
         let (verts, edges) = edges_from_loop(&q, &vidx, size, opts.simplify_frac)?;
         let (wi, hi) = (usize_i64(w), usize_i64(h));
         let (bx, by, bw, bh) = (
@@ -1894,4 +2002,87 @@ fn build_draft(
         mask,
         polys,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn degenerate_loops_and_invalid_options_do_not_panic_or_oom() {
+        assert!(resample_closed(&[], 1.0).is_empty());
+        let sq = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        assert_eq!(resample_closed(&sq, 0.0), sq);
+        assert_eq!(resample_closed(&sq, -1.0), sq);
+        assert_eq!(resample_closed(&sq, f64::NAN), sq);
+        assert_eq!(resample_closed(&sq, f64::INFINITY), sq);
+        assert_eq!(resample_closed(&sq, 1e-300), sq);
+        let resampled = resample_closed(&sq, 2.0);
+        assert_eq!(resampled.len(), 20);
+
+        // NaN / infinite sigma must not poison or OOM; large finite sigma keeps loop length exact.
+        assert_eq!(smooth_closed(&resampled, f64::NAN), resampled);
+        assert_eq!(smooth_closed(&resampled, f64::INFINITY), resampled);
+        let wide_smooth = smooth_closed(&resampled, 10.0);
+        assert_eq!(wide_smooth.len(), resampled.len());
+        assert!(wide_smooth.iter().all(|p| p.is_finite()));
+
+        assert_eq!(
+            detect_corners(&[], 1.0, 100.0, 35.0, 70.0),
+            (Vec::new(), Vec::new(), Vec::new())
+        );
+        let (two_idx, _, _) = detect_corners(&sq[..2], 0.0, f64::INFINITY, 35.0, f64::NAN);
+        assert_eq!(two_idx, vec![0, 1]);
+
+        assert!(edges_from_loop(&sq, &[0, 99], 100.0, 0.003).is_err());
+        assert!(edges_from_loop(&sq, &[0, 1, 2], f64::NAN, 0.003).is_err());
+
+        let empty_mask = Gray {
+            w: 0,
+            h: 0,
+            data: Vec::new(),
+        };
+        assert!(find_piece_contours(&empty_mask, 0.01, Some(f64::INFINITY), None).is_empty());
+        assert_eq!(bridge_dashes(&empty_mask).1, 0);
+
+        let bad_img = Bgr {
+            w: 4,
+            h: 4,
+            data: vec![0; 3],
+        };
+        assert!(trace_image(&bad_img, None, &TraceOptions::default()).is_err());
+
+        let ok_img = Bgr {
+            w: 4,
+            h: 4,
+            data: vec![255; 4 * 4 * 3],
+        };
+        let bad_opts = TraceOptions {
+            crop: Some([f64::NAN, 0.0, 4.0, 4.0]),
+            ..TraceOptions::default()
+        };
+        assert!(trace_image(&ok_img, None, &bad_opts).is_err());
+
+        let bad_erase = TraceOptions {
+            erase: vec![[f64::INFINITY, 0.0, f64::INFINITY, 4.0]],
+            ..TraceOptions::default()
+        };
+        assert!(trace_image(&ok_img, None, &bad_erase).is_err());
+
+        let mask_src = MaskSource {
+            source: None,
+            image_size: (4, 4),
+            origin: (0, 0),
+            erased: vec![false; 2],
+            retries: Vec::new(),
+            threshold: PyJson::Null,
+            bg_rgb: [255, 255, 255],
+        };
+        assert!(trace_mask(Gray::filled(4, 4, 0), &mask_src, &TraceOptions::default()).is_err());
+    }
 }
