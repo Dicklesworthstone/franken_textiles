@@ -25,14 +25,17 @@ Selection, native/portable stitch replay and material comparison preserve that s
 names per-operation rounding. Independent enumeration, pool/calendar/deadline and source mutation
 tests are in `sewing_parallel`, `comparison::sewing_feed_tests` and `sewing_production_workflow`.
 
-**Regional comparison limits.** Optional `Constraint.region` scopes only the twelve material-strain
-or six body-contact metrics to an exact name in the admitted version-2 consumer partition. Each
-metric/region pair is unique; the selected union remains the objective and legacy reading scope.
-Regional values, violations and adaptive-restoration identities retain their name independently.
+**Regional comparison objectives and limits.** Optional `Objective.region` and `Constraint.region`
+scope only the twelve material-strain or six body-contact metrics to an exact name in the admitted
+version-2 consumer partition. Each metric/region pair is unique within its objective or constraint
+list; omission retains the selected union. Regional values, Pareto comparisons, scalar/worst-case
+adaptive scores, violations and restoration identities retain their name independently.
 Missing names, null selectors, unsupported metrics or non-nominal bases refuse without a union,
 instance or zero fallback. Static and complete-motion admission stay independent. Shared welded
 vertices make regional contact totals nonadditive. Native/portable and guided named-case paths
-share this authority; authored bounds do not establish failure, pressure, comfort or physical fit.
+share this authority. Worst-case guidance requires the same objective region in every case;
+all-case Pareto guidance keeps each case's scope. Authored bounds and preferences do not establish
+failure, pressure, comfort or physical fit.
 
 **Qualified drilling in complete cutting programs** (`cutting::program`, `ftx-tm7`). Optional
 `machine.drilling` selects one explicit `coaxial_cold_through_drill/1` tool with exact diameter,

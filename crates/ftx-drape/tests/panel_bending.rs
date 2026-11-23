@@ -135,6 +135,57 @@ fn material_only_bending_changes_actual_newton_motion_and_none_is_bit_identical(
 }
 
 #[test]
+fn rayleigh_bending_changes_source_panel_motion_without_damping_rigid_fall() {
+    use ftx_drape::DampingOptions;
+
+    let (rest, tris) = hex_grid(0.10, 0.06, 0.02, Vec2::ZERO);
+    let bent: Vec<_> = rest
+        .iter()
+        .map(|p| Vec3::new(p.x, p.y, 0.6 * p.x * p.x))
+        .collect();
+    let fixed: Vec<_> = rest.iter().map(|p| [p.x < 0.021; 3]).collect();
+    for normal in [false, true] {
+        let mut law = tensor(1.0);
+        if normal {
+            law = law.normal_projected();
+        }
+        let source = model(&rest, &tris, Some(law));
+        assert!((0..source.hinges.len()).all(|i| source.hinge_rigidity(i) == 0.0));
+        let mut undamped = Solver::new(source.clone(), bent.clone(), &fixed, Vec3::ZERO);
+        undamped.tol = 1e-8;
+        let mut damped = undamped.clone();
+        damped.damping = DampingOptions {
+            rayleigh_bending_s: 0.1,
+            ..DampingOptions::default()
+        };
+        assert!(undamped.step(0.005).unwrap().converged);
+        assert!(damped.step(0.005).unwrap().converged);
+        let displacement = |solver: &Solver| {
+            solver
+                .x
+                .iter()
+                .zip(&bent)
+                .map(|(x, old)| (*x - *old).norm2())
+                .sum::<f64>()
+        };
+        assert!(
+            displacement(&damped) < displacement(&undamped),
+            "normal={normal}"
+        );
+
+        let flat: Vec<_> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let free = vec![[false; 3]; rest.len()];
+        let mut fall = Solver::new(source, flat.clone(), &free, Vec3::new(0.0, 0.0, -9.81));
+        fall.tol = 1e-9;
+        fall.damping = damped.damping;
+        assert!(fall.step(0.01).unwrap().converged);
+        for (current, original) in fall.x.iter().zip(&flat) {
+            assert!((*current - *original - Vec3::new(0.0, 0.0, -9.81e-4)).norm() < 1e-10);
+        }
+    }
+}
+
+#[test]
 fn binding_is_atomic_and_invalidates_previously_built_sparse_structure() {
     let (rest, tris) = hex_grid(0.08, 0.06, 0.02, Vec2::ZERO);
     let x: Vec<_> = rest
@@ -201,6 +252,9 @@ fn tensor_bending_coexists_with_transactional_membrane_history() {
         .with_relaxation(&vec![record.membrane_relaxation().unwrap(); tris.len()])
         .unwrap();
     assert!(s.step(0.001).unwrap().converged);
+    // Adding geometric panel dissipation must preserve the independently accepted Maxwell history,
+    // deterministic continuation and the existing refusal rollback below.
+    s.damping.rayleigh_bending_s = 0.02;
     let mut twin = s.clone();
     assert_eq!(s.step(0.001).unwrap(), twin.step(0.001).unwrap());
     assert_eq!(s.x, twin.x);

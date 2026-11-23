@@ -11,6 +11,7 @@ use ftx_core::np::{pairwise_sum, percentile};
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
+use crate::bvh::QueryBvh;
 use crate::distance::{edge_edge_closest, point_triangle_closest};
 use crate::garment::GarmentMesh;
 use crate::nearest::NearestTree;
@@ -45,10 +46,13 @@ pub const DEFAULT_SELF_REPULSION_CLEARANCE_M: f64 = 0.004;
 pub const DEFAULT_SELF_REPULSION_STIFFNESS: f64 = 0.5;
 /// Default iteration stride for opt-in cloth–cloth separation impulses (divides [`RELAX_PUSH_OUT_ITERS`]).
 pub const DEFAULT_SELF_REPULSION_PERIOD: usize = 5;
+/// Default complete-call work bound for cloth–cloth start separation.
+pub const DEFAULT_SELF_REPULSION_CANDIDATE_CHECKS: usize = 32_000_000;
 
 const MAX_SELF_REPULSION_CLEARANCE_M: f64 = 0.1;
+const MAX_SELF_REPULSION_CANDIDATE_CHECKS: usize = 128_000_000;
 
-/// Opt-in spatial-hash cloth–cloth separation impulses during [`relax_with_repulsion`] and
+/// Opt-in bounded cloth–cloth separation impulses during [`relax_with_repulsion`] and
 /// [`start_state_with_repulsion`].
 ///
 /// Leaving this `None` preserves the reference's bit-identical relaxation trajectory.
@@ -61,6 +65,11 @@ pub struct SelfRepulsionOptions {
     pub stiffness: f64,
     /// Apply cloth–cloth separation impulses every `period` iterations (`1..=RELAX_PUSH_OUT_ITERS`).
     pub period: usize,
+    /// Broad-phase candidates examined over a complete relaxation call (`1..=128000000`).
+    /// All blocks of [`start_state_with_repulsion`] share one allowance; standalone checkpoint
+    /// replay calls each have their own allowance. Exhaustion refuses without returning a start.
+    #[serde(skip_serializing_if = "default_repulsion_candidate_checks")]
+    pub max_candidate_checks: usize,
 }
 
 impl Default for SelfRepulsionOptions {
@@ -69,6 +78,7 @@ impl Default for SelfRepulsionOptions {
             min_separation_m: DEFAULT_SELF_REPULSION_CLEARANCE_M,
             stiffness: DEFAULT_SELF_REPULSION_STIFFNESS,
             period: DEFAULT_SELF_REPULSION_PERIOD,
+            max_candidate_checks: DEFAULT_SELF_REPULSION_CANDIDATE_CHECKS,
         }
     }
 }
@@ -110,6 +120,42 @@ impl SelfRepulsionOptions {
                 ),
             ));
         }
+        if !(1..=MAX_SELF_REPULSION_CANDIDATE_CHECKS).contains(&self.max_candidate_checks) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "self-repulsion max_candidate_checks must be in 1..={MAX_SELF_REPULSION_CANDIDATE_CHECKS}"
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_repulsion_candidate_checks(value: &usize) -> bool {
+    *value == DEFAULT_SELF_REPULSION_CANDIDATE_CHECKS
+}
+
+struct RepulsionWork {
+    remaining: usize,
+    limit: usize,
+}
+
+impl RepulsionWork {
+    fn new(options: SelfRepulsionOptions) -> Self {
+        Self {
+            remaining: options.max_candidate_checks,
+            limit: options.max_candidate_checks,
+        }
+    }
+
+    fn spend(&mut self, count: usize) -> Result<(), Refusal> {
+        self.remaining = self.remaining.checked_sub(count).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::BudgetExceeded,
+                format!("self-repelling start exceeded {} candidate checks", self.limit),
+            ).repair("Use a coarser mesh, separate the starting layers, or increase max_candidate_checks within its supported range.")
+        })?;
         Ok(())
     }
 }
@@ -450,17 +496,20 @@ pub fn relax(
     clearance: f64,
     weights: &[f64],
 ) -> Vec<Vec3> {
-    relax_inner(mesh, start, groups, body, iters, clearance, weights, None)
+    relax_inner(
+        mesh, start, groups, body, iters, clearance, weights, None, None,
+    )
+    .expect("legacy relaxation has no fallible self-repulsion work")
 }
 
-/// As [`relax`], with optional deterministic spatial-hash cloth–cloth separation impulses
+/// As [`relax`], with optional deterministic cloth–cloth separation impulses
 /// ([`SelfRepulsionOptions`]) applied before body push-out to prevent layered and pleated starts
 /// from self-intersecting.
 ///
 /// When `repulsion` is `None`, the result is bit-identical to [`relax`].
 ///
 /// # Errors
-/// [`SelfRepulsionOptions::validate`] refusals for invalid repulsion settings.
+/// Invalid repulsion settings, non-finite separation geometry, or exhausted candidate work.
 #[allow(clippy::too_many_arguments)]
 pub fn relax_with_repulsion(
     mesh: &GarmentMesh,
@@ -475,9 +524,18 @@ pub fn relax_with_repulsion(
     if let Some(opts) = repulsion {
         opts.validate()?;
     }
-    Ok(relax_inner(
-        mesh, start, groups, body, iters, clearance, weights, repulsion,
-    ))
+    let mut work = repulsion.map(RepulsionWork::new);
+    relax_inner(
+        mesh,
+        start,
+        groups,
+        body,
+        iters,
+        clearance,
+        weights,
+        repulsion,
+        work.as_mut(),
+    )
 }
 
 /// Precomputed welded cloth topology used for deterministic vertex–triangle and edge–edge
@@ -492,11 +550,10 @@ struct RepulsionTopology {
     edges: Vec<[usize; 2]>,
     edge_rest2d: Vec<Vec<(usize, [Vec2; 2])>>,
     vert_owners: Vec<Vec<usize>>,
-    cell_size: f64,
 }
 
 impl RepulsionTopology {
-    fn build(mesh: &GarmentMesh, groups: &[Vec<usize>], min_sep: f64) -> Self {
+    fn build(mesh: &GarmentMesh, groups: &[Vec<usize>]) -> Self {
         let n = mesh.verts2d.len();
         let mut weld = vec![usize::MAX; n];
         let mut members: Vec<Vec<usize>> = Vec::new();
@@ -526,8 +583,6 @@ impl RepulsionTopology {
         let mut tri_rest2d = Vec::with_capacity(mesh.faces.len());
         let mut edge_map: std::collections::BTreeMap<[usize; 2], Vec<(usize, [Vec2; 2])>> =
             std::collections::BTreeMap::new();
-        let mut edge_sum = 0.0_f64;
-        let mut edge_count = 0usize;
         for f in &mesh.faces {
             let t = f.map(|v| weld[v]);
             if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
@@ -545,8 +600,6 @@ impl RepulsionTopology {
                     ([b, a], [rb, ra])
                 };
                 edge_map.entry(key).or_default().push((owner, rest_pair));
-                edge_sum += norm2(rb - ra) * MM;
-                edge_count += 1;
             }
             tris.push(t);
             tri_owner.push(owner);
@@ -571,11 +624,6 @@ impl RepulsionTopology {
             o.sort_unstable();
             o.dedup();
         }
-        let mean_edge = if edge_count > 0 {
-            (edge_sum / edge_count as f64).clamp(min_sep, 0.1)
-        } else {
-            min_sep
-        };
         Self {
             n_weld,
             members,
@@ -586,7 +634,6 @@ impl RepulsionTopology {
             edges,
             edge_rest2d,
             vert_owners,
-            cell_size: mean_edge.max(min_sep),
         }
     }
 
@@ -647,18 +694,6 @@ impl RepulsionTopology {
     }
 }
 
-fn cell_key_3d(p: Vec3, cell: f64) -> Option<[i64; 3]> {
-    let mut k = [0i64; 3];
-    for (dst, coord) in k.iter_mut().zip([p.x, p.y, p.z]) {
-        let f = (coord / cell).floor();
-        if !(f.is_finite() && (-1e15..=1e15).contains(&f)) {
-            return None;
-        }
-        *dst = f as i64;
-    }
-    Some(k)
-}
-
 struct RepulsionHit {
     dist: f64,
     tri: usize,
@@ -666,9 +701,10 @@ struct RepulsionHit {
     dir: Vec3,
 }
 
-/// Applies one deterministic Jacobi spatial-hash vertex–triangle cloth–cloth separation sweep over
+/// Applies one deterministic Jacobi vertex–triangle/edge–edge cloth separation sweep over
 /// welded vertices, keeping sewing-group members identical, respecting the body surface as a rigid
 /// unilateral floor (`clearance`), and bounding every displacement.
+#[allow(clippy::too_many_arguments)]
 fn apply_self_repulsion(
     q: &mut [Vec3],
     verts2d: &[Vec2],
@@ -677,15 +713,21 @@ fn apply_self_repulsion(
     body: &NearestTree,
     clearance: f64,
     opts: SelfRepulsionOptions,
-) {
+    work: &mut RepulsionWork,
+) -> Result<(), Refusal> {
     if topo.tris.is_empty() || topo.n_weld < 4 {
-        return;
+        return Ok(());
     }
     let d_min = opts.min_separation_m;
-    let cell = topo.cell_size;
     let rest_margin_mm = (1.5 * d_min) / MM;
 
     let p: Vec<Vec3> = topo.members.iter().map(|m| q[m[0]]).collect();
+    if p.iter().any(|v| !v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "non-finite self-repulsion positions",
+        ));
+    }
     let body_floor: Vec<Option<Vec3>> = p
         .iter()
         .map(|&pv| {
@@ -698,73 +740,29 @@ fn apply_self_repulsion(
         })
         .collect();
     let pad = Vec3::new(d_min, d_min, d_min);
-    let mut entries: Vec<([i64; 3], usize)> = Vec::with_capacity(topo.tris.len() * 4);
-    let mut oversized: Vec<usize> = Vec::new();
-    for (ti, &t) in topo.tris.iter().enumerate() {
-        let (a, b, c) = (p[t[0]], p[t[1]], p[t[2]]);
-        if !(a.is_finite() && b.is_finite() && c.is_finite()) {
-            continue;
-        }
-        let lo = Vec3::new(
-            a.x.min(b.x).min(c.x),
-            a.y.min(b.y).min(c.y),
-            a.z.min(b.z).min(c.z),
-        ) - pad;
-        let hi = Vec3::new(
-            a.x.max(b.x).max(c.x),
-            a.y.max(b.y).max(c.y),
-            a.z.max(b.z).max(c.z),
-        ) + pad;
-        let (Some(k0), Some(k1)) = (cell_key_3d(lo, cell), cell_key_3d(hi, cell)) else {
-            oversized.push(ti);
-            continue;
-        };
-        let dx = k1[0].saturating_sub(k0[0]).saturating_add(1);
-        let dy = k1[1].saturating_sub(k0[1]).saturating_add(1);
-        let dz = k1[2].saturating_sub(k0[2]).saturating_add(1);
-        if dx <= 0 || dy <= 0 || dz <= 0 || dx > 16 || dy > 16 || dz > 16 || dx * dy * dz > 64 {
-            oversized.push(ti);
-            continue;
-        }
-        for cx in k0[0]..=k1[0] {
-            for cy in k0[1]..=k1[1] {
-                for cz in k0[2]..=k1[2] {
-                    entries.push(([cx, cy, cz], ti));
-                }
-            }
-        }
-    }
-    entries.sort_unstable();
-    let mut cells: Vec<([i64; 3], usize, usize)> = Vec::new();
-    let mut i = 0;
-    while i < entries.len() {
-        let key = entries[i].0;
-        let start = i;
-        while i < entries.len() && entries[i].0 == key {
-            i += 1;
-        }
-        cells.push((key, start, i));
-    }
+    let triangle_boxes: Vec<_> = topo
+        .tris
+        .iter()
+        .map(|t| crate::contact::aabb(&t.map(|v| p[v])))
+        .collect();
+    let triangle_query = QueryBvh::build(&triangle_boxes);
+    let mut candidates = Vec::new();
 
     let mut acc = vec![Vec3::ZERO; topo.n_weld];
     let mut w_sum = vec![0.0_f64; topo.n_weld];
     for v in 0..topo.n_weld {
         let pv = p[v];
-        if !pv.is_finite() {
-            continue;
-        }
-        let cell_slice: &[([i64; 3], usize)] = cell_key_3d(pv, cell)
-            .and_then(|key| cells.binary_search_by_key(&key, |c| c.0).ok())
-            .map_or(&[], |idx| &entries[cells[idx].1..cells[idx].2]);
+        triangle_query.query((pv - pad, pv + pad), &mut candidates);
+        work.spend(candidates.len())?;
 
         // Collect all active (dist < d_min) triangle interactions for vertex `v`, then keep only
         // the closest opposing surface hit (plus at most one hit from the opposite side, for a
         // middle leaf in a multi-layer pleat). This prevents adjacent triangles of the same
         // opposing sheet from diluting the true penetration depth.
         let mut hits: Vec<RepulsionHit> = Vec::new();
-        let mut check_tri = |ti: usize| {
+        let mut check_tri = |ti: usize| -> Result<(), Refusal> {
             if topo.excluded(v, ti, verts2d, mesh_owner, rest_margin_mm) {
-                return;
+                return Ok(());
             }
             let t = topo.tris[ti];
             let (a, b, c) = (p[t[0]], p[t[1]], p[t[2]]);
@@ -772,8 +770,14 @@ fn apply_self_repulsion(
             let closest = a * w[0] + b * w[1] + c * w[2];
             let diff = pv - closest;
             let dist = norm3(diff);
-            if !dist.is_finite() || dist >= d_min {
-                return;
+            if !dist.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "non-finite self-repulsion vertex–triangle distance",
+                ));
+            }
+            if dist >= d_min {
+                return Ok(());
             }
             let dir = if dist > 1e-12 {
                 diff / dist
@@ -810,13 +814,11 @@ fn apply_self_repulsion(
                 w,
                 dir,
             });
+            Ok(())
         };
 
-        for &(_, ti) in cell_slice {
-            check_tri(ti);
-        }
-        for &ti in &oversized {
-            check_tri(ti);
+        for &ti in &candidates {
+            check_tri(ti)?;
         }
         if hits.is_empty() {
             continue;
@@ -862,139 +864,99 @@ fn apply_self_repulsion(
         }
     }
 
-    // Edge–edge spatial-hash repulsion catches overhanging border edges that pass within `d_min`
-    // of an opposing cloth edge even when neither endpoint is close to an opposing triangle.
-    let half_pad = Vec3::new(0.5 * d_min, 0.5 * d_min, 0.5 * d_min);
-    let mut edge_entries: Vec<([i64; 3], usize)> = Vec::with_capacity(topo.edges.len() * 2);
-    let mut oversized_edges: Vec<usize> = Vec::new();
-    for (ei, &e) in topo.edges.iter().enumerate() {
-        let (a, b) = (p[e[0]], p[e[1]]);
-        if !(a.is_finite() && b.is_finite()) {
-            continue;
-        }
-        let lo = Vec3::new(a.x.min(b.x), a.y.min(b.y), a.z.min(b.z)) - half_pad;
-        let hi = Vec3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z)) + half_pad;
-        let (Some(k0), Some(k1)) = (cell_key_3d(lo, cell), cell_key_3d(hi, cell)) else {
-            oversized_edges.push(ei);
-            continue;
-        };
-        let dx = k1[0].saturating_sub(k0[0]).saturating_add(1);
-        let dy = k1[1].saturating_sub(k0[1]).saturating_add(1);
-        let dz = k1[2].saturating_sub(k0[2]).saturating_add(1);
-        if dx <= 0 || dy <= 0 || dz <= 0 || dx > 16 || dy > 16 || dz > 16 || dx * dy * dz > 64 {
-            oversized_edges.push(ei);
-            continue;
-        }
-        for cx in k0[0]..=k1[0] {
-            for cy in k0[1]..=k1[1] {
-                for cz in k0[2]..=k1[2] {
-                    edge_entries.push(([cx, cy, cz], ei));
-                }
+    // Visit each unordered pair once in the same sorted order as the former materialized list.
+    // A query retains at most O(E) leaf candidates, even when every layer overlaps. There is no
+    // O(E²) pair vector or Cartesian-product fallback for long edges.
+    let edge_boxes: Vec<_> = topo
+        .edges
+        .iter()
+        .map(|e| crate::contact::aabb(&e.map(|v| p[v])))
+        .collect();
+    let edge_query = QueryBvh::build(&edge_boxes);
+    for (ea, &(lo, hi)) in edge_boxes.iter().enumerate() {
+        edge_query.query((lo - pad, hi + pad), &mut candidates);
+        work.spend(candidates.len())?;
+        for &eb in &candidates {
+            if eb <= ea {
+                continue;
             }
-        }
-    }
-    edge_entries.sort_unstable();
-    let mut edge_pairs: Vec<(usize, usize)> = Vec::new();
-    let mut j = 0;
-    while j < edge_entries.len() {
-        let key = edge_entries[j].0;
-        let start = j;
-        while j < edge_entries.len() && edge_entries[j].0 == key {
-            j += 1;
-        }
-        let bucket = &edge_entries[start..j];
-        for a_idx in 0..bucket.len() {
-            let ea = bucket[a_idx].1;
-            for &(_, eb) in &bucket[(a_idx + 1)..] {
-                if ea != eb {
-                    edge_pairs.push((ea.min(eb), ea.max(eb)));
-                }
+            if topo.excluded_edge(ea, eb, rest_margin_mm) {
+                continue;
             }
-        }
-    }
-    for &ea in &oversized_edges {
-        for eb in 0..topo.edges.len() {
-            if ea != eb {
-                edge_pairs.push((ea.min(eb), ea.max(eb)));
+            let (a_ids, b_ids) = (topo.edges[ea], topo.edges[eb]);
+            let (a0, a1, b0, b1) = (p[a_ids[0]], p[a_ids[1]], p[b_ids[0]], p[b_ids[1]]);
+            let ((s, t), _) = edge_edge_closest(a0, a1, b0, b1);
+            let qa = a0 * (1.0 - s) + a1 * s;
+            let qb = b0 * (1.0 - t) + b1 * t;
+            let diff = qb - qa;
+            let dist = norm3(diff);
+            if !dist.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "non-finite self-repulsion edge–edge distance",
+                ));
             }
-        }
-    }
-    edge_pairs.sort_unstable();
-    edge_pairs.dedup();
-    for (ea, eb) in edge_pairs {
-        if topo.excluded_edge(ea, eb, rest_margin_mm) {
-            continue;
-        }
-        let (a_ids, b_ids) = (topo.edges[ea], topo.edges[eb]);
-        let (a0, a1, b0, b1) = (p[a_ids[0]], p[a_ids[1]], p[b_ids[0]], p[b_ids[1]]);
-        if !(a0.is_finite() && a1.is_finite() && b0.is_finite() && b1.is_finite()) {
-            continue;
-        }
-        let ((s, t), _) = edge_edge_closest(a0, a1, b0, b1);
-        let qa = a0 * (1.0 - s) + a1 * s;
-        let qb = b0 * (1.0 - t) + b1 * t;
-        let diff = qb - qa;
-        let dist = norm3(diff);
-        if !dist.is_finite() || dist >= d_min {
-            continue;
-        }
-        let dir = if dist > 1e-12 {
-            diff / dist
-        } else {
-            let cross = (a1 - a0).cross(b1 - b0);
-            let clen = norm3(cross);
-            let bn = body.nearest(qa).normal;
-            let base = if clen > 1e-12 {
-                cross / clen
+            if dist >= d_min {
+                continue;
+            }
+            let dir = if dist > 1e-12 {
+                diff / dist
             } else {
-                let blen = norm3(bn);
-                if blen > 1e-12 {
-                    bn / blen
+                let cross = (a1 - a0).cross(b1 - b0);
+                let clen = norm3(cross);
+                let bn = body.nearest(qa).normal;
+                let base = if clen > 1e-12 {
+                    cross / clen
                 } else {
-                    Vec3::new(0.0, 0.0, 1.0)
-                }
+                    let blen = norm3(bn);
+                    if blen > 1e-12 {
+                        bn / blen
+                    } else {
+                        Vec3::new(0.0, 0.0, 1.0)
+                    }
+                };
+                let outward = if base.dot(bn) < 0.0 { -base } else { base };
+                let oa = topo.edge_rest2d[ea][0].0;
+                let ob = topo.edge_rest2d[eb][0].0;
+                let push_b_outward = if ob != oa { ob > oa } else { eb > ea };
+                if push_b_outward { outward } else { -outward }
             };
-            let outward = if base.dot(bn) < 0.0 { -base } else { base };
-            let oa = topo.edge_rest2d[ea][0].0;
-            let ob = topo.edge_rest2d[eb][0].0;
-            let push_b_outward = if ob != oa { ob > oa } else { eb > ea };
-            if push_b_outward { outward } else { -outward }
-        };
-        // `dir` points from edge `a` toward edge `b`, so `b` moves along `+dir` and `a` along `-dir`.
-        let wa = [1.0 - s, s];
-        let wb = [1.0 - t, t];
-        let mut inv_a = std::array::from_fn(|k| {
-            if body_floor[a_ids[k]].is_some_and(|bn| dir.dot(bn) > 1e-6) {
-                0.0
-            } else {
-                1.0
+            // `dir` points from edge `a` toward edge `b`, so `b` moves along `+dir` and `a` along `-dir`.
+            let wa = [1.0 - s, s];
+            let wb = [1.0 - t, t];
+            let mut inv_a = std::array::from_fn(|k| {
+                if body_floor[a_ids[k]].is_some_and(|bn| dir.dot(bn) > 1e-6) {
+                    0.0
+                } else {
+                    1.0
+                }
+            });
+            let mut inv_b = std::array::from_fn(|k| {
+                if body_floor[b_ids[k]].is_some_and(|bn| dir.dot(bn) < -1e-6) {
+                    0.0
+                } else {
+                    1.0
+                }
+            });
+            let mut denom = inv_a[0] * wa[0] * wa[0]
+                + inv_a[1] * wa[1] * wa[1]
+                + inv_b[0] * wb[0] * wb[0]
+                + inv_b[1] * wb[1] * wb[1];
+            if denom <= 1e-12 {
+                inv_a = [1.0; 2];
+                inv_b = [1.0; 2];
+                denom = wa[0] * wa[0] + wa[1] * wa[1] + wb[0] * wb[0] + wb[1] * wb[1];
             }
-        });
-        let mut inv_b = std::array::from_fn(|k| {
-            if body_floor[b_ids[k]].is_some_and(|bn| dir.dot(bn) < -1e-6) {
-                0.0
-            } else {
-                1.0
-            }
-        });
-        let mut denom = inv_a[0] * wa[0] * wa[0]
-            + inv_a[1] * wa[1] * wa[1]
-            + inv_b[0] * wb[0] * wb[0]
-            + inv_b[1] * wb[1] * wb[1];
-        if denom <= 1e-12 {
-            inv_a = [1.0; 2];
-            inv_b = [1.0; 2];
-            denom = wa[0] * wa[0] + wa[1] * wa[1] + wb[0] * wb[0] + wb[1] * wb[1];
-        }
-        let scale = opts.stiffness * (d_min - dist) / denom;
-        for k in 0..2 {
-            if wa[k] > 0.0 && inv_a[k] > 0.0 {
-                acc[a_ids[k]] -= dir * (scale * inv_a[k] * wa[k]);
-                w_sum[a_ids[k]] += wa[k];
-            }
-            if wb[k] > 0.0 && inv_b[k] > 0.0 {
-                acc[b_ids[k]] += dir * (scale * inv_b[k] * wb[k]);
-                w_sum[b_ids[k]] += wb[k];
+            let scale = opts.stiffness * (d_min - dist) / denom;
+            for k in 0..2 {
+                if wa[k] > 0.0 && inv_a[k] > 0.0 {
+                    acc[a_ids[k]] -= dir * (scale * inv_a[k] * wa[k]);
+                    w_sum[a_ids[k]] += wa[k];
+                }
+                if wb[k] > 0.0 && inv_b[k] > 0.0 {
+                    acc[b_ids[k]] += dir * (scale * inv_b[k] * wb[k]);
+                    w_sum[b_ids[k]] += wb[k];
+                }
             }
         }
     }
@@ -1006,7 +968,13 @@ fn apply_self_repulsion(
         }
         let mut delta = acc[w] / w_sum[w].max(1.0);
         let len = norm3(delta);
-        if !len.is_finite() || len == 0.0 {
+        if !len.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite self-repulsion correction",
+            ));
+        }
+        if len == 0.0 {
             continue;
         }
         if len > max_step {
@@ -1016,6 +984,13 @@ fn apply_self_repulsion(
             q[mv] += delta;
         }
     }
+    if q.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "non-finite repelling start",
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1028,7 +1003,14 @@ fn relax_inner(
     clearance: f64,
     weights: &[f64],
     repulsion: Option<SelfRepulsionOptions>,
-) -> Vec<Vec3> {
+    mut work: Option<&mut RepulsionWork>,
+) -> Result<Vec<Vec3>, Refusal> {
+    if repulsion.is_some() && start.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "non-finite self-repulsion start",
+        ));
+    }
     let edges = face_edges(&mesh.faces);
     let l0: Vec<f64> = edges
         .iter()
@@ -1040,7 +1022,7 @@ fn relax_inner(
         .collect();
     let n = start.len();
     let deg: Vec<f64> = degrees(n, &edges).into_iter().map(|d| d.max(1.0)).collect();
-    let topo = repulsion.map(|opts| RepulsionTopology::build(mesh, groups, opts.min_separation_m));
+    let topo = repulsion.map(|_| RepulsionTopology::build(mesh, groups));
     let mut q = start.to_vec();
     for it in 0..iters {
         let corr: Vec<Vec3> = edges
@@ -1080,13 +1062,15 @@ fn relax_inner(
                 body,
                 clearance,
                 opts,
-            );
+                work.as_deref_mut()
+                    .expect("repulsion has a complete-call budget"),
+            )?;
         }
         if it % RELAX_PUSH_OUT_ITERS == RELAX_PUSH_OUT_ITERS - 1 || it + 1 == iters {
             body.push_out(&mut q, clearance);
         }
     }
-    q
+    Ok(q)
 }
 
 /// The relaxed start state.
@@ -1113,14 +1097,16 @@ pub struct StartState {
 #[must_use]
 pub fn start_state(mesh: &GarmentMesh, wrapped: Vec<Vec3>, body: &NearestTree) -> StartState {
     start_state_inner(mesh, wrapped, body, None)
+        .expect("legacy start has no fallible self-repulsion work")
 }
 
-/// As [`start_state`], with optional spatial-hash cloth–cloth separation impulses during relaxation
+/// As [`start_state`], with optional bounded cloth–cloth separation impulses during relaxation
 /// ([`SelfRepulsionOptions`]). When `repulsion` is `None`, the result is bit-identical to
 /// [`start_state`].
 ///
 /// # Errors
-/// [`SelfRepulsionOptions::validate`] refusals for invalid repulsion settings.
+/// Invalid settings, non-finite separation geometry, or exhaustion of the allowance shared by all
+/// blocks. No partially relaxed start is returned on refusal.
 pub fn start_state_with_repulsion(
     mesh: &GarmentMesh,
     wrapped: Vec<Vec3>,
@@ -1130,7 +1116,7 @@ pub fn start_state_with_repulsion(
     if let Some(opts) = repulsion {
         opts.validate()?;
     }
-    Ok(start_state_inner(mesh, wrapped, body, repulsion))
+    start_state_inner(mesh, wrapped, body, repulsion)
 }
 
 fn start_state_inner(
@@ -1138,7 +1124,14 @@ fn start_state_inner(
     wrapped: Vec<Vec3>,
     body: &NearestTree,
     repulsion: Option<SelfRepulsionOptions>,
-) -> StartState {
+) -> Result<StartState, Refusal> {
+    if repulsion.is_some() && wrapped.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "non-finite self-repulsion wrap",
+        ));
+    }
+    let mut work = repulsion.map(RepulsionWork::new);
     let weights = gather_weights(mesh);
     let (presewn, groups) = presew(mesh, &wrapped, body, PRESEW_CLEARANCE, PRESEW_ITERS);
     let edges = face_edges(&mesh.faces);
@@ -1157,7 +1150,8 @@ fn start_state_inner(
             RELAX_CLEARANCE,
             &weights,
             repulsion,
-        );
+            work.as_mut(),
+        )?;
         done += RELAX_ITERS;
         let strain: Vec<f64> = edge_strain(&q, &mesh.verts2d, &plain)
             .into_iter()
@@ -1173,7 +1167,7 @@ fn start_state_inner(
             break;
         }
     }
-    StartState {
+    Ok(StartState {
         wrapped,
         presewn,
         groups,
@@ -1181,7 +1175,7 @@ fn start_state_inner(
         relax_iterations: done,
         block_p95: blocks,
         gather_weights: weights,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1351,6 +1345,7 @@ mod tests {
 
         // Serde round-trip and fail-closed validation.
         let wire = serde_json::to_value(opts).unwrap();
+        assert!(wire.get("max_candidate_checks").is_none());
         assert_eq!(
             serde_json::from_value::<SelfRepulsionOptions>(wire).unwrap(),
             opts
@@ -1403,6 +1398,20 @@ mod tests {
                 },
                 RefusalCode::OutOfRange,
             ),
+            (
+                SelfRepulsionOptions {
+                    max_candidate_checks: 0,
+                    ..opts
+                },
+                RefusalCode::OutOfRange,
+            ),
+            (
+                SelfRepulsionOptions {
+                    max_candidate_checks: MAX_SELF_REPULSION_CANDIDATE_CHECKS + 1,
+                    ..opts
+                },
+                RefusalCode::OutOfRange,
+            ),
         ] {
             let err = relax_with_repulsion(
                 &mesh,
@@ -1417,6 +1426,156 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, code, "bad={bad:?} err={err:?}");
         }
+    }
+
+    #[test]
+    fn self_repulsion_work_bound_covers_all_sweeps_without_publishing_partial_state() {
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [panel_piece("inner", 30.0, 30.0), panel_piece("outer", 30.0, 30.0)],
+            "seams": []
+        }));
+        let mesh = build_garment(&pat, 15.0).unwrap();
+        let weights = gather_weights(&mesh);
+        let body = flat_body();
+        let start: Vec<_> = mesh
+            .verts2d
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Vec3::new(p.x * MM, p.y * MM, 0.1 + mesh.owner[i] as f64 * 0.0005))
+            .collect();
+        let before = start.clone();
+        let mut opts = SelfRepulsionOptions {
+            period: 1,
+            ..SelfRepulsionOptions::default()
+        };
+        let mut work = RepulsionWork::new(opts);
+        let first = relax_inner(
+            &mesh,
+            &start,
+            &[],
+            &body,
+            1,
+            RELAX_CLEARANCE,
+            &weights,
+            Some(opts),
+            Some(&mut work),
+        )
+        .unwrap();
+        let spent = opts.max_candidate_checks - work.remaining;
+        assert!(spent > 0);
+        opts.max_candidate_checks = spent;
+        let wire = serde_json::to_value(opts).unwrap();
+        assert_eq!(wire["max_candidate_checks"], spent);
+        assert_eq!(
+            serde_json::from_value::<SelfRepulsionOptions>(wire).unwrap(),
+            opts
+        );
+        assert_eq!(
+            relax_with_repulsion(
+                &mesh,
+                &start,
+                &[],
+                &body,
+                1,
+                RELAX_CLEARANCE,
+                &weights,
+                Some(opts)
+            )
+            .unwrap(),
+            first
+        );
+        for iterations in [2, RELAX_ITERS] {
+            let refusal = relax_with_repulsion(
+                &mesh,
+                &start,
+                &[],
+                &body,
+                iterations,
+                RELAX_CLEARANCE,
+                &weights,
+                Some(opts),
+            )
+            .unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+            assert!(refusal.message.contains(&spent.to_string()));
+            assert_eq!(start, before);
+        }
+        assert_eq!(
+            start_state_with_repulsion(&mesh, start.clone(), &body, Some(opts))
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+        assert_eq!(start, before);
+    }
+
+    #[test]
+    fn self_repulsion_streams_long_overlapping_features_and_refuses_nonfinite_starts() {
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [panel_piece("inner", 30.0, 30.0), panel_piece("outer", 30.0, 30.0)],
+            "seams": []
+        }));
+        let mesh = build_garment(&pat, 30.0).unwrap();
+        let topology = RepulsionTopology::build(&mesh, &[]);
+        let opts = SelfRepulsionOptions::default();
+        let body = flat_body();
+        // Long current edges used to enter the all-edges Cartesian-product fallback. The model's
+        // flat rest coordinates remain unchanged: this is a geometric broad-phase experiment.
+        let start: Vec<_> = mesh
+            .verts2d
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Vec3::new(p.x, p.y, 0.1 + mesh.owner[i] as f64 * 0.0005))
+            .collect();
+        let mut output = start.clone();
+        let mut work = RepulsionWork::new(opts);
+        apply_self_repulsion(
+            &mut output,
+            &mesh.verts2d,
+            &mesh.owner,
+            &topology,
+            &body,
+            RELAX_CLEARANCE,
+            opts,
+            &mut work,
+        )
+        .unwrap();
+        let (lo0, hi0) = mesh.inst_range[0];
+        let (lo1, hi1) = mesh.inst_range[1];
+        let mean_z = |range: std::ops::Range<usize>| {
+            let n = range.len();
+            range.map(|i| output[i].z).sum::<f64>() / n as f64
+        };
+        assert!(mean_z(lo1..hi1) - mean_z(lo0..hi0) > 0.0005);
+        let mut repeat = start.clone();
+        apply_self_repulsion(
+            &mut repeat,
+            &mesh.verts2d,
+            &mesh.owner,
+            &topology,
+            &body,
+            RELAX_CLEARANCE,
+            opts,
+            &mut RepulsionWork::new(opts),
+        )
+        .unwrap();
+        assert_eq!(output, repeat);
+        let mut invalid = start;
+        invalid[0].x = f64::NAN;
+        let refusal = relax_with_repulsion(
+            &mesh,
+            &invalid,
+            &[],
+            &body,
+            1,
+            RELAX_CLEARANCE,
+            &gather_weights(&mesh),
+            Some(opts),
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::NonFinite);
     }
 
     #[test]
@@ -1542,6 +1701,7 @@ mod tests {
             min_separation_m: 0.0035,
             stiffness: 0.6,
             period: 5,
+            ..SelfRepulsionOptions::default()
         };
         let rep1 = relax_with_repulsion(
             &mesh,

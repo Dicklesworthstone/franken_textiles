@@ -79,58 +79,63 @@ fn element() -> MembraneElement {
 
 #[test]
 fn element_area_acts_on_physical_metric_with_exact_spatial_derivatives() {
-    let law = compiled(true);
-    let base = compiled(false);
-    let element = element();
-    let positions = [
-        Vec3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.91, 0.04, 0.02),
-        Vec3::new(0.02, 1.06, 0.03),
-    ];
-    for compression in [1.0, 0.01] {
-        let m = membrane(&law, compression);
-        let actual = element.response_local(&positions, &law, &m);
-        let base_only = element.response_local(&positions, &base, &m);
-        let physical = element.strain(&positions);
-        let expected_area = law.evaluate_area(physical).unwrap();
-        near(
-            actual.energy - base_only.energy,
-            element.area * expected_area.energy,
-            1e-13,
-        );
-        assert!(
-            !actual.psd,
-            "area term cannot borrow the separable PSD shortcut"
-        );
-        near(
-            actual.energy,
-            element.response_energy(&positions, &law, &m),
-            1e-13,
-        );
-        let h = 1e-6;
-        for coordinate in 0..9 {
-            let mut plus = positions;
-            let mut minus = positions;
-            let delta = match coordinate % 3 {
-                0 => Vec3::new(h, 0.0, 0.0),
-                1 => Vec3::new(0.0, h, 0.0),
-                _ => Vec3::new(0.0, 0.0, h),
-            };
-            plus[coordinate / 3] += delta;
-            minus[coordinate / 3] -= delta;
-            let p = element.response_local(&plus, &law, &m);
-            let n = element.response_local(&minus, &law, &m);
+    for model in [
+        ftx_drape::CompressionModel::AxisAligned,
+        ftx_drape::CompressionModel::Principal,
+    ] {
+        let law = compiled(true);
+        let base = compiled(false);
+        let element = element();
+        let positions = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.91, 0.04, 0.02),
+            Vec3::new(0.02, 1.06, 0.03),
+        ];
+        for compression in [1.0, 0.01] {
+            let m = membrane(&law, compression);
+            let actual = element.response_local_with_model(&positions, &law, &m, model);
+            let base_only = element.response_local_with_model(&positions, &base, &m, model);
+            let physical = element.strain(&positions);
+            let expected_area = law.evaluate_area(physical).unwrap();
             near(
-                (p.energy - n.energy) / (2.0 * h),
-                actual.grad[coordinate],
-                2e-7,
+                actual.energy - base_only.energy,
+                element.area * expected_area.energy,
+                1e-13,
             );
-            for component in 0..9 {
+            assert!(
+                !actual.psd,
+                "area term cannot borrow the separable PSD shortcut"
+            );
+            near(
+                actual.energy,
+                element.response_energy_with_model(&positions, &law, &m, model),
+                1e-13,
+            );
+            let h = 1e-6;
+            for coordinate in 0..9 {
+                let mut plus = positions;
+                let mut minus = positions;
+                let delta = match coordinate % 3 {
+                    0 => Vec3::new(h, 0.0, 0.0),
+                    1 => Vec3::new(0.0, h, 0.0),
+                    _ => Vec3::new(0.0, 0.0, h),
+                };
+                plus[coordinate / 3] += delta;
+                minus[coordinate / 3] -= delta;
+                let p = element.response_local_with_model(&plus, &law, &m, model);
+                let n = element.response_local_with_model(&minus, &law, &m, model);
                 near(
-                    (p.grad[component] - n.grad[component]) / (2.0 * h),
-                    actual.hess[component * 9 + coordinate],
-                    2e-6,
+                    (p.energy - n.energy) / (2.0 * h),
+                    actual.grad[coordinate],
+                    2e-7,
                 );
+                for component in 0..9 {
+                    near(
+                        (p.grad[component] - n.grad[component]) / (2.0 * h),
+                        actual.hess[component * 9 + coordinate],
+                        2e-6,
+                    );
+                }
             }
         }
     }

@@ -220,6 +220,13 @@ impl BendingPatch {
     }
 
     fn normal_strain_jets(&self, x: &[Vec3]) -> [Jet<18>; 3] {
+        let actual = self.normal_curvature_jets(x);
+        std::array::from_fn(|a| actual[a] - Jet::constant(self.preferred_curvature()[a]))
+    }
+
+    // Raw curvature is also the objective rate coordinate. Subtracting a large preferred shape
+    // before taking its change would discard small, physically real curvature increments.
+    pub(super) fn normal_curvature_jets(&self, x: &[Vec3]) -> [Jet<18>; 3] {
         type J = Jet<18>;
         let z = J::constant(0.0);
         let p: [[J; 3]; 6] = std::array::from_fn(|i| {
@@ -246,7 +253,7 @@ impl BendingPatch {
             let derivative = std::array::from_fn(|k| {
                 (1..6).fold(z, |sum, i| sum + p[i][k] * self.weights[a][i])
             });
-            dot(normal, derivative) - J::constant(self.preferred_curvature()[a])
+            dot(normal, derivative)
         })
     }
 }
