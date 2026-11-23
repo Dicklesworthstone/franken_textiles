@@ -204,7 +204,11 @@ impl AdaptiveBarrierPolicy {
             ));
         }
         let phi = Self::barrier_force_factor(self.target_gap_fraction);
-        let k_grav = (mean_vertex_mass_kg * gravity_m_s2) / (dhat_m * phi);
+        let k_grav = if mean_vertex_mass_kg == 0.0 || gravity_m_s2 == 0.0 {
+            0.0
+        } else {
+            (mean_vertex_mass_kg * gravity_m_s2) / (dhat_m * phi)
+        };
         let k_mem = self.membrane_floor_scale * membrane_stiffness_n_m;
         let raw = k_grav.max(k_mem);
         Refusal::finite("adaptive initial barrier stiffness", raw)?;
@@ -215,6 +219,13 @@ impl AdaptiveBarrierPolicy {
     /// `current_kappa` up by `growth_factor` within `[kappa_min, kappa_max]`.
     #[must_use]
     pub fn adapt_kappa(&self, current_kappa: f64, min_gap: Option<f64>, dhat_m: f64) -> f64 {
+        if self.validate().is_err() {
+            return if current_kappa.is_finite() && current_kappa > 0.0 {
+                current_kappa
+            } else {
+                Self::default().kappa_min
+            };
+        }
         if !current_kappa.is_finite() || !dhat_m.is_finite() || dhat_m <= 0.0 {
             return self.kappa_min;
         }
@@ -303,12 +314,12 @@ impl StickSlipFriction {
             self.mu_s * (-r * r + 2.0 * r)
         } else {
             let u = (v - eps_v) / self.transition_v_m_s;
-            let exp_neg_u = if u > 700.0 {
+            let decay = if u > 700.0 {
                 0.0
             } else {
-                ftx_core::det::exp(-u)
+                (1.0 + u) * ftx_core::det::exp(-u)
             };
-            self.mu_k + (self.mu_s - self.mu_k) * (1.0 + u) * exp_neg_u
+            self.mu_k + (self.mu_s - self.mu_k) * decay
         }
     }
 }
@@ -347,18 +358,26 @@ fn stick_slip_radial(y: f64, eps: f64, ss: StickSlipFriction, h: f64) -> StickSl
     } else {
         let w = ss.transition_v_m_s * h;
         let s = y - eps;
-        let u = s / w;
         let dm = ss.mu_s - ss.mu_k;
-        let exp_neg_u = if u > 700.0 {
-            0.0
+        let (exp_neg_u, u_exp, radial_eig_exact) = if !(w > 0.0) {
+            if s <= 0.0 {
+                (1.0, 0.0, 0.0)
+            } else {
+                (0.0, 0.0, 0.0)
+            }
         } else {
-            ftx_core::det::exp(-u)
+            let u = s / w;
+            if u > 700.0 {
+                (0.0, 0.0, 0.0)
+            } else {
+                let exp_neg_u = ftx_core::det::exp(-u);
+                let u_exp = u * exp_neg_u;
+                (exp_neg_u, u_exp, -dm * u_exp / w)
+            }
         };
-        let u_exp = if u > 700.0 { 0.0 } else { u * exp_neg_u };
         let d_val = ss.mu_s * eps + ss.mu_k * s + dm * w * (2.0 - (2.0 * exp_neg_u + u_exp));
         let tau = ss.mu_k + dm * (exp_neg_u + u_exp);
         let tau_over_y = tau / y;
-        let radial_eig_exact = -dm * u_exp / w;
         let radial_eig_psd = radial_eig_exact.max(0.0);
         StickSlipRadial {
             d_val,
@@ -1547,6 +1566,82 @@ impl Contact {
             }
         }
         self.params.kappa
+    }
+
+    /// Li et al. (2020) §5.1 in-solve barrier stiffness escalation: when adaptive barrier scaling is
+    /// enabled and an intense load (such as tight sewing hoop tension) crushes an active gap far
+    /// below `min_gap_fraction * dhat` within a single Newton solve, scales `kappa` upward (at
+    /// least by `growth_factor`, capped at `kappa_max`) to match the active barrier load near
+    /// `min_gap_fraction * dhat` instead of stalling in sub-micrometre CCD steps.
+    ///
+    /// Returns `true` iff body or cloth–cloth `kappa` increased. Always a no-op when adaptive
+    /// barrier scaling is disabled.
+    pub(crate) fn escalate_barrier_if_crushed(&mut self, x: &[Vec3]) -> bool {
+        let Some(policy) = self.adaptive_barrier else {
+            return false;
+        };
+        if policy.validate().is_err() || !(policy.growth_factor > 1.0) {
+            return false;
+        }
+        // Trigger only on severe in-solve crush (50× deeper than `min_gap_fraction`), so moderate
+        // overloads continue to be handled between steps by `adapt_barrier_stiffness`.
+        const SEVERE_CRUSH_RATIO: f64 = 0.02;
+        let phi_min = AdaptiveBarrierPolicy::barrier_force_factor(policy.min_gap_fraction);
+        let escalate = |kappa: f64, min_gap: Option<f64>, dhat: f64| -> Option<f64> {
+            let g = min_gap?;
+            if !(kappa.is_finite()
+                && dhat.is_finite()
+                && dhat > 0.0
+                && g.is_finite()
+                && g > 0.0
+                && kappa < policy.kappa_max)
+            {
+                return None;
+            }
+            let trigger = SEVERE_CRUSH_RATIO * policy.min_gap_fraction * dhat;
+            if g >= trigger {
+                return None;
+            }
+            let alpha = (g / dhat).clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+            let phi_now = AdaptiveBarrierPolicy::barrier_force_factor(alpha);
+            let force_matched = if phi_now.is_finite() && phi_min.is_finite() && phi_min > 0.0 {
+                kappa * (phi_now / phi_min)
+            } else {
+                policy.kappa_max
+            };
+            let min_step = kappa * policy.growth_factor;
+            let next = force_matched
+                .max(min_step)
+                .clamp(policy.kappa_min, policy.kappa_max);
+            (next.is_finite() && next > kappa).then_some(next)
+        };
+        let mut changed = false;
+        let body_trigger = SEVERE_CRUSH_RATIO * policy.min_gap_fraction * self.params.dhat;
+        if self.params.kappa < policy.kappa_max
+            && body_trigger.is_finite()
+            && body_trigger > 0.0
+            && let Some(next) = escalate(
+                self.params.kappa,
+                self.min_gap(x, body_trigger),
+                self.params.dhat,
+            )
+        {
+            self.params.kappa = next;
+            changed = true;
+        }
+        if let Some(sp) = self.self_params {
+            let self_trigger = SEVERE_CRUSH_RATIO * policy.min_gap_fraction * sp.dhat;
+            if sp.kappa < policy.kappa_max
+                && self_trigger.is_finite()
+                && self_trigger > 0.0
+                && let Some(next) = escalate(sp.kappa, self.min_self_gap(x, self_trigger), sp.dhat)
+                && let Some(sp_mut) = self.self_params.as_mut()
+            {
+                sp_mut.kappa = next;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Configures opt-in smooth static/kinetic stick-slip friction for cloth–body contact.
@@ -3716,5 +3811,74 @@ mod tests {
             .unwrap();
         assert_eq!(replaced_with_mat.stick_slip(), None);
         assert_eq!(replaced_with_mat.self_stick_slip(), None);
+    }
+
+    #[test]
+    fn stick_slip_handles_extreme_transition_scales_without_nan() {
+        let tiny = StickSlipFriction::new(0.6, 0.3, 1e-315).unwrap();
+        let mu_slide = tiny.effective_mu(1.0, 1e-3);
+        assert!(
+            mu_slide.is_finite() && (mu_slide - 0.3).abs() < 1e-15,
+            "overflowing u=(v-eps_v)/transition_v must saturate cleanly at mu_k, got {mu_slide}"
+        );
+        let at_eps = stick_slip_radial(1e-5, 1e-5, tiny, 1e-2);
+        assert!(at_eps.d_val.is_finite() && at_eps.tau_over_y.is_finite());
+        assert!((at_eps.tau_over_y * 1e-5 - 0.6).abs() < 1e-12);
+        let past_eps = stick_slip_radial(2e-5, 1e-5, tiny, 1e-2);
+        assert!(past_eps.d_val.is_finite() && past_eps.tau_over_y.is_finite());
+        assert!((past_eps.tau_over_y * 2e-5 - 0.3).abs() < 1e-12);
+    }
+
+    #[test]
+    fn in_solve_barrier_escalation_rescues_severe_crush_without_touching_moderate_overload() {
+        let policy = AdaptiveBarrierPolicy::default();
+        let p = ContactParams {
+            dhat: 1e-3,
+            thickness: 5e-4,
+            kappa: 100.0,
+            mu: 0.0,
+            eps_v: 1e-3,
+        };
+        let floor = Body::new(
+            vec![
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(1.0, -1.0, 0.0),
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(-1.0, 1.0, 0.0),
+            ],
+            vec![[0, 1, 2], [0, 2, 3]],
+            0.2,
+        )
+        .unwrap();
+        let patch = |z: f64| {
+            vec![
+                Vec3::new(0.0, 0.0, z),
+                Vec3::new(0.02, 0.0, z),
+                Vec3::new(0.0, 0.02, z),
+            ]
+        };
+        let tris = vec![[0, 1, 2]];
+        let x_moderate = patch(p.thickness + 1.5e-5); // 0.015 * dhat: moderate overload (< 0.05)
+        let x_crushed = patch(p.thickness + 5e-7); // 0.0005 * dhat: severe crush (< 0.001)
+
+        // Disabled adaptive barrier is always a no-op even on severe crush.
+        let mut legacy = Contact::new(floor.clone(), p, tris.clone(), |_, _| 0.02);
+        assert!(!legacy.escalate_barrier_if_crushed(&x_crushed));
+        assert_eq!(legacy.params.kappa, p.kappa);
+
+        let mut adaptive = Contact::new(floor, p, tris, |_, _| 0.02)
+            .with_adaptive_barrier(policy, 1.6e-5, 400.0, 9.81)
+            .unwrap();
+        let k0 = adaptive.params.kappa;
+        assert!(!adaptive.escalate_barrier_if_crushed(&x_moderate));
+        assert_eq!(adaptive.params.kappa, k0);
+
+        assert!(adaptive.escalate_barrier_if_crushed(&x_crushed));
+        assert!(
+            adaptive.params.kappa >= k0 * policy.growth_factor
+                && adaptive.params.kappa <= policy.kappa_max,
+            "escalated kappa {} out of expected range from k0={k0}",
+            adaptive.params.kappa
+        );
     }
 }

@@ -8,7 +8,7 @@
 //! interior has many such quadruples) and either diagonal is correct. Exactly coincident points are
 //! merged (the reference merges within 1e-6 mm).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::curve::EDGE_DENSE;
 use ftx_core::det;
@@ -265,6 +265,19 @@ pub struct SeamRecord {
     /// native extension): the depth of the band of pleats below a gathered seam and the cloth's compression
     /// factor inside it. `None` is the reference's gather zone.
     pub gather_relief: Option<GatherRelief>,
+    /// Optional authored pressed-seam dihedral rest angle `θ₀ ∈ (−π, π)` (rad) from
+    /// `seam.crease_angle_deg` (FTX-27a native extension; requires [`crate::BendingModel::DiscreteShells`]).
+    pub crease_angle_rad: Option<f64>,
+}
+
+/// One authored interior crease or fold edge on the flat mesh (FTX-27a native extension).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CreaseEdge {
+    /// Global vertex indices into [`GarmentMesh::verts2d`] forming the constrained crease edge.
+    pub verts: [usize; 2],
+    /// Signed rest dihedral angle `θ₀ ∈ (−π, π)` (rad): positive folds toward the public (`+n`)
+    /// face (valley), negative folds toward the inside (`−n`) face (mountain crease).
+    pub rest_angle_rad: f64,
 }
 
 /// A gathered seam's own band of pleats (spec 04 §5.4, native extension).
@@ -298,6 +311,8 @@ pub struct GarmentMesh {
     pub corner: BTreeMap<(String, String), usize>,
     /// `(instance, edge)` → global indices along the edge, both ends included.
     pub index: BTreeMap<(String, String), Vec<usize>>,
+    /// Authored interior crease/pleat constrained edges (empty unless pieces declare `crease_angle_deg`).
+    pub creases: Vec<CreaseEdge>,
 }
 
 fn doc_error(e: &PyError) -> Refusal {
@@ -879,8 +894,38 @@ fn adaptive_interior(
     } else {
         sizing.min_spacing
     };
+    let step_y = s_seed * 0.866;
+    let est = |start: f64, stop: f64, step: f64| -> Option<usize> {
+        if !(start.is_finite() && stop.is_finite() && step.is_finite() && step > 0.0) {
+            return None;
+        }
+        if stop <= start {
+            return Some(0);
+        }
+        let n = ((stop - start) / step).ceil();
+        if !n.is_finite() || n > 2_000_000.0 {
+            None
+        } else {
+            Some(n as usize)
+        }
+    };
+    let (Some(est_x), Some(est_y)) = (
+        est(lo.x + s_seed / 2.0, hi.x, s_seed),
+        est(lo.y + s_seed / 2.0, hi.y, step_y),
+    ) else {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{inst_id}: adaptive interior lattice exceeds 2,000,000 candidate sites"),
+        ));
+    };
+    if est_x.saturating_mul(est_y) > 2_000_000 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{inst_id}: adaptive interior lattice exceeds 2,000,000 candidate sites"),
+        ));
+    }
     let gx = arange(lo.x + s_seed / 2.0, hi.x, s_seed);
-    let gy = arange(lo.y + s_seed / 2.0, hi.y, s_seed * 0.866);
+    let gy = arange(lo.y + s_seed / 2.0, hi.y, step_y);
     if gx.len().saturating_mul(gy.len()) > 2_000_000 {
         return Err(Refusal::new(
             RefusalCode::BudgetExceeded,
@@ -966,37 +1011,42 @@ fn triangle_voronoi_center(a: Vec2, b: Vec2, c: Vec2) -> Vec2 {
     }
 }
 
-/// Bounded density-weighted interior Lloyd CVT smoothing (`ρ(x) = h(x)⁻²`, fixed boundary vertices,
-/// star-validity backtracking, and constrained Delaunay re-triangulation after each pass).
+/// Bounded density-weighted interior Lloyd CVT smoothing (`ρ(x) = h(x)⁻²`, fixed boundary and
+/// authored crease vertices, star-validity backtracking, and constrained Delaunay re-triangulation
+/// after each pass).
+#[allow(clippy::too_many_arguments)]
 fn smooth_interior_cvt(
     allp: &mut [Vec2],
     nb: usize,
+    pinned_count: usize,
+    crease_constraints: &[([usize; 2], f64)],
     mut faces: Vec<[usize; 3]>,
     sizing: &SizingField,
     iterations: usize,
     inst_id: &str,
-) -> Result<Vec<[usize; 3]>, Refusal> {
-    let n_int = allp.len().saturating_sub(nb);
-    if iterations == 0 || n_int == 0 {
-        return Ok(faces);
+) -> Result<(Vec<[usize; 3]>, Vec<([usize; 2], f64)>), Refusal> {
+    let n_free = allp.len().saturating_sub(pinned_count);
+    if iterations == 0 || n_free == 0 {
+        return Ok((faces, crease_constraints.to_vec()));
     }
     let stop_tol = CVT_STOP_REL * sizing.min_spacing;
+    let mut resolved_creases = crease_constraints.to_vec();
     for _ in 0..iterations {
-        let mut star: Vec<Vec<[usize; 3]>> = vec![Vec::new(); n_int];
+        let mut star: Vec<Vec<[usize; 3]>> = vec![Vec::new(); n_free];
         for &[i, j, k] in &faces {
-            if i >= nb {
-                star[i - nb].push([i, j, k]);
+            if i >= pinned_count {
+                star[i - pinned_count].push([i, j, k]);
             }
-            if j >= nb {
-                star[j - nb].push([j, k, i]);
+            if j >= pinned_count {
+                star[j - pinned_count].push([j, k, i]);
             }
-            if k >= nb {
-                star[k - nb].push([k, i, j]);
+            if k >= pinned_count {
+                star[k - pinned_count].push([k, i, j]);
             }
         }
         let mut max_move = 0.0_f64;
-        for v in nb..allp.len() {
-            let inc = &star[v - nb];
+        for v in pinned_count..allp.len() {
+            let inc = &star[v - pinned_count];
             if inc.len() < 3 {
                 continue;
             }
@@ -1045,12 +1095,15 @@ fn smooth_interior_cvt(
                 }
             }
         }
-        faces = triangulate(allp, nb, inst_id)?;
+        let (next_faces, next_creases) =
+            triangulate_with_creases(allp, nb, crease_constraints, inst_id)?;
+        faces = next_faces;
+        resolved_creases = next_creases;
         if max_move < stop_tol {
             break;
         }
     }
-    Ok(faces)
+    Ok((faces, resolved_creases))
 }
 
 /// Opt-in garment construction mechanics multipliers for folded hem bands and sewn seam allowances
@@ -1478,6 +1531,391 @@ pub fn compute_construction_field(
     })
 }
 
+fn parse_crease_angle_rad(raw: Option<&Value>, context: &str) -> Result<Option<f64>, Refusal> {
+    let Some(v) = raw.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let deg = number(v, &format!("{context} crease_angle_deg"))?;
+    if !(deg.is_finite() && deg.abs() < 180.0) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "{context}: crease_angle_deg {deg} must be finite and strictly within (-180, 180)"
+            ),
+        ));
+    }
+    if deg == 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(deg.to_radians()))
+}
+
+fn extract_piece_creases(
+    piece: &Value,
+    inst: &Instance,
+    loop_pts: &[Vec2],
+    spacing: f64,
+) -> Result<Vec<(Vec<Vec2>, f64)>, Refusal> {
+    let Some(marks) = piece.get("internal").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let nb = loop_pts.len();
+    let min_boundary_dist = |p: Vec2| -> f64 {
+        (0..nb)
+            .map(|i| dist_point_segment(p, loop_pts[i], loop_pts[(i + 1) % nb]))
+            .fold(f64::INFINITY, f64::min)
+    };
+    let fold_axis: Option<(Vec2, Vec2)> = piece
+        .get("cut")
+        .and_then(|c| c.get("on_fold"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .and_then(|fold_id| {
+            let edge = piece
+                .get("edges")?
+                .as_array()?
+                .iter()
+                .find(|e| e.get("id").and_then(Value::as_str) == Some(fold_id))?;
+            let (from, to) = (edge.get("from")?.as_str()?, edge.get("to")?.as_str()?);
+            let verts = piece.get("vertices")?.as_object()?;
+            let pt = |k: &str| -> Option<Vec2> {
+                let a = verts.get(k)?.as_array()?;
+                Some(Vec2::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+            };
+            let (a, b) = (pt(from)?, pt(to)?);
+            let len = norm2(b - a);
+            (a.is_finite() && b.is_finite() && len.is_finite() && len > 0.0).then_some((a, b))
+        });
+    let reflect_across = |p: Vec2, a: Vec2, b: Vec2| -> Vec2 {
+        let ab = b - a;
+        let len = norm2(ab);
+        let d = Vec2::new(ab.x / len, ab.y / len);
+        let w = p - a;
+        let k = 2.0 * (w.x * d.x + w.y * d.y);
+        Vec2::new((a.x + k * d.x) - w.x, (a.y + k * d.y) - w.y)
+    };
+    let mut out = Vec::new();
+    for (idx, mark) in marks.iter().enumerate() {
+        let context = format!("{} internal[{idx}]", inst.id);
+        let Some(angle_rad) = parse_crease_angle_rad(mark.get("crease_angle_deg"), &context)?
+        else {
+            continue;
+        };
+        let raw_pts = mark
+            .get("pts")
+            .and_then(Value::as_array)
+            .filter(|a| a.len() >= 2)
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("{context}: crease requires pts with at least 2 [x, y] points"),
+                )
+            })?;
+        let mut drafted_poly = Vec::with_capacity(raw_pts.len());
+        for (pi, item) in raw_pts.iter().enumerate() {
+            let pair = item.as_array().filter(|a| a.len() == 2).ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("{context}.pts[{pi}] must be [x, y]"),
+                )
+            })?;
+            let x = number(&pair[0], &format!("{context}.pts[{pi}][0]"))?;
+            let y = number(&pair[1], &format!("{context}.pts[{pi}][1]"))?;
+            if !(x.is_finite() && y.is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    format!("{context}.pts[{pi}] must be finite"),
+                ));
+            }
+            drafted_poly.push(Vec2::new(x, y));
+        }
+        let mut copies = vec![drafted_poly.clone()];
+        if let Some((fa, fb)) = fold_axis {
+            let off_fold = drafted_poly
+                .iter()
+                .any(|&p| norm2(reflect_across(p, fa, fb) - p) > 1e-3);
+            if off_fold {
+                copies.push(
+                    drafted_poly
+                        .iter()
+                        .map(|&p| reflect_across(p, fa, fb))
+                        .collect(),
+                );
+            }
+        }
+        for copy in copies {
+            let mut poly = Vec::with_capacity(copy.len());
+            for (pi, raw_p) in copy.into_iter().enumerate() {
+                let p = if inst.mirrored {
+                    Vec2::new(-raw_p.x, raw_p.y)
+                } else {
+                    raw_p
+                };
+                if !point_in_polygon(p, loop_pts) && min_boundary_dist(p) > 1e-3 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("{context}.pts[{pi}] lies outside the piece outline"),
+                    ));
+                }
+                poly.push(p);
+            }
+            let mut sampled = Vec::new();
+            for seg in poly.windows(2) {
+                let len = norm2(seg[1] - seg[0]);
+                if len <= 1e-6 {
+                    continue;
+                }
+                let n = ((len / spacing).ceil() as usize).max(1);
+                if n > 100_000 {
+                    return Err(Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        format!("{context}: crease sampling exceeds 100,000 segments"),
+                    ));
+                }
+                if sampled.is_empty() {
+                    sampled.push(seg[0]);
+                }
+                for k in 1..=n {
+                    let t = k as f64 / n as f64;
+                    let pt = seg[0] + (seg[1] - seg[0]) * t;
+                    if !point_in_polygon(pt, loop_pts) && min_boundary_dist(pt) > 1e-3 {
+                        return Err(Refusal::new(
+                            RefusalCode::OutOfRange,
+                            format!("{context}: crease segment exits the piece outline"),
+                        ));
+                    }
+                    sampled.push(pt);
+                }
+            }
+            if sampled.len() >= 2 {
+                out.push((sampled, angle_rad));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Inserts crease vertices that fall strictly between boundary samples into unsewn outline edges
+/// (preserving CCW order and `mesh.index` with zero T-junctions) and refuses crease vertices that
+/// land mid-segment on a sewn edge (where inserting a vertex would break 1-to-1 seam pairing).
+fn anchor_boundary_crease_points(
+    inst_id: &str,
+    edge_samples: &mut [(String, String, Vec<Vec2>, bool)],
+    piece_creases: &mut [(Vec<Vec2>, f64)],
+) -> Result<bool, Refusal> {
+    let mut insertions: Vec<(usize, usize, f64, Vec2)> = Vec::new();
+    for (poly, _) in piece_creases.iter_mut() {
+        for p in poly.iter_mut() {
+            // Exact match against any existing boundary vertex needs no boundary edit.
+            if let Some(existing) = edge_samples
+                .iter()
+                .flat_map(|(_, _, pts, _)| pts.iter())
+                .find(|q| norm2(**q - *p) <= 1e-3)
+            {
+                *p = *existing;
+                continue;
+            }
+            let mut best: Option<(f64, usize, usize, f64, Vec2)> = None;
+            for (ei, (_, _, pts, _)) in edge_samples.iter().enumerate() {
+                for (si, seg) in pts.windows(2).enumerate() {
+                    let d = dist_point_segment(*p, seg[0], seg[1]);
+                    if d <= 1e-3 && best.is_none_or(|b| d < b.0) {
+                        let ab = seg[1] - seg[0];
+                        let l2 = ab.x * ab.x + ab.y * ab.y;
+                        let t = if l2 > 0.0 {
+                            (((p.x - seg[0].x) * ab.x + (p.y - seg[0].y) * ab.y) / l2)
+                                .clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        let proj = seg[0] + ab * t;
+                        best = Some((d, ei, si, t, proj));
+                    }
+                }
+            }
+            let Some((_, ei, si, t, proj)) = best else {
+                continue;
+            };
+            if edge_samples[ei].3 {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    format!(
+                        "{inst_id}/{}: authored crease meets a sewn edge between seam mesh samples",
+                        edge_samples[ei].0
+                    ),
+                )
+                .repair(
+                    "Split the sewn edge with a pattern vertex at the crease intersection (so both \
+                     sides of the seam share the node) or end the crease inside the piece.",
+                ));
+            }
+            *p = proj;
+            insertions.push((ei, si, t, proj));
+        }
+    }
+    if insertions.is_empty() {
+        return Ok(false);
+    }
+    // Insert from back to front per edge/segment so earlier indices stay valid.
+    insertions.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| b.2.total_cmp(&a.2))
+    });
+    for (ei, si, _, proj) in insertions {
+        let pts = &mut edge_samples[ei].2;
+        if pts.iter().all(|q| norm2(*q - proj) > 1e-3) {
+            pts.insert(si + 1, proj);
+        }
+    }
+    Ok(true)
+}
+
+/// Constrained Delaunay of `points` with the first `nb` as the closed boundary loop and optional
+/// authored interior crease constraints; returns CCW interior faces and resolved crease segments.
+/// When `crease_constraints` is empty, delegates directly to [`triangulate`] for bit-exact parity.
+#[allow(clippy::type_complexity)]
+fn triangulate_with_creases(
+    points: &[Vec2],
+    nb: usize,
+    crease_constraints: &[([usize; 2], f64)],
+    inst: &str,
+) -> Result<(Vec<[usize; 3]>, Vec<([usize; 2], f64)>), Refusal> {
+    if crease_constraints.is_empty() {
+        return Ok((triangulate(points, nb, inst)?, Vec::new()));
+    }
+    let bad = |m: String| Refusal::new(RefusalCode::DegenerateGeometry, m);
+    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> =
+        ConstrainedDelaunayTriangulation::new();
+    let mut handles = Vec::with_capacity(points.len());
+    let mut first: BTreeMap<usize, usize> = BTreeMap::new();
+    for (i, p) in points.iter().enumerate() {
+        let h = cdt
+            .insert(Point2::new(p.x, p.y))
+            .map_err(|e| bad(format!("{inst}: cannot triangulate point {i}: {e:?}")))?;
+        first.entry(h.index()).or_insert(i);
+        handles.push(h);
+    }
+    for k in 0..nb {
+        let (a, b) = (handles[k], handles[(k + 1) % nb]);
+        if a == b {
+            continue;
+        }
+        if !cdt.can_add_constraint(a, b) {
+            return Err(bad(format!(
+                "{inst}: the outline crosses itself near boundary sample {k}"
+            )));
+        }
+        cdt.add_constraint(a, b);
+    }
+    // Snapshot every boundary constraint edge (including any sub-edges split by crease endpoints on
+    // the outline) before adding interior crease constraints so interior creases never invert the
+    // odd/even inside-outside flood-fill parity.
+    let edge_key = |u: usize, v: usize| (u.min(v), u.max(v));
+    let mut boundary_constraints: BTreeSet<(usize, usize)> = BTreeSet::new();
+    for e in cdt.undirected_edges() {
+        if cdt.is_constraint_edge(e.fix()) {
+            let [u, v] = e.vertices().map(|h| h.fix().index());
+            boundary_constraints.insert(edge_key(u, v));
+        }
+    }
+    let mut known_constraints = boundary_constraints.clone();
+    let mut assigned_creases: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+    let mut record_crease = |su: usize, sv: usize, angle: f64| -> Result<(), Refusal> {
+        let sk = edge_key(su, sv);
+        if boundary_constraints.contains(&sk) {
+            return Ok(());
+        }
+        let (ia, ib) = (first[&su], first[&sv]);
+        if ia == ib {
+            return Ok(());
+        }
+        let pk = edge_key(ia, ib);
+        if let Some(&prev) = assigned_creases.get(&pk) {
+            if (prev - angle).abs() > 1e-9 {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("{inst}: conflicting crease angles on shared edge {pk:?}"),
+                ));
+            }
+        } else {
+            assigned_creases.insert(pk, angle);
+        }
+        Ok(())
+    };
+    for &([ca, cb], angle) in crease_constraints {
+        let (ha, hb) = (handles[ca], handles[cb]);
+        if ha == hb {
+            continue;
+        }
+        if !cdt.can_add_constraint(ha, hb) {
+            return Err(bad(format!(
+                "{inst}: authored crease segment ({ca}, {cb}) crosses outline or another crease"
+            )));
+        }
+        cdt.add_constraint(ha, hb);
+        if let Some(dir) = cdt.get_edge_from_neighbors(ha, hb)
+            && cdt.is_constraint_edge(dir.as_undirected().fix())
+        {
+            known_constraints.insert(edge_key(ha.index(), hb.index()));
+            record_crease(ha.index(), hb.index(), angle)?;
+        } else {
+            let new_edges: Vec<(usize, usize)> = cdt
+                .undirected_edges()
+                .filter_map(|e| {
+                    if !cdt.is_constraint_edge(e.fix()) {
+                        return None;
+                    }
+                    let [u, v] = e.vertices().map(|h| h.fix().index());
+                    let sk = edge_key(u, v);
+                    (!known_constraints.contains(&sk)).then_some(sk)
+                })
+                .collect();
+            for (su, sv) in new_edges {
+                known_constraints.insert(edge_key(su, sv));
+                record_crease(su, sv, angle)?;
+            }
+        }
+    }
+    let mut adjacent: Vec<Vec<(usize, usize)>> = vec![Vec::new(); cdt.num_all_faces()];
+    for e in cdt.undirected_edges() {
+        let d = e.as_directed();
+        let (f1, f2) = (d.face().fix().index(), d.rev().face().fix().index());
+        let [u, v] = e.vertices().map(|h| h.fix().index());
+        let crossing = usize::from(boundary_constraints.contains(&edge_key(u, v)));
+        adjacent[f1].push((f2, crossing));
+        adjacent[f2].push((f1, crossing));
+    }
+    let mut depth: Vec<Option<usize>> = vec![None; adjacent.len()];
+    let outer = cdt.outer_face().fix().index();
+    depth[outer] = Some(0);
+    let mut queue = std::collections::VecDeque::from([outer]);
+    while let Some(fi) = queue.pop_front() {
+        let d = depth[fi].unwrap_or(0);
+        for &(n, crossing) in &adjacent[fi] {
+            if depth[n].is_none() {
+                depth[n] = Some(d + crossing);
+                queue.push_back(n);
+            }
+        }
+    }
+    let mut faces = Vec::new();
+    for f in cdt.inner_faces() {
+        if depth[f.fix().index()].unwrap_or(0).is_multiple_of(2) {
+            continue;
+        }
+        let v = f.vertices().map(|h| first[&h.fix().index()]);
+        let (a, b, c) = (points[v[0]], points[v[1]], points[v[2]]);
+        let cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        faces.push(if cross < 0.0 { [v[2], v[1], v[0]] } else { v });
+    }
+    let resolved = assigned_creases
+        .into_iter()
+        .map(|((u, v), a)| ([u, v], a))
+        .collect();
+    Ok((faces, resolved))
+}
+
 /// Constrained Delaunay of `points` with the first `nb` as the closed boundary loop; the triangles
 /// inside the loop, counter-clockwise, as indices into `points`.
 fn triangulate(points: &[Vec2], nb: usize, inst: &str) -> Result<Vec<[usize; 3]>, Refusal> {
@@ -1684,6 +2122,10 @@ pub fn build_garment_with_options(
                 Some(relief)
             }
         };
+        let crease_angle_rad = parse_crease_angle_rad(
+            s.0.get("crease_angle_deg"),
+            &format!("seam {}", s.id_text()),
+        )?;
         seam_info.push((
             s.id_text(),
             ia.id.clone(),
@@ -1693,6 +2135,7 @@ pub fn build_garment_with_options(
             rev,
             ratio,
             gather_relief,
+            crease_angle_rad,
         ));
     }
 
@@ -1706,20 +2149,21 @@ pub fn build_garment_with_options(
         seams: Vec::new(),
         corner: BTreeMap::new(),
         index: BTreeMap::new(),
+        creases: Vec::new(),
     };
     for (k, inst) in insts.iter().enumerate() {
         let base = mesh.verts2d.len();
-        let mut loop_pts: Vec<Vec2> = Vec::new();
-        let mut loop_edge_idx = Vec::new();
+        let mut edge_samples: Vec<(String, String, Vec<Vec2>, bool)> =
+            Vec::with_capacity(inst.edges.len());
         for e in &inst.edges {
             let key = (inst.id.clone(), e.id.clone());
-            let pts = if let Some(p) = edge_pts.get(&key) {
-                p.clone()
+            let (pts, is_sewn) = if let Some(p) = edge_pts.get(&key) {
+                (p.clone(), true)
             } else {
                 let dense = inst
                     .edge_dense(&e.id, EDGE_DENSE)
                     .map_err(|e| doc_error(&e))?;
-                if let Some(min_s) = options.min_spacing_mm {
+                let sampled = if let Some(min_s) = options.min_spacing_mm {
                     adaptive_edge_samples(
                         &dense,
                         spacing,
@@ -1730,11 +2174,28 @@ pub fn build_garment_with_options(
                 } else {
                     let n = ((polyline_length(&dense) / spacing).ceil() as usize).max(1);
                     at_fractions(&dense, &linspace(0.0, 1.0, n + 1))
-                }
+                };
+                (sampled, false)
             };
-            let start = loop_pts.len();
-            loop_pts.extend_from_slice(&pts[..pts.len().saturating_sub(1)]);
-            loop_edge_idx.push((e.id.clone(), e.from.clone(), start, pts.len()));
+            edge_samples.push((e.id.clone(), e.from.clone(), pts, is_sewn));
+        }
+        let flatten_boundary = |edges: &[(String, String, Vec<Vec2>, bool)]| {
+            let mut pts_out: Vec<Vec2> = Vec::new();
+            let mut idx_out = Vec::with_capacity(edges.len());
+            for (eid, from, pts, _) in edges {
+                let start = pts_out.len();
+                pts_out.extend_from_slice(&pts[..pts.len().saturating_sub(1)]);
+                idx_out.push((eid.clone(), from.clone(), start, pts.len()));
+            }
+            (pts_out, idx_out)
+        };
+        let (mut loop_pts, mut loop_edge_idx) = flatten_boundary(&edge_samples);
+        let min_s = options.min_spacing_mm.unwrap_or(spacing);
+        let mut piece_creases = extract_piece_creases(piece_def(inst), inst, &loop_pts, min_s)?;
+        if !piece_creases.is_empty()
+            && anchor_boundary_crease_points(&inst.id, &mut edge_samples, &mut piece_creases)?
+        {
+            (loop_pts, loop_edge_idx) = flatten_boundary(&edge_samples);
         }
         let nb = loop_pts.len();
         if nb < 3 {
@@ -1752,29 +2213,77 @@ pub fn build_garment_with_options(
                 .insert((inst.id.clone(), from.clone()), base + start);
         }
         let mut allp = loop_pts.clone();
-        let faces = if options.is_default() {
-            allp.extend(interior(&loop_pts, spacing));
-            triangulate(&allp, nb, &inst.id)?
-        } else {
-            let min_s = options.min_spacing_mm.unwrap_or(spacing);
-            let sizing = SizingField::from_boundary(&loop_pts, spacing, min_s);
-            if options.min_spacing_mm.is_some() {
-                allp.extend(adaptive_interior(&loop_pts, &sizing, &inst.id)?);
-            } else {
-                allp.extend(interior(&loop_pts, spacing));
+        let mut crease_constraints: Vec<([usize; 2], f64)> = Vec::new();
+        let mut crease_segs_geo: Vec<(Vec2, Vec2)> = Vec::new();
+        for (poly, angle_rad) in piece_creases {
+            let mut prev_idx: Option<usize> = None;
+            for p in poly {
+                let idx = if let Some((existing, _)) = allp
+                    .iter()
+                    .enumerate()
+                    .find(|(_, q)| norm2(**q - p) <= 1e-3)
+                {
+                    existing
+                } else {
+                    let i = allp.len();
+                    allp.push(p);
+                    i
+                };
+                if let Some(prev) = prev_idx
+                    && prev != idx
+                {
+                    crease_constraints.push(([prev, idx], angle_rad));
+                    crease_segs_geo.push((allp[prev], allp[idx]));
+                }
+                prev_idx = Some(idx);
             }
-            let faces = triangulate(&allp, nb, &inst.id)?;
-            smooth_interior_cvt(
-                &mut allp,
-                nb,
-                faces,
-                &sizing,
-                options.cvt_iterations,
-                &inst.id,
-            )?
+        }
+        let pinned_count = allp.len();
+        let clear_of_creases = |p: Vec2| -> bool {
+            if crease_segs_geo.is_empty() {
+                return true;
+            }
+            let min_clear = 0.35 * min_s;
+            crease_segs_geo
+                .iter()
+                .all(|&(a, b)| dist_point_segment(p, a, b) > min_clear)
+        };
+        let (faces, resolved_creases) = if options.is_default() && crease_constraints.is_empty() {
+            allp.extend(interior(&loop_pts, spacing));
+            (triangulate(&allp, nb, &inst.id)?, Vec::new())
+        } else {
+            let sizing = SizingField::from_boundary(&loop_pts, spacing, min_s);
+            let inner_pts = if options.min_spacing_mm.is_some() {
+                adaptive_interior(&loop_pts, &sizing, &inst.id)?
+            } else {
+                interior(&loop_pts, spacing)
+            };
+            allp.extend(inner_pts.into_iter().filter(|&p| clear_of_creases(p)));
+            let (faces, resolved) =
+                triangulate_with_creases(&allp, nb, &crease_constraints, &inst.id)?;
+            if options.cvt_iterations > 0 {
+                smooth_interior_cvt(
+                    &mut allp,
+                    nb,
+                    pinned_count,
+                    &crease_constraints,
+                    faces,
+                    &sizing,
+                    options.cvt_iterations,
+                    &inst.id,
+                )?
+            } else {
+                (faces, resolved)
+            }
         };
         for f in faces {
             mesh.faces.push(f.map(|j| base + j));
+        }
+        for ([u, v], rest_angle_rad) in resolved_creases {
+            mesh.creases.push(CreaseEdge {
+                verts: [base + u, base + v],
+                rest_angle_rad,
+            });
         }
         mesh.owner.extend(std::iter::repeat_n(k, allp.len()));
         mesh.verts2d.extend(allp);
@@ -1782,7 +2291,7 @@ pub fn build_garment_with_options(
     }
 
     let pos = |id: &str| ids.iter().position(|x| *x == id).unwrap_or(0);
-    for (sid, ia, ea, ib, eb, rev, ratio, gather_relief) in seam_info {
+    for (sid, ia, ea, ib, eb, rev, ratio, gather_relief, crease_angle_rad) in seam_info {
         let pa = path_indices(&mesh.index, &ia, &ea);
         let mut pb = path_indices(&mesh.index, &ib, &eb);
         if rev {
@@ -1811,6 +2320,7 @@ pub fn build_garment_with_options(
             side_b: pb,
             ratio,
             gather_relief,
+            crease_angle_rad,
         });
     }
     for inst in &insts {
@@ -2539,5 +3049,20 @@ mod tests {
             q.sliver_triangles == 0 && q.min_angle_deg >= 20.0 && q.p05_angle_deg >= 35.0,
             "gathered adaptive+CVT mesh should keep healthy angles with zero slivers: {q:?}"
         );
+
+        // Oversized adaptive lattice must refuse BudgetExceeded before allocating arange vectors.
+        let giant_boundary = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1e8, 0.0),
+            Vec2::new(1e8, 1e8),
+            Vec2::new(0.0, 1e8),
+        ];
+        let sizing = SizingField {
+            min_spacing: 1.0,
+            max_spacing: 10.0,
+            sources: vec![(Vec2::ZERO, 1.0)],
+        };
+        let err = adaptive_interior(&giant_boundary, &sizing, "giant").unwrap_err();
+        assert_eq!(err.code, RefusalCode::BudgetExceeded);
     }
 }

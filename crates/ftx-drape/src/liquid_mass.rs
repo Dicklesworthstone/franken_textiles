@@ -3195,6 +3195,7 @@ mod tests {
             seams: vec![],
             corner: BTreeMap::new(),
             index: BTreeMap::new(),
+            creases: Vec::new(),
         };
         let run = DrapeRun {
             scene: crate::scene::Scene {
@@ -3219,6 +3220,8 @@ mod tests {
                 solver: s,
                 elastic_rings: vec![],
                 elastic_groups: vec![],
+                construction_field: None,
+                authored_crease_hinges: 0,
             },
             fold: crate::animation::FoldUp::default(),
             report: json!({"material":material.report}),

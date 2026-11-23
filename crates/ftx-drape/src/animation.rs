@@ -1078,6 +1078,7 @@ mod tests {
             seams: Vec::new(),
             corner: std::collections::BTreeMap::new(),
             index: std::collections::BTreeMap::new(),
+            creases: Vec::new(),
         };
         assert!(board_layout(&mesh).is_empty());
 

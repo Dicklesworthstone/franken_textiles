@@ -46,6 +46,42 @@ pinned `kat` / `kat_contact` digests:
 These tests establish numerical behavior, convergence order, derivative accuracy, and conservation
 only — never runtime speedup (unbenchmarked), empirical material qualification, or physical fit.
 
+**Physics and draping realism extensions (`FTX-27`).** Opt-in physical, meshing, start-state,
+contact, and rendering upgrades preserve bit-identical legacy defaults (every new option is omitted
+from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default):
+- **Finite-angle Discrete Shells dihedral bending & authored creases (`FTX-27a`)**:
+  `BendingModel::DiscreteShells` evaluates `½·B·w_d·(θ − θ₀)²` via deterministic `Jet::atan2`,
+  eliminating in-plane stretch pollution and quadratic hairpin torque collapse. Patterns may declare
+  optional `crease_angle_deg ∈ (−180, 180)` on piece `internal` polylines (inserted as pinned CDT
+  constraints in `garment::build_garment_with_options`) or on seams; `scene` binds their signed `θ₀`
+  onto matching welded hinges, and `Solver::check_bending_model` refuses non-zero rest angles under
+  `BendingModel::Quadratic` or characterized panel bending fail-closed.
+- **Anisotropic aerodynamic drag & SE(3)-invariant Rayleigh damping (`FTX-27b`)**: `damping::AirDrag`
+  (variational strictly convex PSD normal/tangential crossflow and skin-friction drag supporting both
+  `ImplicitEuler` and `GeneralizedAlpha`) and stiffness-proportional Green-strain-rate / dihedral-rate
+  Rayleigh damping (`DampingOptions`), exerting exact zero drag on rigid 3D translation and rotation.
+- **Principal-strain tension-field softening (`FTX-27c`)**: `CompressionModel::Principal` applies
+  the `C²` `tanh` blend to Green-strain eigenvalues via the singularity-free spectral formula
+  `Φ(E) = A I + B (E − m I)`, eliminating 45° bias membrane locking; refuses nonlinear/history laws.
+- **Folded-hem & seam-allowance construction mechanics (`FTX-27d`)**: `ConstructionMechanicsOptions`
+  and `compute_construction_field` apply uncalibrated area/bending multipliers on open hem bands and
+  sewn seam allowances (refused on characterized material records and panel bending).
+- **Adaptive IPC barrier & stick-slip friction (`FTX-27e`)**: `AdaptiveBarrierPolicy` (Li et al.
+  2020 initial scaling + between-step gap escalation, transactional rollback on refused trials) and
+  smooth Stribeck `StickSlipFriction` (`μ_s ≥ μ_k`, refused on characterized material records).
+- **Adaptive meshing & interior Lloyd CVT smoothing (`FTX-27f`)**: `MeshOptions` /
+  `build_garment_with_options` with curvature/gather-graded refinement and bounded CVT smoothing;
+  `study::Session` charges `mesh_bound` at `min_spacing_mm` when active.
+- **Self-repelling start-state relaxation (`FTX-27g`)**: `SelfRepulsionOptions` /
+  `start_state_with_repulsion` / `relax_with_repulsion` with deterministic spatial-hash VT/EE
+  separation impulses preserved through backtrack checkpoint replay.
+- **Offline stills & 3D viewer shading (`FTX-27h`)**: deterministic 2×2 MSAA, grazing sheen, and
+  16-sample AO in `render`, plus physical fabric sheen, 3-point shadow rig, legible toggle, wireframe
+  overlay, and named camera views in `assets/fold_viewer_template.html`.
+Honesty boundary (Four Claims): KATs in `tests/kat_realism.rs` and crate unit tests establish
+numerical/physical laws, determinism, and fail-closed refusals only — never calibrated textile
+constants, runtime speedups, or physical garment fit.
+
 **Drafting and flat checks on a selected body (plan §8).**
 `drafting::PreparedPatternBody` resolves an optional intact accepted report through
 the existing `FittedBody` authority, or fits the supplied tape evidence when the

@@ -944,6 +944,7 @@ mod girth_coverage_tests {
             seams: Vec::new(),
             corner: std::collections::BTreeMap::new(),
             index: std::collections::BTreeMap::new(),
+            creases: Vec::new(),
         };
         let body = NearestTree::new(
             vec![

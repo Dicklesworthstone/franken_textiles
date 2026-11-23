@@ -652,6 +652,7 @@ pub fn drape_observed(
     scene.solver.model.bending_model = opts.bending_model;
     scene.solver.model.compression_model = opts.compression_model;
     scene.solver.damping = opts.damping;
+    scene.solver.check_bending_model()?;
     scene.solver.check_integrator_history()?;
     if opts.max_settle_steps > 0 {
         scene.solver.check_settling_history()?;
@@ -833,7 +834,7 @@ pub fn drape_observed(
     );
     add_numerical_report(
         &mut report,
-        &scene,
+        Some(&scene),
         &sew,
         &drape,
         opts,
@@ -1064,7 +1065,7 @@ fn consecutive_quiet_steps(phase: &PhaseReport) -> usize {
 
 fn add_numerical_report(
     report: &mut Value,
-    scene: &Scene,
+    scene: Option<&Scene>,
     sew: &PhaseReport,
     drape: &PhaseReport,
     opts: &DrapeOptions,
@@ -1112,17 +1113,20 @@ fn add_numerical_report(
         report["numerical"]["self_stick_slip"] = json!(friction);
     }
     if !opts.mesh.is_default() {
-        report["numerical"]["mesh"] = json!({
+        let mut entry = json!({
             "options": opts.mesh,
-            "quality": mesh_quality(&scene.mesh),
         });
+        if let Some(scene) = scene {
+            entry["quality"] = json!(mesh_quality(&scene.mesh));
+        }
+        report["numerical"]["mesh"] = entry;
     }
     if !opts.construction.is_default() {
         let mut entry = json!({
             "options": opts.construction,
             "basis": "uncalibrated structural multipliers on flat hem and seam-allowance bands; not measured laminate or stitch-class properties and not a fit claim",
         });
-        if let Some(field) = &scene.construction_field {
+        if let Some(field) = scene.and_then(|s| s.construction_field.as_ref()) {
             entry["hem_edges"] = json!(field.hem_edges);
             entry["hem_triangles"] = json!(field.hem_triangles);
             entry["seam_band_triangles"] = json!(field.seam_band_triangles);
@@ -1132,6 +1136,9 @@ fn add_numerical_report(
     }
     if let Some(repulsion) = opts.start_self_repulsion {
         report["numerical"]["start_self_repulsion"] = json!(repulsion);
+    }
+    if let Some(count) = scene.map(|s| s.authored_crease_hinges).filter(|&n| n > 0) {
+        report["numerical"]["authored_crease_hinges"] = json!(count);
     }
     if let Some(policy) = opts.time_subdivision {
         let intervals: Vec<_> = sew
@@ -1776,6 +1783,7 @@ mod self_contact_tests {
         let mut report = json!({"settled":true,"flags":[],"gating":[]});
         add_numerical_report(
             &mut report,
+            None,
             &PhaseReport::default(),
             &phase,
             &options,
@@ -1811,6 +1819,7 @@ mod self_contact_tests {
         let mut quiet = json!({"settled":true,"flags":[],"gating":[]});
         add_numerical_report(
             &mut quiet,
+            None,
             &PhaseReport::default(),
             &phase,
             &options,
@@ -1830,6 +1839,7 @@ mod self_contact_tests {
             let mut offset = json!({"settled":true,"flags":[],"gating":[]});
             add_numerical_report(
                 &mut offset,
+                None,
                 &PhaseReport::default(),
                 &phase,
                 &options,
@@ -1850,6 +1860,7 @@ mod self_contact_tests {
         let mut report = json!({"settled":true,"flags":[],"gating":[]});
         add_numerical_report(
             &mut report,
+            None,
             &PhaseReport::default(),
             &PhaseReport::default(),
             &DrapeOptions::default(),

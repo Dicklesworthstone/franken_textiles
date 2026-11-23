@@ -372,6 +372,9 @@ pub struct Scene {
     /// Classified folded-hem and seam-allowance construction field when opt-in construction
     /// mechanics (FTX-27d) were applied; `None` for default single-ply scenes.
     pub construction_field: Option<ConstructionField>,
+    /// Number of solver hinges with non-zero authored rest dihedral angles `θ₀` from pattern
+    /// `crease_angle_deg` annotations (`0` when no creases are declared).
+    pub authored_crease_hinges: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -879,27 +882,6 @@ fn separated_leg_start(
     Some((start, moved, max_move / MM))
 }
 
-pub(crate) fn build_scene_resolved(
-    pattern: &Pattern,
-    mesh: GarmentMesh,
-    frames: &dyn PartFrames,
-    collision: (&[Vec3], &[[usize; 3]]),
-    material: &crate::material::MaterialInputs,
-    elastics: &[ElasticCasing],
-    display_contact: Option<&mut crate::animation::ReplayContact>,
-) -> Result<Scene, Refusal> {
-    build_scene_resolved_with_options(
-        pattern,
-        mesh,
-        frames,
-        collision,
-        material,
-        elastics,
-        display_contact,
-        SceneBuildOptions::default(),
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_scene_resolved_with_options(
     pattern: &Pattern,
@@ -1355,6 +1337,53 @@ fn build_scene_inner(
         model.set_membrane_responses(&tri_responses)?;
     }
     model.check_membrane_domains(&x)?;
+    let mut crease_map: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+    let mut register_crease = |wa: usize, wb: usize, angle: f64| -> Result<(), Refusal> {
+        if wa == wb || angle == 0.0 {
+            return Ok(());
+        }
+        let key = (wa.min(wb), wa.max(wb));
+        if let Some(&prev) = crease_map.get(&key) {
+            if (prev - angle).abs() > 1e-9 {
+                return Err(bad(format!(
+                    "conflicting authored crease angles ({prev} vs {angle} rad) on welded edge {key:?}"
+                )));
+            }
+        } else {
+            crease_map.insert(key, angle);
+        }
+        Ok(())
+    };
+    for c in &mesh.creases {
+        register_crease(weld[c.verts[0]], weld[c.verts[1]], c.rest_angle_rad)?;
+    }
+    for s in &mesh.seams {
+        if let Some(angle) = s.crease_angle_rad {
+            for w in s.side_a.windows(2) {
+                register_crease(weld[w[0]], weld[w[1]], angle)?;
+            }
+        }
+    }
+    let mut authored_crease_hinges = 0usize;
+    if !crease_map.is_empty() {
+        let mut angles = vec![0.0_f64; model.hinges.len()];
+        for (i, h) in model.hinges.iter().enumerate() {
+            let key = (h.v[0].min(h.v[1]), h.v[0].max(h.v[1]));
+            if let Some(&theta) = crease_map.get(&key) {
+                angles[i] = theta;
+                authored_crease_hinges += 1;
+            }
+        }
+        if authored_crease_hinges > 0 {
+            if !model.panel_bending_patches().is_empty() {
+                return Err(bad(
+                    "authored crease/pleat rest angles cannot be combined with characterized panel bending"
+                        .into(),
+                ));
+            }
+            model.set_hinge_rest_angles(&angles)?;
+        }
+    }
     let construction_field = if options.construction.is_active() {
         let base_areal: Vec<f64> = triangle_owner
             .iter()
@@ -1521,6 +1550,7 @@ fn build_scene_inner(
         elastic_rings,
         elastic_groups,
         construction_field,
+        authored_crease_hinges,
     })
 }
 
@@ -1972,6 +2002,7 @@ mod grain_tests {
                 seams: vec![],
                 corner: BTreeMap::new(),
                 index: BTreeMap::new(),
+                creases: Vec::new(),
             },
             placements: vec![],
             start: StartState {
@@ -1993,6 +2024,8 @@ mod grain_tests {
             solver,
             elastic_rings: vec![],
             elastic_groups: vec![],
+            construction_field: None,
+            authored_crease_hinges: 0,
         }
     }
 
@@ -3312,6 +3345,7 @@ mod grain_tests {
             seams: Vec::new(),
             corner: BTreeMap::new(),
             index: BTreeMap::new(),
+            creases: Vec::new(),
         };
         let weld = vec![0, 1, 2];
         let casing = ElasticCasing {

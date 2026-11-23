@@ -2040,6 +2040,14 @@ impl Solver {
                     if alpha < 0.25 {
                         ew_eta = (ew_eta * 0.1).max(1e-8);
                     }
+                    if let Some(c) = self.contact.as_mut()
+                        && c.escalate_barrier_if_crushed(&self.x)
+                    {
+                        energy = self.potential_ctx(&self.x, ctx)?;
+                        self.precond = None;
+                        prev_grad_l2 = None;
+                        ew_eta = eta_max;
+                    }
                     accepted = true;
                     break;
                 }
@@ -2295,6 +2303,12 @@ impl Solver {
                 self.x = trial;
                 energy = trial_energy;
                 rep.roundoff_steps += usize::from(precision_step);
+                if let Some(c) = self.contact.as_mut()
+                    && c.escalate_barrier_if_crushed(&self.x)
+                {
+                    energy = self.potential_ctx(&self.x, ctx)?;
+                    delta = delta.max(initial_radius);
+                }
             } else if delta < min_radius {
                 rep.line_search_failures += 1;
                 break;
@@ -2452,6 +2466,24 @@ impl Solver {
         self.step_at_body(h, None)
     }
 
+    /// Refuses fail-closed if any hinge carries a non-zero authored rest dihedral angle `θ₀`
+    /// while [`BendingModel::Quadratic`] is selected (quadratic bending ignores `rest_angle`).
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] when authored creases are paired with `BendingModel::Quadratic`.
+    pub fn check_bending_model(&self) -> Result<(), Refusal> {
+        if self.model.bending_model == BendingModel::Quadratic
+            && self.model.hinges.iter().any(|h| h.rest_angle != 0.0)
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "authored crease/pleat rest angles require BendingModel::DiscreteShells",
+            )
+            .repair("Enable --bending-model discrete-shells (or BendingModel::DiscreteShells) to simulate pressed creases and pleats."));
+        }
+        Ok(())
+    }
+
     // Prescribed body motion is admitted transactionally by motion::advance_body. Newton sees
     // the endpoint collider, while friction measures displacement from its previous coordinates.
     pub(crate) fn step_at_body(
@@ -2461,6 +2493,7 @@ impl Solver {
     ) -> Result<SolveReport, Refusal> {
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
+        self.check_bending_model()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -2964,6 +2997,7 @@ impl Solver {
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
+        self.check_bending_model()?;
         self.check_integrator_history()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()

@@ -61,8 +61,8 @@ pub use contact::{
 pub use damping::{AirDrag, DampingOptions};
 pub use elements::{BendingModel, CompressionModel, Hinge, Membrane, MembraneElement};
 pub use garment::{
-    ConstructionField, ConstructionMechanicsOptions, GarmentMesh, GatherRelief, MeshOptions,
-    MeshQuality, SeamRecord, build_garment, build_garment_with_options, mesh_quality,
+    ConstructionField, ConstructionMechanicsOptions, CreaseEdge, GarmentMesh, GatherRelief,
+    MeshOptions, MeshQuality, SeamRecord, build_garment, build_garment_with_options, mesh_quality,
 };
 pub use integrator::TimeIntegrator;
 pub use nearest::{Nearest, NearestTree};

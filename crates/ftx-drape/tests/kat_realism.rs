@@ -627,3 +627,598 @@ fn kat_drape_options_adaptive_barrier_and_stick_slip_wire_end_to_end_and_preserv
         Some(ss)
     );
 }
+
+#[test]
+fn mesh_construction_and_start_repulsion_round_trip_through_drape() {
+    use ftx_drape::{
+        ConstructionMechanicsOptions, MeshOptions, PartFrame, SelfRepulsionOptions,
+        run::{DrapeBody, DrapeOptions, drape},
+        scene::PartFrames,
+    };
+    use ftx_pattern::Pattern;
+    use serde_json::json;
+
+    struct CylFrames;
+    impl PartFrames for CylFrames {
+        fn frame(&self, _: &str) -> Option<PartFrame> {
+            Some(PartFrame {
+                origin: Vec3::ZERO,
+                up: Vec3::new(0.0, 0.0, 1.0),
+                front: Vec3::new(0.0, -1.0, 0.0),
+                lat: Vec3::new(1.0, 0.0, 0.0),
+            })
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+            Some(20.0)
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            30.0
+        }
+    }
+
+    let mut verts = Vec::new();
+    for z in [0.0, 0.12] {
+        for i in 0..16 {
+            let a = std::f64::consts::TAU * i as f64 / 16.0;
+            let (s, c) = ftx_core::det::sin_cos(a);
+            verts.push(Vec3::new(0.03 * c, 0.03 * s, z));
+        }
+    }
+    let mut tris = Vec::new();
+    for i in 0..16 {
+        let j = (i + 1) % 16;
+        tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+    }
+    let frames = CylFrames;
+    let body = DrapeBody {
+        frames: &frames,
+        collision: (&verts, &tris),
+        display: (&verts, &tris),
+        arm_deg: 35.0,
+    };
+    let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
+    let pat = Pattern::new(json!({
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "pieces": [{
+            "id": "band",
+            "cut": {"qty": 1},
+            "vertices": {"a": [0, 0], "b": [w, 0], "c": [w, 40], "d": [0, 40]},
+            "edges": [
+                {"id": "bottom", "from": "a", "to": "b"},
+                {"id": "right", "from": "b", "to": "c"},
+                {"id": "top", "from": "c", "to": "d"},
+                {"id": "left", "from": "d", "to": "a"}
+            ],
+            "notches": [],
+            "grain": [[0, 0], [0, 40]],
+            "placement": {"part": "torso", "radius_mm": 35, "x0": w / 2.0}
+        }],
+        "seams": [{"id": "join", "a": "band/right", "b": "band/left"}]
+    }));
+
+    let base_opts = DrapeOptions {
+        sew_steps: 4,
+        drape_steps: 6,
+        step: 0.01,
+        ..DrapeOptions::default()
+    };
+    let base = drape(&pat, &json!({}), &body, &base_opts, |_| {}).unwrap();
+    assert!(base.report["numerical"].get("mesh").is_none());
+    assert!(base.report["numerical"].get("construction").is_none());
+    assert!(
+        base.report["numerical"]
+            .get("start_self_repulsion")
+            .is_none()
+    );
+
+    let mesh_opts = MeshOptions::adaptive(6.0);
+    let constr_opts = ConstructionMechanicsOptions::standard();
+    let rep_opts = SelfRepulsionOptions::default();
+    let rich_opts = DrapeOptions {
+        mesh: mesh_opts,
+        construction: constr_opts,
+        start_self_repulsion: Some(rep_opts),
+        ..base_opts
+    };
+    let rich = drape(&pat, &json!({}), &body, &rich_opts, |_| {}).unwrap();
+    let rich_repeat = drape(&pat, &json!({}), &body, &rich_opts, |_| {}).unwrap();
+    assert_eq!(
+        rich.scene.solver.x, rich_repeat.scene.solver.x,
+        "adaptive mesh + construction + self-repulsion drape must be deterministic"
+    );
+    assert_eq!(
+        rich.report["numerical"]["mesh"]["options"],
+        json!(mesh_opts)
+    );
+    assert!(
+        rich.report["numerical"]["mesh"]["quality"]["triangle_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        rich.report["numerical"]["construction"]["options"],
+        json!(constr_opts)
+    );
+    assert!(
+        rich.report["numerical"]["construction"]["hem_edges"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        rich.report["numerical"]["construction"]["hem_triangles"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        rich.report["numerical"]["construction"]["seam_hinges"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        rich.report["numerical"]["start_self_repulsion"],
+        json!(rep_opts)
+    );
+    let m_base = base.report["mass_kg"].as_f64().unwrap();
+    let m_rich = rich.report["mass_kg"].as_f64().unwrap();
+    assert!(
+        m_rich > 1.5 * m_base,
+        "folded hem + seam allowance must increase reported cloth mass: base={m_base} rich={m_rich}"
+    );
+}
+
+#[test]
+fn kat_all_ftx27_realism_upgrades_compose_deterministically_through_drape() {
+    use ftx_drape::{ConstructionMechanicsOptions, MeshOptions, SelfRepulsionOptions};
+
+    struct CylFrames;
+    impl PartFrames for CylFrames {
+        fn frame(&self, _: &str) -> Option<PartFrame> {
+            Some(PartFrame {
+                origin: Vec3::ZERO,
+                up: Vec3::new(0.0, 0.0, 1.0),
+                front: Vec3::new(0.0, -1.0, 0.0),
+                lat: Vec3::new(1.0, 0.0, 0.0),
+            })
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+            Some(20.0)
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            30.0
+        }
+    }
+
+    let mut verts = Vec::new();
+    for z in [-0.02, 0.10] {
+        for i in 0..16 {
+            let a = std::f64::consts::TAU * i as f64 / 16.0;
+            let (s, c) = ftx_core::det::sin_cos(a);
+            verts.push(Vec3::new(0.03 * c, 0.03 * s, z));
+        }
+    }
+    let mut tris = Vec::new();
+    for i in 0..16 {
+        let j = (i + 1) % 16;
+        tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+    }
+    let frames = CylFrames;
+    let body = DrapeBody {
+        frames: &frames,
+        collision: (&verts, &tris),
+        display: (&verts, &tris),
+        arm_deg: 35.0,
+    };
+    let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
+    let pat = Pattern::new(json!({
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "pieces": [{
+            "id": "band",
+            "cut": {"qty": 1},
+            "vertices": {"a": [0, 0], "b": [w, 0], "c": [w, 40], "d": [0, 40]},
+            "edges": [
+                {"id": "bottom", "from": "a", "to": "b"},
+                {"id": "right", "from": "b", "to": "c"},
+                {"id": "top", "from": "c", "to": "d"},
+                {"id": "left", "from": "d", "to": "a"}
+            ],
+            "notches": [],
+            "grain": [[0, 0], [0, 40]],
+            "placement": {"part": "torso", "radius_mm": 35, "x0": w / 2.0}
+        }],
+        "seams": [{"id": "join", "a": "band/right", "b": "band/left"}]
+    }));
+
+    let full_opts = DrapeOptions {
+        sew_steps: 4,
+        drape_steps: 6,
+        step: 0.01,
+        integrator: TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+        bending_model: BendingModel::DiscreteShells,
+        compression: 0.2,
+        compression_model: CompressionModel::Principal,
+        damping: DampingOptions {
+            air_drag: Some(AirDrag::standard()),
+            rayleigh_membrane_s: 0.001,
+            rayleigh_bending_s: 0.002,
+        },
+        adaptive_barrier: Some(AdaptiveBarrierPolicy::default()),
+        stick_slip: Some(StickSlipFriction::new(0.6, 0.3, 0.02).unwrap()),
+        mesh: MeshOptions::adaptive(6.0),
+        construction: ConstructionMechanicsOptions::standard(),
+        start_self_repulsion: Some(SelfRepulsionOptions::default()),
+        ..DrapeOptions::default()
+    };
+    let run1 = drape(&pat, &json!({}), &body, &full_opts, |_| {}).unwrap();
+    let run2 = drape(&pat, &json!({}), &body, &full_opts, |_| {}).unwrap();
+    assert_eq!(run1.scene.solver.x, run2.scene.solver.x);
+    assert_eq!(run1.sew.unconverged, 0);
+    assert_eq!(run1.drape.unconverged, 0);
+    assert!(run1.scene.solver.x.iter().all(|p| p.is_finite()));
+    for key in [
+        "integrator",
+        "bending_model",
+        "compression_model",
+        "damping",
+        "adaptive_barrier",
+        "stick_slip",
+        "mesh",
+        "construction",
+        "start_self_repulsion",
+    ] {
+        assert!(
+            run1.report["numerical"].get(key).is_some(),
+            "combined realism drape missing report.numerical.{key}"
+        );
+    }
+    assert!(
+        run1.report["contact_diagnostics"]["final_body_kappa_n_m"]
+            .as_f64()
+            .is_some_and(|k| k.is_finite() && k > 0.0)
+    );
+}
+
+#[test]
+fn kat_authored_internal_and_seam_creases_fold_under_discrete_shells_and_refuse_quadratic() {
+    use ftx_core::RefusalCode;
+    use ftx_drape::build_garment;
+
+    struct CylFrames;
+    impl PartFrames for CylFrames {
+        fn frame(&self, _: &str) -> Option<PartFrame> {
+            Some(PartFrame {
+                origin: Vec3::ZERO,
+                up: Vec3::new(0.0, 0.0, 1.0),
+                front: Vec3::new(0.0, -1.0, 0.0),
+                lat: Vec3::new(1.0, 0.0, 0.0),
+            })
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+            Some(20.0)
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            30.0
+        }
+    }
+
+    let mut verts = Vec::new();
+    for z in [-0.02, 0.10] {
+        for i in 0..16 {
+            let a = std::f64::consts::TAU * i as f64 / 16.0;
+            let (s, c) = ftx_core::det::sin_cos(a);
+            verts.push(Vec3::new(0.03 * c, 0.03 * s, z));
+        }
+    }
+    let mut tris = Vec::new();
+    for i in 0..16 {
+        let j = (i + 1) % 16;
+        tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+    }
+    let frames = CylFrames;
+    let body = DrapeBody {
+        frames: &frames,
+        collision: (&verts, &tris),
+        display: (&verts, &tris),
+        arm_deg: 35.0,
+    };
+
+    // Two panels joined into a band around the cylinder:
+    // - front panel has a vertical interior pressed mountain crease (`-60°`) running hem-to-top;
+    // - seam `side_a` declares a pressed dihedral rest angle (`+45°`).
+    let half_w = (0.49 * 0.06 * std::f64::consts::PI * 1000.0).round();
+    let creased_pat = Pattern::new(json!({
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "pieces": [
+            {
+                "id": "front",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [half_w, 0], "c": [half_w, 40], "d": [0, 40]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "internal": [
+                    {
+                        "kind": "draw",
+                        "label": "center_crease",
+                        "pts": [[half_w * 0.5, 0.0], [half_w * 0.5, 40.0]],
+                        "crease_angle_deg": -60.0
+                    }
+                ],
+                "notches": [],
+                "grain": [[0, 0], [0, 40]],
+                "placement": {"part": "torso", "radius_mm": 38, "theta_deg": 0.0, "x0": half_w * 0.5}
+            },
+            {
+                "id": "back",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [half_w, 0], "c": [half_w, 40], "d": [0, 40]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "notches": [],
+                "grain": [[0, 0], [0, 40]],
+                "placement": {"part": "torso", "radius_mm": 38, "theta_deg": 180.0, "x0": half_w * 0.5}
+            }
+        ],
+        "seams": [
+            {"id": "side_r", "a": "front/right", "b": "back/left", "reverse": true, "crease_angle_deg": 45.0},
+            {"id": "side_l", "a": "back/right", "b": "front/left", "reverse": true}
+        ]
+    }));
+
+    // Meshing produces constrained interior crease edges and records seam crease angle.
+    let mesh = build_garment(&creased_pat, 12.0).unwrap();
+    assert!(
+        mesh.creases.len() >= 3,
+        "vertical 40 mm crease at 12 mm spacing must create >= 3 constrained crease edges, got {}",
+        mesh.creases.len()
+    );
+    assert!(
+        mesh.creases
+            .iter()
+            .all(|c| (c.rest_angle_rad + 60.0_f64.to_radians()).abs() < 1e-12)
+    );
+    assert!(
+        mesh.seams[0]
+            .crease_angle_rad
+            .is_some_and(|a| (a - 45.0_f64.to_radians()).abs() < 1e-12)
+    );
+    assert!(mesh.seams[1].crease_angle_rad.is_none());
+
+    // Draping with legacy Quadratic bending MUST refuse fail-closed (never silently drop creases).
+    let quad_opts = DrapeOptions {
+        sew_steps: 4,
+        drape_steps: 6,
+        step: 0.01,
+        ..DrapeOptions::default()
+    };
+    let err = drape(&creased_pat, &json!({}), &body, &quad_opts, |_| {})
+        .err()
+        .expect("creased pattern must refuse under BendingModel::Quadratic");
+    assert_eq!(err.code, RefusalCode::InvalidDocument);
+    assert!(
+        err.message.contains("DiscreteShells"),
+        "refusal should direct caller to DiscreteShells: {}",
+        err.message
+    );
+
+    // Draping with DiscreteShells succeeds, binds non-zero hinge rest_angles, and reports count.
+    let ds_opts = DrapeOptions {
+        bending_model: BendingModel::DiscreteShells,
+        ..quad_opts
+    };
+    let run = drape(&creased_pat, &json!({}), &body, &ds_opts, |_| {}).unwrap();
+    assert!(run.scene.authored_crease_hinges >= mesh.creases.len() + 2);
+    assert_eq!(
+        run.report["numerical"]["authored_crease_hinges"].as_u64(),
+        Some(run.scene.authored_crease_hinges as u64)
+    );
+    let neg_hinges = run
+        .scene
+        .solver
+        .model
+        .hinges
+        .iter()
+        .filter(|h| (h.rest_angle + 60.0_f64.to_radians()).abs() < 1e-12)
+        .count();
+    let pos_hinges = run
+        .scene
+        .solver
+        .model
+        .hinges
+        .iter()
+        .filter(|h| (h.rest_angle - 45.0_f64.to_radians()).abs() < 1e-12)
+        .count();
+    assert!(
+        neg_hinges >= 3,
+        "expected >= 3 interior -60 deg hinges, got {neg_hinges}"
+    );
+    assert!(
+        pos_hinges >= 3,
+        "expected >= 3 seam +45 deg hinges, got {pos_hinges}"
+    );
+
+    // Physical fold verification: a free flat panel with an authored `-60°` center crease on an
+    // odd-sample-count edge (80 mm at 12 mm -> 7 segments, so x = 40 mm lies mid-segment on the
+    // unsewn top/bottom edges) must anchor into the unsewn boundary with zero T-junctions and
+    // physically fold under DiscreteShells to `-60°`, while an uncreased control stays flat (0°).
+    let make_swatch = |deg: Option<f64>| {
+        let internal = deg.map_or_else(
+            || json!([]),
+            |d| json!([{"kind": "draw", "pts": [[40.0, 0.0], [40.0, 48.0]], "crease_angle_deg": d}]),
+        );
+        Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [{
+                "id": "swatch",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [80, 0], "c": [80, 48], "d": [0, 48]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "internal": internal,
+                "notches": [],
+                "grain": [[0, 0], [0, 48]],
+                "placement": {"part": "torso", "radius_mm": 40, "x0": 40.0}
+            }],
+            "seams": []
+        }))
+    };
+    let swatch_mesh = build_garment(&make_swatch(Some(-60.0)), 12.0).unwrap();
+    // Both unsewn edges must contain the inserted x = 40 mm crease endpoint (no T-junction).
+    for edge in ["bottom", "top"] {
+        let on_edge = swatch_mesh.index[&("swatch".to_string(), edge.to_string())]
+            .iter()
+            .any(|&v| (swatch_mesh.verts2d[v].x - 40.0).abs() < 1e-6);
+        assert!(
+            on_edge,
+            "unsewn edge {edge} must include the anchored mid-segment crease endpoint"
+        );
+    }
+    let solve_swatch = |deg: Option<f64>| -> f64 {
+        let m = &swatch_mesh;
+        let rest_m: Vec<Vec2> = m
+            .verts2d
+            .iter()
+            .map(|p| Vec2::new(p.x * 1e-3, p.y * 1e-3))
+            .collect();
+        let mut model = ClothModel::new(
+            rest_m.clone(),
+            m.faces.clone(),
+            Membrane::orthotropic(1200.0, 1200.0, 0.2, 400.0, 1.0),
+            1e-4,
+            0.2,
+        )
+        .unwrap();
+        model.bending_model = BendingModel::DiscreteShells;
+        if let Some(d) = deg {
+            let crease_set: std::collections::BTreeSet<(usize, usize)> = m
+                .creases
+                .iter()
+                .map(|c| (c.verts[0].min(c.verts[1]), c.verts[0].max(c.verts[1])))
+                .collect();
+            let angles: Vec<f64> = model
+                .hinges
+                .iter()
+                .map(|h| {
+                    let k = (h.v[0].min(h.v[1]), h.v[0].max(h.v[1]));
+                    if crease_set.contains(&k) {
+                        d.to_radians()
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            model.set_hinge_rest_angles(&angles).unwrap();
+        }
+        // Start flat with a tiny z nudge on the right half to break flat-plane symmetry, pin left edge.
+        let x0: Vec<Vec3> = rest_m
+            .iter()
+            .map(|p| Vec3::new(p.x, p.y, if p.x > 0.041 { -1e-4 } else { 0.0 }))
+            .collect();
+        let mut solver = Solver::new(model, x0);
+        solver.gravity = Vec3::ZERO;
+        for (i, p) in rest_m.iter().enumerate() {
+            if p.x < 0.039 {
+                solver.pin(i);
+            }
+        }
+        solver.static_solve().unwrap();
+        let creased_angles: Vec<f64> = solver
+            .model
+            .hinges
+            .iter()
+            .filter(|h| {
+                (rest_m[h.v[0]].x - 0.04).abs() < 1e-6 && (rest_m[h.v[1]].x - 0.04).abs() < 1e-6
+            })
+            .map(|h| h.dihedral_angle(&solver.x))
+            .collect();
+        assert!(!creased_angles.is_empty());
+        creased_angles.iter().sum::<f64>() / creased_angles.len() as f64
+    };
+    let folded_rad = solve_swatch(Some(-60.0));
+    let flat_rad = solve_swatch(None);
+    assert!(
+        (folded_rad - (-60.0_f64.to_radians())).abs() < 0.05,
+        "creased swatch must fold to -60 deg (-1.047 rad), got {folded_rad}"
+    );
+    assert!(
+        flat_rad.abs() < 1e-3,
+        "uncreased control swatch must stay flat (0 rad), got {flat_rad}"
+    );
+
+    // Out-of-range crease_angle_deg, exterior points, and concave outline exits refuse OutOfRange.
+    for bad_crease in [
+        json!({"kind": "draw", "pts": [[half_w * 0.5, 0.0], [half_w * 0.5, 40.0]], "crease_angle_deg": 180.0}),
+        json!({"kind": "draw", "pts": [[half_w * 0.5, -10.0], [half_w * 0.5, 40.0]], "crease_angle_deg": 45.0}),
+    ] {
+        let mut raw = creased_pat.raw().clone();
+        raw["pieces"][0]["internal"] = json!([bad_crease]);
+        let bad_err = build_garment(&Pattern::new(raw), 12.0).unwrap_err();
+        assert_eq!(bad_err.code, RefusalCode::OutOfRange, "{bad_err:?}");
+    }
+    let concave_pat = Pattern::new(json!({
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "pieces": [{
+            "id": "c_shape",
+            "cut": {"qty": 1},
+            "vertices": {
+                "a": [0, 0], "b": [60, 0], "c": [60, 20],
+                "d": [20, 20], "e": [20, 40], "f": [60, 40],
+                "g": [60, 60], "h": [0, 60]
+            },
+            "edges": [
+                {"id": "e0", "from": "a", "to": "b"},
+                {"id": "e1", "from": "b", "to": "c"},
+                {"id": "e2", "from": "c", "to": "d"},
+                {"id": "e3", "from": "d", "to": "e"},
+                {"id": "e4", "from": "e", "to": "f"},
+                {"id": "e5", "from": "f", "to": "g"},
+                {"id": "e6", "from": "g", "to": "h"},
+                {"id": "e7", "from": "h", "to": "a"}
+            ],
+            "internal": [{
+                "kind": "draw",
+                "pts": [[50.0, 10.0], [50.0, 50.0]],
+                "crease_angle_deg": -45.0
+            }],
+            "notches": [],
+            "grain": [[10, 10], [10, 50]],
+            "placement": {"part": "torso", "radius_mm": 40, "x0": 30.0}
+        }],
+        "seams": []
+    }));
+    let concave_err = build_garment(&concave_pat, 10.0).unwrap_err();
+    assert_eq!(concave_err.code, RefusalCode::OutOfRange, "{concave_err:?}");
+
+    // Crease landing mid-segment on a SEWN edge must refuse DegenerateGeometry (no seam T-junction).
+    let mut seam_t_raw = creased_pat.raw().clone();
+    seam_t_raw["pieces"][0]["internal"] = json!([{
+        "kind": "draw",
+        "pts": [[half_w * 0.5, 20.0], [half_w, 17.0]],
+        "crease_angle_deg": -45.0
+    }]);
+    let seam_t_err = build_garment(&Pattern::new(seam_t_raw), 12.0).unwrap_err();
+    assert_eq!(
+        seam_t_err.code,
+        RefusalCode::DegenerateGeometry,
+        "{seam_t_err:?}"
+    );
+}
