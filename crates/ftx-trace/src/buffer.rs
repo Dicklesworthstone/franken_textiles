@@ -751,8 +751,12 @@ fn triangle_eroded(t: &[Vec2], distance: f64) -> bool {
     let (p0, p1, p2) = (t[0], t[1], t[2]);
     let (l0, l1, l2) = (dist(p1, p2), dist(p0, p2), dist(p0, p1));
     let c = l0 + l1 + l2;
+    // GEOS `Triangle::inCentre` yields NaN when `c == 0` (point-ring) or overflows, so `NaN < |d|`
+    // evaluates false: a collapsed point-hole therefore reaches `ring_curve` as a 1-point circle
+    // (`point-hole` oracle fixture), while a collapsed shell at `distance <= 0` is still dropped by
+    // `coords.len() < 3` in `raw_curves`.
     if c == 0.0 || !c.is_finite() {
-        return true;
+        return false;
     }
     let centre = Vec2::new(
         (l0 * p0.x + l1 * p1.x + l2 * p2.x) / c,
@@ -1169,8 +1173,18 @@ mod tests {
         let sh = precision_scale_factor(&[huge_poly], 1e308, 12);
         assert!(sh.is_finite() && sh > 0.0);
 
-        // Collapsed zero-area triangle counts as eroded rather than returning NaN < d (false).
-        assert!(triangle_eroded(&[Vec2::ZERO; 4], -1.0));
+        // Collapsed point-ring matches GEOS `inCentre` NaN < d (false) so point-holes buffer to a
+        // circle, whereas a collinear non-zero segment triangle has inradius 0 and counts as eroded.
+        assert!(!triangle_eroded(&[Vec2::ZERO; 4], 0.5));
+        assert!(triangle_eroded(
+            &[
+                Vec2::ZERO,
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+                Vec2::ZERO,
+            ],
+            0.5
+        ));
 
         // Subnormal and extreme segments never return NaN distances.
         let d_tiny = point_to_segment(
