@@ -271,8 +271,9 @@ def trim_top(points, faces, height, keep_above=False, only=None):
                     vertices.append(points[a] + (points[b]-points[a])*t)
                 polygon.append(edge_points[key])
         triangles.extend((polygon[0], polygon[i], polygon[i+1]) for i in range(1,len(polygon)-1))
-    if not vertices:
-        return points, np.array(triangles)
+    if not vertices or keep_above:
+        # A form cut at the hip stands on its plate, which covers the opening.
+        return np.vstack((points, vertices)) if vertices else points, np.array(triangles)
     # Cap the central torso loop. This leaves any arms crossing the display plane separate.
     ring = np.asarray(vertices)
     width = max(0.04, np.ptp(points[:,0])*.21)
