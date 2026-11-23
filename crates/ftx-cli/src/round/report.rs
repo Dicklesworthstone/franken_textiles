@@ -747,18 +747,56 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                     && super::regular(&ws.join(dir), true)?
                     && super::regular(&ws.join(format!("{dir}/sim")), true)?
                 {
-                    out.push_str("<h3>Drape stills — construction and strain</h3>");
-                    for (view, label) in super::stills::VIEWS {
-                        let path = format!("{dir}/sim/still_{view}.png");
+                    let mut has_standard = false;
+                    let mut has_legible = false;
+                    for (view, _) in super::stills::VIEWS {
+                        let std_path = format!("{dir}/sim/still_{view}.png");
                         if entry["images"]
                             .as_array()
-                            .is_some_and(|a| a.iter().any(|v| v == &path))
-                            && regular_file(&ws.join(&path))?
+                            .is_some_and(|a| a.iter().any(|v| v == &std_path))
+                            && regular_file(&ws.join(&std_path))?
                         {
-                            let _ = write!(
-                                out,
-                                "<figure><figcaption>{label}</figcaption><img class=\"preview\" loading=\"lazy\" src=\"{path}\" alt=\"{label} drape prediction\"></figure>"
-                            );
+                            has_standard = true;
+                        }
+                        let leg_path = format!("{dir}/sim/still_{view}_legible.png");
+                        if entry["images"]
+                            .as_array()
+                            .is_some_and(|a| a.iter().any(|v| v == &leg_path))
+                            && regular_file(&ws.join(&leg_path))?
+                        {
+                            has_legible = true;
+                        }
+                    }
+                    if has_standard || !has_legible {
+                        out.push_str("<h3>Drape stills — construction and strain</h3>");
+                        for (view, label) in super::stills::VIEWS {
+                            let path = format!("{dir}/sim/still_{view}.png");
+                            if entry["images"]
+                                .as_array()
+                                .is_some_and(|a| a.iter().any(|v| v == &path))
+                                && regular_file(&ws.join(&path))?
+                            {
+                                let _ = write!(
+                                    out,
+                                    "<figure><figcaption>{label}</figcaption><img class=\"preview\" loading=\"lazy\" src=\"{path}\" alt=\"{label} drape prediction\"></figure>"
+                                );
+                            }
+                        }
+                    }
+                    if has_legible {
+                        out.push_str("<h3>Drape stills — legible shading (fold and edge aid; describes no fabric)</h3>");
+                        for (view, label) in super::stills::VIEWS {
+                            let path = format!("{dir}/sim/still_{view}_legible.png");
+                            if entry["images"]
+                                .as_array()
+                                .is_some_and(|a| a.iter().any(|v| v == &path))
+                                && regular_file(&ws.join(&path))?
+                            {
+                                let _ = write!(
+                                    out,
+                                    "<figure><figcaption>{label} (legible)</figcaption><img class=\"preview\" loading=\"lazy\" src=\"{path}\" alt=\"{label} legible drape prediction\"></figure>"
+                                );
+                            }
                         }
                     }
                 }

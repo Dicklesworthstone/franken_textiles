@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ftx_core::{Refusal, RefusalCode, Vec3, det, receipt::sha256_hex};
 use ftx_drape::point_cache::PointCache;
-use ftx_drape::render::{Camera, ColouredMesh, fez_frustum, png, read_obj, render};
+use ftx_drape::render::{Camera, ColouredMesh, Shading, fez_frustum, png, read_obj, render_shaded};
 use ftx_export::text::xml_escape;
 use ftx_pattern::{
     Pattern,
@@ -324,7 +324,12 @@ fn add_hat(outfit: &mut Outfit, path: &Path, measurements: &Value) -> Result<(),
     Ok(())
 }
 
-fn shots(outfit: &Outfit, width: usize, height: usize) -> Vec<(String, Vec<u8>)> {
+fn shots(
+    outfit: &Outfit,
+    width: usize,
+    height: usize,
+    shading: Shading,
+) -> Vec<(String, Vec<u8>)> {
     let meshes: Vec<_> = std::iter::once(&outfit.body)
         .chain(outfit.garments.iter().map(|g| &g.mesh))
         .chain(outfit.hat.iter().map(|(mesh, _)| mesh))
@@ -351,7 +356,7 @@ fn shots(outfit: &Outfit, width: usize, height: usize) -> Vec<(String, Vec<u8>)>
                 target: center,
                 focal_over_sensor: focal,
             };
-            let rgb = render(&meshes, cam, width, height);
+            let rgb = render_shaded(&meshes, 1, cam, [width, height], shading, true);
             (format!("outfit_{name}.png"), png(width, height, &rgb))
         })
         .collect()
@@ -362,12 +367,18 @@ fn review(report: &Value) -> String {
     let mut html = String::from(
         r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Outfit proportions</title><style>body{font:16px/1.6 system-ui,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em;background:#f6f4ef;color:#25231e}aside{background:#fff0ce;padding:1em;border-left:4px solid #956921}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1em}figure{margin:0}img{width:100%;border:1px solid #cec8bc}pre{white-space:pre-wrap;overflow-wrap:anywhere}article{border-top:1px solid #cec8bc;margin-top:2em}</style><h1>Whole-outfit proportions</h1>"#,
     );
+    let shading_note = if report["shading"] == "legible" {
+        " Shading: legible (fold and edge aid; describes no fabric)."
+    } else {
+        ""
+    };
     let _ = write!(
         html,
-        "<aside>{}</aside><p>Status: <strong>{}</strong>. Arms: {} degrees. No garment positions were changed.</p><section>",
+        "<aside>{}</aside><p>Status: <strong>{}</strong>. Arms: {} degrees. No garment positions were changed.{}</p><section>",
         xml_escape(NOTE),
         xml_escape(report["status"].as_str().unwrap()),
-        report["pose"]["arm_deg"]
+        report["pose"]["arm_deg"],
+        shading_note
     );
     for (name, _) in VIEWS {
         let _ = write!(
@@ -403,7 +414,7 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "outfit",
-        &["measurements", "sim", "out", "seams", "res", "hat"],
+        &["measurements", "sim", "out", "seams", "res", "hat", "shading"],
     )?;
     if args.positional.len() != 1 {
         return Err(bad_input(
@@ -413,6 +424,7 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let (width, height) = crate::render::resolution(Some(
         args.options.get("res").map_or("960x960", String::as_str),
     ))?;
+    let shading = crate::render::shading(args.options.get("shading").map(String::as_str))?;
     let output = PathBuf::from(required(args, "out")?);
     match fs::symlink_metadata(&output) {
         Ok(_) => {
@@ -435,10 +447,11 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if let Some(path) = args.options.get("hat") {
         add_hat(&mut outfit, Path::new(path), &fused)?;
     }
-    let images = shots(&outfit, width, height);
+    let images = shots(&outfit, width, height, shading);
     let mut report = json!({"schema":"ftx-outfit/1","status":if outfit.flagged {"VISUALIZATION_WITH_FLAGS"}else{"VISUALIZATION_ONLY"},
         "note":NOTE,"measurements_sha256":outfit.measurements_sha256,"pose":{"arm_deg":outfit.arm_deg,"body_source":"first native drape; all body meshes checked"},
-        "colour_mode":if args.options.contains_key("seams"){"seams"}else{"plain"},"garments":outfit.garments.iter().map(|g| &g.record).collect::<Vec<_>>(),
+        "colour_mode":if args.options.contains_key("seams"){"seams"}else{"plain"},"shading":shading.name(),
+        "garments":outfit.garments.iter().map(|g| &g.record).collect::<Vec<_>>(),
         "width":width,"height":height,"stills":{},"report":"report.html","hat":outfit.hat.as_ref().map(|(_,report)|report),"turntable":null,"inter_garment_contact":"not_simulated"});
     for (name, _) in VIEWS {
         report["stills"][name] = json!(format!("outfit_{name}.png"));

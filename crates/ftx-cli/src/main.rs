@@ -64,7 +64,7 @@ const USAGE: &str = "usage:
             [--model PATH] [--body-fit REPORT] (draft from a tape-fitted or accepted body; MODEL_FIT, not new measurements)
   ftx validate PATTERN --measurements M [--fit F] [--model PATH] [--body-fit REPORT] [--flat-body] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
-            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N] [--res WIDTHxHEIGHT]
+            [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N] [--res WIDTHxHEIGHT] [--shading standard|legible|both]
             [--thumb-pose JSON] [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
@@ -105,7 +105,7 @@ const USAGE: &str = "usage:
   ftx viewer SIMDIR --check-contact [--json]
   ftx report WS [--json]
   ftx sim-points SIMDIR --pattern P --measurements M [--json]
-  ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--hat P] [--seams] [--res 960x960] [--json]
+  ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--hat P] [--seams] [--res 960x960] [--shading standard|legible] [--json]
   ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
   ftx alter move PATTERN --piece P --vertex V [--dx MM] [--dy MM] --out OUT [--json]
   ftx alter true-seam PATTERN --seam S [--end start|end] --out OUT [--json]

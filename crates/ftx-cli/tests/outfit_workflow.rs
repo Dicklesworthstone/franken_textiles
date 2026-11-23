@@ -408,3 +408,21 @@ fn hat_recomputes_record_bearing_measurements_ignoring_stale_or_missing_fused_ca
     let from_unfused = run(&dir, &["--out", "unfused", "--hat", "hat.json"], 0)["result"].clone();
     assert_eq!(from_unfused["hat"], expected["hat"]);
 }
+
+#[test]
+fn outfit_legible_shading_renders_distinct_pngs_and_refuses_unknown_shading() {
+    let dir = setup();
+    let standard = run(&dir, &["--out", "std_out"], 0)["result"].clone();
+    assert_eq!(standard["shading"], "standard");
+    let legible = run(&dir, &["--out", "leg_out", "--shading", "legible"], 0)["result"].clone();
+    assert_eq!(legible["shading"], "legible");
+    assert_ne!(
+        std::fs::read(dir.join("std_out/outfit_front.png")).unwrap(),
+        std::fs::read(dir.join("leg_out/outfit_front.png")).unwrap(),
+        "legible shading must differ from standard shading"
+    );
+    let html = std::fs::read_to_string(dir.join("leg_out/report.html")).unwrap();
+    assert!(html.contains("Shading: legible"));
+    run(&dir, &["--out", "bad_out", "--shading", "glossy"], 3);
+    assert!(!dir.join("bad_out").exists());
+}

@@ -2,6 +2,7 @@
 use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode};
+use ftx_drape::render::Shading;
 use serde_json::{Value, json};
 
 pub(super) const VIEWS: [(&str, &str); 6] = [
@@ -13,11 +14,49 @@ pub(super) const VIEWS: [(&str, &str); 6] = [
     ("strain_back", "Back strain"),
 ];
 
+/// Which still set(s) `ftx round --stills` publishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RoundShading {
+    Standard,
+    Legible,
+    Both,
+}
+
+impl RoundShading {
+    pub(super) fn parse(value: Option<&str>) -> Result<Self, Refusal> {
+        match value {
+            None | Some("standard") => Ok(Self::Standard),
+            Some("legible") => Ok(Self::Legible),
+            Some("both") => Ok(Self::Both),
+            Some(other) => Err(super::bad_input(format!(
+                "--shading {other}: give standard, legible or both"
+            ))),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Legible => "legible",
+            Self::Both => "both",
+        }
+    }
+
+    fn shadings(self) -> &'static [Shading] {
+        match self {
+            Self::Standard => &[Shading::Standard],
+            Self::Legible => &[Shading::Legible],
+            Self::Both => &[Shading::Standard, Shading::Legible],
+        }
+    }
+}
+
 pub(super) fn publish(
     rd: &Path,
     number: u64,
     sim: Option<&Value>,
     size: Option<(usize, usize)>,
+    shading: RoundShading,
 ) -> Result<(Value, Vec<String>), Refusal> {
     let Some((width, height)) = size else {
         return Ok((json!({"status":"NOT_REQUESTED"}), Vec::new()));
@@ -44,38 +83,49 @@ pub(super) fn publish(
         }
         // Check all destinations before computing or writing; stills from any earlier attempt
         // are evidence, not an invitation to overwrite or mix frames across runs.
-        for (view, _) in VIEWS {
-            let path = dir.join(format!("still_{view}.png"));
-            if super::regular(&path, false)? {
-                return Err(Refusal::new(
-                    RefusalCode::Io,
-                    format!("{} already exists; start a new round", path.display()),
-                ));
+        for &mode in shading.shadings() {
+            let suffix = mode.suffix();
+            for (view, _) in VIEWS {
+                let path = dir.join(format!("still_{view}{suffix}.png"));
+                if super::regular(&path, false)? {
+                    return Err(Refusal::new(
+                        RefusalCode::Io,
+                        format!("{} already exists; start a new round", path.display()),
+                    ));
+                }
             }
         }
-        let rendered = crate::render::images(&dir, width, height)?;
-        let expected: Vec<_> = VIEWS
-            .iter()
-            .map(|(v, _)| format!("still_{v}.png"))
-            .collect();
-        if rendered.iter().map(|(name, _)| name).ne(expected.iter()) {
-            return Err(super::bad_input(
-                "renderer did not produce the complete expected still set",
-            ));
+        let mut all_rendered = Vec::new();
+        for &mode in shading.shadings() {
+            let suffix = mode.suffix();
+            let rendered = crate::render::shaded(&dir, width, height, mode)?;
+            let expected: Vec<_> = VIEWS
+                .iter()
+                .map(|(v, _)| format!("still_{v}{suffix}.png"))
+                .collect();
+            if rendered.iter().map(|(name, _)| name).ne(expected.iter()) {
+                return Err(super::bad_input(
+                    "renderer did not produce the complete expected still set",
+                ));
+            }
+            all_rendered.extend(rendered);
         }
         let mut images = Vec::new();
-        for (name, png) in rendered {
+        for (name, png) in all_rendered {
             super::write_new(&dir.join(&name), &png)?;
             images.push(format!("rounds/{number:03}/sim/{name}"));
         }
         Ok(images)
     })();
     match result {
-        Ok(images) => Ok((
-            json!({"status":"PASS", "width":width, "height":height, "views":VIEWS.map(|(v, _)| v),
-                "no_claim":"Still images visualize a drape prediction; they do not establish fit. No video was rendered."}),
-            images,
-        )),
+        Ok(images) => {
+            let mut report = json!({"status":"PASS", "width":width, "height":height, "views":VIEWS.map(|(v, _)| v),
+                "no_claim":"Still images visualize a drape prediction; they do not establish fit. No video was rendered."});
+            if shading != RoundShading::Standard {
+                report["shading"] = json!(shading.name());
+            }
+            Ok((report, images))
+        }
         Err(refusal) => {
             let failure = json!({"status":"FAILED", "refusal":refusal});
             super::write_json(&rd.join("render_failure.json"), &failure)?;
@@ -119,8 +169,10 @@ mod tests {
     fn completed_simulation_renders_six_real_pngs_and_never_overwrites_them() {
         let rd = scene();
         let sim = json!({"settled":true, "gating":[], "advisory":[]});
-        let (report, images) = publish(&rd, 7, Some(&sim), Some((48, 32))).unwrap();
+        let (report, images) =
+            publish(&rd, 7, Some(&sim), Some((48, 32)), RoundShading::Standard).unwrap();
         assert_eq!(report["status"], "PASS");
+        assert!(report.get("shading").is_none());
         assert_eq!(images.len(), 6);
         assert_eq!(images[0], "rounds/007/sim/still_front.png");
         for (view, _) in VIEWS {
@@ -130,7 +182,8 @@ mod tests {
         }
         let path = rd.join("sim/still_front.png");
         let original = std::fs::read(&path).unwrap();
-        let (failure, images) = publish(&rd, 7, Some(&sim), Some((48, 32))).unwrap();
+        let (failure, images) =
+            publish(&rd, 7, Some(&sim), Some((48, 32)), RoundShading::Standard).unwrap();
         assert_eq!(failure["status"], "FAILED");
         assert!(images.is_empty());
         assert_eq!(std::fs::read(path).unwrap(), original);
@@ -138,10 +191,65 @@ mod tests {
     }
 
     #[test]
+    fn legible_and_both_shadings_publish_distinct_pngs_and_render_in_report() {
+        assert_eq!(RoundShading::parse(None).unwrap(), RoundShading::Standard);
+        assert_eq!(
+            RoundShading::parse(Some("standard")).unwrap(),
+            RoundShading::Standard
+        );
+        assert_eq!(
+            RoundShading::parse(Some("legible")).unwrap(),
+            RoundShading::Legible
+        );
+        assert_eq!(
+            RoundShading::parse(Some("both")).unwrap(),
+            RoundShading::Both
+        );
+        assert!(RoundShading::parse(Some("glossy")).is_err());
+
+        let sim = json!({"settled":true, "gating":[], "advisory":[]});
+
+        // Legible-only round writes still_<view>_legible.png and shows the legible section in report.html.
+        let rd_leg = scene();
+        let ws_leg = rd_leg.parent().unwrap().parent().unwrap();
+        let (rep_leg, imgs_leg) =
+            publish(&rd_leg, 7, Some(&sim), Some((48, 32)), RoundShading::Legible).unwrap();
+        assert_eq!(rep_leg["status"], "PASS");
+        assert_eq!(rep_leg["shading"], "legible");
+        assert_eq!(imgs_leg.len(), 6);
+        assert_eq!(imgs_leg[0], "rounds/007/sim/still_front_legible.png");
+        assert!(!rd_leg.join("sim/still_front.png").exists());
+        assert!(rd_leg.join("sim/still_front_legible.png").is_file());
+        let entry_leg = json!({"round":7,"dir":"rounds/007","sim":sim,"rendering":rep_leg,"images":imgs_leg});
+        let html_leg = super::super::report::render(ws_leg, &[entry_leg]).unwrap();
+        assert_eq!(html_leg.matches("loading=\"lazy\"").count(), 6);
+        assert!(html_leg.contains("src=\"rounds/007/sim/still_front_legible.png\""));
+        assert!(html_leg.contains("legible shading"));
+
+        // Both-shading round writes all 12 PNGs and renders both sections in report.html.
+        let rd_both = scene();
+        let ws_both = rd_both.parent().unwrap().parent().unwrap();
+        let (rep_both, imgs_both) =
+            publish(&rd_both, 7, Some(&sim), Some((48, 32)), RoundShading::Both).unwrap();
+        assert_eq!(rep_both["status"], "PASS");
+        assert_eq!(rep_both["shading"], "both");
+        assert_eq!(imgs_both.len(), 12);
+        let std_bytes = std::fs::read(rd_both.join("sim/still_front.png")).unwrap();
+        let leg_bytes = std::fs::read(rd_both.join("sim/still_front_legible.png")).unwrap();
+        assert_ne!(std_bytes, leg_bytes, "legible still must differ from standard still");
+        let entry_both = json!({"round":7,"dir":"rounds/007","sim":sim,"rendering":rep_both,"images":imgs_both});
+        let html_both = super::super::report::render(ws_both, &[entry_both]).unwrap();
+        assert_eq!(html_both.matches("loading=\"lazy\"").count(), 12);
+        assert!(html_both.contains("src=\"rounds/007/sim/still_front.png\""));
+        assert!(html_both.contains("src=\"rounds/007/sim/still_front_legible.png\""));
+    }
+
+    #[test]
     fn inspect_pixel_identifies_the_visible_panel_and_its_authored_edge() {
         let rd = scene();
         let sim = json!({"settled":false,"gating":["moving"]});
-        let (rendering, images) = publish(&rd, 7, Some(&sim), Some((96, 72))).unwrap();
+        let (rendering, images) =
+            publish(&rd, 7, Some(&sim), Some((96, 72)), RoundShading::Standard).unwrap();
         let entry = json!({"round":7,"sim":sim,"rendering":rendering,"images":images});
         super::super::write_json(&rd.join("round.json"), &entry).unwrap();
         super::super::write_json(
@@ -290,12 +398,13 @@ mod tests {
         let rd = scene();
         let failed = json!({"settled":false,"gating":["solver failed"],"refusal":{"code":"io"}});
         for sim in [None, Some(&failed)] {
-            let (report, images) = publish(&rd, 1, sim, Some((48, 32))).unwrap();
+            let (report, images) =
+                publish(&rd, 1, sim, Some((48, 32)), RoundShading::Standard).unwrap();
             assert_eq!(report["status"], "SKIPPED");
             assert!(images.is_empty());
             assert!(!rd.join("sim/still_front.png").exists());
         }
-        let (report, _) = publish(&rd, 1, None, None).unwrap();
+        let (report, _) = publish(&rd, 1, None, None, RoundShading::Standard).unwrap();
         assert_eq!(report["status"], "NOT_REQUESTED");
     }
 
@@ -304,7 +413,8 @@ mod tests {
         let rd = scene();
         let ws = rd.parent().unwrap().parent().unwrap();
         let sim = json!({"settled":true, "gating":[], "advisory":[]});
-        let (rendering, images) = publish(&rd, 7, Some(&sim), Some((48, 32))).unwrap();
+        let (rendering, images) =
+            publish(&rd, 7, Some(&sim), Some((48, 32)), RoundShading::Standard).unwrap();
         let mut entry = json!({"round":7,"dir":"rounds/007", "sim":sim,
             "rendering":rendering,"images":images});
         entry["images"]
@@ -343,8 +453,14 @@ mod tests {
         for contents in ["", "v NaN 0 0\nv 1 0 0\nv 0 0 1\nf 1 2 3\n"] {
             let rd = scene();
             std::fs::write(rd.join("sim/body.obj"), contents).unwrap();
-            let (failure, images) =
-                publish(&rd, 7, Some(&json!({"settled":true})), Some((48, 32))).unwrap();
+            let (failure, images) = publish(
+                &rd,
+                7,
+                Some(&json!({"settled":true})),
+                Some((48, 32)),
+                RoundShading::Standard,
+            )
+            .unwrap();
             assert_eq!(failure["status"], "FAILED");
             assert!(images.is_empty());
             assert!(!rd.join("sim/still_front.png").exists());
@@ -358,8 +474,14 @@ mod tests {
         let rd = root.join("next");
         std::fs::create_dir_all(rd.join("sim")).unwrap();
         std::os::unix::fs::symlink(root.join("sim/body.obj"), rd.join("sim/body.obj")).unwrap();
-        let (failure, images) =
-            publish(&rd, 2, Some(&json!({"settled":true})), Some((48, 32))).unwrap();
+        let (failure, images) = publish(
+            &rd,
+            2,
+            Some(&json!({"settled":true})),
+            Some((48, 32)),
+            RoundShading::Standard,
+        )
+        .unwrap();
         assert_eq!(failure["status"], "FAILED");
         assert!(images.is_empty());
         assert!(!root.join("sim/still_front.png").exists());

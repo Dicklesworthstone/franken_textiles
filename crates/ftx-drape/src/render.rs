@@ -683,6 +683,23 @@ pub fn still(
     render_with(&[body, cloth], 1, cam, [width, height], shading, !strain)
 }
 
+/// Renders `meshes` from `cam` at `width` × `height` under `shading`: 8-bit RGB rows, top first.
+///
+/// `meshes[cloth..]` are treated as cloth surfaces and those before `cloth` as the body; when
+/// `mark_cloth` is true and `shading` is [`Shading::Legible`], cloth receives grazing highlight
+/// and open-edge darkening. Under [`Shading::Standard`], this matches [`render`] bit-for-bit.
+#[must_use]
+pub fn render_shaded(
+    meshes: &[&ColouredMesh],
+    cloth: usize,
+    cam: Camera,
+    [width, height]: [usize; 2],
+    shading: Shading,
+    mark_cloth: bool,
+) -> Vec<u8> {
+    render_with(meshes, cloth, cam, [width, height], shading, mark_cloth)
+}
+
 /// `meshes[cloth..]` are cloth and the ones before them the body; `mark_cloth` lets the legible shading
 /// add its highlight and edge line to the cloth. Neither matters to the standard shading.
 fn render_with(

@@ -60,7 +60,7 @@ pub(super) fn cmd_render(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 /// `--shading`: the standard still unless asked for the legible one.
-fn shading(value: Option<&str>) -> Result<Shading, Refusal> {
+pub(super) fn shading(value: Option<&str>) -> Result<Shading, Refusal> {
     match value {
         None => Ok(Shading::Standard),
         Some(name) => Shading::parse(name)
@@ -179,7 +179,7 @@ pub(super) fn images(
 }
 
 /// The complete still set in `shading`, named `still_<view>.png` or `still_<view>_legible.png`.
-fn shaded(
+pub(super) fn shaded(
     dir: &Path,
     width: usize,
     height: usize,

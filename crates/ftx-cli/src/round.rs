@@ -450,20 +450,26 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "spread-seam-pp",
             "stills",
             "res",
+            "shading",
         ],
     )?;
     if args.positional.len() != 2 {
         return Err(bad_input("ftx round needs exactly one workspace"));
     }
     let wants_sim = args.options.contains_key("sim") || args.options.contains_key("stills");
-    let render_size = if args.options.contains_key("stills") {
-        Some(super::render::resolution(
-            args.options.get("res").map(String::as_str),
-        )?)
+    let (render_size, render_shading) = if args.options.contains_key("stills") {
+        (
+            Some(super::render::resolution(
+                args.options.get("res").map(String::as_str),
+            )?),
+            stills::RoundShading::parse(args.options.get("shading").map(String::as_str))?,
+        )
     } else if args.options.contains_key("res") {
         return Err(bad_input("--res requires --stills"));
+    } else if args.options.contains_key("shading") {
+        return Err(bad_input("--shading requires --stills"));
     } else {
-        None
+        (None, stills::RoundShading::Standard)
     };
     if wants_sim {
         let run_options = super::drape_options(args)?;
@@ -636,7 +642,8 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         (None, "not run".to_string(), None, false)
     };
-    let (rendering, images) = stills::publish(&rd, n, sim.as_ref(), render_size)?;
+    let (rendering, images) =
+        stills::publish(&rd, n, sim.as_ref(), render_size, render_shading)?;
     let mut exports = None;
     let mut export_basis = "not run".to_string();
     if args.options.contains_key("export") {
