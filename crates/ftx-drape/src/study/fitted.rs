@@ -2326,7 +2326,7 @@ mod tests {
                         thumb_l = Some(first_idx as u32);
                     }
                 }
-                let h1 = Vec3::new(sign * 0.32, (finger as f64 - 3.0) * 0.01, 0.90);
+                let h1 = Vec3::new(sign * 0.14, (finger as f64 - 3.0) * 0.005, 1.65);
                 let t1 = h1 + Vec3::new(sign * 0.02, 0.0, -0.02);
                 let t2 = t1 + Vec3::new(sign * 0.02, 0.0, -0.02);
                 for (name, parent, head, tail) in [
@@ -2385,7 +2385,7 @@ mod tests {
         // Motion endpoints AND intermediate substeps preserve the authored thumb pose.
         let motion: motion::Request = serde_json::from_value(json!({
             "schema": "ftx-drape-motion/1",
-            "keyframes": [{"time_s": 0.02, "arm_abduction_deg": 37.0}],
+            "keyframes": [{"time_s": 0.02, "arm_abduction_deg": 36.0}],
             "source_pose_sampling": {"max_step_s": 0.01, "max_segments": 2},
             "max_step_s": 0.01, "max_trials": 16, "max_pairs": 10000, "max_sample_vertices": 10000
         }))
@@ -2396,7 +2396,7 @@ mod tests {
         assert_ne!(path.sha256(), plain_path.sha256());
         assert_ne!(path.source_vertices()[0], plain_path.source_vertices()[0]);
         let mut mid_req = thumb_req.clone();
-        mid_req.arm_abduction_deg = 36.0;
+        mid_req.arm_abduction_deg = 35.5;
         let mid = FittedBody::prepare(&finger_model, &hash, &mid_req).unwrap();
         for (actual, expected) in path.source_vertices()[0]
             .iter()
@@ -2408,7 +2408,7 @@ mod tests {
             );
         }
         let mut end_req = thumb_req;
-        end_req.arm_abduction_deg = 37.0;
+        end_req.arm_abduction_deg = 36.0;
         let end = FittedBody::prepare(&finger_model, &hash, &end_req).unwrap();
         assert_eq!(path.source_vertices()[1], end.collision.vertices);
     }
