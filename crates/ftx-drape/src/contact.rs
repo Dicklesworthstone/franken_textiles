@@ -3637,8 +3637,8 @@ mod tests {
         assert_eq!(upgraded.adaptive_barrier(), Some(policy));
         assert_eq!(upgraded.stick_slip(), Some(ss));
 
-        // Fresh collider inherits prior policies when unset, but does not leak self_stick_slip
-        // if the replacement contact has no self-contact.
+        // Fresh collider inherits prior policies and adapted kappa when unset, without leaking
+        // self_stick_slip if the replacement contact has no self-contact.
         let prev_full = self_layers(&x)
             .with_self_contact(&x, params())
             .unwrap()
@@ -3652,13 +3652,52 @@ mod tests {
             .retain_surface_materials(Some(&prev_full), &x)
             .unwrap();
         assert_eq!(inherited_body_only.adaptive_barrier(), Some(policy));
+        assert_eq!(inherited_body_only.params.kappa, prev_full.params.kappa);
         assert_eq!(inherited_body_only.stick_slip(), Some(ss));
         assert_eq!(inherited_body_only.self_stick_slip(), None);
 
-        // Replacing a surface-material contact with stick-slip refuses instead of combining both.
+        let inherited_with_self = self_layers(&x)
+            .with_self_contact(&x, params())
+            .unwrap()
+            .retain_surface_materials(Some(&prev_full), &x)
+            .unwrap();
+        assert_eq!(inherited_with_self.params.kappa, prev_full.params.kappa);
+        assert_eq!(
+            inherited_with_self.self_contact_params().unwrap().kappa,
+            prev_full.self_contact_params().unwrap().kappa
+        );
+        assert_eq!(inherited_with_self.self_stick_slip(), Some(ss));
+
+        // Inheriting body-only surface materials onto a self-contact replacement refuses
+        // fail-closed instead of panicking on a missing self-friction matrix; inheriting a full
+        // matrix updates the self-contact broad-phase envelope.
         let prev_mat = self_layers(&x)
             .with_surface_materials(&x, &[0, 0], &mats, None)
             .unwrap();
+        assert_eq!(
+            self_layers(&x)
+                .with_self_contact(&x, params())
+                .unwrap()
+                .retain_surface_materials(Some(&prev_mat), &x)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        let prev_mat_self = self_layers(&x)
+            .with_surface_materials(&x, &[0, 0], &mats, Some(&[vec![0.45]]))
+            .unwrap()
+            .with_self_contact(&x, params())
+            .unwrap();
+        let inherited_mat_self = self_layers(&x)
+            .with_self_contact(&x, params())
+            .unwrap()
+            .retain_surface_materials(Some(&prev_mat_self), &x)
+            .unwrap();
+        let sp = inherited_mat_self.self_contact_params().unwrap();
+        assert!((sp.thickness - 2e-4).abs() < 1e-15);
+        assert!((sp.mu - 0.45).abs() < 1e-15);
+
+        // Replacing a surface-material contact with stick-slip refuses instead of combining both.
         assert_eq!(
             self_layers(&x)
                 .with_stick_slip(ss)

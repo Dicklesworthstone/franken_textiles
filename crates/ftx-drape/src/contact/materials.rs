@@ -217,8 +217,14 @@ impl Contact {
         x: &[Vec3],
     ) -> Result<Self, Refusal> {
         if let Some(prev) = previous {
-            if self.adaptive_barrier.is_none() {
-                self.adaptive_barrier = prev.adaptive_barrier;
+            if self.adaptive_barrier.is_none()
+                && let Some(policy) = prev.adaptive_barrier
+            {
+                self.adaptive_barrier = Some(policy);
+                self.params.kappa = prev.params.kappa.clamp(policy.kappa_min, policy.kappa_max);
+                if let (Some(sp), Some(prev_sp)) = (self.self_params.as_mut(), prev.self_params) {
+                    sp.kappa = prev_sp.kappa.clamp(policy.kappa_min, policy.kappa_max);
+                }
             }
             if self.surface_materials.is_none() {
                 if self.stick_slip.is_none() {
@@ -245,6 +251,11 @@ impl Contact {
                     .fold(0.0, f64::max);
                 self.surface_materials = Some(field.clone());
                 self.params.validate()?;
+                if let Some(p) = self.self_params {
+                    let p = self.material_self_params(p)?;
+                    self.self_params = Some(p);
+                    self.creases = self.find_start_creases(x, &p);
+                }
             }
         }
         Ok(self)

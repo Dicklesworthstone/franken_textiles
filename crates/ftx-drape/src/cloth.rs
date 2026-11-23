@@ -902,6 +902,7 @@ impl Solver {
     pub fn with_contact(mut self, body: Body, params: ContactParams) -> Result<Self, Refusal> {
         params.validate()?;
         let self_params = self.contact.as_ref().and_then(Contact::self_contact_params);
+        let self_stick_slip = self.contact.as_ref().and_then(Contact::self_stick_slip);
         if self.x.iter().any(|p| !p.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
@@ -966,7 +967,16 @@ impl Solver {
             .repair("place the pieces outside the body (a larger push-out or clearance)"));
         }
         self.contact = Some(match self_params {
-            Some(p) => contact.with_self_contact(&self.x, p)?,
+            Some(p) => {
+                let mut contact = contact.with_self_contact(&self.x, p)?;
+                if !contact.has_surface_materials()
+                    && contact.self_stick_slip().is_none()
+                    && let Some(ss) = self_stick_slip
+                {
+                    contact.set_self_stick_slip(ss)?;
+                }
+                contact
+            }
             None => contact,
         });
         self.symbolic = None;
@@ -4011,6 +4021,90 @@ mod strategy_and_integrator_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn with_contact_replacement_preserves_adaptive_kappa_and_self_stick_slip() {
+        let rest = vec![
+            Vec2::ZERO,
+            Vec2::new(0.04, 0.0),
+            Vec2::new(0.0, 0.04),
+            Vec2::new(0.1, 0.0),
+            Vec2::new(0.14, 0.0),
+            Vec2::new(0.1, 0.04),
+        ];
+        let x = vec![
+            Vec3::new(0.0, 0.0, 0.01),
+            Vec3::new(0.04, 0.0, 0.01),
+            Vec3::new(0.0, 0.04, 0.01),
+            Vec3::new(0.0, 0.0, 0.02),
+            Vec3::new(0.04, 0.0, 0.02),
+            Vec3::new(0.0, 0.04, 0.02),
+        ];
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2], [3, 4, 5]],
+            Membrane::orthotropic(200.0, 200.0, 0.1, 40.0, 0.1),
+            1e-5,
+            0.05,
+        )
+        .unwrap();
+        let floor = |z: f64| {
+            Body::new(
+                vec![
+                    Vec3::new(-0.1, -0.1, z),
+                    Vec3::new(0.2, -0.1, z),
+                    Vec3::new(-0.1, 0.2, z),
+                ],
+                vec![[0, 1, 2]],
+                0.05,
+            )
+            .unwrap()
+        };
+        let params = ContactParams {
+            dhat: 1e-3,
+            thickness: 2e-4,
+            kappa: 100.0,
+            mu: 0.2,
+            eps_v: 1e-3,
+        };
+        let self_params = ContactParams {
+            thickness: 4e-4,
+            ..params
+        };
+        let policy = crate::contact::AdaptiveBarrierPolicy::default();
+        let body_ss = crate::contact::StickSlipFriction::new(0.6, 0.3, 0.02).unwrap();
+        let self_ss = crate::contact::StickSlipFriction::new(0.5, 0.25, 0.01).unwrap();
+        let mut solver = Solver::new(model, x, &[[false; 3]; 6], Vec3::new(0.0, 0.0, -9.81))
+            .with_contact(floor(0.0), params)
+            .unwrap()
+            .with_self_contact(self_params)
+            .unwrap();
+        let adapted_k = {
+            let c = solver.contact.as_mut().unwrap();
+            let k = c.set_adaptive_barrier(policy, 1e-5, 200.0, 9.81).unwrap();
+            c.set_stick_slip(body_ss).unwrap();
+            c.set_self_stick_slip(self_ss).unwrap();
+            k
+        };
+        let prev_self_k = solver
+            .contact
+            .as_ref()
+            .unwrap()
+            .self_contact_params()
+            .unwrap()
+            .kappa;
+        assert!((adapted_k - 100.0).abs() > 1.0);
+
+        // Replacing the collider with default params must preserve adaptive policy, adapted body
+        // and self kappas, body stick-slip, and cloth-cloth self stick-slip.
+        let solver = solver.with_contact(floor(-0.001), params).unwrap();
+        let c = solver.contact.as_ref().unwrap();
+        assert_eq!(c.adaptive_barrier(), Some(policy));
+        assert_eq!(c.params.kappa, adapted_k);
+        assert_eq!(c.self_contact_params().unwrap().kappa, prev_self_k);
+        assert_eq!(c.stick_slip(), Some(body_ss));
+        assert_eq!(c.self_stick_slip(), Some(self_ss));
     }
 }
 
