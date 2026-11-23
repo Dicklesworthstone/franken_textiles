@@ -4279,7 +4279,21 @@ mod strategy_and_integrator_tests {
         let tri_fixed = [[true; 3], [true; 3], [false; 3]];
 
         // 2a. Nonlinear CompiledMembrane (`element_responses`)
-        let compiled = material.membrane_response().unwrap().unwrap();
+        let nl_record: ftx_pattern::materials::Material = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-nonlinear.json"
+        ))
+        .unwrap();
+        let mut nl_selection = selected.clone();
+        nl_selection.id.clone_from(&nl_record.id);
+        nl_selection.expected_sha256 = None;
+        nl_selection.record = Some(nl_record);
+        let nl_snapshot = Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: Vec::new(),
+        }
+        .resolve(&nl_selection)
+        .unwrap();
+        let compiled = nl_snapshot.membrane_response().unwrap().unwrap();
         let mut nl_model = ClothModel::new(
             tri_rest.clone(),
             &[[0, 1, 2]],
