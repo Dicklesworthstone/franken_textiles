@@ -308,6 +308,18 @@ impl<'a> Ctx<'a> {
             geoms.push(self.geom(src, 6.0)?);
         }
         let lay = shelf_layout(&geoms, 15.0, 10.0, self.opts.layout_width, false, true, 0.0);
+        if !lay.width.is_finite()
+            || !lay.height.is_finite()
+            || lay
+                .items
+                .iter()
+                .any(|g| g.cut.iter().chain(&g.sew).any(|p| !p.is_finite()))
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "master layout dimensions or geometry overflowed finite bounds",
+            ));
+        }
         Ok(self.master.get_or_init(|| lay))
     }
 }

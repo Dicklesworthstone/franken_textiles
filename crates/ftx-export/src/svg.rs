@@ -51,21 +51,32 @@ pub fn svg_piece_group(g: &Geom, size: &str, line: f64) -> Vec<String> {
     let stroke = |d: String, extra: &str| {
         format!("<path d=\"{d}\" fill=\"none\" stroke=\"#000\" stroke-width=\"{lw}\"{extra}/>")
     };
-    grp("cut", vec![stroke(path_d(&g.cut, true), "")]);
+    grp(
+        "cut",
+        if g.cut.is_empty() {
+            Vec::new()
+        } else {
+            vec![stroke(path_d(&g.cut, true), "")]
+        },
+    );
     grp(
         "sew",
-        vec![format!(
-            "<path d=\"{}\" fill=\"none\" stroke=\"#000\" stroke-width=\"{}\" stroke-dasharray=\"3 1.5\"/>",
-            path_d(&g.sew, true),
-            py::repr_f64(line * 0.7)
-        )],
+        if g.sew.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!(
+                "<path d=\"{}\" fill=\"none\" stroke=\"#000\" stroke-width=\"{}\" stroke-dasharray=\"3 1.5\"/>",
+                path_d(&g.sew, true),
+                py::repr_f64(line * 0.7)
+            )]
+        },
     );
     grp(
         "notches",
         g.notches
             .iter()
             .flat_map(|n| {
-                n.marks.iter().map(move |mk| {
+                n.marks.iter().filter(|mk| !mk.is_empty()).map(move |mk| {
                     format!(
                         "<path data-notch=\"{}\" data-type=\"{}\" d=\"{}\" fill=\"none\" stroke=\"#000\" \
                          stroke-width=\"{lw}\"/>",
@@ -81,6 +92,7 @@ pub fn svg_piece_group(g: &Geom, size: &str, line: f64) -> Vec<String> {
         "grain",
         grain_marks(g, 6.0)
             .iter()
+            .filter(|mk| !mk.is_empty())
             .map(|mk| stroke(path_d(mk, false), ""))
             .collect(),
     );
@@ -88,6 +100,7 @@ pub fn svg_piece_group(g: &Geom, size: &str, line: f64) -> Vec<String> {
         "fold",
         g.fold_lines
             .iter()
+            .filter(|(p, _)| !p.is_empty())
             .map(|(p, s)| {
                 stroke(
                     path_d(p, false),
@@ -104,6 +117,7 @@ pub fn svg_piece_group(g: &Geom, size: &str, line: f64) -> Vec<String> {
         "internal-draw",
         g.internal_draw
             .iter()
+            .filter(|(p, _)| !p.is_empty())
             .map(|(p, c)| {
                 format!(
                     "<path d=\"{}\" fill=\"none\" stroke=\"#000\" stroke-width=\"{}\" stroke-dasharray=\"2 1\"/>",
@@ -117,6 +131,7 @@ pub fn svg_piece_group(g: &Geom, size: &str, line: f64) -> Vec<String> {
         "internal-cut",
         g.internal_cut
             .iter()
+            .filter(|(p, _)| !p.is_empty())
             .map(|(p, c)| stroke(path_d(p, *c), ""))
             .collect(),
     );
@@ -164,7 +179,11 @@ pub fn svg_piece_group(g: &Geom, size: &str, line: f64) -> Vec<String> {
     grp("labels", texts);
     for kind in ["soutache", "embroidery"] {
         let mut body = Vec::new();
-        for d in g.decor.iter().filter(|d| d.kind == kind) {
+        for d in g
+            .decor
+            .iter()
+            .filter(|d| d.kind == kind && !d.pts.is_empty())
+        {
             let w = fnum(d.width, 3);
             body.push(format!(
                 "<path d=\"{}\" fill=\"none\" stroke=\"#000\" stroke-opacity=\"0.35\" stroke-width=\"{w}\" \
@@ -192,6 +211,12 @@ pub fn svg_piece_group(g: &Geom, size: &str, line: f64) -> Vec<String> {
 /// As [`Ctx::master`].
 pub fn master_svg(ctx: &Ctx) -> Result<(String, Value), Refusal> {
     let lay = ctx.master()?;
+    if !lay.width.is_finite() || !lay.height.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "master SVG layout dimensions are not finite",
+        ));
+    }
     let (w, h) = (fnum(lay.width, 3), fnum(lay.height, 3));
     let fold_mode = if ctx.opts.unfold { "unfolded" } else { "half" };
     let mut out = vec![
@@ -221,6 +246,12 @@ pub fn master_svg(ctx: &Ctx) -> Result<(String, Value), Refusal> {
         f64::NEG_INFINITY,
     ];
     for p in lay.items.iter().flat_map(|g| g.cut.iter()) {
+        if !p.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "master SVG layout contains non-finite cut coordinates",
+            ));
+        }
         bb = [
             bb[0].min(p.x),
             bb[1].min(p.y),
@@ -263,5 +294,45 @@ mod tests {
         let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
         let err = master_svg(&ctx).unwrap_err();
         assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+    }
+
+    #[test]
+    fn svg_piece_group_skips_empty_optional_paths_instead_of_emitting_bare_m() {
+        let raw = json!({
+            "schema": "fabric-pattern/1",
+            "style": "SVGEMPTY",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 10},
+            "pieces": [{
+                "id": "p1",
+                "name": "P1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        });
+        let pat = Pattern::new(raw);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let mut g = ctx.geom(crate::Source::Piece(0), 6.0).unwrap();
+        g.internal_draw.push((Vec::new(), false));
+        g.internal_cut.push((Vec::new(), true));
+        g.fold_lines.push((Vec::new(), "dashdot".into()));
+        g.decor.push(crate::geom::Decor {
+            kind: "soutache".into(),
+            pts: Vec::new(),
+            width: 3.0,
+            closed: false,
+        });
+        let svg = svg_piece_group(&g, "2T", 0.25).join("\n");
+        assert!(!svg.contains("d=\"M\""), "unexpected bare M path:\n{svg}");
+        assert!(
+            !svg.contains("d=\"M Z\""),
+            "unexpected bare M Z path:\n{svg}"
+        );
     }
 }

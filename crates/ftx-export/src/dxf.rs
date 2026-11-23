@@ -382,6 +382,12 @@ pub fn export_dxf_astm(
         b.pair(0, "ENDBLK");
         b.pair(8, "0");
         let (x0, y0, x1, y1) = g.bbox();
+        if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("{}: non-finite piece bounds in DXF export", g.iid),
+            ));
+        }
         ents.pair(0, "INSERT");
         ents.pair(8, "1");
         ents.pair(2, bname);
@@ -393,6 +399,12 @@ pub fn export_dxf_astm(
             ext[3].max(40.0 + y1 - y0),
         ];
         x += (x1 - x0) + 30.0;
+        if !x.is_finite() || !ext.iter().all(|v| v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "DXF layout extents overflowed finite bounds",
+            ));
+        }
     }
     let mut d = Dxf::default();
     d.pair(0, "SECTION");
@@ -519,10 +531,19 @@ impl Handles {
 pub fn export_flat_dxf(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal> {
     let geoms = ctx.instance_geoms(8.0)?;
     let lay = shelf_layout(&geoms, 20.0, 10.0, None, true, false, 0.0);
+    if !lay.width.is_finite() || !lay.height.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "flat DXF layout dimensions are not finite",
+        ));
+    }
     let mut h = Handles(0x1F);
     let (model_rec, paper_rec) = (h.next(), h.next());
     let mut ents = Dxf::default();
     let lw = |ents: &mut Dxf, h: &mut Handles, layer: &str, pts: &[(f64, f64)], closed: bool| {
+        if pts.is_empty() {
+            return;
+        }
         ents.pair(0, "LWPOLYLINE");
         ents.pair(5, &h.next());
         ents.pair(330, &model_rec);
@@ -588,6 +609,12 @@ pub fn export_flat_dxf(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal> {
         f64::NEG_INFINITY,
     ];
     for p in lay.items.iter().flat_map(|g: &Geom| g.cut.iter()) {
+        if !p.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "flat DXF layout contains non-finite cut coordinates",
+            ));
+        }
         bb = [
             bb[0].min(p.x),
             bb[1].min(p.y),

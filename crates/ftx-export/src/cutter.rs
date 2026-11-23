@@ -78,6 +78,13 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
         }
         let margin = 1.0;
         let (w, h) = (hi.x - lo.x + 2.0 * margin, hi.y - lo.y + 2.0 * margin);
+        let (bw, bh) = (w - 2.0 * margin, h - 2.0 * margin);
+        if !w.is_finite() || !h.is_finite() || !bw.is_finite() || !bh.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("{}: cutter layout dimensions are not finite", g.iid),
+            ));
+        }
         let d: Vec<String> = ring
             .iter()
             .map(|p| {
@@ -117,7 +124,6 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
             w = fnum(w, 3),
             h = fnum(h, 3)
         );
-        let (bw, bh) = (w - 2.0 * margin, h - 2.0 * margin);
         let fits_long = bw <= MAT_W && bh <= MAT_LONG;
         let fits_sq = bw <= MAT_W && bh <= MAT_W;
         let fits_cross = bh <= MAT_W && bw <= MAT_LONG;
