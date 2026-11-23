@@ -315,6 +315,18 @@ impl ClothModel {
         Ok(())
     }
 
+    fn check_dihedral_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        if self.bending_model == BendingModel::DiscreteShells {
+            for (i, hinge) in self.hinges.iter().enumerate() {
+                hinge.check_dihedral_domain(x).map_err(|mut refusal| {
+                    refusal.message = format!("hinge {i}: {}", refusal.message);
+                    refusal
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Membrane energy of element `e` under [`Self::compression_model`].
     #[must_use]
     pub fn membrane_energy(&self, e: usize, x: &[Vec3]) -> f64 {
@@ -1371,6 +1383,7 @@ impl Solver {
             } => {
                 self.model.check_membrane_domains(x)?;
                 self.model.check_panel_bending_domains(x)?;
+                self.model.check_dihedral_domains(x)?;
                 let x_eval: Vec<Vec3> = x
                     .iter()
                     .zip(x0)
@@ -1378,6 +1391,7 @@ impl Solver {
                     .collect();
                 self.model.check_membrane_domains(&x_eval)?;
                 self.model.check_panel_bending_domains(&x_eval)?;
+                self.model.check_dihedral_domains(&x_eval)?;
                 let panels = self
                     .plasticity
                     .as_ref()
@@ -1428,6 +1442,7 @@ impl Solver {
     ) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
         self.model.check_panel_bending_domains(x)?;
+        self.model.check_dihedral_domains(x)?;
         let panels = self
             .plasticity
             .as_ref()
@@ -1797,6 +1812,33 @@ impl Solver {
             .map_or(1.0, |c| c.step_bound(&self.x, &self.displacement(p)))
     }
 
+    fn dihedral_step_bound(&self, p: &[f64], ctx: StepContext<'_>) -> f64 {
+        if self.model.bending_model != BendingModel::DiscreteShells {
+            return 1.0;
+        }
+        let dx = self.displacement(p);
+        let bound_at = |x: &[Vec3], dx: &[Vec3]| {
+            self.model.hinges.iter().fold(1.0_f64, |bound, hinge| {
+                bound.min(hinge.dihedral_step_bound(x, dx))
+            })
+        };
+        let bound = bound_at(&self.x, &dx);
+        if let StepContext::GeneralizedAlpha { x0, params, .. } = ctx {
+            // Generalized-alpha evaluates elastic forces at an affine midpoint while
+            // publishing the actual endpoint. Both geometric paths must stay admitted.
+            let x_eval: Vec<_> = self
+                .x
+                .iter()
+                .zip(x0)
+                .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                .collect();
+            let dx_eval: Vec<_> = dx.iter().map(|&d| d * params.elastic_weight()).collect();
+            bound.min(bound_at(&x_eval, &dx_eval))
+        } else {
+            bound
+        }
+    }
+
     /// Projected Newton (or configured [`NewtonStrategy`]) on the potential from the current positions.
     fn minimize(&mut self, inertia: Option<(&[Vec3], f64)>) -> Result<SolveReport, Refusal> {
         self.minimize_ctx(StepContext::from_inertia(inertia))
@@ -2015,8 +2057,9 @@ impl Solver {
                 break;
             }
             // Never step through the body or another cloth layer: cap α by additive CCD.
-            let mut alpha = self.ccd_step_bound(&p);
-            rep.ccd_limited += usize::from(alpha < 1.0);
+            let ccd_alpha = self.ccd_step_bound(&p);
+            rep.ccd_limited += usize::from(ccd_alpha < 1.0);
+            let mut alpha = ccd_alpha.min(self.dihedral_step_bound(&p, ctx));
             let mut accepted = false;
             for _ in 0..50 {
                 let trial = self.apply(&self.x, &p, alpha);
@@ -2251,10 +2294,11 @@ impl Solver {
                 break;
             }
             let ccd_alpha = self.ccd_step_bound(&p);
-            if ccd_alpha < 1.0 {
-                rep.ccd_limited += 1;
+            rep.ccd_limited += usize::from(ccd_alpha < 1.0);
+            let step_alpha = ccd_alpha.min(self.dihedral_step_bound(&p, ctx));
+            if step_alpha < 1.0 {
                 for v in &mut p {
-                    *v *= ccd_alpha;
+                    *v *= step_alpha;
                 }
                 let mut hp = vec![0.0; self.nfree];
                 h_mat.spmv(&p, &mut hp);
@@ -2289,7 +2333,7 @@ impl Solver {
             };
             let slope: f64 = g.iter().zip(&p).map(|(a, b)| a * b).sum();
             let precision_step = !(rho > 1e-4 && model_decrease > 0.0)
-                && ccd_alpha == 1.0
+                && step_alpha == 1.0
                 && !out.hit_boundary
                 && -slope <= 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs())
                 && (trial_energy - energy).abs()
@@ -2314,7 +2358,7 @@ impl Solver {
             } else if rho < 0.25 && !precision_step {
                 delta = (0.25 * delta).max(min_radius);
                 rep.halvings += 1;
-            } else if rho > 0.75 && out.hit_boundary && ccd_alpha == 1.0 {
+            } else if rho > 0.75 && out.hit_boundary && step_alpha == 1.0 {
                 delta = (2.0 * delta).min(max_radius);
             }
             if accepted {
@@ -2577,13 +2621,16 @@ impl Solver {
     /// Implicit-Euler (or configured [`TimeIntegrator`]) step from the accepted physical state
     /// `self.x` (`x_n`), optionally seeding free DOFs of the Newton minimizer at `guess` without
     /// altering `x_n` in the inertia predictor or post-step velocity. Falls back to `step` when
-    /// contact is active.
+    /// contact or finite-angle bending is active.
     pub(crate) fn step_with_guess(
         &mut self,
         h: f64,
         guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
-        if guess.is_none() || self.contact.is_some() {
+        if guess.is_none()
+            || self.contact.is_some()
+            || self.model.bending_model == BendingModel::DiscreteShells
+        {
             return self.step_at_body(h, None);
         }
         self.check_liquid_mass()?;
@@ -2625,6 +2672,7 @@ impl Solver {
     ) -> Result<SolveReport, Refusal> {
         self.check_integrator_history()?;
         self.model.check_panel_bending_domains(&self.x)?;
+        self.model.check_dihedral_domains(&self.x)?;
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -3170,6 +3218,7 @@ impl Solver {
         }
         self.model.check_membrane_domains(x)?;
         self.model.check_panel_bending_domains(x)?;
+        self.model.check_dihedral_domains(x)?;
         if let Some(field) = &self.membrane_plasticity {
             field.check(&self.model, x)?;
         }
@@ -3726,6 +3775,136 @@ mod self_contact_tests {
 #[cfg(test)]
 mod strategy_and_integrator_tests {
     use super::*;
+
+    fn creased_hinge(degrees: f64, target_degrees: f64) -> Solver {
+        let rest = vec![
+            Vec2::ZERO,
+            Vec2::new(0.02, 0.0),
+            Vec2::new(0.01, 0.02),
+            Vec2::new(0.01, -0.02),
+        ];
+        let mut model = ClothModel::new(
+            rest,
+            &[[0, 1, 2], [1, 0, 3]],
+            Membrane::orthotropic(1.0, 1.0, 0.0, 0.5, 1.0),
+            1e-8,
+            0.2,
+        )
+        .unwrap();
+        model.bending_model = BendingModel::DiscreteShells;
+        model
+            .set_hinge_rest_angles(&[target_degrees.to_radians()])
+            .unwrap();
+        let (sin, cos) = ftx_core::det::sin_cos(degrees.to_radians());
+        let x = vec![
+            Vec3::ZERO,
+            Vec3::new(0.02, 0.0, 0.0),
+            Vec3::new(0.01, 0.02, 0.0),
+            Vec3::new(0.01, -0.02 * cos, 0.02 * sin),
+        ];
+        let mut solver = Solver::new(
+            model,
+            x,
+            &[[true; 3], [true; 3], [true; 3], [true, true, false]],
+            Vec3::ZERO,
+        );
+        solver.tol = 1e-11;
+        solver
+    }
+
+    #[test]
+    fn discrete_shells_refuses_branch_crossing_and_preserves_accepted_state() {
+        for strategy in [
+            NewtonStrategy::ProjectedNewton,
+            NewtonStrategy::AdaptiveIlu {
+                pcg_iters: 64,
+                max_shifts: 4,
+            },
+            NewtonStrategy::trust_region_default(),
+        ] {
+            for integrator in [
+                TimeIntegrator::ImplicitEuler,
+                TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+            ] {
+                let mut solver = creased_hinge(170.0, -170.0);
+                solver.newton_strategy = strategy;
+                solver.integrator = integrator;
+                solver.v[3].z = -1.0;
+                let original = solver.clone();
+                // The prescribed x/y constraints prevent unfolding the long way around.
+                // Inertia requests a negative z across the hairpin, so the step must fail
+                // rather than accepting a lower-energy value on the opposite angle branch.
+                let error = solver.step(0.01).unwrap_err();
+                assert_eq!(
+                    error.code,
+                    RefusalCode::NotConverged,
+                    "{strategy:?} {integrator:?}: {error:?}"
+                );
+                assert_eq!(solver.x, original.x);
+                assert_eq!(solver.v, original.v);
+                assert_eq!(solver.a, original.a);
+                assert_eq!(solver.accel_initialized, original.accel_initialized);
+                assert_eq!(solver.pattern.is_some(), original.pattern.is_some());
+            }
+        }
+        let mut hairpin = creased_hinge(0.0, 0.0);
+        hairpin.x[3] = Vec3::new(0.01, 0.02, 0.0);
+        assert_eq!(
+            hairpin.step(0.01).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            hairpin.static_solve().unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+    }
+
+    #[test]
+    fn discrete_shells_guards_generalized_alpha_midpoint_and_warm_start() {
+        let solver = creased_hinge(35.0, 35.0);
+        let params = GeneralizedAlphaParams::new(1.0).unwrap();
+        let midpoint = creased_hinge(175.0, 35.0).x;
+        let x0: Vec<_> = midpoint
+            .iter()
+            .zip(&solver.x)
+            .map(|(&m, &x)| m * 2.0 - x)
+            .collect();
+        let dx = vec![-0.01];
+        let ctx = StepContext::GeneralizedAlpha {
+            x0: &x0,
+            xt: &solver.x,
+            h: 0.01,
+            params,
+            damping: None,
+        };
+        let endpoint_bound = solver.dihedral_step_bound(&dx, StepContext::Static);
+        let both_bound = solver.dihedral_step_bound(&dx, ctx);
+        assert!(both_bound > 0.0 && both_bound < endpoint_bound);
+        let trial = solver.apply(&solver.x, &dx, both_bound);
+        solver.potential_ctx(&trial, ctx).unwrap();
+        let eval: Vec<_> = trial
+            .iter()
+            .zip(&x0)
+            .map(|(&x, &x0)| params.eval_pos(x, x0))
+            .collect();
+        assert!(solver.model.hinges[0].dihedral_angle(&eval) > 0.0);
+
+        for integrator in [
+            TimeIntegrator::ImplicitEuler,
+            TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+        ] {
+            let mut plain = creased_hinge(170.0, 170.0);
+            plain.integrator = integrator;
+            let mut guessed = plain.clone();
+            let guess = creased_hinge(-170.0, 170.0).x;
+            let report = plain.step(0.001).unwrap();
+            let guessed_report = guessed.step_with_guess(0.001, Some(&guess)).unwrap();
+            assert_eq!(guessed.x, plain.x);
+            assert_eq!(guessed.v, plain.v);
+            assert_eq!(guessed_report.iterations, report.iterations);
+            assert_eq!(guessed_report.ccd_limited, 0);
+        }
+    }
 
     fn hanging_sheet() -> Solver {
         let (rest, tris) = grid(0.10, 0.08, 4, 3, Vec2::ZERO);

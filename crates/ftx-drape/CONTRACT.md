@@ -55,7 +55,14 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   optional `crease_angle_deg ∈ (−180, 180)` on piece `internal` polylines (inserted as pinned CDT
   constraints in `garment::build_garment_with_options`) or on seams; `scene` binds their signed `θ₀`
   onto matching welded hinges, and `Solver::check_bending_model` refuses non-zero rest angles under
-  `BendingModel::Quadratic` or characterized panel bending fail-closed.
+  `BendingModel::Quadratic` or characterized panel bending fail-closed. Exact hairpins, degenerate
+  faces and invalid rest metrics refuse before assembly. A conservative bound on each incident
+  face normal admits the entire trial segment, preventing an apparent energy decrease across the
+  signed `atan2` branch or an intermediate face collapse. Projected Newton, Adaptive ILU and trust
+  region steps share this bound; Generalized Alpha checks both endpoint and elastic midpoint paths.
+  Unadmitted warm guesses are bypassed. Failed steps preserve accepted state and `ccd_limited`
+  continues to count contact restrictions only. Direct regressions live in `elements::tests` and
+  `cloth::strategy_and_integrator_tests`; these numerical safeguards do not qualify fabric or fit.
 - **Anisotropic aerodynamic drag & SE(3)-invariant Rayleigh damping (`FTX-27b`)**: `damping::AirDrag`
   (variational strictly convex PSD normal/tangential crossflow and skin-friction drag supporting both
   `ImplicitEuler` and `GeneralizedAlpha`) and stiffness-proportional Green-strain-rate / dihedral-rate

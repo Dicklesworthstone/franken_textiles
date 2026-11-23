@@ -967,6 +967,71 @@ impl Hinge {
         ftx_core::det::atan2(sin_raw / scale, cos_raw / scale)
     }
 
+    // A signed rest-angle energy has a discontinuity at the atan2 branch cut. The two
+    // sides of an exact hairpin cannot share one derivative, even though atan2 has a
+    // finite value there. Reject it before assembly rather than choosing a side by ±0.
+    pub(crate) fn check_dihedral_domain(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        if self
+            .v
+            .iter()
+            .any(|&v| x.get(v).is_none_or(|p| !p.is_finite()))
+            || !self.rest_angle.is_finite()
+            || self.rest_angle.abs() >= std::f64::consts::PI
+            || !self.edge_length.is_finite()
+            || self.edge_length <= 0.0
+            || !self.dihedral_weight().is_finite()
+            || self.dihedral_weight() < 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "discrete-shell hinge needs finite geometry, rest metric and a rest angle in (-pi, pi)",
+            ));
+        }
+        let theta = self.dihedral_angle(x);
+        if !theta.is_finite() || theta.abs() >= std::f64::consts::PI {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "discrete-shell hinge is degenerate or lies on the exact hairpin angle branch",
+            ));
+        }
+        Ok(())
+    }
+
+    // Conservative admission for the WHOLE straight vertex path, not just its endpoint.
+    // For a moving face n(t) = n + t dn + t² ddn. Keeping |n(t)-n| below
+    // |n| sin((pi-|theta|)/4) keeps both face normals nonzero and their total turn
+    // below half the distance to antiparallel. Thus no hidden ±pi crossing or
+    // triangle collapse can lower the signed rest-angle potential during a trial.
+    pub(crate) fn dihedral_step_bound(&self, x: &[Vec3], dx: &[Vec3]) -> f64 {
+        if self.check_dihedral_domain(x).is_err()
+            || self
+                .v
+                .iter()
+                .any(|&v| dx.get(v).is_none_or(|p| !p.is_finite()))
+        {
+            return 0.0;
+        }
+        let margin = std::f64::consts::PI - self.dihedral_angle(x).abs();
+        let cone = ftx_core::det::sin(0.25 * margin);
+        let [a, b, c, d] = self.v;
+        let e = x[b] - x[a];
+        let de = dx[b] - dx[a];
+        let mut bound: f64 = 1.0;
+        for opposite in [c, d] {
+            let u = x[opposite] - x[a];
+            let du = dx[opposite] - dx[a];
+            let n = e.cross(u).norm();
+            let change = (de.cross(u) + e.cross(du)).norm() + de.cross(du).norm();
+            if !n.is_finite() || n <= 0.0 || !change.is_finite() {
+                return 0.0;
+            }
+            if change > 0.0 {
+                bound = bound.min(cone * n / change);
+            }
+        }
+        bound
+    }
+
     /// Exact value, gradient (12) and Hessian (12 × 12) of the signed dihedral angle `θ(x)` via
     /// deterministic `atan2` forward-mode autodiff (`Jet<12>`).
     #[must_use]
@@ -1014,6 +1079,9 @@ impl Hinge {
     /// Finite-angle Discrete Shells bending energy `½·B·w_d·(θ − θ₀)²` for bending stiffness `b` (N·m).
     #[must_use]
     pub fn dihedral_energy(&self, x: &[Vec3], b: f64) -> f64 {
+        if self.check_dihedral_domain(x).is_err() {
+            return f64::NAN;
+        }
         if b == 0.0 {
             return 0.0;
         }
@@ -1061,6 +1129,14 @@ impl Hinge {
     /// `½·B·w_d·(θ − θ₀)²`.
     #[must_use]
     pub fn dihedral_local(&self, x: &[Vec3], b: f64) -> Local<12, 144> {
+        if self.check_dihedral_domain(x).is_err() {
+            return Local {
+                energy: f64::NAN,
+                grad: [f64::NAN; 12],
+                hess: [f64::NAN; 144],
+                psd: false,
+            };
+        }
         if b == 0.0 {
             return Local {
                 energy: 0.0,
@@ -1579,6 +1655,70 @@ mod tests {
         let t_q_90 = torque_at(90.0, BendingModel::Quadratic);
         let t_q_170 = torque_at(170.0, BendingModel::Quadratic);
         assert!(t_q_170 < 0.2 * t_q_90, "quad 170°={t_q_170} 90°={t_q_90}");
+    }
+
+    #[test]
+    fn discrete_shells_segment_bound_excludes_hidden_hairpins_and_collapses() {
+        let rest = [
+            Vec2::ZERO,
+            Vec2::new(0.02, 0.0),
+            Vec2::new(0.01, 0.02),
+            Vec2::new(0.01, -0.02),
+        ];
+        let hinge = Hinge::new([0, 1, 2, 3], rest)
+            .unwrap()
+            .with_rest_angle(-170.0_f64.to_radians());
+        let fold = |degrees: f64| {
+            let (sin, cos) = ftx_core::det::sin_cos(degrees.to_radians());
+            [
+                Vec3::ZERO,
+                Vec3::new(0.02, 0.0, 0.0),
+                Vec3::new(0.01, 0.02, 0.0),
+                Vec3::new(0.01, -0.02 * cos, 0.02 * sin),
+            ]
+        };
+        let start = fold(170.0);
+        let end = fold(-170.0);
+        // Both endpoints are individually valid and the endpoint energy is lower, but the
+        // straight chord crosses the angle cut at its midpoint and is not an admissible trial.
+        assert!(hinge.dihedral_energy(&end, 1e-5) < hinge.dihedral_energy(&start, 1e-5));
+        let delta = std::array::from_fn::<_, 4, _>(|i| end[i] - start[i]);
+        let bound = hinge.dihedral_step_bound(&start, &delta);
+        assert!(bound > 0.0 && bound < 0.5, "{bound}");
+        for i in 0..=100 {
+            let alpha = bound * f64::from(i) / 100.0;
+            let trial = std::array::from_fn::<_, 4, _>(|v| start[v] + delta[v] * alpha);
+            hinge.check_dihedral_domain(&trial).unwrap();
+            assert!(hinge.dihedral_angle(&trial) > 0.0);
+        }
+        let hairpin = [start[0], start[1], start[2], Vec3::new(0.01, 0.02, 0.0)];
+        assert_eq!(
+            hinge.check_dihedral_domain(&hairpin).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert!(hinge.dihedral_energy(&hairpin, 1e-5).is_nan());
+        assert!(hinge.dihedral_local(&hairpin, 1e-5).energy.is_nan());
+
+        // Simultaneously reversing both face normals leaves theta=0 at the endpoints.
+        // An endpoint angle comparison misses the intervening collapse of BOTH triangles.
+        let flat = fold(0.0);
+        let mut collapsed_delta = [Vec3::ZERO; 4];
+        collapsed_delta[2].y = -0.04;
+        collapsed_delta[3].y = 0.04;
+        let flipped = std::array::from_fn::<_, 4, _>(|i| flat[i] + collapsed_delta[i]);
+        assert_eq!(hinge.dihedral_angle(&flat), hinge.dihedral_angle(&flipped));
+        let bound = hinge.dihedral_step_bound(&flat, &collapsed_delta);
+        assert!(bound > 0.0 && bound < 0.5);
+        let translated = [Vec3::new(0.03, -0.04, 0.05); 4];
+        assert_eq!(hinge.dihedral_step_bound(&start, &translated), 1.0);
+        for angle in [std::f64::consts::PI, f64::NAN] {
+            assert!(
+                hinge
+                    .with_rest_angle(angle)
+                    .check_dihedral_domain(&flat)
+                    .is_err()
+            );
+        }
     }
 
     #[test]
