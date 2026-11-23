@@ -1456,8 +1456,8 @@ fn replay(
                     let motion = &row["evaluation"]["result"]["motion"];
                     let thermal = &motion["result"][consumer];
                     json!({"key":row["key"],"evaluation_status":row["evaluation"]["status"],
-                    "motion_status":motion["status"],"thermal_status":thermal["status"],
-                    "thermal_refusal":thermal["refusal"]})
+                    "motion_status":motion["status"],"motion_refusal":motion["refusal"],
+                    "thermal_status":thermal["status"],"thermal_refusal":thermal["refusal"]})
                 })
                 .collect::<Vec<_>>())
         );
@@ -2955,9 +2955,14 @@ fn finite_vapor_scheduled_ambient_replays_in_native_portable_and_named_case_deci
 
 fn ambient_vapor_exchange_workflow(scheduled: bool) {
     let (pattern, mut study, mut single) = inputs();
-    let initial_vapor = 1e-12;
+    // For the three-interval scheduled case (humid -> dry outflow -> renewed humid inflow),
+    // scale the synthetic reservoir capacitance and exchange conductances so the dry second
+    // interval does not drain vapor pressure 11 orders of magnitude below welded cloth inertia
+    // precision (`m_dry * f64::EPSILON`). Initial pressure remains 1000 Pa.
+    let initial_vapor = if scheduled { 1e-10 } else { 1e-12 };
+    let capacitance = if scheduled { 1e-13 } else { 1e-15 };
     let ambient = json!({"schema":"ftx-textile-vapor-exchange/1",
-        "model":"linear_pressure_vapor_exchange/1","conductance_kg_pa_s":1e-11,
+        "model":"linear_pressure_vapor_exchange/1","conductance_kg_pa_s":if scheduled { 2e-10 } else { 1e-11 },
         "ambient_vapor_pressure_pa":1000.,"ambient_temperature_c":40.,
         "reservoir_pressure_domain_pa":[0.,10000.],
         "source":{"reference":"test:selected-body-ambient-vapor","accessed_on":"2026-11-01",
@@ -2965,11 +2970,11 @@ fn ambient_vapor_exchange_workflow(scheduled: bool) {
         "evidence":"estimate","allow_estimates":true,"method":"Explicit pressure-driven mass transfer",
         "qualification":"Artificial constant conductance over the complete pressure domain and motion history"});
     let mut ambient_schedule = vec![ambient.clone(); 3];
-    ambient_schedule[1]["conductance_kg_pa_s"] = json!(2e-11);
+    ambient_schedule[1]["conductance_kg_pa_s"] = json!(4e-10);
     ambient_schedule[1]["ambient_vapor_pressure_pa"] = json!(0.);
     ambient_schedule[1]["ambient_temperature_c"] = json!(10.);
     ambient_schedule[1]["source"]["reference"] = json!("test:selected-body-dry-ambient");
-    ambient_schedule[2]["conductance_kg_pa_s"] = json!(3e-11);
+    ambient_schedule[2]["conductance_kg_pa_s"] = json!(6e-10);
     ambient_schedule[2]["ambient_temperature_c"] = json!(30.);
     ambient_schedule[2]["source"]["reference"] = json!("test:selected-body-renewed-ambient");
     if scheduled {
@@ -3007,7 +3012,7 @@ fn ambient_vapor_exchange_workflow(scheduled: bool) {
         "evidence":"estimate","allow_estimates":true,"method":"Artificial bidirectional free-film transfer",
         "qualification":"Exact artificial Ret in both directions over the declared pressure, temperature and loading domains"});
     water["vapor_reservoir"] = json!({"schema":"ftx-textile-vapor-reservoir/1",
-        "model":"isothermal_constant_vapor_capacitance/1","vapor_capacitance_kg_pa":1e-15,
+        "model":"isothermal_constant_vapor_capacitance/1","vapor_capacitance_kg_pa":capacitance,
         "initial_vapor_mass_kg":initial_vapor,"temperature_c":20.,"pressure_domain_pa":[0.,10000.],
         "max_iterations":128,"mass_tolerance_kg":1e-18,"ambient_exchange":ambient,
         "source":{"reference":"test:ambient-vapor-storage","accessed_on":"2026-11-01",
