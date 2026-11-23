@@ -156,10 +156,14 @@ pub fn pdf_objects(data: &[u8]) -> BTreeMap<u32, (Vec<u8>, Option<Vec<u8>>)> {
             pos = off + 1;
             continue;
         }
-        let num: u32 = std::str::from_utf8(&data[ds..off])
+        let Some(num) = std::str::from_utf8(&data[ds..off])
             .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&n| n > 0)
+        else {
+            pos = off + 7;
+            continue;
+        };
         let start = off + 7;
         let sm = find(data, b"stream\n", start);
         let em = find(data, b"endobj", start).unwrap_or(data.len());
@@ -585,10 +589,10 @@ pub fn check_pdf(
                 .unwrap_or("")
                 .to_string(),
         );
-        let cnum: u32 = text_after(h, "/Contents ", ' ')
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let stream_opt = objs.get(&cnum).and_then(|o| o.1.as_deref());
+        let cnum = text_after(h, "/Contents ", ' ')
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&n| n > 0);
+        let stream_opt = cnum.and_then(|n| objs.get(&n)).and_then(|o| o.1.as_deref());
         let stream_ok = stream_opt.is_some();
         if !stream_ok {
             damaged_pages.push(page_idx + 1);
@@ -701,14 +705,17 @@ pub fn check_pdf(
                 sq_ok(&first),
                 squares_repr(&first),
             ));
+            let fonts_finite = fonts_all.iter().all(|v| v.is_finite());
             let min = fonts_all.iter().copied().fold(f64::INFINITY, f64::min);
             let cap = min / K * crate::geom::CAP;
             out.push(CheckItem::new(
                 "pdf.projector_text_cap_12mm",
                 file,
-                !fonts_all.is_empty() && cap >= 12.0 - 1e-3,
+                !fonts_all.is_empty() && fonts_finite && cap.is_finite() && cap >= 12.0 - 1e-3,
                 if fonts_all.is_empty() {
                     "no text".to_string()
+                } else if !fonts_finite {
+                    "non-finite font size".to_string()
                 } else {
                     format!("min cap height {cap:.2} mm")
                 },
@@ -1843,5 +1850,56 @@ mod tests {
             &json!({}),
         );
         assert!(utf8.iter().any(|c| c.check == "hpgl.bbox" && !c.ok));
+    }
+
+    #[test]
+    fn check_pdf_projector_rejects_non_finite_fonts_and_object_zero_fallback() {
+        let make_pdf = |stream: &[u8]| {
+            let mut out = Vec::new();
+            out.extend_from_slice(
+                b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /PrintScaling /None >>\nendobj\n\
+2 0 obj\n<< /Type /Pages /Count 1 >>\nendobj\n\
+3 0 obj\n<< /Type /Page /MediaBox [0 0 1000 1000] /Contents 4 0 R >>\nendobj\n",
+            );
+            out.extend_from_slice(
+                format!("4 0 obj\n<< /Length {} >>\nstream\n", stream.len()).as_bytes(),
+            );
+            out.extend_from_slice(stream);
+            out.extend_from_slice(b"\nendstream\nendobj\n");
+            out
+        };
+
+        // NaN font size mixed with a valid large font must not be swallowed by f64::min.
+        let nan_font = make_pdf(b"BT /F1 60 Tf (OK) Tj /F1 NaN Tf (BAD) Tj ET");
+        let checks = check_pdf(&nan_font, "proj.pdf", [352.78, 352.78], "projector", None);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.check == "pdf.projector_text_cap_12mm" && !c.ok),
+            "NaN font size must fail pdf.projector_text_cap_12mm: {checks:?}"
+        );
+
+        // Infinite font size (e.g. from overflowing cm transform) must also fail.
+        let inf_font = make_pdf(b"1e200 0 0 1e200 0 0 cm BT /F1 60 Tf (BIG) Tj ET");
+        let checks = check_pdf(&inf_font, "proj.pdf", [352.78, 352.78], "projector", None);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.check == "pdf.projector_text_cap_12mm" && !c.ok),
+            "overflowing cm font size must fail pdf.projector_text_cap_12mm: {checks:?}"
+        );
+
+        // Page without /Contents must not accidentally read an overflowing-id object mapped to 0.
+        let bogus_obj = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /PrintScaling /None >>\nendobj\n\
+2 0 obj\n<< /Type /Pages /Count 1 >>\nendobj\n\
+3 0 obj\n<< /Type /Page /MediaBox [0 0 1000 1000] >>\nendobj\n\
+999999999999 0 obj\n<< /Length 21 >>\nstream\nBT /F1 60 Tf (X) Tj ET\nendstream\nendobj\n";
+        let checks = check_pdf(bogus_obj, "proj.pdf", [352.78, 352.78], "projector", None);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.check == "pdf.page_streams_decode" && !c.ok),
+            "missing /Contents must not bind to invalid object 0: {checks:?}"
+        );
     }
 }

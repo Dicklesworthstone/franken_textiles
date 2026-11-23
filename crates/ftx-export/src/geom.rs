@@ -635,11 +635,30 @@ pub fn build_geom(
             let (p, t) = point_on(&l.pts, s);
             let nout = Vec2::new(t.y, -t.x);
             let base = p + nout * l.sa;
-            let depth = n
-                .get("depth")
-                .and_then(Value::as_f64)
-                .unwrap_or_else(|| notch_depth(l.sa));
-            let width = n.get("width").and_then(Value::as_f64).unwrap_or(3.0);
+            let depth = match n.get("depth") {
+                None | Some(Value::Null) => notch_depth(l.sa),
+                Some(v) => v
+                    .as_f64()
+                    .filter(|x| x.is_finite() && *x > 0.0)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "{}: notch depth must be a positive finite number",
+                            g.iid
+                        ))
+                    })?,
+            };
+            let width = match n.get("width") {
+                None | Some(Value::Null) => 3.0,
+                Some(v) => v
+                    .as_f64()
+                    .filter(|x| x.is_finite() && *x > 0.0)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "{}: notch width must be a positive finite number",
+                            g.iid
+                        ))
+                    })?,
+            };
             let kind = n.get("type").map_or_else(|| "V".to_string(), py_str);
             let inward = Vec2::new(-nout.x, -nout.y);
             g.notches.push(Notch {
@@ -1198,7 +1217,15 @@ impl<'a> Region<'a> {
 /// (5) and decor (half its width + 4); the whole sew polygon when nothing of that is left.
 #[must_use]
 pub fn main_label_fits(g: &Geom, p: Vec2, lines: &[(String, f64, bool)], size: f64) -> bool {
-    if lines.is_empty() || !p.is_finite() || !size.is_finite() || size < 0.0 {
+    if g.sew.len() < 3
+        || lines.is_empty()
+        || !p.is_finite()
+        || !size.is_finite()
+        || size < 0.0
+        || lines
+            .iter()
+            .any(|(_, rel, _)| !rel.is_finite() || *rel < 0.0)
+    {
         return false;
     }
     let region = Region::new(g, &g.sew);
@@ -1429,5 +1456,58 @@ mod tests {
         let mut bad_drill = g.clone();
         bad_drill.drills.push((Vec2::new(10.0, f64::INFINITY), 3.0));
         assert!(bad_drill.has_non_finite());
+
+        // Non-positive or non-numeric notch depth/width must be refused, matching drills/decor.
+        for bad_notch in [
+            json!({"id": "n1", "edge": "e0", "s": 0.5, "depth": 0.0}),
+            json!({"id": "n1", "edge": "e0", "s": 0.5, "depth": -3.0}),
+            json!({"id": "n1", "edge": "e0", "s": 0.5, "depth": "deep"}),
+            json!({"id": "n1", "edge": "e0", "s": 0.5, "width": 0.0}),
+            json!({"id": "n1", "edge": "e0", "s": 0.5, "width": -2.0}),
+            json!({"id": "n1", "edge": "e0", "s": 0.5, "width": "wide"}),
+        ] {
+            let pat = Pattern::new(json!({
+                "schema": "fabric-pattern/1",
+                "style": "NOTCH",
+                "units": "mm",
+                "pieces": [{
+                    "id": "p1",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "notches": [bad_notch],
+                    "cut": {"qty": 1}
+                }]
+            }));
+            let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+            let err = ctx.geom(Source::Piece(0), 6.0).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument);
+        }
+
+        // Degenerate sew ring and negative/NaN line relative sizes must fail fast in main_label_fits.
+        let mut empty_sew = g.clone();
+        empty_sew.sew.clear();
+        assert!(!main_label_fits(
+            &empty_sew,
+            Vec2::new(50.0, 40.0),
+            &[("A".into(), 1.0, true)],
+            6.0
+        ));
+        assert!(!main_label_fits(
+            &g,
+            Vec2::new(50.0, 40.0),
+            &[("A".into(), -0.5, true)],
+            6.0
+        ));
+        assert!(!main_label_fits(
+            &g,
+            Vec2::new(50.0, 40.0),
+            &[("A".into(), f64::NAN, true)],
+            6.0
+        ));
     }
 }
