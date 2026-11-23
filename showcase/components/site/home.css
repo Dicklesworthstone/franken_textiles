@@ -34,6 +34,18 @@
 .hm-pattern:hover{color:var(--rust);text-decoration-color:currentColor}
 .hm-after{margin:clamp(30px,3.4vw,48px) 0 0}
 
+/* 2b. The posing room: two pictures of the same jacket, sewn in two poses */
+.hm-pose{background:var(--paper);color:var(--ink);padding-block:clamp(56px,7vw,108px)}
+.hm-pose>.wrap{display:grid;grid-template-columns:minmax(0,.82fr) minmax(0,1.18fr);gap:clamp(30px,5vw,84px);align-items:center}
+.hm-pose .hm-kicker{color:var(--rust)}
+.hm-pose h2{margin:0;font:400 clamp(34px,3.7vw,58px)/1.02 var(--serif);letter-spacing:-.032em;text-wrap:balance}
+.hm-pose-copy>p:not(.hm-kicker){margin:20px 0 26px;max-width:50ch;font-size:clamp(15.5px,1.1vw,17px);line-height:1.62;color:#3f4a4e;text-wrap:pretty}
+.hm-pose-figure{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(14px,2vw,28px)}
+.hm-pose-figure figure{margin:0}
+.hm-pose-figure img{display:block;width:100%;height:auto;border-radius:6px;background:#ece7df;border:1px solid #d9d2c4}
+.hm-pose-figure figcaption{margin-top:13px;font-size:14.5px;line-height:1.5;color:#4c585c}
+.hm-pose-figure figcaption strong{display:block;margin-bottom:3px;font:500 11px/1.4 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--rust)}
+
 /* 3. The assistant loop: the one dark band */
 .hm-loop{background-color:var(--dark);color:#f3efe3;padding-block:clamp(60px,7.4vw,116px)}
 .hm-loop>.wrap{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(30px,5vw,84px);align-items:center}
@@ -71,14 +83,14 @@
 .hm-more strong{font:400 21px/1.2 var(--serif);letter-spacing:-.01em}
 .hm-more span{font-size:14.5px;line-height:1.5;color:#4c585c}
 
-.hm-steps :focus-visible,.hm-garments :focus-visible,.hm-tools :focus-visible,.hm-limits :focus-visible{outline:2px solid var(--rust);outline-offset:3px;border-radius:2px}
+.hm-steps :focus-visible,.hm-garments :focus-visible,.hm-pose :focus-visible,.hm-tools :focus-visible,.hm-limits :focus-visible{outline:2px solid var(--rust);outline-offset:3px;border-radius:2px}
 .hm-loop :focus-visible{outline:2px solid var(--lime);outline-offset:3px;border-radius:2px}
 
 @media(max-width:1000px){
   .hm-head{grid-template-columns:1fr;align-items:start}
   .hm-garment-list{grid-template-columns:repeat(2,minmax(0,1fr))}
   .hm-tool-list{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .hm-loop>.wrap,.hm-limits>.wrap{grid-template-columns:1fr}
+  .hm-loop>.wrap,.hm-pose>.wrap,.hm-limits>.wrap{grid-template-columns:1fr}
 }
 @media(max-width:760px){
   .hm-step-list{grid-template-columns:1fr;gap:38px}

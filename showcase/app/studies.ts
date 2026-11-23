@@ -15,11 +15,12 @@ export const studies = [
     id: "construction", garment: "bolero", group: "Construction", label: "Construction study",
     title: "Anatomy of a seam", short: "Seam anatomy", figure: "03",
     description: "Trace the bolero’s stitch lines, inspect its triangulation, and reveal the final edge strain.",
-    detail: "Panel map · Edge strain", mode: "construction", card: "construction",
+    detail: "Panel map · Edge strain", mode: "construction", card: "construction-panels",
   },
 ] as const;
 // `card` is the film on a study's card in the drape gallery: the same recorded drape as the study, in the
-// studio look of the construction films, for the two garments; the panel-map film for the seam study.
+// studio look of the construction films. The seam study's film shows each of the bolero's pieces in its own
+// colour (scripts/render-native-film.py, garment "panels").
 
 export type Study = (typeof studies)[number];
 export type View = "cloth" | "construction" | "strain";

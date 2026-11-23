@@ -103,6 +103,32 @@ export default function Home() {
       <p className="hm-after"><a className="hm-link" href="/sections/wardrobe/">See the whole wardrobe <Arrow/></a></p>
     </div></section>
 
+    <section className="hm-pose" id="pose" aria-labelledby="pose-title"><div className="wrap">
+      <div className="hm-pose-copy">
+        <p className="hm-kicker">Live in your browser</p>
+        <h2 id="pose-title">Move an arm. The jacket is sewn on again.</h2>
+        <p>In the posing room the form&rsquo;s arms move like a doll&rsquo;s. Drag one and let go: the project&rsquo;s
+          cloth solver, compiled to WebAssembly and running in your tab, lays the bolero&rsquo;s five flat pieces round
+          the form in the new pose, sews the seams and lets the jacket hang. Nothing is recorded in advance, and the
+          solver&rsquo;s own warnings are shown with every drape.</p>
+        <a className="hm-link" href="/studies/pose/">Open the posing room <Arrow/></a>
+      </div>
+      {/* Both pictures are the posing room's own canvas in headless Chromium: after its first drape, then after
+          the "One arm up" preset was sewn. Neither is retouched. */}
+      <div className="hm-pose-figure" role="group" aria-label="The same jacket sewn in two poses">
+        <figure>
+          <img src="/media/home/pose-arms-down.webp" width={816} height={768} loading="lazy" decoding="async"
+            alt="A green bolero with cream edging on a tailor's form, both arms hanging at 35 degrees."/>
+          <figcaption><strong>First drape</strong>Both arms at 35&deg;, as the page opens.</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/home/pose-one-arm-up.webp" width={816} height={768} loading="lazy" decoding="async"
+            alt="The same bolero sewn again with the form's left arm raised high. The sleeve follows the arm and that side of the jacket lifts."/>
+          <figcaption><strong>Sewn again</strong>Left arm raised to 135&deg;. The sleeve follows the arm and that side of the jacket lifts.</figcaption>
+        </figure>
+      </div>
+    </div></section>
+
     <section className="hm-loop" id="agent" aria-labelledby="agent-title"><div className="wrap">
       <div className="hm-loop-copy">
         <p className="hm-kicker">For a sewist working with an AI assistant</p>

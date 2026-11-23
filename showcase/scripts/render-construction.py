@@ -36,6 +36,9 @@ FABRIC_COLORS = {
     "bolero-full-hand": (.55, .137, .068),
     "ensemble": (.03, .14, .105), "fez": (.26, .017, .021),
     "column": (.28, .16, .09), "flare": (.32, .15, .07),
+    # The bolero's drape with each piece in its own colour (render-native-film.py PANEL_COLORS); this
+    # entry only names the garment.
+    "panels": (.27, .042, .028),
 }
 
 
@@ -135,7 +138,7 @@ def load(name, native):
     pointcache = (native/"fold.pc2").read_bytes()
     if name in ("column","flare"):
         expected = document(PUBLIC/"atelier/study.json")["runs"][name+"-680"]["pc2Sha256"]
-    elif name == "bolero":
+    elif name in ("bolero", "panels"):
         expected = document(PUBLIC/"exhibits/poses/runs.json")["cases"]["520-35"]["sourcePc2Sha256"]
     elif name == "bolero-full-hand":
         # The admitted 355 mm cut from the visual fitting walkthrough.

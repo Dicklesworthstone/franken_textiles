@@ -39,7 +39,9 @@ const films = [
   { id:"wardrobe-reel", title:"Inside the wardrobe", detail:"Exhibition reel" },
   ...wardrobe.map(s=>({ id:"wardrobe-"+s.id, title:s.title, detail:s.detail })),
   ...(Object.keys(experiments) as Rig[]).map(rig=>({ id:"rig-"+rig, title:experiments[rig].title, detail:"Material study" })),
-  ...studies.map(s=>({ id:s.id, title:s.title, detail:"Drape study" })),
+  // A garment study's own film is the same drape as its construction film above, in the older look, so
+  // only the seam study is listed, with its card's film.
+  ...studies.filter(s=>s.group==="Construction").map(s=>({ id:s.card, title:s.title, detail:"Construction study" })),
 ];
 
 const filmGroups = ["All", "Construction", "Studies", "Wardrobe", "Materials"] as const;

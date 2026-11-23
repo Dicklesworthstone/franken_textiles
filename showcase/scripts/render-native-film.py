@@ -14,6 +14,10 @@ import numpy as np
 
 SOURCE = runpy.run_path(str(Path(__file__).with_name("render-construction.py")))
 WIDTH, HEIGHT, FPS = 3840, 2160, 60
+# The seam study's film ("panels"): the bolero's drape with each cut piece in its own colour, so every
+# seam shows as a change of cloth. Linear values, like FABRIC_COLORS; the keys are the bolero's pieces.
+PANEL_COLORS = {"back": (.50, .31, .06), "front.R": (.47, .12, .06), "front.L": (.10, .27, .15),
+                "sleeve.R": (.42, .33, .20), "sleeve.L": (.08, .15, .33)}
 
 VERTEX = """
 #version 330
@@ -617,9 +621,12 @@ def light_for(points, key):
 
 def render(args):
     recorded, ids, faces, panels, body, body_faces, layout, phases = SOURCE["load"](args.garment, args.native)
-    bolero = args.garment == "bolero"
+    bolero = args.garment in ("bolero", "panels")
     garment_only = args.garment == "bolero-full-hand"
     cloth_colours = np.tile(SOURCE["FABRIC_COLORS"][args.garment], (len(recorded[0]), 1))
+    if args.garment == "panels":
+        for name, (start, end) in panels.items():
+            cloth_colours[start:end] = PANEL_COLORS[name]
     if args.garment == "ensemble":
         for name, (start, end) in panels.items():
             if name.startswith("trousers::"):
@@ -864,6 +871,6 @@ if __name__ == "__main__":
         parser.error("choose a new .png path for a still or .mp4 path for a film")
     if args.out.exists():
         parser.error(f"{args.out} already exists")
-    if args.native is None and args.garment in ("bolero","bolero-full-hand","column","flare","ensemble"):
+    if args.native is None and args.garment in ("bolero","panels","bolero-full-hand","column","flare","ensemble"):
         parser.error("this garment needs its original native drape directory")
     render(args)

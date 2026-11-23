@@ -39,7 +39,11 @@ const stills = [
   ["wardrobe", "public/media/wardrobe-hussar.jpg"],
   ["studios", "public/media/lab-draft.webp"],
   ["materials", "public/media/rig-cylinder.jpg"],
-  ["drape-gallery", "public/media/bolero.jpg"],
+  // The middle of the poster, clear of its chapter label at the lower left.
+  ["drape-gallery", "public/media/construction-bolero.jpg", { left: 480, top: 60, width: 2880, height: 1920 }],
+  // The posing room has to sew before its stage shows a jacket, so its thumbnail is the home page's picture
+  // of the raised arm (captured by hand from the page's canvas; see components/site/Home.tsx).
+  ["pose", "public/media/home/pose-one-arm-up.webp", { left: 0, top: 0, width: 816, height: 544 }],
   ["films", "public/media/studio-tour.jpg"],
 ];
 // Two links under the drape room show a 4K film still at about 100 px wide. These are the same stills at

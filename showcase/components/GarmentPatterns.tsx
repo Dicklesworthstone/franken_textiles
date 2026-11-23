@@ -15,7 +15,7 @@ const exhibits: Record<string, (keyof typeof patterns)[]> = {
   "skirt-atelier":["column","flare"],
   "drape-room": ["bolero","trousers"],
   "trouser-posture":["trousers"], "trouser-elastic":["trousers"], "trouser-section":["trousers"],
-  bolero: ["bolero"], construction: ["bolero"], trousers: ["trousers"], fez: ["fez"],
+  bolero: ["bolero"], construction: ["bolero"], panels: ["bolero"], trousers: ["trousers"], fez: ["fez"],
   sundress: ["dress"], "sundress-cuts": ["dress","eased"], hussar: ["blue", "yellow"],
   "wardrobe-sundress": ["dress"], "wardrobe-hussar": ["blue", "yellow"],
   "studio-tour": ["bolero"], "wardrobe-reel": ["dress", "blue", "yellow", "flare", "bolero"],
