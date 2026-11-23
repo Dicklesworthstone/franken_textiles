@@ -859,15 +859,28 @@ struct Delivery {
 struct Supply {
     ends: Vec<f64>,
     active_seconds: Vec<f64>,
+    interval_mass_rates: Vec<f64>,
     deliveries: BTreeMap<String, Delivery>,
     reservoir: Option<SupplyReservoir>,
     depletion: Option<(usize, f64)>,
+}
+
+#[derive(Clone, Copy)]
+struct ExpectedSupply {
+    requested: f64,
+    unmet: f64,
+    supplied: f64,
+    unmet_scale: f64,
+    boundary_depletion_scale: f64,
 }
 
 struct SupplyReservoir {
     initial_mass: f64,
     temperature: f64,
     specific_enthalpy: f64,
+    has_demand_ledger: Option<bool>,
+    previous_requested: f64,
+    previous_unmet: f64,
 }
 
 impl SupplyReservoir {
@@ -892,11 +905,60 @@ impl SupplyReservoir {
             initial_mass,
             temperature,
             specific_enthalpy,
+            has_demand_ledger: None,
+            previous_requested: 0.,
+            previous_unmet: 0.,
         })
     }
 
-    fn admit(&self, water: &Value, time: f64, steps: u64) -> Result<(), Refusal> {
+    fn admit(
+        &mut self,
+        water: &Value,
+        time: f64,
+        steps: u64,
+        expected: ExpectedSupply,
+    ) -> Result<(), Refusal> {
         let receipt = &water["supply_reservoir"];
+        let object = receipt.as_object().ok_or_else(fail)?;
+        let demand_keys = [
+            "requested_liquid_mass_kg",
+            "unmet_liquid_mass_kg",
+            "demand_balance_error_kg",
+        ];
+        if object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "schema"
+                    | "initial_liquid_mass_kg"
+                    | "remaining_liquid_mass_kg"
+                    | "supplied_liquid_mass_kg"
+                    | "requested_liquid_mass_kg"
+                    | "unmet_liquid_mass_kg"
+                    | "temperature_c"
+                    | "elapsed_seconds"
+                    | "exhaustion_events"
+                    | "liquid_enthalpy_change_j"
+                    | "exported_liquid_enthalpy_j"
+                    | "mass_balance_error_kg"
+                    | "demand_balance_error_kg"
+                    | "enthalpy_balance_error_j"
+            )
+        }) {
+            return Err(fail());
+        }
+        let demand_present = demand_keys
+            .iter()
+            .filter(|key| object.contains_key(**key))
+            .count();
+        if demand_present != 0 && demand_present != demand_keys.len() {
+            return Err(fail());
+        }
+        let has_demand = demand_present == demand_keys.len();
+        match self.has_demand_ledger {
+            None => self.has_demand_ledger = Some(has_demand),
+            Some(previous) if previous != has_demand => return Err(fail()),
+            Some(_) => {}
+        }
         let remaining = nonnegative(receipt, "remaining_liquid_mass_kg")?;
         let supplied = nonnegative(receipt, "supplied_liquid_mass_kg")?;
         let exported = number(receipt, "exported_liquid_enthalpy_j")?;
@@ -910,6 +972,7 @@ impl SupplyReservoir {
             || remaining > self.initial_mass
             || supplied > self.initial_mass
                 && !accumulated_near(supplied, self.initial_mass, self.initial_mass, steps)
+            || !accumulated_near(supplied, expected.supplied, expected.supplied, steps)
             || receipt["exhaustion_events"].as_u64()
                 != Some(u64::from(self.initial_mass > 0. && remaining == 0.))
             || !accumulated_near(
@@ -955,6 +1018,39 @@ impl SupplyReservoir {
             || !accumulated_near(stored + exported, 0., energy_scale, steps)
         {
             return Err(fail());
+        }
+        if has_demand {
+            let requested = nonnegative(receipt, "requested_liquid_mass_kg")?;
+            let unmet = nonnegative(receipt, "unmet_liquid_mass_kg")?;
+            let demand_error = number(receipt, "demand_balance_error_kg")?;
+            let expected_demand_error = (supplied - requested) + unmet;
+            let demand_scale = supplied + requested + unmet;
+            let unmet_ok = if remaining > 0. {
+                unmet == 0. && expected.unmet == 0.
+            } else if expected.unmet > 0. {
+                unmet > 0. && accumulated_near(unmet, expected.unmet, expected.unmet_scale, steps)
+            } else if self.initial_mass > 0.
+                && expected.boundary_depletion_scale > 0.
+                && steps > 1
+            {
+                accumulated_near(unmet, 0., expected.boundary_depletion_scale, steps)
+            } else {
+                unmet == 0.
+            };
+            if requested < self.previous_requested
+                || unmet < self.previous_unmet
+                || !expected_demand_error.is_finite()
+                || !demand_scale.is_finite()
+                || !near(demand_error, expected_demand_error, demand_scale)
+                || expected_demand_error.abs() > 1024. * f64::EPSILON * demand_scale
+                || !accumulated_near(supplied + unmet, requested, demand_scale, steps)
+                || !accumulated_near(requested, expected.requested, expected.requested, steps)
+                || !unmet_ok
+            {
+                return Err(fail());
+            }
+            self.previous_requested = requested;
+            self.previous_unmet = unmet;
         }
         Ok(())
     }
@@ -1038,6 +1134,7 @@ impl Supply {
         Ok(Self {
             ends,
             active_seconds,
+            interval_mass_rates: Vec::new(),
             deliveries,
             reservoir,
             depletion: None,
@@ -1068,6 +1165,7 @@ impl Supply {
         };
         let mut remaining = reservoir.initial_mass;
         let rates = self.rates(areas)?;
+        self.interval_mass_rates = rates.iter().map(|rate| rate[0]).collect();
         for (interval, (seconds, rate)) in self.active_seconds.iter_mut().zip(rates).enumerate() {
             let demand = rate[0] * *seconds;
             let depletion_seconds = remaining / rate[0];
@@ -1111,6 +1209,84 @@ impl Supply {
             }
         }
         Ok(())
+    }
+
+    // Independently integrate authored delivery demand, active delivery and post-exhaustion
+    // shortfall up to `time`, keeping strictly post-exhaustion intervals at their own scale so
+    // tiny shortfalls cannot hide behind earlier supplied mass.
+    fn expected_demand(&self, time: f64) -> Result<ExpectedSupply, Refusal> {
+        if !time.is_finite()
+            || time < 0.
+            || time > *self.ends.last().ok_or_else(fail)?
+            || self.interval_mass_rates.len() != self.ends.len()
+        {
+            return Err(fail());
+        }
+        let mut start = 0.;
+        let mut requested = 0.;
+        let mut supplied = 0.;
+        let mut unmet = 0.;
+        let mut unmet_scale = 0.;
+        let mut boundary_depletion_scale = 0.;
+        for (interval, ((&end, &rate), &active)) in self
+            .ends
+            .iter()
+            .zip(&self.interval_mass_rates)
+            .zip(&self.active_seconds)
+            .enumerate()
+        {
+            let elapsed = (end.min(time) - start).max(0.);
+            if elapsed > 0. {
+                let req = rate * elapsed;
+                let next_requested = requested + req;
+                if !next_requested.is_finite() || (rate > 0. && req <= 0.) {
+                    return Err(fail());
+                }
+                requested = next_requested;
+
+                let delivered_seconds = elapsed.min(active);
+                if delivered_seconds > 0. {
+                    let del = rate * delivered_seconds;
+                    let next_supplied = supplied + del;
+                    if !next_supplied.is_finite() || (rate > 0. && del <= 0.) {
+                        return Err(fail());
+                    }
+                    supplied = next_supplied;
+                }
+
+                let unmet_seconds = (elapsed - active).max(0.);
+                if unmet_seconds > 0. {
+                    let shortfall = rate * unmet_seconds;
+                    let next_unmet = unmet + shortfall;
+                    if !next_unmet.is_finite() || (rate > 0. && shortfall <= 0.) {
+                        return Err(fail());
+                    }
+                    unmet = next_unmet;
+                    // Split-interval exhaustion subtracts `active` from `elapsed`, so its scale
+                    // is the interval demand `req`; purely post-exhaustion intervals (`active == 0`)
+                    // scale only by `shortfall`, keeping tiny shortfalls sharp.
+                    unmet_scale += if active > 0. { req } else { shortfall };
+                } else if self
+                    .depletion
+                    .is_some_and(|(dep_interval, _)| dep_interval == interval)
+                    && active > 0.
+                    && (elapsed - active).abs() <= 64. * f64::EPSILON * elapsed.max(active)
+                {
+                    boundary_depletion_scale = boundary_depletion_scale.max(req);
+                }
+            }
+            start = end;
+        }
+        if !unmet_scale.is_finite() || !boundary_depletion_scale.is_finite() {
+            return Err(fail());
+        }
+        Ok(ExpectedSupply {
+            requested,
+            unmet,
+            supplied,
+            unmet_scale,
+            boundary_depletion_scale,
+        })
     }
 
     // The producer reconciles one exhausted stock on its largest delivery stream, rather than
@@ -2614,13 +2790,20 @@ pub(super) fn admit(
         } else if w.get("vapor_reservoir").is_some() {
             return Err(fail());
         }
-        if let Some(reservoir) = supply.as_ref().and_then(|s| s.reservoir.as_ref()) {
+        if let Some(supply) = &mut supply
+            && supply.reservoir.is_some()
+        {
             let time = if std::ptr::eq(row, heat) {
                 number(heat, "duration_s")?
             } else {
                 number(row, "time_s")?
             };
-            reservoir.admit(w, time, steps)?;
+            let expected = supply.expected_demand(time)?;
+            supply
+                .reservoir
+                .as_mut()
+                .ok_or_else(fail)?
+                .admit(w, time, steps, expected)?;
         } else if w.get("supply_reservoir").is_some() {
             return Err(fail());
         }
