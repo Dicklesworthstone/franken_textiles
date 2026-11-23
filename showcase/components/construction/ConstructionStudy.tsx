@@ -78,7 +78,7 @@ export function ConstructionMotion({garment, hero=false}:{garment:Garment;hero?:
         onLoadedMetadata={()=>{if(wantTime.current!==null){video.current!.currentTime=wantTime.current;wantTime.current=null;}}}
         onPlaying={()=>{setStill(null);setPlaying(true);}} onPause={()=>setPlaying(false)}
         onError={()=>{setPlaying(false);setStill(chapter);}}
-        onTimeUpdate={()=>{if(!video.current?.paused){const f=video.current!.currentTime*16;setChapter(f<26?0:f<77?1:2);}}}/>
+        onTimeUpdate={()=>{if(!video.current?.paused){const f=video.current!.currentTime*16;setChapter(f<26?0:f<61?1:2);}}}/>
       {still!==null&&<img className="construction-still" src={imageFile(still)}
         fetchPriority={hero?"high":"auto"} alt={data.name+" · "+chapters[still].name}/>}
       <button type="button" className="construction-transport" onClick={play} aria-label={(playing?"Pause":"Play")+" construction film"}>
