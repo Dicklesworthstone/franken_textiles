@@ -2,7 +2,7 @@
 //! Delivery retains its original rate until the exact depletion event, then stops. Proposals
 //! are immutable so dryout, vapor-pressure and thermal trials cannot consume source stock.
 
-use super::{Evidence, Refusal, Source, invalid, positive_sum};
+use super::{Evidence, Refusal, Source, add_positive, invalid, positive_sum};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
@@ -65,6 +65,8 @@ impl Request {
 #[derive(Clone)]
 pub(super) struct State {
     mass_kg: f64,
+    requested_mass_kg: f64,
+    unmet_mass_kg: f64,
     elapsed_seconds: f64,
     exhaustion_events: usize,
 }
@@ -72,6 +74,7 @@ pub(super) struct State {
 pub(super) struct Step {
     before: State,
     rates: Vec<f64>,
+    requested_rate_kg_s: f64,
     maximum_seconds: f64,
     depletion_seconds: Option<f64>,
 }
@@ -80,16 +83,25 @@ impl State {
     pub(super) fn new(request: &Request) -> Self {
         Self {
             mass_kg: request.initial_liquid_mass_kg,
+            requested_mass_kg: 0.,
+            unmet_mass_kg: 0.,
             elapsed_seconds: 0.,
             exhaustion_events: 0,
         }
     }
 
     pub(super) fn plan(&self, mut rates: Vec<f64>, maximum_seconds: f64) -> Result<Step, Refusal> {
+        // The authored demand continues after stock exhaustion. Retain it before switching
+        // actual delivery off; a dry donor must not make an unsatisfied operating case disappear.
+        let requested_rate_kg_s = positive_sum(&rates)?;
         if self.mass_kg == 0. {
             rates.fill(0.);
         }
-        let total_rate = positive_sum(&rates)?;
+        let total_rate = if self.mass_kg == 0. {
+            0.
+        } else {
+            requested_rate_kg_s
+        };
         let depletion_seconds = if self.mass_kg > 0. && total_rate > 0. {
             let seconds = self.mass_kg / total_rate;
             if seconds <= 0. {
@@ -121,6 +133,7 @@ impl State {
         Ok(Step {
             before: self.clone(),
             rates,
+            requested_rate_kg_s,
             maximum_seconds,
             depletion_seconds,
         })
@@ -136,6 +149,8 @@ impl State {
     ) -> Result<Value, Refusal> {
         let mass_error = (self.mass_kg - request.initial_liquid_mass_kg) + supplied_mass_kg;
         let mass_scale = self.mass_kg + request.initial_liquid_mass_kg + supplied_mass_kg;
+        let demand_error = (supplied_mass_kg - self.requested_mass_kg) + self.unmet_mass_kg;
+        let demand_scale = supplied_mass_kg + self.requested_mass_kg + self.unmet_mass_kg;
         let specific_enthalpy =
             liquid_specific_heat * (request.temperature_c - enthalpy_reference_c);
         let enthalpy_change = specific_enthalpy * (self.mass_kg - request.initial_liquid_mass_kg);
@@ -145,6 +160,8 @@ impl State {
         if [
             mass_error,
             mass_scale,
+            demand_error,
+            demand_scale,
             specific_enthalpy,
             enthalpy_change,
             enthalpy_error,
@@ -154,11 +171,12 @@ impl State {
         .iter()
         .any(|value| !value.is_finite())
             || mass_error.abs() > 1024. * f64::EPSILON * mass_scale
+            || demand_error.abs() > 1024. * f64::EPSILON * demand_scale
             || enthalpy_error.abs() > 1e-8 * energy_scale
             || (expected_export - exported_enthalpy_j).abs() > 1e-8 * energy_scale
         {
             return Err(invalid(
-                "finite liquid-source mass or sensible-enthalpy ledger failed",
+                "finite liquid-source mass, delivery demand or sensible-enthalpy ledger failed",
             ));
         }
         Ok(json!({
@@ -166,12 +184,15 @@ impl State {
             "initial_liquid_mass_kg":request.initial_liquid_mass_kg,
             "remaining_liquid_mass_kg":self.mass_kg,
             "supplied_liquid_mass_kg":supplied_mass_kg,
+            "requested_liquid_mass_kg":self.requested_mass_kg,
+            "unmet_liquid_mass_kg":self.unmet_mass_kg,
             "temperature_c":request.temperature_c,
             "elapsed_seconds":self.elapsed_seconds,
             "exhaustion_events":self.exhaustion_events,
             "liquid_enthalpy_change_j":enthalpy_change,
             "exported_liquid_enthalpy_j":exported_enthalpy_j,
             "mass_balance_error_kg":mass_error,
+            "demand_balance_error_kg":demand_error,
             "enthalpy_balance_error_j":enthalpy_error
         }))
     }
@@ -257,10 +278,24 @@ impl Step {
                 "finite liquid-source withdrawal overdraws or loses mass or time",
             ));
         }
+        let requested = self.requested_rate_kg_s * seconds;
+        if self.requested_rate_kg_s > 0. && requested <= 0. {
+            return Err(invalid("finite liquid delivery loses positive demand"));
+        }
+        let mut requested_mass_kg = self.before.requested_mass_kg;
+        add_positive(&mut requested_mass_kg, requested)?;
+        let mut unmet_mass_kg = self.before.unmet_mass_kg;
+        if self.before.mass_kg == 0. {
+            // Exact exhaustion already splits the physical interval. Only the subsequent
+            // empty-source portion is unmet; no subtraction of large near-equal totals is used.
+            add_positive(&mut unmet_mass_kg, requested)?;
+        }
         Ok((
             amounts,
             State {
                 mass_kg: remaining,
+                requested_mass_kg,
+                unmet_mass_kg,
                 elapsed_seconds: elapsed,
                 exhaustion_events: self.before.exhaustion_events
                     + usize::from(self.before.mass_kg > 0. && remaining == 0.),
@@ -278,6 +313,8 @@ mod tests {
         for mass in [0.1 * 0.1, (0.1_f64 * 0.1).next_up()] {
             let state = State {
                 mass_kg: mass,
+                requested_mass_kg: 0.,
+                unmet_mass_kg: 0.,
                 elapsed_seconds: 0.,
                 exhaustion_events: 0,
             };
@@ -285,15 +322,21 @@ mod tests {
             let (amounts, after) = proposal.amounts(proposal.maximum_seconds()).unwrap();
             assert_eq!(amounts, vec![mass]);
             assert_eq!(after.mass_kg, 0.);
+            assert_eq!(after.requested_mass_kg, 0.1 * 0.1);
+            assert_eq!(after.unmet_mass_kg, 0.);
             assert_eq!(after.exhaustion_events, 1);
             let empty = after.plan(vec![0.1], 0.1).unwrap();
             assert_eq!(empty.maximum_seconds(), 0.1);
             let (amounts, after) = empty.amounts(0.1).unwrap();
             assert_eq!(amounts, vec![0.]);
             assert_eq!(after.exhaustion_events, 1);
+            assert_eq!(after.requested_mass_kg, 2. * (0.1 * 0.1));
+            assert_eq!(after.unmet_mass_kg, 0.1 * 0.1);
         }
         let later = State {
             mass_kg: 0.01000001,
+            requested_mass_kg: 0.,
+            unmet_mass_kg: 0.,
             elapsed_seconds: 0.,
             exhaustion_events: 0,
         };
@@ -301,5 +344,81 @@ mod tests {
         assert_eq!(amounts, vec![0.1 * 0.1]);
         assert!(after.mass_kg > 0.);
         assert_eq!(after.exhaustion_events, 0);
+        assert_eq!(after.requested_mass_kg, 0.1 * 0.1);
+        assert_eq!(after.unmet_mass_kg, 0.);
+    }
+
+    #[test]
+    fn finite_supply_demand_uses_only_accepted_time_and_retains_scheduled_shortfall() {
+        let original = State {
+            mass_kg: 0.125,
+            requested_mass_kg: 0.,
+            unmet_mass_kg: 0.,
+            elapsed_seconds: 0.,
+            exhaustion_events: 0,
+        };
+        let proposal = original.plan(vec![0.125, 0.375], 1.).unwrap();
+        assert_eq!(proposal.maximum_seconds(), 0.25);
+        // A discarded full proposal and a shorter accepted thermal interval use the same
+        // unchanged donor. Neither pressure probes nor dryout trials spend future demand.
+        let (_, discarded) = proposal.amounts(0.25).unwrap();
+        assert_eq!(discarded.requested_mass_kg, 0.125);
+        let (delivered, half) = proposal.amounts(0.125).unwrap();
+        assert_eq!(delivered, vec![0.015625, 0.046875]);
+        assert_eq!(half.requested_mass_kg, 0.0625);
+        assert_eq!(half.unmet_mass_kg, 0.);
+        assert_eq!(original.requested_mass_kg, 0.);
+        let (_, depleted) = half
+            .plan(vec![0.125, 0.375], 1.)
+            .unwrap()
+            .amounts(0.125)
+            .unwrap();
+        assert_eq!(depleted.mass_kg, 0.);
+        assert_eq!(depleted.requested_mass_kg, 0.125);
+        assert_eq!(depleted.unmet_mass_kg, 0.);
+        let (_, idle) = depleted
+            .plan(vec![0., 0.], 1.)
+            .unwrap()
+            .amounts(1.)
+            .unwrap();
+        assert_eq!(idle.requested_mass_kg, 0.125);
+        assert_eq!(idle.unmet_mass_kg, 0.);
+        let (delivered, final_state) = idle.plan(vec![0., 0.25], 2.).unwrap().amounts(2.).unwrap();
+        assert_eq!(delivered, vec![0., 0.]);
+        assert_eq!(final_state.requested_mass_kg, 0.625);
+        assert_eq!(final_state.unmet_mass_kg, 0.5);
+        assert_eq!(final_state.elapsed_seconds, 3.25);
+        assert_eq!(final_state.exhaustion_events, 1);
+    }
+
+    #[test]
+    fn empty_donor_preserves_tiny_shortfalls_and_refuses_unrepresentable_demand() {
+        let original = State {
+            mass_kg: 0.,
+            requested_mass_kg: 1.,
+            unmet_mass_kg: 0.,
+            elapsed_seconds: 1.,
+            exhaustion_events: 1,
+        };
+        let rate = 2.0_f64.powi(-40);
+        let (_, after) = original.plan(vec![rate], 1.).unwrap().amounts(1.).unwrap();
+        assert_eq!(after.requested_mass_kg, 1. + rate);
+        assert_eq!(after.unmet_mass_kg, rate);
+        assert!(
+            original
+                .plan(vec![f64::MAX], 2.)
+                .unwrap()
+                .amounts(2.)
+                .is_err()
+        );
+        assert!(
+            original
+                .plan(vec![f64::from_bits(1)], 0.5)
+                .unwrap()
+                .amounts(0.5)
+                .is_err()
+        );
+        assert_eq!(original.requested_mass_kg, 1.);
+        assert_eq!(original.unmet_mass_kg, 0.);
     }
 }

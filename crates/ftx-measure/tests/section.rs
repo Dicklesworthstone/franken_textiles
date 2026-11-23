@@ -49,6 +49,111 @@ fn published_value_sigma_and_calibration_match() {
 }
 
 #[test]
+fn precise_circle_uncertainty_survives_section_records_and_photo_fusion() {
+    // At w=d, each full-diameter derivative is pi/2, independently of the production
+    // finite differences. These declared uncertainties are numerical controls, not camera claims.
+    let expected_sigma = std::f64::consts::PI / 2.0 * 0.001_f64.hypot(0.002);
+    let options = SectionOptions {
+        sigma_width_mm: 0.001,
+        sigma_depth_mm: 0.002,
+        k: Some(1.0),
+        k_sigma: Some(0.0),
+        ..Default::default()
+    };
+    let section = section_measurement(200.0, 200.0, &options, None).unwrap();
+    let sigma = section["sigma_mm"].as_f64().unwrap();
+    assert!((sigma - expected_sigma).abs() < 1e-8);
+    assert_eq!(section["record"]["sigma_mm"], section["sigma_mm"]);
+    assert_eq!(section["record"]["provenance"], "PHOTO_ESTIMATED");
+    assert_eq!(section["k_sigma"], 0.0);
+    assert_eq!(section["sigma_terms_mm"]["k"], 0.0);
+    for (field, input_sigma) in [("width", 0.001), ("depth", 0.002)] {
+        let term = section["sigma_terms_mm"][field].as_f64().unwrap();
+        assert!((term - std::f64::consts::PI / 2.0 * input_sigma).abs() < 1e-8);
+    }
+    assert!(validate(&section).is_empty());
+    assert_eq!(
+        fuse(&section, false).unwrap()["fused"]["waist"]["sigma_mm"],
+        section["sigma_mm"]
+    );
+
+    let width = photo_document("waist_width", 200.0, 0.001).to_string();
+    let depth = photo_document("waist_depth", 200.0, 0.002).to_string();
+    let derived = photo_section(
+        &width,
+        &depth,
+        r#"{"level":"waist","same_wearer":true,"k":1.0,"k_sigma":0.0}"#,
+    )
+    .unwrap();
+    assert_eq!(derived["record"], section["record"]);
+    assert_eq!(derived["section_sources"]["width"]["text"], width);
+    assert_eq!(derived["section_sources"]["depth"]["text"], depth);
+}
+
+#[test]
+fn precise_calibration_retains_tape_and_section_uncertainty_when_reused() {
+    let options = SectionOptions {
+        sigma_width_mm: 0.001,
+        sigma_depth_mm: 0.002,
+        ..Default::default()
+    };
+    let perimeter = 628.3; // The specified one-decimal ellipse perimeter for a 200 mm circle.
+    let tape = 1.06 * perimeter;
+    let sigma_perimeter = std::f64::consts::PI / 2.0 * 0.001_f64.hypot(0.002);
+    let sigma_k = 0.001_f64.hypot(1.06 * sigma_perimeter) / perimeter;
+    let calibrated = calibrate_k(tape, 200.0, 200.0, 0.001, &options).unwrap();
+    assert_eq!(calibrated["k_child"], 1.06);
+    assert_eq!(calibrated["k_ratio"], 1.0);
+    assert!((calibrated["k_child_sigma"].as_f64().unwrap() - sigma_k).abs() < 1e-10);
+    let sigma_ratio = calibrated["k_ratio_sigma"].as_f64().unwrap();
+    assert!((sigma_ratio - sigma_k / 1.06).abs() < 1e-10);
+
+    // Reuse only the returned calibration uncertainty, keeping additional measurement noise
+    // and population shape spread explicitly zero. Positive uncertainty must not become exact.
+    let reused = section_measurement(
+        200.0,
+        200.0,
+        &SectionOptions {
+            k_sigma: Some(0.0),
+            k_ratio: calibrated["k_ratio"].as_f64().unwrap(),
+            k_ratio_sigma: sigma_ratio,
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let expected = 200.0 * std::f64::consts::PI * sigma_k;
+    assert!((reused["sigma_mm"].as_f64().unwrap() - expected).abs() < 1e-8);
+    assert!(reused["k_sigma"].as_f64().unwrap() > 0.0);
+    assert!(validate(&reused).is_empty());
+}
+
+#[test]
+fn positive_section_scales_remain_reusable_without_inventing_uncertainty() {
+    let tiny = section_measurement(0.001, 0.001, &SectionOptions::default(), None).unwrap();
+    for field in ["girth_mm", "ellipse_perimeter_mm", "sigma_mm"] {
+        let value = tiny[field].as_f64().unwrap();
+        assert!(value > 0.0 && value < 0.05, "{field}: {value}");
+    }
+    assert!(validate(&tiny).is_empty());
+    let calibrated = calibrate_k(1e-8, 0.001, 0.001, 1e-10, &SectionOptions::default()).unwrap();
+    for field in ["k_child", "k_child_sigma", "k_ratio", "k_ratio_sigma"] {
+        let value = calibrated[field].as_f64().unwrap();
+        assert!(value > 0.0 && value < 0.00005, "{field}: {value}");
+    }
+    let exact = SectionOptions {
+        k: Some(1.0),
+        k_sigma: Some(0.0),
+        ..Default::default()
+    };
+    assert_eq!(
+        girth_from_section(200.0, 200.0, &exact).unwrap()["sigma_mm"],
+        0.0
+    );
+    assert!(section_measurement(200.0, 200.0, &exact, None).is_err());
+}
+
+#[test]
 fn chart_sections_recover_their_girths_and_clothing_is_explicit() {
     for height in [800.0, 920.0, 1100.0, 1280.0] {
         let p = priors_for(height, None, None).unwrap();

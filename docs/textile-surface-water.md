@@ -598,10 +598,18 @@ Every thermal trace and final water result includes `supply_reservoir`, with sch
 | Field | Meaning |
 | --- | --- |
 | `initial_liquid_mass_kg`, `remaining_liquid_mass_kg`, `supplied_liquid_mass_kg` | One shared source inventory and cumulative actual withdrawal |
+| `requested_liquid_mass_kg`, `unmet_liquid_mass_kg` | Complete authored delivery demand and the portion requested after the source was exhausted |
 | `temperature_c`, `elapsed_seconds` | Fixed qualified source temperature and accepted physical duration, including time after exhaustion |
 | `exhaustion_events` | Zero until positive stock is exhausted, then one; an initially empty source has zero events |
 | `liquid_enthalpy_change_j`, `exported_liquid_enthalpy_j` | Source sensible-storage change and energy delivered to the textile, using the water model's explicit heat capacity and enthalpy reference |
 | `mass_balance_error_kg`, `enthalpy_balance_error_j` | Source conservation residuals, separate from the textile and vapor ledgers |
+| `demand_balance_error_kg` | `(supplied - requested) + unmet`, separate from physical liquid conservation |
+
+Requested delivery integrates the original rates over the entire accepted duration, including
+empty-source time and later changes to the delivery schedule. Unmet demand is accumulated directly
+over those empty-source intervals, preserving small shortfalls without subtracting two large totals.
+It is an unsatisfied operating requirement, not water removed from a physical owner. Discarded
+probes and rolled-back intervals retain neither requested demand nor shortfall.
 
 Homogeneous withdrawal leaves source temperature unchanged: its storage change is the negative
 of delivered sensible enthalpy. The existing textile mixing equation receives that same delivered

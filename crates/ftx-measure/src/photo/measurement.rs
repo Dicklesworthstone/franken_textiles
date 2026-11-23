@@ -463,8 +463,9 @@ mod tests {
 
     #[test]
     fn measure_photo_preserves_sub_tenth_mm_positive_sigma_instead_of_rounding_to_zero() {
-        // High-resolution sheet (0.05 mm/px) with tight ChArUco-like corners and click_px = 0.2
-        // yields a valid positive sigma (~0.02–0.04 mm) that rounds to 0.0 at 1 decimal place.
+        // A 15 mm span at 0.05 mm/px has click sigma sqrt(2) * 0.2 * 0.05 mm and
+        // paper-scale sigma 15/210 * 0.5 mm. Their combined uncertainty rounds to zero
+        // at one decimal. High pixel resolution alone cannot remove paper-size uncertainty.
         let reference = json!({
             "schema": "ftx-photo-reference/1",
             "reference": "plain_sheet",
@@ -475,11 +476,11 @@ mod tests {
         });
         let scale = super::super::analyze_reference(&reference).unwrap();
         let points = json!({
-            "chest_width": [[500.0, 1000.0], [3500.0, 1000.0]]
+            "chest_width": [[500.0, 1000.0], [800.0, 1000.0]]
         });
         let options = PhotoOptions {
             click_px: 0.2,
-            bootstrap: 40,
+            bootstrap: 200,
             seed: 7,
             ..PhotoOptions::default()
         };
@@ -490,5 +491,25 @@ mod tests {
             sigma > 0.0 && sigma < 0.05,
             "expected positive unrounded sub-0.05 mm sigma, got {sigma} (record: {rec})"
         );
+        let expected_click = 2.0_f64.sqrt() * 0.2 * 0.05;
+        let expected_scale = 15.0 / 210.0 * 0.5;
+        assert!((sigma - expected_click.hypot(expected_scale)).abs() < 0.006);
+        assert!(crate::validate(&doc).is_empty());
+        let fused = crate::fuse(&doc, false).unwrap();
+        assert_eq!(fused["fused"]["chest_width"]["sigma_mm"], rec["sigma_mm"]);
+
+        // Retain the former 150 mm fixture as an independent source-scale control. Its
+        // paper contribution is about 0.36 mm, even with precisely located image corners.
+        let long = measure_photo(
+            &scale,
+            &json!({"chest_width": [[500.0, 1000.0], [3500.0, 1000.0]]}),
+            &options,
+        )
+        .unwrap();
+        let long_sigma = long["records"][0]["sigma_terms_mm"]["homography"]
+            .as_f64()
+            .unwrap();
+        assert!((long_sigma - 150.0 / 210.0 * 0.5).abs() < 0.06);
+        assert!(long["records"][0]["sigma_mm"].as_f64().unwrap() > 0.2);
     }
 }
