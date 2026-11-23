@@ -1754,10 +1754,10 @@ impl Solver {
                 p = g.iter().map(|v| -v).collect();
                 slope = -g.iter().map(|v| v * v).sum::<f64>();
             }
-            let mut step = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let mut step = max_abs_or_nan(&p);
             rep.iterations = it + 1;
             rep.last_step = step;
-            rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            rep.residual = max_abs_or_nan(&g);
             // An inexact Eisenstat–Walker solve (used_lin_tol > base_linear_tol) is valid for
             // descent far from equilibrium, but cannot certify displacement convergence: stiff
             // membrane components can dominate ‖g‖₂ while leaving soft bending modes unsolved.
@@ -1783,7 +1783,13 @@ impl Solver {
                     rep.projected_iterations += 1;
                     let (g2, a2) = self.assemble_ctx(&self.x, ctx, true, true);
                     g = g2;
-                    rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                    if g.iter().any(|v| !v.is_finite()) {
+                        return Err(Refusal::new(
+                            RefusalCode::NonFinite,
+                            "Newton gradient is non-finite",
+                        ));
+                    }
+                    rep.residual = max_abs_or_nan(&g);
                     p_tight = self.solve_newton_linear(
                         &a2,
                         &g,
@@ -1815,7 +1821,7 @@ impl Solver {
                     p = g.iter().map(|v| -v).collect();
                     slope = -g.iter().map(|v| v * v).sum::<f64>();
                 }
-                step = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                step = max_abs_or_nan(&p);
                 rep.last_step = step;
             }
             drop(a_mat);
@@ -1850,8 +1856,7 @@ impl Solver {
                     && {
                         let (trial_gradient, _) = self.assemble_ctx(&trial, ctx, false, false);
                         let trial_slope = trial_gradient.iter().zip(&p).map(|(a, b)| a * b).sum();
-                        let trial_residual =
-                            trial_gradient.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+                        let trial_residual = max_abs_or_nan(&trial_gradient);
                         trial_gradient.iter().all(|v| v.is_finite())
                             && roundoff_step(
                                 energy,
@@ -1884,7 +1889,7 @@ impl Solver {
         rep.energy_end = energy;
         if !rep.converged {
             let (g, _) = self.assemble_ctx(&self.x, ctx, false, false);
-            rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            rep.residual = max_abs_or_nan(&g);
             let mut refusal = Refusal::new(
                 RefusalCode::NotConverged,
                 format!(
@@ -2006,7 +2011,7 @@ impl Solver {
                     "trust-region gradient is non-finite",
                 ));
             }
-            let res_inf = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let res_inf = max_abs_or_nan(&g);
             rep.iterations = it + 1;
             rep.residual = res_inf;
             if res_inf == 0.0 {
@@ -2032,7 +2037,7 @@ impl Solver {
             }
             let mut p = out.step;
             let mut model_decrease = out.model_decrease;
-            let step_inf = p.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let step_inf = max_abs_or_nan(&p);
             rep.last_step = step_inf;
             let newton_accurate = out.interior_converged || {
                 let mut hp = vec![0.0; self.nfree];
@@ -2101,7 +2106,7 @@ impl Solver {
                 && {
                     let (tg, _) = self.assemble_ctx(&trial, ctx, false, false);
                     let tslope = tg.iter().zip(&p).map(|(a, b)| a * b).sum();
-                    let tres = tg.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                    let tres = max_abs_or_nan(&tg);
                     tg.iter().all(|v| v.is_finite())
                         && roundoff_step(energy, trial_energy, 1.0, slope, tslope, res_inf, tres)
                 };
@@ -2133,7 +2138,7 @@ impl Solver {
         rep.energy_end = energy;
         if !rep.converged {
             let (g, _) = self.assemble_ctx(&self.x, ctx, false, false);
-            rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            rep.residual = max_abs_or_nan(&g);
             let mut refusal = Refusal::new(
                 RefusalCode::NotConverged,
                 format!(
@@ -2170,6 +2175,9 @@ impl Solver {
         g: &[f64],
         rep: &mut SolveReport,
     ) -> Result<Option<Vec<f64>>, Refusal> {
+        if (0..self.nfree).any(|i| !a.get(i, i).is_finite()) {
+            return Ok(None);
+        }
         let scale = (0..self.nfree)
             .map(|i| a.get(i, i).abs())
             .fold(0.0_f64, f64::max);
@@ -2689,6 +2697,12 @@ impl Solver {
             rep.steps += 1;
             rep.time += rep.h;
             rep.newton_iterations += r.iterations;
+            if self.v.iter().any(|v| !v.norm().is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "cloth velocity became non-finite while settling",
+                ));
+            }
             rep.max_speed = self.v.iter().fold(0.0f64, |m, v| m.max(v.norm()));
             calm = if rep.max_speed < v_tol { calm + 1 } else { 0 };
             if calm >= quiet {
@@ -3744,4 +3758,56 @@ mod strategy_and_integrator_tests {
             s.x[2].z
         );
     }
+
+    #[test]
+    fn max_abs_or_nan_propagates_nan_and_static_search_rejects_nan_diagonal() {
+        assert_eq!(max_abs_or_nan(&[]), 0.0);
+        assert_eq!(max_abs_or_nan(&[-3.5, 2.0, 1.0]), 3.5);
+        assert!(max_abs_or_nan(&[f64::NAN, 2.0]).is_nan());
+        assert!(max_abs_or_nan(&[1.0, f64::NAN, 2.0]).is_nan());
+        assert!(max_abs_or_nan(&[1.0, f64::INFINITY]).is_infinite());
+
+        let rest = vec![Vec2::ZERO, Vec2::new(0.04, 0.0), Vec2::new(0.0, 0.04)];
+        let x: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(200.0, 200.0, 0.1, 40.0, 0.1),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let mut s = Solver::new(
+            model,
+            x,
+            &[[true; 3], [true; 3], [false; 3]],
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        let mut coo = crate::sparse::Coo::new(3, 3);
+        coo.push(0, 0, f64::NAN);
+        coo.push(1, 1, 10.0);
+        coo.push(2, 2, 10.0);
+        let a = coo.assemble();
+        let mut rep = SolveReport::default();
+        assert!(
+            s.static_search_direction(&a, &[1.0, 1.0, 1.0], &mut rep)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+/// Infinity norm of a slice that propagates any `NaN` rather than absorbing it into `0.0`.
+fn max_abs_or_nan(xs: &[f64]) -> f64 {
+    let mut best = 0.0_f64;
+    for &x in xs {
+        let a = x.abs();
+        if a.is_nan() {
+            return f64::NAN;
+        }
+        if a > best {
+            best = a;
+        }
+    }
+    best
 }
