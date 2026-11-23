@@ -230,6 +230,36 @@ test("the full-hand bolero links to the matching editable draft and keeps strain
   } finally { await page.close(); }
 });
 
+const annyModel = process.env.FTX_TEST_ANNY_MODEL;
+test("the full-hand preset sews and drapes on the pinned Anny model", {
+  skip: annyModel ? false : "requires FTX_TEST_ANNY_MODEL",
+  timeout: 480000,
+}, async () => {
+  const page = await browser.newPage({ ...opts, reducedMotion: "reduce" });
+  try {
+    await page.goto(new URL("/workbench/?sample=full-hand-bolero", site).href);
+    await page.locator("#draftOverview").waitFor({ timeout: 60000 });
+    await page.getByText("Use a fitted body (optional)", { exact: true }).click();
+    await page.locator("#bodyFile").setInputFiles(annyModel);
+    await page.locator("#foldGo:enabled").waitFor({ timeout: 120000 });
+    await page.locator("#foldGo").click();
+    await page.locator('a[download="sim_report.json"], #errorBox:not(.hidden)').first().waitFor({ timeout: 360000 });
+    assert.ok(await page.locator("#errorBox").isHidden(), await page.locator("#errorText").innerText());
+    const report = await page.locator('a[download="sim_report.json"]').evaluate(async link => (await fetch(link.href)).json());
+    assert.equal(report.hand_collider, "full");
+    assert.deepEqual(report.body.thumb_pose, JSON.parse(await page.locator("#drapeThumbPose").inputValue()));
+    assert.ok(report.body.authored_hand_surface_pairs_tested > 0);
+    assert.equal(report.self_contact.audit, "passed");
+    assert.equal(report.settled, true);
+    assert.deepEqual(report.gating, []);
+    assert.deepEqual(report.frames, { sew: 12, drape: 36 });
+    assert.equal(report.animation.frames - report.animation.first_physical_frame, 49);
+    const fold = page.frameLocator("#foldView");
+    await fold.getByRole("radio", { name: "strain at the end" }).check();
+    assert.match(await fold.locator("#phase").innerText(), /Draped/);
+  } finally { await page.close(); }
+});
+
 test("visible preview plays, preserves a deliberate pause, and leaves the screen quiet", async () => {
   const p = await browser.newPage({ ...opts, reducedMotion:"no-preference" });
   try {
