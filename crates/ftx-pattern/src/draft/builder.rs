@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn bisect_cubic_abs_and_fez_refuse_non_finite_inputs_and_overflows() {
         assert_eq!(
-            bisect(|x| Ok(x), f64::NAN, 1.0).unwrap_err().code,
+            bisect(Ok, f64::NAN, 1.0).unwrap_err().code,
             RefusalCode::NonFinite
         );
         assert_eq!(
