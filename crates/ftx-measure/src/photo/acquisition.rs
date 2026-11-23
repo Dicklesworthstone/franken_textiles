@@ -163,11 +163,15 @@ impl PhotoLens {
         self.check_image(&json!(size))?;
         if self.uncertainty.is_some() {
             let digest = sha256_hex(bgr);
+            let encoded = receipt.get("sha256").and_then(Value::as_str);
             let reused = self.receipt["calibration"]["image_acquisition"]["views"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .any(|v| v["pixels_bgr_sha256"] == digest || v["sha256"] == receipt["sha256"]);
+                .any(|v| {
+                    v["pixels_bgr_sha256"].as_str() == Some(digest.as_str())
+                        || encoded.is_some_and(|hash| v["sha256"].as_str() == Some(hash))
+                });
             if reused {
                 return Err(invalid(
                     "photo reuses a calibration image: independent lens/photo uncertainty is not supported for this acquisition",
@@ -383,5 +387,60 @@ mod tests {
         }
         assert_eq!(blur(&bgr, 100, 100, &reference, 10.0), Some(0.0));
         assert_eq!(blur(&bgr, 100, 100, &json!({"corners":[]}), 10.0), None);
+    }
+
+    #[test]
+    fn check_acquisition_does_not_treat_absent_encoded_sha256_as_image_reuse() {
+        let intrinsics = Intrinsics {
+            focal_px: ftx_core::Vec2::new(1000.0, 1000.0),
+            principal_px: ftx_core::Vec2::new(40.0, 30.0),
+            distortion: crate::camera::Distortion::default(),
+        };
+        let mut cov = [[0.0; 9]; 9];
+        for (i, row) in cov.iter_mut().enumerate() {
+            row[i] = 1e-4;
+        }
+        let uncertainty = IntrinsicUncertainty {
+            schema: "ftx-intrinsic-uncertainty/1",
+            parameters: ["fx", "fy", "cx", "cy", "k1", "k2", "k3", "p1", "p2"],
+            intrinsics,
+            covariance: cov,
+            standard_deviations: [1e-2; 9],
+            corner_noise: super::super::intrinsics::CornerNoise {
+                model: "independent_isotropic".into(),
+                sigma_px: 0.2,
+                evidence: "Synthetic test noise".into(),
+            },
+            calibration_independence_evidence: None,
+            fit_corners: 60,
+            nuisance_parameters: 24,
+            residual_degrees_of_freedom: 87,
+            no_claim: "Synthetic test",
+        };
+        let cal_pixels = vec![10_u8; 80 * 60 * 3];
+        let cal_digest = sha256_hex(&cal_pixels);
+        let lens = PhotoLens {
+            intrinsics,
+            uncertainty: Some(uncertainty),
+            receipt: json!({
+                "calibration": {
+                    "image_acquisition": {
+                        "views": [{ "pixels_bgr_sha256": cal_digest }]
+                    }
+                }
+            }),
+            image_size_px: [80, 60],
+        };
+        let new_pixels = vec![20_u8; 80 * 60 * 3];
+        let mut receipt = json!({});
+        assert!(
+            lens.check_acquisition(&new_pixels, [80, 60], &mut receipt)
+                .is_ok()
+        );
+        assert_eq!(receipt["pixels_bgr_sha256"], json!(sha256_hex(&new_pixels)));
+        assert!(
+            lens.check_acquisition(&cal_pixels, [80, 60], &mut json!({}))
+                .is_err()
+        );
     }
 }
