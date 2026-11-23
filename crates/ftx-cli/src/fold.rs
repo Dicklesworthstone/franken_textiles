@@ -247,6 +247,9 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     let strain = view.map(crate::render::strain_view).transpose()?;
     let dir = Path::new(&args.positional[1]);
+    let resolved_dir = dir
+        .canonicalize()
+        .map_err(|e| workspace::io_error(dir, e))?;
     let (report, _) = document(&dir.join("sim_report.json"))?;
     let (map, _) = document(&dir.join("mesh_map.json"))?;
     let raw_pc2 = bytes(&dir.join("fold.pc2"), MAX_CACHE_BYTES)?;
@@ -331,8 +334,8 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             return Err(bad_input(errors.join("; ")));
         }
         Some(doc)
-    } else if let Some(parent) = dir.parent().filter(|parent| {
-        dir.file_name().is_some_and(|name| name == "sim")
+    } else if let Some(parent) = resolved_dir.parent().filter(|parent| {
+        resolved_dir.file_name().is_some_and(|name| name == "sim")
             && report["style"]
                 .as_str()
                 .and_then(|style| style.strip_prefix("KAT_BAND_"))

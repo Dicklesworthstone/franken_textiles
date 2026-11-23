@@ -281,27 +281,42 @@ fn viewer_uses_the_saved_pattern_of_an_archived_qualification_band() {
         &sim.join("sim_report.json"),
         &json!({"style":"KAT_BAND_+0","pattern":"p.json"}),
     );
-    let view = || {
+    let view = |cwd: &Path, source: &str, destination: &Path| {
         Command::new(env!("CARGO_BIN_EXE_ftx"))
-            .current_dir(&dir)
-            .args(["viewer", "qualification.before-000/band_+0/sim", "--json"])
+            .current_dir(cwd)
+            .args(["viewer", source, "--json", "--out"])
+            .arg(destination)
             .output()
             .unwrap()
     };
-    assert_eq!(view().status.code(), Some(3));
-    assert!(!sim.join("fold_viewer.html").exists());
+    let from_workspace = dir.join("from-workspace.html");
+    let from_sim = dir.join("from-sim.html");
+    let invocations = [
+        (
+            &dir,
+            "qualification.before-000/band_+0/sim",
+            &from_workspace,
+        ),
+        (&sim, ".", &from_sim),
+    ];
+    for (cwd, source, destination) in invocations {
+        assert_eq!(view(cwd, source, destination).status.code(), Some(3));
+        assert!(!destination.exists());
+    }
     let mut pattern: Value =
         serde_json::from_slice(&std::fs::read(dir.join("p.json")).unwrap()).unwrap();
     pattern["meta"] = json!({"title":"Archived band"});
     save(&band.join("pattern.json"), &pattern);
-    let rebuilt = view();
-    assert!(
-        rebuilt.status.success(),
-        "{}",
-        String::from_utf8_lossy(&rebuilt.stderr)
-    );
-    let html = std::fs::read_to_string(sim.join("fold_viewer.html")).unwrap();
-    assert!(html.contains("<title>Archived Band Fold-up</title>"));
+    for (cwd, source, destination) in invocations {
+        let rebuilt = view(cwd, source, destination);
+        assert!(
+            rebuilt.status.success(),
+            "{}",
+            String::from_utf8_lossy(&rebuilt.stderr)
+        );
+        let html = std::fs::read_to_string(destination).unwrap();
+        assert!(html.contains("<title>Archived Band Fold-up</title>"));
+    }
 }
 
 #[test]
