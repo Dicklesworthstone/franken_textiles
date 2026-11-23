@@ -192,6 +192,9 @@ fn material_state(
     }
     if let Some(law) = &material.membrane_relaxation {
         check_conditions(&law.conditions, "relaxation response")?;
+        if let Some(parallel) = &law.parallel_plasticity {
+            check_conditions(&parallel.conditions, "parallel plasticity")?;
+        }
         for branch in &law.branches {
             check_conditions(&branch.stiffness_ratio.conditions, "relaxation ratio")?;
             check_conditions(&branch.relaxation_time.conditions, "relaxation time")?;

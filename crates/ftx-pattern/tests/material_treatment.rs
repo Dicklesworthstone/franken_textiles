@@ -472,6 +472,60 @@ fn freshly_locked_before_observations_must_match_the_observed_specimen_and_condi
 }
 
 #[test]
+fn relaxation_parallel_plasticity_conditions_must_match_treatment_state() {
+    let mut input = fixture();
+    let mut after = material(true);
+    let mut conditions = after.properties["thickness"].conditions.clone();
+    conditions.insert("specimen_id".into(), SPECIMEN.into());
+    after.membrane_relaxation = Some(
+        serde_json::from_value(json!({
+            "model": "green_maxwell/1",
+            "initialization": "stress_free_reference",
+            "strain_range": [[-0.2, 0.2], [-0.2, 0.2], [-0.2, 0.2]],
+            "source": "synthetic",
+            "method": "Synthetic relaxation state",
+            "conditions": conditions,
+            "branches": [{
+                "id": "b0",
+                "stiffness_ratio": {
+                    "value": 0.2, "unit": "1", "evidence": "estimate",
+                    "source": "synthetic", "method": "Synthetic branch", "conditions": conditions
+                },
+                "relaxation_time": {
+                    "value": 1.0, "unit": "s", "evidence": "estimate",
+                    "source": "synthetic", "method": "Synthetic branch", "conditions": conditions
+                }
+            }],
+            "parallel_plasticity": {
+                "model": "parallel_green_maxwell_plastic/1",
+                "evidence": "estimate",
+                "source": "synthetic",
+                "method": "Synthetic parallel network",
+                "conditions": conditions
+            }
+        }))
+        .unwrap(),
+    );
+    input.after = freeze(after.clone());
+    assert!(evaluate(&input).is_ok());
+    after
+        .membrane_relaxation
+        .as_mut()
+        .unwrap()
+        .parallel_plasticity
+        .as_mut()
+        .unwrap()
+        .conditions
+        .insert("conditioning".into(), "before-conditioned".into());
+    input.after = freeze(after);
+    let refused = evaluate(&input).unwrap_err();
+    assert!(
+        refused.message.contains("AFTER parallel plasticity"),
+        "{refused}"
+    );
+}
+
+#[test]
 fn measured_transition_preserves_its_pair_and_cannot_borrow_another_denim_specimen() {
     let mut input = laundered_denim::treatment_request(1).unwrap();
     let original = serde_json::to_value(&input).unwrap();
