@@ -522,3 +522,83 @@ fn valid_body_motion_retains_legal_shared_features_and_reports_audit_work() {
     assert_eq!(report.pairs_tested, 5);
     assert_eq!(s.contact.as_ref().unwrap().body.vertices, target);
 }
+
+#[test]
+fn moving_body_adapts_barrier_stiffness_between_substeps_and_rolls_back_on_refusal() {
+    use ftx_drape::AdaptiveBarrierPolicy;
+
+    let mut legacy = sliding_patch(0.0, true);
+    let mut adaptive = sliding_patch(0.0, true);
+    let policy = AdaptiveBarrierPolicy {
+        target_gap_fraction: 0.5,
+        min_gap_fraction: 0.3,
+        growth_factor: 2.0,
+        membrane_floor_scale: 0.0,
+        kappa_min: 1e-3,
+        kappa_max: 1e5,
+    };
+    adaptive
+        .contact
+        .as_mut()
+        .unwrap()
+        .set_adaptive_barrier(policy, 1e-3, 1000.0, 9.81)
+        .unwrap();
+    let legacy_kappa0 = legacy.contact.as_ref().unwrap().params.kappa;
+    let adaptive_kappa0 = adaptive.contact.as_ref().unwrap().params.kappa;
+    let target: Vec<_> = legacy
+        .contact
+        .as_ref()
+        .unwrap()
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.002, 0.0, 0.0))
+        .collect();
+    let opts = MotionOptions {
+        max_step_s: 0.01,
+        ..MotionOptions::default()
+    };
+    advance_body(&mut legacy, &target, 0.02, opts).unwrap();
+    let rep = advance_body(&mut adaptive, &target, 0.02, opts).unwrap();
+    assert!(rep.samples.len() >= 2);
+    assert_eq!(
+        legacy.contact.as_ref().unwrap().params.kappa,
+        legacy_kappa0,
+        "legacy moving-body steps must leave fixed kappa untouched"
+    );
+    let escalated = adaptive.contact.as_ref().unwrap().params.kappa;
+    assert!(
+        escalated > adaptive_kappa0,
+        "adaptive barrier must escalate kappa across compressed moving-body substeps ({adaptive_kappa0} -> {escalated})"
+    );
+
+    // A refused moving-body step must roll back any trial barrier escalation transactionally.
+    let mut bad_target = target.clone();
+    bad_target[0].z = f64::NAN;
+    assert!(advance_body(&mut adaptive, &bad_target, 0.02, opts).is_err());
+    assert_eq!(adaptive.contact.as_ref().unwrap().params.kappa, escalated);
+
+    // Incompatible constitutive pair (e.g. authored crease under Quadratic bending) must refuse
+    // fail-closed before spending audit work.
+    let (rest, tris) = ftx_drape::hex_grid(0.06, 0.06, 0.03, ftx_core::Vec2::ZERO);
+    let mut creased = ClothModel::new(
+        rest.clone(),
+        &tris,
+        Membrane::orthotropic(1000.0, 1000.0, 0.0, 200.0, 1.0),
+        1e-4,
+        0.2,
+    )
+    .unwrap();
+    let mut angles = vec![0.0; creased.hinges.len()];
+    angles[0] = 0.5;
+    creased.set_hinge_rest_angles(&angles).unwrap();
+    let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.01)).collect();
+    let mut bad_solver = Solver::new(creased, x0, &vec![[false; 3]; rest.len()], Vec3::ZERO)
+        .with_contact(
+            Body::new(triangle(0.0, 1.0), vec![[0, 1, 2]], 0.1).unwrap(),
+            parameters(0.0),
+        )
+        .unwrap();
+    let err = advance_body(&mut bad_solver, &target, 0.01, opts).unwrap_err();
+    assert_eq!(err.code, RefusalCode::InvalidDocument);
+}

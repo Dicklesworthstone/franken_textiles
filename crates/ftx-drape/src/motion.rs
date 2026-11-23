@@ -219,6 +219,7 @@ pub(crate) fn advance_body_coupled<S: Clone>(
     mut accept: impl FnMut(&mut Solver, &MotionSample, &mut S) -> Result<(), Refusal>,
 ) -> Result<MotionReport, Refusal> {
     solver.model.check_attached_mass()?;
+    solver.check_constitutive_models()?;
     if !duration_s.is_finite()
         || !(1e-9..=60.0).contains(&duration_s)
         || !options.max_step_s.is_finite()
@@ -466,6 +467,9 @@ pub(crate) fn advance_body_coupled<S: Clone>(
                 .is_some_and(|m| m != trial.model.mass.as_slice())
         {
             trial.reset_acceleration();
+        }
+        if let Some(contact) = trial.contact.as_mut() {
+            contact.adapt_barrier_stiffness(&trial.x);
         }
         report.samples.push(sample);
         work = trial;

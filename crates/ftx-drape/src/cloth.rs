@@ -2495,22 +2495,31 @@ impl Solver {
         Ok(())
     }
 
-    /// Refuses fail-closed when the requested bending or compression formulation would be
-    /// silently bypassed by the bound constitutive law (orthotropic panel-bending patches,
-    /// characterized nonlinear membrane laws, or membrane plasticity).
+    /// Refuses fail-closed when the requested bending, damping, or compression formulation would
+    /// be silently bypassed by the bound constitutive law (orthotropic panel-bending patches,
+    /// characterized nonlinear membrane laws, Maxwell relaxation, or membrane plasticity).
     ///
     /// # Errors
     /// [`RefusalCode::InvalidDocument`] on an incompatible constitutive combination.
     pub fn check_constitutive_models(&self) -> Result<(), Refusal> {
         self.check_bending_model()?;
+        if self.damping.rayleigh_bending_s > 0.0 && !self.model.panel_bending_patches().is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "orthotropic panel-bending patches do not implement scalar Rayleigh hinge bending damping",
+            )
+            .repair("Set rayleigh_bending_s = 0 with orthotropic characterized bending materials, or use an isotropic scalar bending law with Rayleigh bending damping."));
+        }
         if self.model.compression_model == CompressionModel::Principal
-            && (self.model.element_responses.is_some() || self.membrane_plasticity.is_some())
+            && (self.model.element_responses.is_some()
+                || self.relaxation.is_some()
+                || self.membrane_plasticity.is_some())
         {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
-                "characterized nonlinear or plastic membrane laws do not implement CompressionModel::Principal",
+                "characterized nonlinear, viscoelastic, or plastic membrane laws do not implement CompressionModel::Principal",
             )
-            .repair("Use CompressionModel::AxisAligned with nonlinear/plastic membrane laws, or use a linear orthotropic membrane with Principal compression softening."));
+            .repair("Use CompressionModel::AxisAligned with nonlinear/history membrane laws, or use a linear orthotropic membrane with Principal compression softening."));
         }
         Ok(())
     }
@@ -4254,6 +4263,28 @@ mod strategy_and_integrator_tests {
         );
 
         pb_model.bending_model = BendingModel::Quadratic;
+        let mut pb_rayleigh = Solver::new(pb_model.clone(), x.clone(), &fixed, Vec3::ZERO);
+        pb_rayleigh.damping.rayleigh_bending_s = 0.002;
+        assert_eq!(
+            pb_rayleigh.check_constitutive_models().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            pb_rayleigh.step(0.01).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            pb_rayleigh
+                .step_with_guess(0.01, Some(&x))
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            pb_rayleigh.static_solve().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
         let mut pb_ok = Solver::new(pb_model, x, &fixed, Vec3::ZERO);
         pb_ok.check_constitutive_models().unwrap();
         pb_ok.step(0.01).unwrap();
@@ -4340,7 +4371,10 @@ mod strategy_and_integrator_tests {
         .unwrap();
         pl_model.compression_model = CompressionModel::Principal;
         let mut pl_solver = Solver::new(pl_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO)
-            .with_membrane_plasticity(&[material.membrane_plasticity().unwrap()])
+            .with_membrane_histories(
+                &[material.membrane_relaxation().unwrap()],
+                &[material.membrane_plasticity().unwrap()],
+            )
             .unwrap();
         assert_eq!(
             pl_solver.check_constitutive_models().unwrap_err().code,
@@ -4351,11 +4385,53 @@ mod strategy_and_integrator_tests {
             RefusalCode::InvalidDocument
         );
         pl_model.compression_model = CompressionModel::AxisAligned;
-        let mut pl_ok = Solver::new(pl_model, tri_x, &tri_fixed, Vec3::ZERO)
-            .with_membrane_plasticity(&[material.membrane_plasticity().unwrap()])
+        let mut pl_ok = Solver::new(pl_model, tri_x.clone(), &tri_fixed, Vec3::ZERO)
+            .with_membrane_histories(
+                &[material.membrane_relaxation().unwrap()],
+                &[material.membrane_plasticity().unwrap()],
+            )
             .unwrap();
         pl_ok.check_constitutive_models().unwrap();
         pl_ok.step(0.01).unwrap();
+
+        // 2c. Standalone Maxwell membrane relaxation
+        let relax_sel: Selection = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-relaxation.json"
+        ))
+        .unwrap();
+        let relax_mat = Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: Vec::new(),
+        }
+        .resolve(&relax_sel)
+        .unwrap();
+        let rm = relax_mat.mechanics().unwrap();
+        let mut rx_model = ClothModel::new(
+            vec![Vec2::ZERO, Vec2::new(0.04, 0.0), Vec2::new(0.0, 0.04)],
+            &[[0, 1, 2]],
+            Membrane::orthotropic(rm.warp_n_m, rm.weft_n_m, rm.poisson, rm.shear_n_m, 1.0),
+            0.0,
+            rm.areal_kg_m2,
+        )
+        .unwrap();
+        rx_model.compression_model = CompressionModel::Principal;
+        let mut rx_solver = Solver::new(rx_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO)
+            .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
+            .unwrap();
+        assert_eq!(
+            rx_solver.check_constitutive_models().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            rx_solver.step(0.01).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        rx_model.compression_model = CompressionModel::AxisAligned;
+        let mut rx_ok = Solver::new(rx_model, tri_x, &tri_fixed, Vec3::ZERO)
+            .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
+            .unwrap();
+        rx_ok.check_constitutive_models().unwrap();
+        rx_ok.step(0.01).unwrap();
     }
 }
 
