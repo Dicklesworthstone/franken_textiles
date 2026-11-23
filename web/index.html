@@ -274,6 +274,35 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <p class="row"><label><input type="checkbox" id="staticEquilibrium"> Run independent frictionless static-equilibrium comparison</label>
         <label>Correction tolerance (mm) <input id="staticTolMm" type="number" min="0" step="any" value="0.001" disabled></label>
         <label>Max static Newton iterations <input id="staticMaxNewton" type="number" min="1" max="1000" step="1" value="300" disabled></label></p>
+      <details id="physicsRealismBox"><summary>Physics &amp; draping realism options (opt-in)</summary>
+        <p class="row"><button id="applyRealismPreset" type="button">Apply realistic cloth preset</button>
+          <button id="resetRealismPreset" type="button">Reset realism to legacy defaults</button></p>
+        <p class="row"><label>Bending model <select id="drapeBendingModel"><option value="quadratic">Quadratic (legacy default)</option><option value="discrete_shells">Discrete Shells (finite-angle dihedral)</option></select></label>
+          <label>Compression softening <select id="drapeCompressionModel"><option value="axis_aligned">Axis-aligned (legacy default)</option><option value="principal">Principal-strain (bias-isotropic)</option></select></label></p>
+        <p class="row"><label><input type="checkbox" id="drapeAirDrag"> Anisotropic air drag (C<sub>n</sub>=1.2, C<sub>t</sub>=0.05)</label>
+          <label>Rayleigh membrane (s) <input id="drapeRayleighMembraneS" type="number" min="0" step="0.0005" value="0"></label>
+          <label>Rayleigh bending (s) <input id="drapeRayleighBendingS" type="number" min="0" step="0.0005" value="0"></label></p>
+        <p class="row"><label><input type="checkbox" id="drapeAdaptiveBarrier"> Adaptive IPC barrier stiffness</label>
+          <label><input type="checkbox" id="drapeStickSlip"> Body stick-slip friction</label>
+          <label>μ<sub>s</sub> <input id="drapeStickSlipMus" type="number" min="0" step="0.05" value="0.5" disabled></label>
+          <label>μ<sub>k</sub> <input id="drapeStickSlipMuk" type="number" min="0" step="0.05" value="0.3" disabled></label>
+          <label>v<sub>t</sub> (m/s) <input id="drapeStickSlipV" type="number" min="0" step="0.005" value="0.02" disabled></label></p>
+        <p class="row"><label><input type="checkbox" id="drapeAdaptiveMesh"> Curvature/gather-adaptive mesh &amp; CVT</label>
+          <label>Min spacing (mm) <input id="drapeMeshMinMm" type="number" min="1.5" max="12" step="0.5" value="6" disabled></label>
+          <label>CVT passes <input id="drapeMeshCvt" type="number" min="0" max="32" step="1" value="6" disabled></label></p>
+        <p class="row"><label><input type="checkbox" id="drapeConstruction"> Folded-hem &amp; seam-allowance mechanics</label>
+          <label>Hem width (mm) <input id="drapeHemWidthMm" type="number" min="0" max="200" step="1" value="20" disabled></label>
+          <label>Hem mass× <input id="drapeHemMassMult" type="number" min="1" max="10" step="0.1" value="2.5" disabled></label>
+          <label>Hem bend× <input id="drapeHemBendMult" type="number" min="1" max="32" step="0.5" value="5" disabled></label>
+          <label>Seam width (mm) <input id="drapeSeamWidthMm" type="number" min="0" max="100" step="1" value="10" disabled></label>
+          <label>Seam mass× <input id="drapeSeamMassMult" type="number" min="1" max="10" step="0.1" value="2" disabled></label>
+          <label>Seam bend× <input id="drapeSeamBendMult" type="number" min="1" max="32" step="0.5" value="3" disabled></label></p>
+        <p class="row"><label><input type="checkbox" id="drapeStartRepulsion"> Self-repelling start relaxation</label>
+          <label>Separation (mm) <input id="drapeRepulsionMm" type="number" min="0.5" max="100" step="0.5" value="4" disabled></label>
+          <label>Stiffness <input id="drapeRepulsionStiffness" type="number" min="0.05" max="1" step="0.05" value="0.5" disabled></label>
+          <label>Period <input id="drapeRepulsionPeriod" type="number" min="1" max="25" step="1" value="5" disabled></label></p>
+        <p class="mut">Every option above is opt-in and omitted from settings when left at its legacy default. Air drag, uncalibrated stick-slip friction, and hem/seam multipliers are structural approximations, not measured textile constants or physical-fit claims; characterized material records refuse uncalibrated stick-slip or construction overrides.</p>
+      </details>
       <p class="mut">Static equilibrium runs a separate frictionless conservative solve from the finished dynamic state without altering dynamic frames, flags, or simulated time. History-dependent materials refuse the static comparison while retaining the dynamic drape.</p>
       <p class="mut">Projected Newton with Implicit Euler is the default solver. Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller steps on stiff contact transitions. Custom schedule overrides stay within the 512-step browser budget per sewing path (sew + gravity + settling).</p>
       <p class="mut">Retries a stalled step as smaller steps without extending simulated time. The trial limit covers sewing, draping and settling, separately for each start. Exhausting the limits refuses the run.</p>
@@ -607,6 +636,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = !$("customDrapeSchedule").checked;
     for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = !$("staticEquilibrium").checked;
     $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
+    for (const id of ["drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV"]) $(id).disabled = !$("drapeStickSlip").checked;
+    for (const id of ["drapeMeshMinMm", "drapeMeshCvt"]) $(id).disabled = !$("drapeAdaptiveMesh").checked;
+    for (const id of ["drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult"]) $(id).disabled = !$("drapeConstruction").checked;
+    for (const id of ["drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]) $(id).disabled = !$("drapeStartRepulsion").checked;
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
     $("foldGo").disabled = !available || !foldable;
@@ -844,6 +877,233 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const tp = checkedThumbPose(value);
     $("drapeThumbPose").value = tp !== undefined ? JSON.stringify(tp) : "";
   }
+  const DEFAULT_AIR_DRAG = Object.freeze({ rho_air_kg_m3: 1.225, c_normal: 1.2, c_tangent: 0.05, eps_v_m_s: 1e-3 });
+  const DEFAULT_ADAPTIVE_BARRIER = Object.freeze({
+    target_gap_fraction: 0.5, min_gap_fraction: 0.05, growth_factor: 2.0,
+    membrane_floor_scale: 1e-5, kappa_min: 1e-3, kappa_max: 1e5,
+  });
+  function checkedRealismOptions(settings) {
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return {};
+    const out = {};
+    if (settings.bending_model !== undefined) {
+      if (settings.bending_model === "discrete_shells") out.bending_model = "discrete_shells";
+      else if (settings.bending_model !== "quadratic") throw Error("Bending model must be quadratic or discrete_shells.");
+    }
+    if (settings.compression_model !== undefined) {
+      if (settings.compression_model === "principal") out.compression_model = "principal";
+      else if (settings.compression_model !== "axis_aligned") throw Error("Compression model must be axis_aligned or principal.");
+    }
+    if (settings.damping !== undefined) {
+      const d = settings.damping;
+      const allowed = ["air_drag", "rayleigh_membrane_s", "rayleigh_bending_s"];
+      if (!d || typeof d !== "object" || Array.isArray(d) || Object.keys(d).some(k => !allowed.includes(k))) {
+        throw Error("Damping options must contain only air_drag, rayleigh_membrane_s, or rayleigh_bending_s.");
+      }
+      const damp = {};
+      if (d.air_drag !== undefined) {
+        const a = d.air_drag;
+        const aKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+        if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).length !== 4 ||
+            Object.keys(a).some(k => !aKeys.includes(k)) ||
+            aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
+            a.rho_air_kg_m3 < 0 || a.c_normal < 0 || a.c_tangent < 0 || a.eps_v_m_s <= 0) {
+          throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
+        }
+        damp.air_drag = { rho_air_kg_m3: a.rho_air_kg_m3, c_normal: a.c_normal, c_tangent: a.c_tangent, eps_v_m_s: a.eps_v_m_s };
+      }
+      for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
+        if (d[key] !== undefined) {
+          if (typeof d[key] !== "number" || !Number.isFinite(d[key]) || d[key] < 0) {
+            throw Error(`${key} must be a finite nonnegative duration in seconds.`);
+          }
+          if (d[key] > 0) damp[key] = d[key];
+        }
+      }
+      if (Object.keys(damp).length > 0) out.damping = damp;
+    }
+    if (settings.adaptive_barrier !== undefined) {
+      const b = settings.adaptive_barrier;
+      const bKeys = ["target_gap_fraction", "min_gap_fraction", "growth_factor", "membrane_floor_scale", "kappa_min", "kappa_max"];
+      if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).length !== 6 ||
+          Object.keys(b).some(k => !bKeys.includes(k)) || bKeys.some(k => typeof b[k] !== "number" || !Number.isFinite(b[k])) ||
+          !(b.target_gap_fraction > 0 && b.target_gap_fraction < 1) ||
+          !(b.min_gap_fraction > 0 && b.min_gap_fraction <= b.target_gap_fraction) ||
+          !(b.growth_factor >= 1 && b.growth_factor <= 16) ||
+          !(b.membrane_floor_scale >= 0 && b.membrane_floor_scale <= 1) ||
+          b.kappa_min <= 0 || b.kappa_max < b.kappa_min) {
+        throw Error("Adaptive barrier policy parameters are out of range.");
+      }
+      out.adaptive_barrier = {
+        target_gap_fraction: b.target_gap_fraction, min_gap_fraction: b.min_gap_fraction,
+        growth_factor: b.growth_factor, membrane_floor_scale: b.membrane_floor_scale,
+        kappa_min: b.kappa_min, kappa_max: b.kappa_max,
+      };
+    }
+    if (settings.stick_slip !== undefined) {
+      const s = settings.stick_slip;
+      const sKeys = ["mu_s", "mu_k", "transition_v_m_s"];
+      if (!s || typeof s !== "object" || Array.isArray(s) || Object.keys(s).length !== 3 ||
+          Object.keys(s).some(k => !sKeys.includes(k)) || sKeys.some(k => typeof s[k] !== "number" || !Number.isFinite(s[k])) ||
+          s.mu_k < 0 || s.mu_s < s.mu_k || s.transition_v_m_s <= 0) {
+        throw Error("Stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s.");
+      }
+      out.stick_slip = { mu_s: s.mu_s, mu_k: s.mu_k, transition_v_m_s: s.transition_v_m_s };
+    }
+    if (settings.mesh !== undefined) {
+      const m = settings.mesh;
+      const mKeys = ["min_spacing_mm", "cvt_iterations", "max_turning_angle_rad", "gather_refinement"];
+      if (!m || typeof m !== "object" || Array.isArray(m) || Object.keys(m).some(k => !mKeys.includes(k))) {
+        throw Error("Adaptive mesh options contain an unknown field.");
+      }
+      const mesh = {};
+      if (m.min_spacing_mm !== undefined) {
+        if (typeof m.min_spacing_mm !== "number" || !Number.isFinite(m.min_spacing_mm) || m.min_spacing_mm <= 0 || m.min_spacing_mm > 12 || 12 / m.min_spacing_mm > 8) {
+          throw Error("Adaptive mesh min_spacing_mm must be in [1.5, 12] mm.");
+        }
+        mesh.min_spacing_mm = m.min_spacing_mm;
+      }
+      if (m.cvt_iterations !== undefined) {
+        if (!Number.isSafeInteger(m.cvt_iterations) || m.cvt_iterations < 0 || m.cvt_iterations > 32) {
+          throw Error("Adaptive mesh cvt_iterations must be a whole number in 0–32.");
+        }
+        if (m.cvt_iterations > 0) mesh.cvt_iterations = m.cvt_iterations;
+      }
+      if (m.max_turning_angle_rad !== undefined) {
+        if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) || m.max_turning_angle_rad < 0.05 || m.max_turning_angle_rad > Math.PI) {
+          throw Error("Adaptive mesh max_turning_angle_rad must be in [0.05, π].");
+        }
+        if (mesh.min_spacing_mm === undefined && m.max_turning_angle_rad !== 0.12) {
+          throw Error("Adaptive mesh max_turning_angle_rad requires min_spacing_mm.");
+        }
+        if (m.max_turning_angle_rad !== 0.12) mesh.max_turning_angle_rad = m.max_turning_angle_rad;
+      }
+      if (m.gather_refinement !== undefined) {
+        if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) || m.gather_refinement < 1 || m.gather_refinement > 8) {
+          throw Error("Adaptive mesh gather_refinement must be in [1, 8].");
+        }
+        if (mesh.min_spacing_mm === undefined && m.gather_refinement !== 2) {
+          throw Error("Adaptive mesh gather_refinement requires min_spacing_mm.");
+        }
+        if (m.gather_refinement !== 2) mesh.gather_refinement = m.gather_refinement;
+      }
+      if (Object.keys(mesh).length > 0) out.mesh = mesh;
+    }
+    if (settings.construction !== undefined) {
+      const c = settings.construction;
+      const cKeys = ["hem_width_mm", "hem_mass_multiplier", "hem_bending_multiplier", "seam_width_mm", "seam_mass_multiplier", "seam_bending_multiplier"];
+      if (!c || typeof c !== "object" || Array.isArray(c) || Object.keys(c).length !== 6 ||
+          Object.keys(c).some(k => !cKeys.includes(k)) || cKeys.some(k => typeof c[k] !== "number" || !Number.isFinite(c[k])) ||
+          c.hem_width_mm < 0 || c.hem_width_mm > 200 || c.seam_width_mm < 0 || c.seam_width_mm > 100 ||
+          c.hem_mass_multiplier < 1 || c.hem_mass_multiplier > 10 || c.seam_mass_multiplier < 1 || c.seam_mass_multiplier > 10 ||
+          c.hem_bending_multiplier < 1 || c.hem_bending_multiplier > 32 || c.seam_bending_multiplier < 1 || c.seam_bending_multiplier > 32 ||
+          ((c.hem_mass_multiplier > 1 || c.hem_bending_multiplier > 1) && c.hem_width_mm <= 0) ||
+          (c.hem_width_mm > 0 && c.hem_mass_multiplier === 1 && c.hem_bending_multiplier === 1) ||
+          (c.seam_mass_multiplier > 1 && c.seam_width_mm <= 0) ||
+          (c.seam_width_mm > 0 && c.seam_mass_multiplier === 1 && c.seam_bending_multiplier === 1)) {
+        throw Error("Construction mechanics widths or multipliers are out of range.");
+      }
+      if (c.hem_mass_multiplier > 1 || c.hem_bending_multiplier > 1 || c.seam_mass_multiplier > 1 || c.seam_bending_multiplier > 1) {
+        out.construction = {
+          hem_width_mm: c.hem_width_mm, hem_mass_multiplier: c.hem_mass_multiplier, hem_bending_multiplier: c.hem_bending_multiplier,
+          seam_width_mm: c.seam_width_mm, seam_mass_multiplier: c.seam_mass_multiplier, seam_bending_multiplier: c.seam_bending_multiplier,
+        };
+      }
+    }
+    if (settings.start_self_repulsion !== undefined) {
+      const r = settings.start_self_repulsion;
+      const rKeys = ["min_separation_m", "stiffness", "period"];
+      if (!r || typeof r !== "object" || Array.isArray(r) || Object.keys(r).length !== 3 ||
+          Object.keys(r).some(k => !rKeys.includes(k)) ||
+          typeof r.min_separation_m !== "number" || !Number.isFinite(r.min_separation_m) || r.min_separation_m <= 0 || r.min_separation_m > 0.1 ||
+          typeof r.stiffness !== "number" || !Number.isFinite(r.stiffness) || r.stiffness <= 0 || r.stiffness > 1 ||
+          !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
+        throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
+      }
+      out.start_self_repulsion = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+    }
+    return out;
+  }
+  function reqRealismNum(id, label) {
+    const raw = $(id).value.trim();
+    if (!raw) throw Error(`Supply ${label}.`);
+    return Number(raw);
+  }
+  function drapeRealismOptions() {
+    const raw = {};
+    const bm = $("drapeBendingModel").value;
+    if (bm !== "quadratic") raw.bending_model = bm;
+    const cm = $("drapeCompressionModel").value;
+    if (cm !== "axis_aligned") raw.compression_model = cm;
+    const rm = reqRealismNum("drapeRayleighMembraneS", "Rayleigh membrane damping (s)");
+    const rb = reqRealismNum("drapeRayleighBendingS", "Rayleigh bending damping (s)");
+    if ($("drapeAirDrag").checked || rm !== 0 || rb !== 0) {
+      raw.damping = {
+        ...($("drapeAirDrag").checked ? { air_drag: { ...DEFAULT_AIR_DRAG } } : {}),
+        ...(rm !== 0 ? { rayleigh_membrane_s: rm } : {}),
+        ...(rb !== 0 ? { rayleigh_bending_s: rb } : {}),
+      };
+    }
+    if ($("drapeAdaptiveBarrier").checked) raw.adaptive_barrier = { ...DEFAULT_ADAPTIVE_BARRIER };
+    if ($("drapeStickSlip").checked) {
+      raw.stick_slip = {
+        mu_s: reqRealismNum("drapeStickSlipMus", "static friction μs"),
+        mu_k: reqRealismNum("drapeStickSlipMuk", "kinetic friction μk"),
+        transition_v_m_s: reqRealismNum("drapeStickSlipV", "stick-slip transition speed"),
+      };
+    }
+    if ($("drapeAdaptiveMesh").checked) {
+      raw.mesh = {
+        min_spacing_mm: reqRealismNum("drapeMeshMinMm", "adaptive mesh minimum spacing (mm)"),
+        cvt_iterations: reqRealismNum("drapeMeshCvt", "adaptive mesh CVT iterations"),
+      };
+    }
+    if ($("drapeConstruction").checked) {
+      raw.construction = {
+        hem_width_mm: reqRealismNum("drapeHemWidthMm", "hem band width (mm)"),
+        hem_mass_multiplier: reqRealismNum("drapeHemMassMult", "hem mass multiplier"),
+        hem_bending_multiplier: reqRealismNum("drapeHemBendMult", "hem bending multiplier"),
+        seam_width_mm: reqRealismNum("drapeSeamWidthMm", "seam allowance width (mm)"),
+        seam_mass_multiplier: reqRealismNum("drapeSeamMassMult", "seam mass multiplier"),
+        seam_bending_multiplier: reqRealismNum("drapeSeamBendMult", "seam bending multiplier"),
+      };
+    }
+    if ($("drapeStartRepulsion").checked) {
+      raw.start_self_repulsion = {
+        min_separation_m: reqRealismNum("drapeRepulsionMm", "start self-repulsion clearance (mm)") * 1e-3,
+        stiffness: reqRealismNum("drapeRepulsionStiffness", "start self-repulsion stiffness"),
+        period: reqRealismNum("drapeRepulsionPeriod", "start self-repulsion period"),
+      };
+    }
+    return checkedRealismOptions(raw);
+  }
+  function setRealismOptions(settings) {
+    const r = checkedRealismOptions(settings);
+    $("drapeBendingModel").value = r.bending_model ?? "quadratic";
+    $("drapeCompressionModel").value = r.compression_model ?? "axis_aligned";
+    $("drapeAirDrag").checked = r.damping?.air_drag !== undefined;
+    $("drapeRayleighMembraneS").value = String(r.damping?.rayleigh_membrane_s ?? 0);
+    $("drapeRayleighBendingS").value = String(r.damping?.rayleigh_bending_s ?? 0);
+    $("drapeAdaptiveBarrier").checked = r.adaptive_barrier !== undefined;
+    $("drapeStickSlip").checked = r.stick_slip !== undefined;
+    $("drapeStickSlipMus").value = String(r.stick_slip?.mu_s ?? 0.5);
+    $("drapeStickSlipMuk").value = String(r.stick_slip?.mu_k ?? 0.3);
+    $("drapeStickSlipV").value = String(r.stick_slip?.transition_v_m_s ?? 0.02);
+    $("drapeAdaptiveMesh").checked = r.mesh !== undefined;
+    $("drapeMeshMinMm").value = String(r.mesh?.min_spacing_mm ?? 6);
+    $("drapeMeshCvt").value = String(r.mesh?.cvt_iterations ?? 6);
+    $("drapeConstruction").checked = r.construction !== undefined;
+    $("drapeHemWidthMm").value = String(r.construction?.hem_width_mm ?? 20);
+    $("drapeHemMassMult").value = String(r.construction?.hem_mass_multiplier ?? 2.5);
+    $("drapeHemBendMult").value = String(r.construction?.hem_bending_multiplier ?? 5);
+    $("drapeSeamWidthMm").value = String(r.construction?.seam_width_mm ?? 10);
+    $("drapeSeamMassMult").value = String(r.construction?.seam_mass_multiplier ?? 2);
+    $("drapeSeamBendMult").value = String(r.construction?.seam_bending_multiplier ?? 3);
+    $("drapeStartRepulsion").checked = r.start_self_repulsion !== undefined;
+    $("drapeRepulsionMm").value = String(r.start_self_repulsion ? r.start_self_repulsion.min_separation_m * 1e3 : 4);
+    $("drapeRepulsionStiffness").value = String(r.start_self_repulsion?.stiffness ?? 0.5);
+    $("drapeRepulsionPeriod").value = String(r.start_self_repulsion?.period ?? 5);
+    foldButton();
+  }
   let foldUrls = [];
   let materialSources = null, materialTransfer = null;
   const materialOrigin = new URL(location.href).origin;
@@ -890,6 +1150,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (staticEq !== undefined) drapeSettings.static_equilibrium = staticEq;
       const thumbPose = drapeThumbPose();
       if (thumbPose !== undefined) drapeSettings.thumb_pose = thumbPose;
+      Object.assign(drapeSettings, drapeRealismOptions());
     } catch (error) { status(error.message); return; }
     const bodySource = model || imported ? { model: model || null,
       fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
@@ -1207,6 +1468,39 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         const ig = r.numerical.integrator;
         $("foldSummary").innerHTML += `<br>Integrator: ${esc(ig.kind)}${ig.rho_inf !== undefined ? ` (ρ∞ = ${esc(ig.rho_inf)})` : ""}`;
       }
+      if (r.numerical?.bending_model) {
+        $("foldSummary").innerHTML += `<br>Bending model: ${esc(r.numerical.bending_model)}`;
+      }
+      if (r.numerical?.compression_model) {
+        $("foldSummary").innerHTML += `<br>Compression model: ${esc(r.numerical.compression_model)}`;
+      }
+      if (r.numerical?.damping) {
+        const dp = r.numerical.damping, parts = [];
+        if (dp.air_drag) parts.push("air drag");
+        if (dp.rayleigh_membrane_s > 0) parts.push(`Rayleigh membrane ${dp.rayleigh_membrane_s} s`);
+        if (dp.rayleigh_bending_s > 0) parts.push(`Rayleigh bending ${dp.rayleigh_bending_s} s`);
+        if (parts.length) $("foldSummary").innerHTML += `<br>Damping: ${esc(parts.join(", "))}`;
+      }
+      if (r.numerical?.adaptive_barrier) {
+        const k = r.contact_diagnostics?.final_body_kappa_n_m;
+        $("foldSummary").innerHTML += `<br>Adaptive IPC barrier: enabled${Number.isFinite(k) ? ` (final κ = ${esc(k.toExponential(2))} N/m)` : ""}`;
+      }
+      if (r.numerical?.stick_slip) {
+        const ss = r.numerical.stick_slip;
+        $("foldSummary").innerHTML += `<br>Stick-slip friction: μs = ${esc(ss.mu_s)}, μk = ${esc(ss.mu_k)}`;
+      }
+      if (r.numerical?.mesh) {
+        const q = r.numerical.mesh.quality;
+        $("foldSummary").innerHTML += `<br>Adaptive mesh: ${q ? `min angle ${esc(q.min_angle_deg?.toFixed(1))}°, ${esc(q.sliver_triangles)} slivers` : "enabled"}`;
+      }
+      if (r.numerical?.construction) {
+        const c = r.numerical.construction;
+        $("foldSummary").innerHTML += `<br>Construction mechanics: ${c.hem_triangles !== undefined ? `${esc(c.hem_triangles)} hem tris, ${esc(c.seam_hinges)} seam hinges` : "enabled"}`;
+      }
+      if (r.numerical?.start_self_repulsion) {
+        const sr = r.numerical.start_self_repulsion;
+        $("foldSummary").innerHTML += `<br>Self-repelling start relaxation: ${esc((sr.min_separation_m * 1e3).toFixed(1))} mm clearance`;
+      }
       if (r.numerical?.settling) {
         const tail = r.numerical.settling;
         $("foldSummary").innerHTML += `<br>Extra settling: ${esc(tail.steps)} / ${esc(tail.max_steps)} steps, ${esc(tail.duration_s)} s; ${esc(tail.stop_reason)}. Total gravity duration: ${esc(tail.gravity_duration_s)} s.`;
@@ -1306,9 +1600,28 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton", "drapeBendingModel", "drapeCompressionModel", "drapeAirDrag", "drapeRayleighMembraneS", "drapeRayleighBendingS", "drapeAdaptiveBarrier", "drapeStickSlip", "drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV", "drapeAdaptiveMesh", "drapeMeshMinMm", "drapeMeshCvt", "drapeConstruction", "drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult", "drapeStartRepulsion", "drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
+  $("applyRealismPreset").addEventListener("click", () => {
+    setRealismOptions({
+      bending_model: "discrete_shells",
+      compression_model: "principal",
+      damping: { air_drag: { ...DEFAULT_AIR_DRAG }, rayleigh_membrane_s: 0.001, rayleigh_bending_s: 0.002 },
+      adaptive_barrier: { ...DEFAULT_ADAPTIVE_BARRIER },
+      mesh: { min_spacing_mm: 6, cvt_iterations: 6 },
+      construction: {
+        hem_width_mm: 20, hem_mass_multiplier: 2.5, hem_bending_multiplier: 5,
+        seam_width_mm: 10, seam_mass_multiplier: 2, seam_bending_multiplier: 3,
+      },
+      start_self_repulsion: { min_separation_m: 0.004, stiffness: 0.5, period: 5 },
+    });
+    cancelMaterialImport(); invalidateFold();
+  });
+  $("resetRealismPreset").addEventListener("click", () => {
+    setRealismOptions({});
+    cancelMaterialImport(); invalidateFold();
+  });
   $("resetStyle").addEventListener("click", () => {
     $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();
   });
@@ -1457,7 +1770,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) {
       showError("Choose wrist, palm, knuckle or full hand collider."); return;
     }
-    let thumbPose, timeSubdivision, newtonStrategy, integrator, schedule, staticEquilibrium;
+    let thumbPose, timeSubdivision, newtonStrategy, integrator, schedule, staticEquilibrium, realism;
     try {
       thumbPose = drapeThumbPose();
       timeSubdivision = drapeTimeSubdivision();
@@ -1465,6 +1778,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       integrator = drapeIntegrator();
       schedule = drapeSchedule($("twoStart").checked, Number($("maxSettleSteps").value));
       staticEquilibrium = drapeStaticEquilibrium();
+      realism = drapeRealismOptions();
     }
     catch (error) { showError(error.message); return; }
     foldRequest = ++nextRequest;
@@ -1482,7 +1796,15 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       ...(newtonStrategy !== undefined ? { newtonStrategy } : {}),
       ...(integrator !== undefined ? { integrator } : {}),
       ...(schedule !== undefined ? { schedule } : {}),
-      ...(staticEquilibrium !== undefined ? { staticEquilibrium } : {}) });
+      ...(staticEquilibrium !== undefined ? { staticEquilibrium } : {}),
+      ...(realism.bending_model !== undefined ? { bendingModel: realism.bending_model } : {}),
+      ...(realism.compression_model !== undefined ? { compressionModel: realism.compression_model } : {}),
+      ...(realism.damping !== undefined ? { damping: realism.damping } : {}),
+      ...(realism.adaptive_barrier !== undefined ? { adaptiveBarrier: realism.adaptive_barrier } : {}),
+      ...(realism.stick_slip !== undefined ? { stickSlip: realism.stick_slip } : {}),
+      ...(realism.mesh !== undefined ? { mesh: realism.mesh } : {}),
+      ...(realism.construction !== undefined ? { construction: realism.construction } : {}),
+      ...(realism.start_self_repulsion !== undefined ? { startSelfRepulsion: realism.start_self_repulsion } : {}) });
   });
   const traceOrigin=new URL(location.href).origin;
   if(bodyFitToken && !traceToken && !photoToken && /^[0-9a-f]{32}$/.test(bodyFitToken) && traceOrigin!=="null" && window.opener) {
@@ -1569,6 +1891,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             checkedDrapeSchedule(settings);
             checkedStaticEquilibrium(settings.static_equilibrium);
             checkedThumbPose(settings.thumb_pose);
+            checkedRealismOptions(settings);
             if(context.bodyFit !== null && context.bodyFit !== undefined) {
               if(!(context.bodyFit instanceof Blob) || !context.bodyFit.size || context.bodyFit.size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
               bodyFit=await readJson({files:[context.bodyFit]},"body-fit-report.json");
@@ -1594,6 +1917,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             setDrapeSchedule(settings);
             setStaticEquilibrium(settings.static_equilibrium);
             setThumbPose(settings.thumb_pose);
+            setRealismOptions(settings);
             showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
           }
           materialImportBusy=false;showMaterialInputs();renderPrograms();onProgram(true);
