@@ -67,6 +67,22 @@ fn missing(name: &str) -> Refusal {
     .repair("measure it, or fuse the file with priors (ftx measure fuse)")
 }
 
+fn positive(name: &str, value: f64) -> Result<f64, Refusal> {
+    if !value.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            format!("{name} must be finite"),
+        ));
+    }
+    if value <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("{name} must be positive, got {value}"),
+        ));
+    }
+    Ok(value)
+}
+
 fn ramanujan(a: f64, b: f64) -> f64 {
     let r = (a - b) / (a + b);
     let h = r * r;
@@ -75,6 +91,9 @@ fn ramanujan(a: f64, b: f64) -> f64 {
 
 fn depth_for_perimeter(perimeter: f64, a: f64) -> f64 {
     let (mut lo, mut hi) = (1.0, a.max(perimeter / 2.0));
+    if !hi.is_finite() {
+        return f64::NAN;
+    }
     if ramanujan(a, lo) > perimeter {
         return lo;
     }
@@ -178,17 +197,23 @@ fn sagittal_path(l: &Landmarks, ring: Section, hip: Section, waist: Section) -> 
         .fold(0.0, |a, b| a + b)
 }
 
-fn crotch_ring(m: Meas, l: &Landmarks, hip: Section, waist: Section) -> Section {
+fn crotch_ring(m: Meas, l: &Landmarks, hip: Section, waist: Section) -> Result<Section, Refusal> {
     let (zh, ah, bh, cyh) = hip;
     let crotch = l.at("crotch");
+    if !zh.is_finite() || !crotch.is_finite() || zh <= crotch {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("hip height ({zh}) must exceed crotch height ({crotch})"),
+        ));
+    }
     let z1 = crotch + 25.0f64.min(0.5 * (zh - crotch));
     let ring = |b: f64| (z1, 0.92 * ah, b, cyh);
     let mut lo = bh * (z1 - crotch) / (zh - crotch);
     let Ok(target) = m.get("total_crotch_length") else {
-        return ring(0.6 * bh);
+        return Ok(ring(0.6 * bh));
     };
     if sagittal_path(l, ring(lo), hip, waist) >= target {
-        return ring(lo);
+        return Ok(ring(lo));
     }
     let mut hi = bh;
     for _ in 0..40 {
@@ -199,48 +224,75 @@ fn crotch_ring(m: Meas, l: &Landmarks, hip: Section, waist: Section) -> Section 
             hi = mid;
         }
     }
-    ring(0.5 * (lo + hi))
+    Ok(ring(0.5 * (lo + hi)))
 }
 
 /// `torso_sections(meas)`: the crotch ring, hip, waist, chest, across back, shoulder and neck base.
 ///
 /// # Errors
-/// A missing measurement.
+/// A missing measurement, or degenerate non-positive/inverted torso dimensions.
 pub fn torso_sections(m: Meas) -> Result<Vec<Section>, Refusal> {
     let l = landmarks(m)?;
-    let back_y = m.get("chest_depth")? / 2.0;
+    let back_y = positive("chest_depth", m.get("chest_depth")?)? / 2.0;
     let mut out: Vec<Section> = Vec::new();
-    let sec = |out: &mut Vec<Section>, z: f64, girth: f64, width: f64| {
-        let a = width / 2.0;
-        let b = depth_for_perimeter(girth, a);
-        out.push((z, a, b, back_y - b));
+    let sec = |out: &mut Vec<Section>,
+               name: &str,
+               z: f64,
+               girth: f64,
+               width: f64|
+     -> Result<(), Refusal> {
+        Refusal::finite(&format!("{name} section height"), z)?;
+        let girth = positive(&format!("{name} section girth"), girth)?;
+        let a = positive(&format!("{name} section width"), width)? / 2.0;
+        let b = positive(
+            &format!("{name} section depth"),
+            depth_for_perimeter(girth, a),
+        )?;
+        let cy = Refusal::finite(&format!("{name} section centre y"), back_y - b)?;
+        out.push((z, a, b, cy));
+        Ok(())
     };
-    sec(&mut out, l.at("hip"), m.get("hip")?, m.get("hip_width")?);
     sec(
         &mut out,
+        "hip",
+        l.at("hip"),
+        m.get("hip")?,
+        m.get("hip_width")?,
+    )?;
+    sec(
+        &mut out,
+        "waist",
         l.at("waist"),
         m.get("waist")?,
         m.get("waist_width")?,
-    );
-    let ring = crotch_ring(m, &l, out[0], out[1]);
+    )?;
+    let ring = crotch_ring(m, &l, out[0], out[1])?;
     out.insert(0, ring);
     let (chest, chest_w) = (m.get("chest")?, m.get("chest_width")?);
-    sec(&mut out, l.at("chest"), chest, chest_w);
-    sec(&mut out, l.at("across_back"), 0.97 * chest, 0.98 * chest_w);
+    sec(&mut out, "chest", l.at("chest"), chest, chest_w)?;
+    sec(
+        &mut out,
+        "across_back",
+        l.at("across_back"),
+        0.97 * chest,
+        0.98 * chest_w,
+    )?;
     let chest_cy = out[3].3;
     sec(
         &mut out,
+        "shoulder",
         l.at("shoulder") - 15.0,
         0.80 * chest,
         2.0 * l.at("shoulder_half_width") - 30.0,
-    );
+    )?;
     let neck_r = l.at("neck_r");
     sec(
         &mut out,
+        "neck",
         l.at("snp") + 5.0,
         2.0 * PI * neck_r * 1.6,
         2.0 * neck_r * 2.2,
-    );
+    )?;
     let n = out.len();
     for s in &mut out[n - 2..] {
         s.3 = chest_cy + 15.0;
@@ -351,20 +403,23 @@ fn interp_section(secs: &[Section], h: f64) -> (f64, f64, f64) {
 /// `section_radius(meas, part, h)`: the largest distance from the part axis to the form near `h`.
 ///
 /// # Errors
-/// A missing measurement; `invalid_document` for an unknown part.
+/// A missing measurement; non-finite height or degenerate dimensions; `invalid_document` for an unknown part.
 pub fn section_radius(m: Meas, part: &str, h: f64) -> Result<f64, Refusal> {
+    Refusal::finite("section height", h)?;
     if part == "torso" {
         let (a, b, cy) = interp_section(&torso_sections(m)?, h);
-        return Ok(ftx_core::np::linspace(0.0, 2.0 * PI, 96)
+        let r = ftx_core::np::linspace(0.0, 2.0 * PI, 96)
             .into_iter()
             .map(|t| ftx_core::det::hypot(a * sin(t), cy - b * cos(t)))
-            .fold(f64::NEG_INFINITY, f64::max));
+            .fold(f64::NEG_INFINITY, f64::max);
+        return positive("torso section radius", r);
     }
-    if part.starts_with("arm") {
-        return Ok(m.get("upper_arm")? * 1.15 / (2.0 * PI));
+    if matches!(part, "arm_R" | "arm_L") {
+        let upper_arm = positive("upper_arm", m.get("upper_arm")?)?;
+        return positive("arm section radius", upper_arm * 1.15 / (2.0 * PI));
     }
-    if part.starts_with("leg") {
-        let mut r = m.get("thigh")? * 1.05 / (2.0 * PI);
+    if matches!(part, "leg_R" | "leg_L") {
+        let mut r = positive("thigh", m.get("thigh")?)? * 1.05 / (2.0 * PI);
         let fr = frame(m, part)?;
         let z = fr.origin.z + h * fr.up.z;
         if z > fr.origin.z - 20.0 {
@@ -378,7 +433,7 @@ pub fn section_radius(m: Meas, part: &str, h: f64) -> Result<f64, Refusal> {
             };
             r = r.max(reach).max(a - xj);
         }
-        return Ok(r);
+        return positive("leg section radius", r);
     }
     Err(Refusal::new(
         RefusalCode::InvalidDocument,
@@ -411,4 +466,82 @@ pub fn landmark_h(m: Meas, part: &str, name: &str) -> Result<f64, Refusal> {
     }
     let z = l.get(name)?;
     Ok(-(fr.origin.z - z) / fr.up.z)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_meas() -> Value {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/oracle/draft/body.json"
+        )))
+        .unwrap();
+        fixture["cases"][0]["input"]["measurements"].clone()
+    }
+
+    #[test]
+    fn torso_sections_and_section_radius_refuse_degenerate_heights_widths_and_parts() {
+        let base = sample_meas();
+        assert!(torso_sections(Meas(&base)).is_ok());
+
+        // Equal waist and crotch heights previously divided 0/0 in crotch_ring -> NaN.
+        let mut equal_hc = base.clone();
+        let crotch = equal_hc["fused"]["crotch_height"]["value_mm"].clone();
+        equal_hc["fused"]["waist_height"]["value_mm"] = crotch;
+        assert_eq!(
+            torso_sections(Meas(&equal_hc)).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+
+        // Inverted waist below crotch height must also refuse.
+        let mut inverted_hc = base.clone();
+        inverted_hc["fused"]["waist_height"]["value_mm"] = json!(200.0);
+        assert_eq!(
+            torso_sections(Meas(&inverted_hc)).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+
+        // Non-positive widths or girths previously produced NaN in Ramanujan inversion.
+        for (key, val) in [
+            ("hip_width", 0.0),
+            ("waist_width", -10.0),
+            ("chest_width", 0.0),
+            ("chest_depth", 0.0),
+            ("hip", -5.0),
+            ("neck_base", 0.0),
+        ] {
+            let mut m = base.clone();
+            m["fused"][key]["value_mm"] = json!(val);
+            assert_eq!(
+                torso_sections(Meas(&m)).unwrap_err().code,
+                RefusalCode::OutOfRange,
+                "key={key} val={val}"
+            );
+        }
+
+        // Non-finite height previously folded NaN into -inf on torso; unknown arm_* parts bypassed frame check.
+        assert_eq!(
+            section_radius(Meas(&base), "torso", f64::NAN)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            section_radius(Meas(&base), "arm_BOGUS", 0.0)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        let mut bad_arm = base.clone();
+        bad_arm["fused"]["upper_arm"]["value_mm"] = json!(0.0);
+        assert_eq!(
+            section_radius(Meas(&bad_arm), "arm_R", 0.0)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+    }
 }
