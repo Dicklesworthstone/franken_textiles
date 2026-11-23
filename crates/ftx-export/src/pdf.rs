@@ -1529,6 +1529,12 @@ pub fn export_projector(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
         b: Vec2::new(side, head),
     };
     lay.items = lay.items.iter().map(|g| g.transform(&shift)).collect();
+    if lay.items.iter().any(Geom::has_non_finite) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "projector PDF layout contains non-finite coordinates",
+        ));
+    }
     let h = head + lay.height + foot;
     if !h.is_finite() || h >= 200.0 * INCH || width >= 200.0 * INCH {
         return Err(Refusal::new(
