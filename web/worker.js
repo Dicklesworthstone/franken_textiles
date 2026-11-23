@@ -23,6 +23,26 @@ const text = (bytes) => (bytes ? new TextDecoder().decode(bytes) : null);
 // Python truthiness, as webapp.py's has_fold_up reads a placement: {} and [] are false
 const truthy = (v) => !(v === null || v === undefined || v === false || v === 0 || v === ""
   || (Array.isArray(v) && v.length === 0) || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0));
+function checkedThumbPose(value) {
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+  if (!keys || keys.length !== 2 || !Object.hasOwn(value, "left_rotation_vector_rad") || !Object.hasOwn(value, "right_rotation_vector_rad")) {
+    throw new Error("Thumb pose must be an object with only left_rotation_vector_rad and right_rotation_vector_rad.");
+  }
+  const out = {};
+  for (const key of ["left_rotation_vector_rad", "right_rotation_vector_rad"]) {
+    const vec = value[key];
+    if (!Array.isArray(vec) || vec.length !== 3 || vec.some(v => typeof v !== "number" || !Number.isFinite(v))) {
+      throw new Error("Each thumb rotation vector must contain 3 finite radian numbers.");
+    }
+    const scale = Math.max(Math.abs(vec[0]), Math.abs(vec[1]), Math.abs(vec[2]));
+    const angle = scale === 0 ? 0 : scale * Math.sqrt((vec[0] / scale) ** 2 + (vec[1] / scale) ** 2 + (vec[2] / scale) ** 2);
+    if (angle > Math.PI) {
+      throw new Error(`Thumb rotation magnitude ${angle} exceeds π radians.`);
+    }
+    out[key] = [vec[0], vec[1], vec[2]];
+  }
+  return out;
+}
 let dead = false; // set when the module traps: its memory and handles can no longer be trusted
 
 onmessage = async (ev) => {
@@ -166,7 +186,8 @@ onmessage = async (ev) => {
         arm_abduction_deg: armDeg, legs: msg.legs ?? "standing",
         leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,
         ...(skinning !== "lbs" ? { skinning } : {}),
-        ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}) };
+        ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}),
+        ...(msg.thumbPose !== undefined ? { thumb_pose: checkedThumbPose(msg.thumbPose) } : {}) };
       if (!["standing", "seated", "squat"].includes(settings.legs) ||
           !Number.isFinite(settings.leg_fraction) || settings.leg_fraction < 0 || settings.leg_fraction > 1) {
         throw new Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
@@ -282,7 +303,7 @@ onmessage = async (ev) => {
       }
       const configured = (!imported && armDeg !== 35) ||
         settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
-        handCollider !== "wrist" ||
+        handCollider !== "wrist" || settings.thumb_pose !== undefined ||
         settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
         settings.newton_strategy !== undefined || settings.integrator !== undefined ||
         settings.step_s !== undefined || settings.sew_steps !== undefined ||

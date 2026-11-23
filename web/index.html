@@ -257,6 +257,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
         <label>Skinning <select id="drapeSkinning"><option value="lbs">LBS (Anny default)</option><option value="dqs">DQS (dual-quaternion)</option></select></label>
         <label>Hand collider <select id="drapeHands"><option value="wrist">Wrist cap (reference default)</option><option value="palm">Palm (wrist + metacarpals)</option><option value="knuckle">Knuckle (+ first finger bone)</option><option value="full">Full hand (whole hand)</option></select></label>
+        <label>Thumb pose JSON <input id="drapeThumbPose" type="text" placeholder='{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[0,0,0]}'></label>
         <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label></p>
       <p class="row"><label>Newton solver <select id="drapeNewtonStrategy"><option value="projected">Projected Newton (default)</option><option value="adaptive_ilu">Adaptive ILU-PCG</option><option value="trust_region">Trust-region Steihaug</option></select></label>
         <label>Integrator <select id="drapeIntegrator"><option value="implicit_euler">Implicit Euler (default)</option><option value="generalized_alpha">Generalized-α</option></select></label>
@@ -799,6 +800,39 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("staticMaxNewton").value = String(eq?.max_newton_iterations ?? 300);
     for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = eq === undefined;
   }
+  function checkedThumbPose(value) {
+    if (value === undefined) return undefined;
+    const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+    if (!keys || keys.length !== 2 || !Object.hasOwn(value, "left_rotation_vector_rad") || !Object.hasOwn(value, "right_rotation_vector_rad")) {
+      throw Error("Thumb pose must be an object with only left_rotation_vector_rad and right_rotation_vector_rad.");
+    }
+    const out = {};
+    for (const key of ["left_rotation_vector_rad", "right_rotation_vector_rad"]) {
+      const vec = value[key];
+      if (!Array.isArray(vec) || vec.length !== 3 || vec.some(v => typeof v !== "number" || !Number.isFinite(v))) {
+        throw Error("Each thumb rotation vector must contain 3 finite radian numbers.");
+      }
+      const scale = Math.max(Math.abs(vec[0]), Math.abs(vec[1]), Math.abs(vec[2]));
+      const angle = scale === 0 ? 0 : scale * Math.sqrt((vec[0] / scale) ** 2 + (vec[1] / scale) ** 2 + (vec[2] / scale) ** 2);
+      if (angle > Math.PI) {
+        throw Error(`Thumb rotation magnitude ${angle} exceeds π radians.`);
+      }
+      out[key] = [vec[0], vec[1], vec[2]];
+    }
+    return out;
+  }
+  function drapeThumbPose() {
+    const raw = $("drapeThumbPose").value.trim();
+    if (!raw) return undefined;
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch { throw Error("Thumb pose must be valid JSON with left_rotation_vector_rad and right_rotation_vector_rad."); }
+    return checkedThumbPose(parsed);
+  }
+  function setThumbPose(value) {
+    const tp = checkedThumbPose(value);
+    $("drapeThumbPose").value = tp !== undefined ? JSON.stringify(tp) : "";
+  }
   let foldUrls = [];
   let materialSources = null, materialTransfer = null;
   const materialOrigin = new URL(location.href).origin;
@@ -843,6 +877,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (schedule !== undefined) Object.assign(drapeSettings, schedule);
       const staticEq = drapeStaticEquilibrium();
       if (staticEq !== undefined) drapeSettings.static_equilibrium = staticEq;
+      const thumbPose = drapeThumbPose();
+      if (thumbPose !== undefined) drapeSettings.thumb_pose = thumbPose;
     } catch (error) { status(error.message); return; }
     const bodySource = model || imported ? { model: model || null,
       fit: imported ? new Blob([bodyFitText], { type: "application/json" }) : null,
@@ -1137,6 +1173,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (r.hand_collider) {
         $("foldSummary").innerHTML += `<br>Hand collider: ${esc(r.hand_collider)}`;
       }
+      if (r.body?.thumb_pose) {
+        const tp = r.body.thumb_pose;
+        const pairs = r.body.authored_hand_surface_pairs_tested;
+        $("foldSummary").innerHTML += `<br>Thumb pose (rad): L [${esc(tp.left_rotation_vector_rad?.join(", "))}], R [${esc(tp.right_rotation_vector_rad?.join(", "))}]`
+          + (pairs !== undefined ? ` (${esc(pairs)} full-hand surface pairs checked)` : "");
+      }
       if (r.numerical?.newton_strategy) {
         $("foldSummary").innerHTML += `<br>Newton solver: ${esc(r.numerical.newton_strategy.kind)}`;
       }
@@ -1243,7 +1285,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("resetStyle").addEventListener("click", () => {
@@ -1394,8 +1436,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) {
       showError("Choose wrist, palm, knuckle or full hand collider."); return;
     }
-    let timeSubdivision, newtonStrategy, integrator, schedule, staticEquilibrium;
+    let thumbPose, timeSubdivision, newtonStrategy, integrator, schedule, staticEquilibrium;
     try {
+      thumbPose = drapeThumbPose();
       timeSubdivision = drapeTimeSubdivision();
       newtonStrategy = drapeNewtonStrategy();
       integrator = drapeIntegrator();
@@ -1412,7 +1455,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       bodyFit: bodyFitText, bodyFitConsent: $("bodyFitConsent").checked,
       armDeg: Number(angle), legs: $("drapeLegs").value,
       legFraction: Number($("drapeLegFraction").value), skinning,
-      ...(handCollider !== "wrist" ? { handCollider } : {}), maxSettleSteps: Number($("maxSettleSteps").value),
+      ...(handCollider !== "wrist" ? { handCollider } : {}),
+      ...(thumbPose !== undefined ? { thumbPose } : {}), maxSettleSteps: Number($("maxSettleSteps").value),
       ...(timeSubdivision !== undefined ? { timeSubdivision } : {}),
       ...(newtonStrategy !== undefined ? { newtonStrategy } : {}),
       ...(integrator !== undefined ? { integrator } : {}),
@@ -1503,6 +1547,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             checkedIntegrator(settings.integrator);
             checkedDrapeSchedule(settings);
             checkedStaticEquilibrium(settings.static_equilibrium);
+            checkedThumbPose(settings.thumb_pose);
             if(context.bodyFit !== null && context.bodyFit !== undefined) {
               if(!(context.bodyFit instanceof Blob) || !context.bodyFit.size || context.bodyFit.size>16*1024*1024)throw Error("Accepted body report exceeds 16 MiB.");
               bodyFit=await readJson({files:[context.bodyFit]},"body-fit-report.json");
@@ -1527,6 +1572,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
             setIntegrator(settings.integrator);
             setDrapeSchedule(settings);
             setStaticEquilibrium(settings.static_equilibrium);
+            setThumbPose(settings.thumb_pose);
             showBodyImport();worker.postMessage({type:"clearBody"});worker.postMessage({type:"body",request,bytes:modelBytes},[modelBytes]);
           }
           materialImportBusy=false;showMaterialInputs();renderPrograms();onProgram(true);
