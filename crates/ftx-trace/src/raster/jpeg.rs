@@ -1429,7 +1429,7 @@ fn parse_tiff_ifd(data: &[u8]) -> Option<(bool, Vec<TiffEntry<'_>>)> {
     let mut tags: Vec<(u16, u16, usize, &[u8])> = Vec::new();
     for i in 0..tag_count {
         let off = next.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
-        let Some(ent) = data.get(off..off + 12) else {
+        let Some(ent) = off.checked_add(12).and_then(|e| data.get(off..e)) else {
             break;
         };
         let tag = u16_at(&ent[0..2]);
@@ -1548,29 +1548,43 @@ fn ycc_rgb(y: u8, cb: u8, cr: u8) -> [u8; 3] {
 /// (any other short read) ends the walk quietly.
 fn photoshop_raises(s: &[u8]) -> bool {
     let be = |at: usize, n: usize| {
-        s.get(at..at + n)
+        at.checked_add(n)
+            .and_then(|end| s.get(at..end))
             .map(|b| b.iter().fold(0usize, |v, &x| v << 8 | usize::from(x)))
     };
-    let mut offset = 14;
-    while s.get(offset..offset + 4) == Some(b"8BIM") {
+    let mut offset = 14usize;
+    while offset.checked_add(4).and_then(|end| s.get(offset..end)) == Some(b"8BIM") {
         let Some(code) = be(offset + 4, 2) else {
             return false;
         };
         let Some(&name_len) = s.get(offset + 6) else {
             return true;
         };
-        offset += 7 + usize::from(name_len);
-        offset += offset & 1;
+        let Some(next) = offset.checked_add(7 + usize::from(name_len)) else {
+            return false;
+        };
+        let Some(next) = next.checked_add(next & 1) else {
+            return false;
+        };
+        offset = next;
         let Some(size) = be(offset, 4) else {
             return false;
         };
-        offset += 4;
+        let Some(next) = offset.checked_add(4) else {
+            return false;
+        };
+        offset = next;
         // ResolutionInfo is unpacked from its first 14 bytes
         if code == 0x03ED && s.len().saturating_sub(offset).min(size) < 14 {
             return false;
         }
-        offset += size;
-        offset += offset & 1;
+        let Some(next) = offset.checked_add(size).and_then(|n| n.checked_add(n & 1)) else {
+            return false;
+        };
+        if next > s.len() {
+            return false;
+        }
+        offset = next;
     }
     false
 }
@@ -2109,5 +2123,23 @@ mod tests {
             sha256_hex(&c_out),
             "2df4b1ad02667105483dfe33a6cc9b5e1c02ab4c5ba2fc8cf9efebcda1431e1a"
         );
+    }
+
+    #[test]
+    fn malformed_photoshop_and_tiff_offsets_do_not_overflow_or_loop() {
+        // Photoshop 3.0 resource with 32-bit size 0xFFFF_FFEC: on 32-bit wasm, unchecked
+        // `offset += size` at offset 26 would overflow (debug panic) or wrap back to 14 (infinite loop).
+        let mut ps = b"Photoshop 3.0\0".to_vec();
+        ps.extend_from_slice(b"8BIM");
+        ps.extend_from_slice(&0x0404u16.to_be_bytes());
+        ps.push(0); // name_len
+        ps.push(0); // pad to even offset (22)
+        ps.extend_from_slice(&0xFFFF_FFECu32.to_be_bytes());
+        assert!(!photoshop_raises(&ps));
+
+        // TIFF header with IFD offset near u32::MAX (0xFFFF_FFF8): must fail cleanly without overflow.
+        let mut tiff = b"II*\x00".to_vec();
+        tiff.extend_from_slice(&0xFFFF_FFF8u32.to_le_bytes());
+        assert!(parse_tiff_ifd(&tiff).is_none());
     }
 }

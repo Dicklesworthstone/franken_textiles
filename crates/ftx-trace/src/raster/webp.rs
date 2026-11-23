@@ -62,7 +62,11 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
     // anim_decode.c: WebPAnimDecoderNew refuses what WebPGetFeatures refuses, before it demuxes
     let has_alpha = features_have_alpha(bytes).ok_or("WebP: bad file header")?;
     let (frame, (w, h), (xo, yo)) = demux(bytes)?;
-    if w.checked_mul(h).is_none_or(|p| p > max_pixels) {
+    if w.checked_mul(h)
+        .filter(|&p| p <= max_pixels)
+        .and_then(|p| p.checked_mul(4))
+        .is_none()
+    {
         return Err(format!("WebP {w}×{h}: more than {max_pixels} pixels"));
     }
     let (fw, fh) = (frame.w, frame.h);
@@ -167,8 +171,11 @@ fn extended(data: &[u8], end: usize) -> Result<Demuxed<'_>, String> {
     loop {
         let start = pos;
         let (fourcc, size) = (&data[pos..pos + 4], le32(&data[pos + 4..]));
+        if size > MAX_CHUNK_PAYLOAD {
+            return Err("WebP: bad chunk size".into());
+        }
         let padded = size + (size & 1);
-        if size > MAX_CHUNK_PAYLOAD || padded > end - pos - 8 {
+        if padded > end - pos - 8 {
             return Err("WebP: bad chunk size".into());
         }
         match fourcc {
@@ -280,8 +287,11 @@ fn store_frame(
     loop {
         let start = pos;
         let (fourcc, size) = (&data[pos..pos + 4], le32(&data[pos + 4..]));
+        if size > MAX_CHUNK_PAYLOAD {
+            return Err("WebP: bad chunk size".into());
+        }
         let padded = size + (size & 1);
-        if size > MAX_CHUNK_PAYLOAD || padded > end - pos - 8 {
+        if padded > end - pos - 8 {
             return Err("WebP: bad chunk size".into());
         }
         let payload = &data[pos + 8..pos + 8 + padded];
@@ -401,7 +411,7 @@ fn features_have_alpha(data: &[u8]) -> Option<bool> {
     let parsed: Result<(), bool> = 'parse: {
         if vp8x {
             // ParseOptionalChunks: up to the VP8/VP8L chunk, within the RIFF size
-            let mut total = 4 + 8 + 10;
+            let mut total: usize = 4 + 8 + 10;
             loop {
                 let Some(c) = data.get(pos..pos + 8) else {
                     break 'parse Err(true);
@@ -411,7 +421,10 @@ fn features_have_alpha(data: &[u8]) -> Option<bool> {
                     break 'parse Err(false);
                 }
                 let disk = (8 + size + 1) & !1;
-                total += disk;
+                let Some(next_total) = total.checked_add(disk) else {
+                    break 'parse Err(false);
+                };
+                total = next_total;
                 if total > riff_size {
                     break 'parse Err(false);
                 }
@@ -2000,4 +2013,43 @@ fn fancy_rgba(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_chunk_headers_refuse_without_u32_overflow() {
+        // Extended WebP with a VP8X header followed by a chunk whose declared size is u32::MAX
+        // (previously overflowed `size + (size & 1)` on wasm32 before checking MAX_CHUNK_PAYLOAD).
+        let mut max_chunk = Vec::new();
+        max_chunk.extend_from_slice(b"RIFF");
+        max_chunk.extend_from_slice(&30u32.to_le_bytes()); // riff_size = 30 -> total len 38
+        max_chunk.extend_from_slice(b"WEBP");
+        max_chunk.extend_from_slice(b"VP8X");
+        max_chunk.extend_from_slice(&10u32.to_le_bytes());
+        max_chunk.extend_from_slice(&[0u8; 10]); // 1x1 canvas, no flags
+        max_chunk.extend_from_slice(b"JUNK");
+        max_chunk.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(features_have_alpha(&max_chunk).is_none());
+        assert!(decode(&max_chunk, 1024).is_err());
+
+        // Extended WebP with chunk size == MAX_CHUNK_PAYLOAD (0xFFFF_FFF6): on 32-bit wasm,
+        // `total += disk` (22 + 0xFFFF_FFFE) previously overflowed u32 and wrapped below riff_size.
+        let mut payload_wrap = max_chunk.clone();
+        let len = payload_wrap.len();
+        payload_wrap[len - 4..].copy_from_slice(&(MAX_CHUNK_PAYLOAD as u32).to_le_bytes());
+        assert!(features_have_alpha(&payload_wrap).is_none());
+        assert!(decode(&payload_wrap, 1024).is_err());
+
+        // Simple WebP with chunk size == u32::MAX in store_frame.
+        let mut simple_max = Vec::new();
+        simple_max.extend_from_slice(b"RIFF");
+        simple_max.extend_from_slice(&12u32.to_le_bytes());
+        simple_max.extend_from_slice(b"WEBP");
+        simple_max.extend_from_slice(b"VP8 ");
+        simple_max.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode(&simple_max, 1024).is_err());
+    }
 }

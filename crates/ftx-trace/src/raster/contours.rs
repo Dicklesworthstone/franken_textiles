@@ -262,7 +262,11 @@ impl Scanner {
         let mut cur = self.ctable[lval as usize];
         while cur != -1 {
             let c = &self.nodes[cur as usize];
-            if last.0 - c.brect.0 < c.brect.2 && last.1 - c.brect.1 < c.brect.3 {
+            if last.0 >= c.brect.0
+                && last.0 - c.brect.0 < c.brect.2
+                && last.1 >= c.brect.1
+                && last.1 - c.brect.1 < c.brect.3
+            {
                 if res != -1 {
                     let r = &self.nodes[res as usize];
                     if self.trace(r.origin, end, r.is_hole) {
@@ -350,8 +354,19 @@ impl Scanner {
 /// `findContours(img, mode, CHAIN_APPROX_NONE)` (any non-zero pixel is foreground).
 #[must_use]
 pub fn find_contours(img: &Gray, mode: Mode) -> Contours {
-    let (w, h) = (img.w as i32 + 2, img.h as i32 + 2);
-    let mut pad = vec![0i8; (w * h) as usize];
+    if img.w == 0 || img.h == 0 || img.w.checked_mul(img.h) != Some(img.data.len()) {
+        return Contours::default();
+    }
+    let (Some(w), Some(h)) = (
+        i32::try_from(img.w).ok().and_then(|v| v.checked_add(2)),
+        i32::try_from(img.h).ok().and_then(|v| v.checked_add(2)),
+    ) else {
+        return Contours::default();
+    };
+    let Some(pad_len) = w.checked_mul(h).and_then(|n| usize::try_from(n).ok()) else {
+        return Contours::default();
+    };
+    let mut pad = vec![0i8; pad_len];
     for y in 0..img.h {
         for x in 0..img.w {
             pad[(y + 1) * w as usize + x + 1] = i8::from(img.data[y * img.w + x] != 0);
@@ -890,5 +905,62 @@ mod tests {
         // Extreme i32 coordinates subtract in f64 without overflow panic.
         let extreme = [(i32::MIN, 0), (i32::MAX, 0), (0, i32::MAX)];
         assert_eq!(approx_poly_dp(&extreme, 1.0, true).len(), 3);
+    }
+
+    #[test]
+    fn find_contours_handles_empty_mismatched_and_label_wraparound_hierarchy() {
+        let empty = Gray {
+            w: 0,
+            h: 0,
+            data: Vec::new(),
+        };
+        assert!(find_contours(&empty, Mode::CComp).contours.is_empty());
+
+        let bad_len = Gray {
+            w: 4,
+            h: 4,
+            data: vec![255; 3],
+        };
+        assert!(find_contours(&bad_len, Mode::CComp).contours.is_empty());
+
+        // >126 components wrap `nbd` labels across `ctable` buckets; a hollow frame on the left
+        // must still bind its hole to itself even when same-label boxes sit to its right.
+        let mut img = Gray::filled(80, 40, 0);
+        // 130 tiny 1x1 dots across the top band to force label wraparound.
+        for k in 0..130usize {
+            let x = 2 + (k % 35) * 2;
+            let y = 1 + (k / 35) * 2;
+            img.data[y * img.w + x] = 255;
+        }
+        // Hollow 7x7 square on the left at x=4..11, y=15..22.
+        for y in 15..22 {
+            for x in 4..11 {
+                if y == 15 || y == 21 || x == 4 || x == 10 {
+                    img.data[y * img.w + x] = 255;
+                }
+            }
+        }
+        // Tall solid boxes to the right spanning y=12..25 so they collide on y with the left hole.
+        for k in 0..10usize {
+            let bx = 20 + k * 5;
+            for y in 12..25 {
+                for x in bx..bx + 3 {
+                    img.data[y * img.w + x] = 255;
+                }
+            }
+        }
+        let res = find_contours(&img, Mode::CComp);
+        let holes: Vec<usize> = res
+            .hierarchy
+            .iter()
+            .enumerate()
+            .filter(|&(_, h)| h[3] != -1)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(holes.len(), 1, "expected exactly one hole contour");
+        let hole_idx = holes[0];
+        let parent_idx = res.hierarchy[hole_idx][3] as usize;
+        let (px, py, pw, ph) = bounding_rect(&res.contours[parent_idx]);
+        assert_eq!((px, py, pw, ph), (4, 15, 7, 7));
     }
 }
