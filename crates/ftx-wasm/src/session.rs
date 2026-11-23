@@ -143,7 +143,7 @@ fn arm(header: &Header, data: &[u8], stem: &str, vertices: usize, samples: usize
     let moved = indices(header, data, &format!("{stem}_indices"), vertices)?;
     let name = format!("{stem}_offsets");
     let all = points(&floats(header, data, &name)?, &name)?;
-    if all.len() != moved.len() * samples {
+    if moved.len().checked_mul(samples) != Some(all.len()) {
         return Err(format!(
             "posable body: array {name} holds {} points, expected {} vertices at {samples} angles",
             all.len(),
@@ -252,7 +252,11 @@ impl PosableBody {
     // The two samples an angle lies between and its fraction of the way from the first to the second.
     fn bracket(&self, angle: f64) -> (usize, f64) {
         let (low, high) = self.arm_range();
-        let angle = angle.clamp(low, high);
+        let angle = if angle.is_finite() {
+            angle.clamp(low, high)
+        } else {
+            self.base_deg
+        };
         let upper = self
             .angles
             .iter()
@@ -669,6 +673,11 @@ mod tests {
         assert!((full[0].y - base[0].y).abs() < 1e-12 && (full[0].z - base[0].z).abs() < 1e-12);
         assert_eq!(body.collision_at(35.0, 45.0), base, "the right arm moves nothing here");
         assert_eq!(body.display_at(40.0, 35.0), half, "both surfaces are baked alike here");
+        assert_eq!(
+            body.display_at(f64::NAN, 35.0),
+            base,
+            "a non-finite display angle falls back to the base pose instead of NaN vertices"
+        );
         assert_eq!(body.section_radius("torso", 20.4), 30.0);
         assert_eq!(body.section_radius("torso", 5000.0), 0.0);
         assert_eq!(body.section_radius("arm_R", 20.0), 0.0);
