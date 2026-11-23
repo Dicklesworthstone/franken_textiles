@@ -1011,6 +1011,8 @@ fn triangle_voronoi_center(a: Vec2, b: Vec2, c: Vec2) -> Vec2 {
     }
 }
 
+type TriangulatedMesh = (Vec<[usize; 3]>, Vec<([usize; 2], f64)>);
+
 /// Bounded density-weighted interior Lloyd CVT smoothing (`ρ(x) = h(x)⁻²`, fixed boundary and
 /// authored crease vertices, star-validity backtracking, and constrained Delaunay re-triangulation
 /// after each pass).
@@ -1025,7 +1027,7 @@ fn smooth_interior_cvt(
     sizing: &SizingField,
     iterations: usize,
     inst_id: &str,
-) -> Result<(Vec<[usize; 3]>, Vec<([usize; 2], f64)>), Refusal> {
+) -> Result<TriangulatedMesh, Refusal> {
     let n_free = allp.len().saturating_sub(pinned_count);
     if iterations == 0 || n_free == 0 {
         return Ok((faces, resolved_creases));
@@ -1774,13 +1776,12 @@ fn anchor_boundary_crease_points(
 /// Constrained Delaunay of `points` with the first `nb` as the closed boundary loop and optional
 /// authored interior crease constraints; returns CCW interior faces and resolved crease segments.
 /// When `crease_constraints` is empty, delegates directly to [`triangulate`] for bit-exact parity.
-#[allow(clippy::type_complexity)]
 fn triangulate_with_creases(
     points: &[Vec2],
     nb: usize,
     crease_constraints: &[([usize; 2], f64)],
     inst: &str,
-) -> Result<(Vec<[usize; 3]>, Vec<([usize; 2], f64)>), Refusal> {
+) -> Result<TriangulatedMesh, Refusal> {
     if crease_constraints.is_empty() {
         return Ok((triangulate(points, nb, inst)?, Vec::new()));
     }
