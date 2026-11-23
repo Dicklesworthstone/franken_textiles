@@ -141,10 +141,22 @@ pub fn check_svg(text: &str, file: &str, cutter: bool) -> Vec<CheckItem> {
     out
 }
 
+/// Upper bound on a single inflated PDF content stream inspected by [`pdf_objects`] (64 MiB).
+/// Prevents crafted FlateDecode bombs from exhausting memory; streams exceeding the cap are
+/// reported as undecodable (`None`), which fails `pdf.page_streams_decode`.
+const MAX_PDF_STREAM_BYTES: usize = 64 * 1024 * 1024;
+
 /// The objects of a PDF written by the PDF writer: number → (dictionary text, inflated stream). A sequential
 /// scan, streams skipped by `/Length` (spec 03 §8.3).
 #[must_use]
 pub fn pdf_objects(data: &[u8]) -> BTreeMap<u32, (Vec<u8>, Option<Vec<u8>>)> {
+    pdf_objects_with_limit(data, MAX_PDF_STREAM_BYTES)
+}
+
+fn pdf_objects_with_limit(
+    data: &[u8],
+    max_stream_bytes: usize,
+) -> BTreeMap<u32, (Vec<u8>, Option<Vec<u8>>)> {
     let mut objs = BTreeMap::new();
     let mut pos = 0;
     while let Some(off) = find(data, b" 0 obj\n", pos) {
@@ -199,9 +211,15 @@ pub fn pdf_objects(data: &[u8]) -> BTreeMap<u32, (Vec<u8>, Option<Vec<u8>>)> {
                     }
                     let raw = &data[sm + 7..end];
                     if find(&head, b"/FlateDecode", 0).is_some() {
-                        miniz_oxide::inflate::decompress_to_vec_zlib(raw).ok()
-                    } else {
+                        miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+                            raw,
+                            max_stream_bytes,
+                        )
+                        .ok()
+                    } else if raw.len() <= max_stream_bytes {
                         Some(raw.to_vec())
+                    } else {
+                        None
                     }
                 });
                 let scan_from = len
@@ -1900,6 +1918,28 @@ mod tests {
                 .iter()
                 .any(|c| c.check == "pdf.page_streams_decode" && !c.ok),
             "missing /Contents must not bind to invalid object 0: {checks:?}"
+        );
+
+        // Oversized FlateDecode stream must fail closed cleanly under the inflation cap.
+        let payload = vec![b' '; 4096];
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&payload, 9);
+        assert!(compressed.len() < 128);
+        let mut bomb = Vec::new();
+        bomb.extend_from_slice(
+            format!(
+                "%PDF-1.6\n4 0 obj\n<< /Length {} /Filter /FlateDecode >>\nstream\n",
+                compressed.len()
+            )
+            .as_bytes(),
+        );
+        bomb.extend_from_slice(&compressed);
+        bomb.extend_from_slice(b"\nendstream\nendobj\n");
+        let under = pdf_objects_with_limit(&bomb, 4096);
+        assert_eq!(under[&4].1.as_deref(), Some(payload.as_slice()));
+        let over = pdf_objects_with_limit(&bomb, 1024);
+        assert!(
+            over[&4].1.is_none(),
+            "FlateDecode stream exceeding limit must return None instead of inflating unboundedly"
         );
     }
 }
