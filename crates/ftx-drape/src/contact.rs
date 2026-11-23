@@ -359,7 +359,7 @@ fn stick_slip_radial(y: f64, eps: f64, ss: StickSlipFriction, h: f64) -> StickSl
         let w = ss.transition_v_m_s * h;
         let s = y - eps;
         let dm = ss.mu_s - ss.mu_k;
-        let (exp_neg_u, u_exp, radial_eig_exact) = if !(w > 0.0) {
+        let (exp_neg_u, u_exp, radial_eig_exact) = if w.is_nan() || w <= 0.0 {
             if s <= 0.0 {
                 (1.0, 0.0, 0.0)
             } else {
@@ -1598,7 +1598,7 @@ impl Contact {
         let Some(policy) = self.adaptive_barrier else {
             return false;
         };
-        if policy.validate().is_err() || !(policy.growth_factor > 1.0) {
+        if policy.validate().is_err() || policy.growth_factor <= 1.0 {
             return false;
         }
         // Trigger only on severe in-solve crush (50× deeper than `min_gap_fraction`), so moderate
