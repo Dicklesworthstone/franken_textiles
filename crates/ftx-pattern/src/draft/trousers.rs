@@ -28,6 +28,16 @@ fn bad(m: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::DegenerateGeometry, m)
 }
 
+fn positive(name: &str, value: f64) -> Result<f64, Refusal> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("{name} must be finite and positive, got {value}"),
+        ));
+    }
+    Ok(value)
+}
+
 fn edge_len(p: &Pattern, inst: &str, edge: &str) -> Result<f64, Refusal> {
     p.instance(inst)
         .ok_or_else(|| bad(format!("no instance {inst}")))?
@@ -108,10 +118,16 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
     let nappy = crate::doc::truthy(&s["nappy"]);
     let nappy_mm = if nappy { 20.0 } else { 0.0 };
     let seat_name = if nappy { "seat_over_nappy" } else { "hip" };
-    let seat = m.get(seat_name)?;
+    let seat = positive(seat_name, m.get(seat_name)?)?;
     let quarter = (seat + sf(&s, "seat_ease")?) / 4.0;
     let fullness = sf(&s, "fullness")?;
     let (wf, wb) = (quarter - 10.0 + fullness, quarter + 10.0 + fullness);
+    if !wf.is_finite() || wf <= 0.0 || !wb.is_finite() || wb <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("trouser panel widths must be finite and positive (front={wf}, back={wb})"),
+        ));
+    }
     let y_hip = m.landmark_h("torso", "hip")? - m.landmark_h("torso", "waist")?;
     let y_cr = -(m.get("body_rise")? + sf(&s, "rise_ease")? + nappy_mm);
     let ext_f = sf(&s, "front_ext_frac")? * seat;
@@ -124,12 +140,15 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
             )
         })?
         .to_string();
-    let cuff_body = m.get(&cuff_level)?;
-    let cuff_len = (cuff_body + sf(&s, "cuff_ease")?).max(m.get("foot_pass")? + 15.0);
-    let gather = sf(&s, "leg_gather")?;
-    let hem_total = cuff_len * gather;
+    let cuff_body = positive(&cuff_level, m.get(&cuff_level)?)?;
+    let cuff_len = positive(
+        "cuff length",
+        (cuff_body + sf(&s, "cuff_ease")?).max(m.get("foot_pass")? + 15.0),
+    )?;
+    let gather = positive("leg_gather", sf(&s, "leg_gather")?)?;
+    let hem_total = positive("hem total", cuff_len * gather)?;
     let (hem_f, hem_b) = (0.47 * hem_total, 0.53 * hem_total);
-    let cuff_h = sf(&s, "cuff_height")?;
+    let cuff_h = positive("cuff_height", sf(&s, "cuff_height")?)?;
     let z_cuff_top = m.landmark_h("torso", &cuff_level)? + cuff_h / 2.0;
     let y_hem = (z_cuff_top - m.landmark_h("torso", "waist")?) - sf(&s, "blouse_drop")?;
     let leg_origin = m.frame_origin("leg_R")?;
@@ -138,7 +157,7 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
     for y in ftx_core::np::linspace(y_hem, 20.0, 12) {
         r_wrap = r_wrap.max(m.section_radius("leg_R", h_waist + y)?);
     }
-    r_wrap += 22.0;
+    r_wrap = positive("leg wrap radius", r_wrap + 22.0)?;
     let mid_deg = ftx_core::det::asin(1.0f64.min(leg_origin.x.abs() / r_wrap)).to_degrees();
 
     let front_piece = || -> Result<Value, Refusal> {
@@ -197,7 +216,11 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
         p.line("outseam", "hem_side", "waist_side");
         p.line("waist", "waist_side", "waist_cb");
         p.line("cb", "waist_cb", "cb_hip");
-        let cb_dir = unit(Vec2::new(0.0, y_hip) - Vec2::new(cb_slant, rise_extra));
+        let cb_vec = Vec2::new(0.0, y_hip) - Vec2::new(cb_slant, rise_extra);
+        let cb_dir = unit(cb_vec);
+        if !cb_dir.is_finite() {
+            return Err(bad("back waist coincides with hip landmark"));
+        }
         p.cubic_abs(
             "crotch",
             "cb_hip",
@@ -280,16 +303,21 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
         edge_len(&tmp, "tr_front.R", "waist")?,
         edge_len(&tmp, "tr_back.R", "waist")?,
     );
-    let band = (seat + 30.0).max((2.0 * (wl_f + wl_b)) / 1.6);
-    let (seg_b, seg_f) = (
-        band * wl_b / (2.0 * (wl_f + wl_b)),
-        band * wl_f / (2.0 * (wl_f + wl_b)),
-    );
-    let casing = sf(&s, "casing_height")?;
+    let waist_total = positive("combined trouser waist edge length", 2.0 * (wl_f + wl_b))?;
+    let band = positive("waistband length", (seat + 30.0).max(waist_total / 1.6))?;
+    let (seg_b, seg_f) = (band * wl_b / waist_total, band * wl_f / waist_total);
+    let casing = positive("casing_height", sf(&s, "casing_height")?)?;
     let h = 2.0 * casing;
-    let waist = m.get("waist")?;
-    let elastic = sf(&s, "elastic_frac")? * waist;
+    let waist = positive("waist", m.get("waist")?)?;
+    let elastic_frac = positive("elastic_frac", sf(&s, "elastic_frac")?)?;
+    let elastic = positive("elastic length", elastic_frac * waist)?;
     let overlap = sf(&s, "elastic_overlap")?;
+    if !overlap.is_finite() || overlap < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("elastic_overlap must be finite and >= 0, got {overlap}"),
+        ));
+    }
     let mut w = PieceBuilder::new(
         "waistband",
         "WAIST CASING",
@@ -431,4 +459,39 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
         ]
     });
     Ok((pat, spec))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_meas() -> Value {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/oracle/draft/body.json"
+        )))
+        .unwrap();
+        fixture["cases"][0]["input"]["measurements"].clone()
+    }
+
+    #[test]
+    fn zouave_trousers_refuses_nonpositive_cuff_casing_gather_or_negative_overlap() {
+        let meas = sample_meas();
+        assert!(
+            zouave_trousers(&meas, None).is_ok(),
+            "baseline reference measurements must draft cleanly"
+        );
+        for bad_style in [
+            json!({"leg_gather": 0.0}),
+            json!({"leg_gather": -1.0}),
+            json!({"cuff_height": 0.0}),
+            json!({"casing_height": -5.0}),
+            json!({"elastic_frac": 0.0}),
+            json!({"elastic_overlap": -10.0}),
+            json!({"fullness": -500.0}),
+        ] {
+            let err = zouave_trousers(&meas, Some(&bad_style)).unwrap_err();
+            assert_eq!(err.code, RefusalCode::OutOfRange, "style={bad_style}");
+        }
+    }
 }
