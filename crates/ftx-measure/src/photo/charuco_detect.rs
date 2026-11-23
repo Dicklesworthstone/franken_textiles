@@ -82,7 +82,13 @@ fn parse_board(sheet: &Value) -> Result<BoardSpec, Refusal> {
     };
     let sx = int_field("squares_x")?;
     let sy = int_field("squares_y")?;
-    if (sx * sy) / 2 > codes.len() || (sx - 1) * (sy - 1) > 512 {
+    let legacy = match b.get("legacy_pattern") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(refuse("legacy_pattern must be a boolean")),
+    };
+    let marker_count = (sx * sy + usize::from(legacy)) / 2;
+    if marker_count > codes.len() || (sx - 1) * (sy - 1) > 512 {
         return Err(refuse("board exceeds dictionary/corner capacity"));
     }
     let pos_field = |key: &str| -> Result<f64, Refusal> {
@@ -96,11 +102,6 @@ fn parse_board(sheet: &Value) -> Result<BoardSpec, Refusal> {
     if !(marker_mm < square_mm && square_mm <= 1000.0) {
         return Err(refuse("require 0 < marker_mm < square_mm <= 1000"));
     }
-    let legacy = match b.get("legacy_pattern") {
-        None => false,
-        Some(Value::Bool(v)) => *v,
-        Some(_) => return Err(refuse("legacy_pattern must be a boolean")),
-    };
     let origin_mm = match b.get("origin_mm") {
         None => [0.0, 0.0],
         Some(Value::Array(a)) if a.len() == 2 => {
@@ -1086,5 +1087,22 @@ mod dictionary_tests {
         assert!(parse_board(&sheet).is_err());
         sheet["board"]["dictionary"] = json!("DICT_4X4_50");
         assert!(parse_board(&sheet).is_ok());
+
+        // Odd x odd legacy_pattern boards place (sx * sy + 1) / 2 markers (1 more than non-legacy).
+        // 19 x 3 needs 28 markers without legacy_pattern, and 29 with legacy_pattern (exceeding
+        // DICT_5X5_50's 28 captured codes).
+        let mut odd = sidecar("DICT_5X5_50");
+        odd["board"]["squares_x"] = json!(19);
+        odd["board"]["squares_y"] = json!(3);
+        odd["board"]["legacy_pattern"] = json!(false);
+        let parsed = parse_board(&odd).unwrap();
+        assert_eq!(marker_board_coords(&parsed).len(), 28);
+        odd["board"]["legacy_pattern"] = json!(true);
+        assert!(parse_board(&odd).is_err());
+        let blank = vec![255_u8; 32 * 32 * 3];
+        assert!(detect_charuco(&blank, 32, 32, &odd, None).is_err());
+        odd["board"]["dictionary"] = json!("DICT_4X4_50");
+        let parsed_legacy = parse_board(&odd).unwrap();
+        assert_eq!(marker_board_coords(&parsed_legacy).len(), 29);
     }
 }

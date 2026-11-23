@@ -72,12 +72,17 @@ fn board(sheet: &Value) -> Result<Board, Refusal> {
         ));
     }
     let (sx, sy) = (count("squares_x")?, count("squares_y")?);
+    let legacy = match b.get("legacy_pattern") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad_input("board legacy_pattern must be a boolean")),
+    };
     let square = b["square_mm"].as_f64().unwrap_or(f64::NAN);
     let marker = b["marker_mm"].as_f64().unwrap_or(f64::NAN);
     if !square.is_finite()
         || !marker.is_finite()
         || !(0.0 < marker && marker < square && square <= 1000.0)
-        || sx * sy / 2 > capacity
+        || (sx * sy + usize::from(legacy)) / 2 > capacity
         || (sx - 1) * (sy - 1) > 128
     {
         return Err(bad_input(
@@ -673,5 +678,15 @@ mod tests {
         assert_eq!(receipt["manifest_sha256"], sha256_hex(&manifest_bytes));
         assert_eq!(receipt["sheet_sha256"], sha256_hex(&sheet_bytes));
         assert_eq!(receipt, batch.finish().unwrap().1);
+
+        // Odd x odd legacy_pattern board needs (19 * 3 + 1) / 2 = 29 codes, exceeding DICT_5X5_50 (28).
+        let mut odd_sheet = json!({"schema":"fabric-calib-sheet/1","paper":"letter",
+            "board":{"type":"charuco","dictionary":"DICT_5X5_50","squares_x":19,"squares_y":3,
+                "square_mm":22.,"marker_mm":16.,"legacy_pattern":false}});
+        assert!(super::board(&odd_sheet).is_ok());
+        odd_sheet["board"]["legacy_pattern"] = json!(true);
+        assert!(super::board(&odd_sheet).is_err());
+        odd_sheet["board"]["legacy_pattern"] = json!("yes");
+        assert!(super::board(&odd_sheet).is_err());
     }
 }
