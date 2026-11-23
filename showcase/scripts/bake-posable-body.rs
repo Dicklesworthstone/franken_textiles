@@ -2,11 +2,15 @@
 //! converted body model: the frames and landmarks a drape places its pieces by, the surface the cloth
 //! collides with, the surface the page shows, and each arm sampled at a list of angles.
 //!
-//!   bake-posable-body MODEL.ftxbody MEASUREMENTS.json NEW_OUT_DIR BASE_DEG ANGLE,ANGLE,...
+//!   bake-posable-body MODEL.ftxbody MEASUREMENTS.json NEW_OUT_DIR BASE_DEG ANGLE,ANGLE,... [whole|upper:MM]
 //!
 //! The body is fitted and posed by the same functions as `ftx drape` (tape fit, nappy occupancy, linear
-//! blend skinning, the wrist-trimmed clothing skin). An arm angle whose collision surface crosses itself is
-//! left out and named in the header. Writes `posable.json` (header) and `posable.bin` (little-endian
+//! blend skinning, the wrist-trimmed clothing skin). `upper:MM` (for a garment that ends above the hip,
+//! such as a jacket) removes the legs at the top of the thigh and cuts the trunk MM above the floor, on
+//! both surfaces, closing the opening like a tailor's form; the arms are never cut. Below that plane the
+//! cloth would find no body, so choose it below anything the garment reaches. `whole`, the default,
+//! keeps the whole body. An arm angle whose collision surface crosses itself
+//! is left out and named in the header. Writes `posable.json` (header) and `posable.bin` (little-endian
 //! arrays at the header's offsets). Positions are single precision: a browser drape on this body is the
 //! same solver on a rounded body, not a bit-for-bit copy of a native run. Never run on a real person's
 //! measurements.
@@ -14,6 +18,7 @@ use ftx_body::drape::ArmPose;
 use ftx_body::{
     AnnyData, AnnyModel, BodyFrames, DEFAULT_POSE_AUDIT_PAIR_BUDGET, HandCollider, Pose, Wearer,
     clothing_skin_with_hands, fit_tape, nappy_occupancy, pose_deltas, skin_mesh, tape_targets,
+    trimmed_skin,
 };
 use ftx_core::Vec3;
 use serde_json::{Map, Value, json};
@@ -60,11 +65,180 @@ fn xyz(points: &[Vec3]) -> impl Iterator<Item = f64> + '_ {
     points.iter().flat_map(|p| [p.x, p.y, p.z])
 }
 
+/// A horizontal cut that keeps a closed surface's part above a plane and closes the opening. It is found
+/// once, on the base pose, and applied with the same topology to every pose: only the arms move between
+/// poses, and vertices marked `exempt` (the arms) are never cut, so every pose's surface has the same
+/// vertices and triangles.
+struct Cut {
+    /// Source vertices kept, in source order; they come first in the output.
+    kept: Vec<usize>,
+    /// New vertices on the plane: an edge's two source vertices and the fraction of the way from the first.
+    on_plane: Vec<(usize, usize, f64)>,
+    /// For each closed opening, its new vertices (indices into `on_plane`); its centre is their mean.
+    caps: Vec<Vec<usize>>,
+    triangles: Vec<[usize; 3]>,
+}
+
+enum Corner {
+    Source(usize),
+    Plane(usize),
+}
+
+impl Cut {
+    fn new(points: &[Vec3], triangles: &[[usize; 3]], z: f64, exempt: &[bool]) -> Result<Self, String> {
+        let above = |v: usize| exempt[v] || points[v].z >= z;
+        let mut on_plane = Vec::new();
+        let mut plane_index = std::collections::BTreeMap::new();
+        let mut polygons: Vec<Vec<Corner>> = Vec::new();
+        for &face in triangles {
+            let count = face.iter().filter(|&&v| above(v)).count();
+            if count == 3 || face.iter().any(|&v| exempt[v]) {
+                polygons.push(face.map(Corner::Source).into());
+                continue;
+            }
+            if count == 0 {
+                continue;
+            }
+            let mut polygon = Vec::new();
+            for k in 0..3 {
+                let (a, b) = (face[k], face[(k + 1) % 3]);
+                if above(a) {
+                    polygon.push(Corner::Source(a));
+                }
+                if above(a) != above(b) {
+                    let (lo, hi) = (a.min(b), a.max(b));
+                    let index = *plane_index.entry((lo, hi)).or_insert_with(|| {
+                        let t = (z - points[lo].z) / (points[hi].z - points[lo].z);
+                        on_plane.push((lo, hi, t));
+                        on_plane.len() - 1
+                    });
+                    polygon.push(Corner::Plane(index));
+                }
+            }
+            polygons.push(polygon);
+        }
+        let mut kept: Vec<usize> = polygons
+            .iter()
+            .flatten()
+            .filter_map(|c| if let Corner::Source(v) = c { Some(*v) } else { None })
+            .collect();
+        kept.sort_unstable();
+        kept.dedup();
+        let number = |c: &Corner| match c {
+            Corner::Source(v) => kept.binary_search(v).expect("a kept vertex"),
+            Corner::Plane(p) => kept.len() + p,
+        };
+        let mut out = Vec::new();
+        for polygon in &polygons {
+            for i in 1..polygon.len() - 1 {
+                out.push([number(&polygon[0]), number(&polygon[i]), number(&polygon[i + 1])]);
+            }
+        }
+        // The opening's edges are those used in one direction only; each must lie on the plane.
+        let directed: std::collections::BTreeSet<(usize, usize)> =
+            out.iter().flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]).collect();
+        let mut next = std::collections::BTreeMap::new();
+        for &(a, b) in &directed {
+            if !directed.contains(&(b, a)) {
+                if a < kept.len() || b < kept.len() {
+                    return Err("the cut left an opening off the plane: move it away from the arms".into());
+                }
+                next.insert(a, b);
+            }
+        }
+        let mut caps = Vec::new();
+        while let Some((&first, _)) = next.iter().next() {
+            let mut cap = Vec::new();
+            let mut at = first;
+            while let Some(to) = next.remove(&at) {
+                cap.push(at - kept.len());
+                at = to;
+            }
+            if at != first {
+                return Err("an opening made by the cut is not a closed loop".into());
+            }
+            let centre = kept.len() + on_plane.len() + caps.len();
+            for k in 0..cap.len() {
+                let (a, b) = (kept.len() + cap[k], kept.len() + cap[(k + 1) % cap.len()]);
+                out.push([b, a, centre]);
+            }
+            caps.push(cap);
+        }
+        Ok(Self { kept, on_plane, caps, triangles: out })
+    }
+
+    fn apply(&self, points: &[Vec3]) -> Vec<Vec3> {
+        let mut out: Vec<Vec3> = self.kept.iter().map(|&v| points[v]).collect();
+        let plane: Vec<Vec3> = self
+            .on_plane
+            .iter()
+            .map(|&(a, b, t)| points[a] + (points[b] - points[a]) * t)
+            .collect();
+        out.extend(&plane);
+        for cap in &self.caps {
+            let sum = cap.iter().fold(Vec3::ZERO, |s, &p| s + plane[p]);
+            out.push(sum * (1.0 / cap.len() as f64));
+        }
+        out
+    }
+
+    /// Checks the cut surface is a closed, consistently wound skin, as a collision surface must be.
+    fn check(&self, points: &[Vec3]) -> Result<(), Box<dyn Error>> {
+        let faces: Vec<[u32; 3]> = self
+            .triangles
+            .iter()
+            .map(|t| t.map(|v| u32::try_from(v).expect("index fits u32")))
+            .collect();
+        skin_mesh(&self.apply(points), &faces)?;
+        Ok(())
+    }
+}
+
+/// Which source vertices belong to an arm: those skinned most strongly to a bone under either upper arm.
+fn arm_vertices(model: &AnnyModel) -> Vec<bool> {
+    let data = model.data();
+    let k = data.header.counts.influences;
+    let arms: Vec<usize> = ["upperarm01.L", "upperarm01.R"].iter().filter_map(|b| model.bone_index(b)).collect();
+    (0..data.header.counts.vertices)
+        .map(|vertex| {
+            let first = vertex * k;
+            let strongest = (0..k)
+                .max_by(|a, b| data.vertex_bone_weights[first + a].total_cmp(&data.vertex_bone_weights[first + b]))
+                .expect("a vertex has influences");
+            let mut bone = data.vertex_bone_indices[first + strongest] as usize;
+            loop {
+                if arms.contains(&bone) {
+                    return true;
+                }
+                match usize::try_from(data.header.labels.bone_parents[bone]) {
+                    Ok(parent) => bone = parent,
+                    Err(_) => return false,
+                }
+            }
+        })
+        .collect()
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 6 {
-        return Err("usage: bake-posable-body MODEL MEASUREMENTS.json NEW_OUT_DIR BASE_DEG ANGLE,ANGLE,...".into());
+    // `upper:MM` cuts the trunk MM above the floor.
+    let cut_mm: Option<f64> = match args.get(6).map(String::as_str) {
+        None | Some("whole") => None,
+        Some(form) => Some(
+            form.strip_prefix("upper:")
+                .and_then(|mm| mm.parse().ok())
+                .filter(|mm: &f64| mm.is_finite() && *mm > 0.0)
+                .ok_or_else(|| format!("the form is whole or upper:MM, not {form}"))?,
+        ),
+    };
+    let upper = cut_mm.is_some();
+    if !(6..=7).contains(&args.len()) {
+        return Err(
+            "usage: bake-posable-body MODEL MEASUREMENTS.json NEW_OUT_DIR BASE_DEG ANGLE,ANGLE,... [whole|upper:MM]".into(),
+        );
     }
+    // Legs end at the top of the thigh: everything skinned to either upper leg and below is removed.
+    let legs: &[&str] = if upper { &["upperleg01.R", "upperleg01.L"] } else { &[] };
     let model = AnnyModel::from_data(AnnyData::read(Path::new(&args[1]), true)?)?;
     let measurements: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
     let out = Path::new(&args[3]);
@@ -98,25 +272,86 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         pose.validate()?;
         let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
-        let collision = clothing_skin_with_hands(&model, &posed.vertices, HandCollider::Wrist)?;
-        let display = skin_mesh(&posed.vertices, &model.data().faces)?;
+        let (collision, display) = if upper {
+            let mut roots = vec!["wrist.R", "wrist.L"];
+            roots.extend(legs);
+            roots.extend(["levator05.R", "levator05.L"].into_iter().filter(|label| model.bone_index(label).is_some()));
+            (trimmed_skin(&model, &posed.vertices, &roots)?, trimmed_skin(&model, &posed.vertices, legs)?)
+        } else {
+            (
+                clothing_skin_with_hands(&model, &posed.vertices, HandCollider::Wrist)?,
+                skin_mesh(&posed.vertices, &model.data().faces)?,
+            )
+        };
         Ok((posed, collision, display))
     };
 
-    let (posed, collision, display) = posed_at(base, base)?;
-    let audit = collision.audit_self_intersections(DEFAULT_POSE_AUDIT_PAIR_BUDGET)?;
-    if audit.intersecting_pairs != 0 {
-        return Err(format!("the base pose's collision surface crosses itself at {base} degrees").into());
-    }
+    let (posed, collision_skin, display_skin) = posed_at(base, base)?;
     let frames = BodyFrames::new(&model, &posed)?;
+    // The trunk's cut, found on the base pose and kept for every pose. Arm vertices are never cut.
+    let arms = arm_vertices(&model);
+    let exempt = |skin: &ftx_body::SkinMesh| -> Vec<bool> {
+        skin.source_vertex.iter().map(|&s| arms.get(s).copied().unwrap_or(false)).collect()
+    };
+    let cuts = match cut_mm {
+        Some(mm) => {
+            let z = (frames.floor_z + mm) / 1000.0;
+            let c = Cut::new(&collision_skin.vertices, &collision_skin.triangles, z, &exempt(&collision_skin))?;
+            let d = Cut::new(&display_skin.vertices, &display_skin.triangles, z, &exempt(&display_skin))?;
+            c.check(&collision_skin.vertices)?;
+            d.check(&display_skin.vertices)?;
+            Some((c, d))
+        }
+        None => None,
+    };
+    // A pose's two surfaces as the page receives them: (collision, display) points and triangles.
+    let surfaces = |collision: &ftx_body::SkinMesh, display: &ftx_body::SkinMesh| match &cuts {
+        Some((c, d)) => (c.apply(&collision.vertices), d.apply(&display.vertices)),
+        None => (collision.vertices.clone(), display.vertices.clone()),
+    };
+    let (collision_triangles, display_triangles) = match &cuts {
+        Some((c, d)) => (c.triangles.clone(), d.triangles.clone()),
+        None => (collision_skin.triangles.clone(), display_skin.triangles.clone()),
+    };
+    // The moving-body step refuses to start from or move to a body that crosses itself.
+    let crossings = |points: &[Vec3]| -> Result<Option<String>, Box<dyn Error>> {
+        let faces: Vec<[u32; 3]> = collision_triangles
+            .iter()
+            .map(|t| t.map(|v| u32::try_from(v).expect("index fits u32")))
+            .collect();
+        let skin = skin_mesh(points, &faces)?;
+        let audit = skin.audit_self_intersections(DEFAULT_POSE_AUDIT_PAIR_BUDGET)?;
+        Ok(audit.first_intersecting_pair.map(|[a, b]| {
+            let centre = |face: usize| {
+                let [i, j, k] = skin.triangles[face];
+                (skin.vertices[i] + skin.vertices[j] + skin.vertices[k]) * (1000.0 / 3.0)
+            };
+            let (p, q) = (centre(a), centre(b));
+            format!(
+                "{} face pairs, the first near ({:.0}, {:.0}, {:.0}) and ({:.0}, {:.0}, {:.0}) mm",
+                audit.intersecting_pairs, p.x, p.y, p.z, q.x, q.y, q.z
+            )
+        }))
+    };
+    let (collision, display) = surfaces(&collision_skin, &display_skin);
+    if let Some(where_) = crossings(&collision)? {
+        return Err(format!(
+            "the base pose's collision surface crosses itself at {base} degrees: {where_} (floor at {:.0} mm; \
+             waist {:.0} and hip {:.0} mm above it)",
+            frames.floor_z,
+            frames.landmarks.get("waist").copied().unwrap_or(f64::NAN),
+            frames.landmarks.get("hip").copied().unwrap_or(f64::NAN),
+        )
+        .into());
+    }
     let mut blob = Blob {
         bytes: Vec::new(),
         directory: Map::new(),
     };
-    blob.floats("collision_vertices", xyz(&collision.vertices));
-    blob.indices("collision_triangles", collision.triangles.iter().flatten().copied());
-    blob.floats("display_vertices", xyz(&display.vertices));
-    blob.indices("display_triangles", display.triangles.iter().flatten().copied());
+    blob.floats("collision_vertices", xyz(&collision));
+    blob.indices("collision_triangles", collision_triangles.iter().flatten().copied());
+    blob.floats("display_vertices", xyz(&display));
+    blob.indices("display_triangles", display_triangles.iter().flatten().copied());
 
     let mut part_frames = Map::new();
     let mut landmarks = Map::new();
@@ -151,27 +386,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     for &angle in &requested {
         let (_, left_c, left_d) = posed_at(angle, base)?;
         let (_, right_c, right_d) = posed_at(base, angle)?;
-        let crossing = [&left_c, &right_c]
-            .iter()
-            .map(|skin| skin.audit_self_intersections(DEFAULT_POSE_AUDIT_PAIR_BUDGET))
-            .collect::<Result<Vec<_>, _>>()?
-            .iter()
-            .any(|audit| audit.intersecting_pairs != 0);
-        if crossing {
+        let (left_c, left_d) = surfaces(&left_c, &left_d);
+        let (right_c, right_d) = surfaces(&right_c, &right_d);
+        if crossings(&left_c)?.is_some() || crossings(&right_c)?.is_some() {
             refused.push(angle);
         } else {
             admitted.push(angle);
-            samples.push([left_c.vertices, left_d.vertices, right_c.vertices, right_d.vertices]);
+            samples.push([left_c, left_d, right_c, right_d]);
         }
     }
     if admitted.len() < 2 {
         return Err("fewer than two arm angles have a collision surface that does not cross itself".into());
     }
     for (side, first) in [("left", 0), ("right", 2)] {
-        for (surface, base_points, which) in [
-            ("collision", &collision.vertices, first),
-            ("display", &display.vertices, first + 1),
-        ] {
+        for (surface, base_points, which) in [("collision", &collision, first), ("display", &display, first + 1)] {
             let moved: Vec<usize> = (0..base_points.len())
                 .filter(|&v| samples.iter().any(|sample| (sample[which][v] - base_points[v]).norm() > 1e-9))
                 .collect();
@@ -196,14 +424,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         "arm_angles_deg": admitted,
         "arm_angles_refused_deg": refused,
         "hands": "wrist",
+        "form": if upper { "upper" } else { "whole" },
+        "trunk_cut_above_floor_mm": cut_mm,
         "skinning": "lbs",
         "floor_mm": frames.floor_z,
         "radius_h0_mm": RADIUS_RANGE_MM.0,
         "frames": part_frames,
         "landmarks": landmarks,
         "counts": {
-            "collision_vertices": collision.vertices.len(), "collision_triangles": collision.triangles.len(),
-            "display_vertices": display.vertices.len(), "display_triangles": display.triangles.len(),
+            "collision_vertices": collision.len(), "collision_triangles": collision_triangles.len(),
+            "display_vertices": display.len(), "display_triangles": display_triangles.len(),
         },
         "fit": {"iterations": fit.iterations, "mass_kg": fit.mass_kg},
         "arrays": blob.directory,
@@ -212,8 +442,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::write(out.join("posable.bin"), &blob.bytes)?;
     println!(
         "{} collision and {} display vertices, {} arm angles ({} refused), {} bytes",
-        collision.vertices.len(),
-        display.vertices.len(),
+        collision.len(),
+        display.len(),
         admitted.len(),
         refused.len(),
         blob.bytes.len()
