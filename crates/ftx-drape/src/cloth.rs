@@ -4450,6 +4450,8 @@ mod strategy_and_integrator_tests {
         let mut fixed = vec![[false; 3]; rest.len()];
         fixed[0] = [true; 3];
         fixed[1] = [true; 3];
+        // Static admission needs a third, noncollinear support to remove rigid rotation.
+        fixed[rest.len() - 1] = [true; 3];
 
         pb_model.bending_model = BendingModel::DiscreteShells;
         let mut pb_solver = Solver::new(pb_model.clone(), x.clone(), &fixed, Vec3::ZERO);

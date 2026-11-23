@@ -232,8 +232,8 @@ mod tests {
                 1 => Vec3::new(0.0, epsilon, 0.0),
                 _ => Vec3::new(0.0, 0.0, epsilon),
             };
-            plus[i / 3] = plus[i / 3] + offset;
-            minus[i / 3] = minus[i / 3] - offset;
+            plus[i / 3] += offset;
+            minus[i / 3] -= offset;
             let numerical = (patch.rate_energy(&plus, previous, rate)
                 - patch.rate_energy(&minus, previous, rate))
                 / (2.0 * epsilon);
