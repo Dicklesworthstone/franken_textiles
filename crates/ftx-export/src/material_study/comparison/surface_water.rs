@@ -1224,8 +1224,8 @@ impl Supply {
         let mut requested = 0.;
         let mut supplied = 0.;
         let mut unmet = 0.;
-        let mut unmet_scale = 0.;
-        let mut boundary_depletion_scale = 0.;
+        let mut unmet_scale = 0.0_f64;
+        let mut boundary_depletion_scale = 0.0_f64;
         for (interval, ((&end, &rate), &active)) in self
             .ends
             .iter()
