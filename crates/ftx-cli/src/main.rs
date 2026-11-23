@@ -81,8 +81,8 @@ const USAGE: &str = "usage:
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--json]
-  ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
-  ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--model PATH] [--json]
+  ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
+  ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--res 960x540] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--json]
@@ -462,7 +462,14 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "body",
-        &["measurements", "out", "pose", "skinning", "model"],
+        &[
+            "measurements",
+            "out",
+            "pose",
+            "skinning",
+            "thumb-pose",
+            "model",
+        ],
     )?;
     if args.positional.len() != 1 {
         return Err(bad_input("body takes named options, not positional files"));
@@ -480,6 +487,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     };
     let skinning = parse_skinning(args)?;
+    let thumbs = parse_thumb_pose(args)?;
     let (meas, meas_bytes) = read_json(required(args, "measurements")?)?;
     let meas = current_measurements(meas)?;
     let out = PathBuf::from(required(args, "out")?);
@@ -491,8 +499,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .as_ref()
         .map_or(&fit.params, |occupied| &occupied.params);
     let rest = model.rest(params)?;
-    let posed =
-        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
+    let posed = pose_fitted_body(&model, &rest, &pose, skinning, thumbs)?;
     let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
     let pose_geometry = ftx_body::body_pose_geometry_json_with_skinning(
         &model,
@@ -514,6 +521,9 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     doc.insert("pose".into(), json!(pose_name));
     if skinning != SkinningMode::LinearBlend {
         doc.insert("skinning".into(), json!(skinning.as_str()));
+    }
+    if let Some(thumbs) = thumbs {
+        doc.insert("thumb_pose".into(), json!(thumbs));
     }
     doc.insert("pose_geometry".into(), pose_geometry);
     doc.insert(
@@ -966,7 +976,7 @@ fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
     Ok(pose)
 }
 
-fn parse_thumb_pose(args: &Args) -> Result<Option<ThumbPose>, Refusal> {
+pub(crate) fn parse_thumb_pose(args: &Args) -> Result<Option<ThumbPose>, Refusal> {
     let Some(value) = args.options.get("thumb-pose") else {
         return Ok(None);
     };
@@ -976,7 +986,7 @@ fn parse_thumb_pose(args: &Args) -> Result<Option<ThumbPose>, Refusal> {
     Ok(Some(thumbs))
 }
 
-fn pose_fitted_body(
+pub(crate) fn pose_fitted_body(
     model: &AnnyModel,
     rest: &RestBody,
     pose: &Pose,
@@ -1862,11 +1872,54 @@ mod tests {
             let qualifying_refusal = round::cmd_qualify(&qualify).unwrap_err();
             assert_eq!(qualifying_refusal.code, refusal.code);
             assert_eq!(qualifying_refusal.message, refusal.message);
+            for body_args in [
+                vec![
+                    "body",
+                    "--measurements",
+                    "absent.json",
+                    "--out",
+                    "absent",
+                    "--thumb-pose",
+                    input,
+                ],
+                vec![
+                    "body",
+                    "--body-fit",
+                    "absent.json",
+                    "--out",
+                    "absent",
+                    "--thumb-pose",
+                    input,
+                ],
+            ] {
+                let body_parsed =
+                    parse(&body_args.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+                let body_refusal = cmd_body(&body_parsed).unwrap_err();
+                assert_eq!(body_refusal.code, refusal.code);
+                assert_eq!(body_refusal.message, refusal.message);
+            }
         }
         let outside = r#"{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[2,2,2]}"#;
         let args =
             parse(&["drape", "absent.json", "--thumb-pose", outside].map(String::from)).unwrap();
         assert_eq!(cmd_drape(&args).unwrap_err().code, RefusalCode::OutOfRange);
+        let body_outside = parse(
+            &[
+                "body",
+                "--measurements",
+                "absent.json",
+                "--out",
+                "absent",
+                "--thumb-pose",
+                outside,
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_body(&body_outside).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
     }
 
     #[test]

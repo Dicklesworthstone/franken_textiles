@@ -5,8 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyParams, Pose, accepted_shape, default_model_path, pose_deltas,
-    skin_mesh,
+    AnnyData, AnnyModel, BodyParams, Pose, accepted_shape, default_model_path, skin_mesh,
 };
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde_json::{Map, Value, json};
@@ -203,6 +202,7 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "out",
             "pose",
             "skinning",
+            "thumb-pose",
             "model",
         ],
     )?;
@@ -223,6 +223,7 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     };
     let skinning = crate::parse_skinning(args)?;
+    let thumbs = crate::parse_thumb_pose(args)?;
     let out = PathBuf::from(required(args, "out")?);
     absent(&out)?;
     let measurements = args
@@ -237,8 +238,7 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         source_bytes,
     } = prepare(args, measurements.as_ref().map(|m| &m.0))?;
     let rest = model.rest(&params)?;
-    let posed =
-        model.pose_with_skinning(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?, skinning)?;
+    let posed = crate::pose_fitted_body(&model, &rest, &pose, skinning, thumbs)?;
     let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
     let pose_geometry = ftx_body::body_pose_geometry_json_with_skinning(
         &model,
@@ -251,6 +251,9 @@ pub(super) fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     description.insert("pose".into(), json!(pose_name));
     if skinning != ftx_body::SkinningMode::LinearBlend {
         description.insert("skinning".into(), json!(skinning.as_str()));
+    }
+    if let Some(thumbs) = thumbs {
+        description.insert("thumb_pose".into(), json!(thumbs));
     }
     description.insert("pose_geometry".into(), pose_geometry);
     if let Some((_, bytes)) = measurements {
