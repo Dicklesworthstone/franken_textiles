@@ -12,6 +12,7 @@ pub mod manufacturing;
 pub mod materials;
 pub mod page;
 pub mod photo;
+pub mod session;
 pub mod stock_pricing;
 pub mod thermal;
 pub mod tracing;

@@ -69,10 +69,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let measurements: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
     let out = Path::new(&args[3]);
     let base: f64 = args[4].parse()?;
-    let requested: Vec<f64> = args[5]
+    // The base angle is always a sample (with no displacement), so that the body the opening drape uses is
+    // exactly the body a session returns to at that angle.
+    let mut requested: Vec<f64> = args[5]
         .split(',')
         .map(str::parse)
         .collect::<Result<_, _>>()?;
+    requested.push(base);
+    requested.sort_by(f64::total_cmp);
+    requested.dedup();
     fs::create_dir(out)?;
 
     let fit = fit_tape(

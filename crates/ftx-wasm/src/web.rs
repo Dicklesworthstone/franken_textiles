@@ -971,3 +971,104 @@ pub fn thermal_steady(request: &str) -> Result<String, JsError> {
 pub fn thermal_steady_surface(report: &str, conditions: &str) -> Result<String, JsError> {
     crate::thermal::steady_surface(report, conditions).map_err(|e| JsError::new(&e.message))
 }
+
+/// A garment sewn and draped on a baked synthetic body and kept in memory, re-draped by the production
+/// moving-body step as the page moves the body's arms (see [`crate::session`]). Arrays cross the boundary
+/// as typed arrays: positions are xyz in metres (z up, wearer facing −y), indices are `u32`.
+#[wasm_bindgen]
+pub struct WebDrapeSession {
+    inner: crate::session::Session,
+}
+
+#[wasm_bindgen]
+impl WebDrapeSession {
+    /// Sews and drapes `pattern` on the baked body (`ftx-posable-body/1` header text and its array data).
+    /// `settings_json` is a [`crate::session::SessionSettings`] object; `{}` takes the defaults. The
+    /// drape's progress lines go to the worker's `ftxProgress`.
+    ///
+    /// # Errors
+    /// A malformed body, pattern, fit specification or settings, or a refused drape.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        body_header: &str,
+        body_data: &[u8],
+        pattern: &str,
+        fit_spec: &str,
+        settings_json: &str,
+    ) -> Result<WebDrapeSession, JsError> {
+        let parse = |name: &str, text: &str| -> Result<serde_json::Value, JsError> {
+            serde_json::from_str(text).map_err(|e| JsError::new(&format!("{name}: {e}")))
+        };
+        let settings = serde_json::from_str(settings_json)
+            .map_err(|e| JsError::new(&format!("session settings: {e}")))?;
+        let body = crate::session::PosableBody::parse(body_header, body_data)
+            .map_err(|e| JsError::new(&e))?;
+        crate::session::Session::start(
+            body,
+            &parse("pattern", pattern)?,
+            &parse("fit specification", fit_spec)?,
+            settings,
+            ftx_progress,
+        )
+        .map(|inner| WebDrapeSession { inner })
+        .map_err(|e| JsError::new(&e))
+    }
+
+    /// Counts, pieces, the opening drape's phases and its report (`ftx-drape-session/1`) as JSON text.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        self.inner.summary().to_string()
+    }
+
+    /// Every frame of the opening fold-up, frame-major.
+    #[must_use]
+    pub fn replay(&self) -> Vec<f32> {
+        self.inner.replay().to_vec()
+    }
+
+    /// The cloth as it is now.
+    #[must_use]
+    pub fn cloth(&self) -> Vec<f32> {
+        self.inner.cloth()
+    }
+
+    /// The cloth's triangles.
+    #[must_use]
+    pub fn cloth_triangles(&self) -> Vec<u32> {
+        self.inner.cloth_triangles()
+    }
+
+    /// Each cloth vertex's place on its flat pattern piece (xy, mm).
+    #[must_use]
+    pub fn cloth_pattern_mm(&self) -> Vec<f32> {
+        self.inner.cloth_pattern_mm()
+    }
+
+    /// The displayed body with the arms at these angles (degrees from vertical).
+    #[must_use]
+    pub fn display(&self, left_deg: f64, right_deg: f64) -> Vec<f32> {
+        self.inner.display(left_deg, right_deg)
+    }
+
+    /// The displayed body's triangles.
+    #[must_use]
+    pub fn display_triangles(&self) -> Vec<u32> {
+        self.inner.display_triangles()
+    }
+
+    /// Moves the arms to these angles over `seconds` of cloth time. Returns each accepted substep as its
+    /// time (s) followed by the cloth's positions; the same angles as now let the cloth settle.
+    ///
+    /// # Errors
+    /// An invalid request or a move the solver refuses. The session is then exactly where it was.
+    pub fn advance(
+        &mut self,
+        left_deg: f64,
+        right_deg: f64,
+        seconds: f64,
+    ) -> Result<Vec<f32>, JsError> {
+        self.inner
+            .advance(left_deg, right_deg, seconds)
+            .map_err(|e| JsError::new(&e))
+    }
+}
