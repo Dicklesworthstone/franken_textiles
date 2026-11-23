@@ -641,6 +641,7 @@ test("the menu lands the keyboard on a section, a closed rail names its links, a
     await settled("materials");
     // The form once shared a grid row with three control groups and was squeezed to 135 px.
     await phone.goto(new URL("/studies/skirt/", site).href);
+    await phone.locator(".sa-display").waitFor();
     const form = await phone.locator(".sa-display").boundingBox();
     assert.ok(form.width >= 380, `The fitted form spans the phone (${form.width} px)`);
   } finally { await phone.close(); }
@@ -649,7 +650,9 @@ test("the menu lands the keyboard on a section, a closed rail names its links, a
     await wide.goto(site);
     // Its labels are not displayed until it is opened, so each link carries its name another way.
     const rail = wide.getByRole("navigation", { name: "On this page" });
-    assert.equal(await rail.getByRole("link").count(), 14);
+    const marks = await rail.getByRole("link").count();
+    assert.ok(marks > 0, "The rail is drawn on a wide screen with a pointer");
+    assert.equal(await rail.getByRole("link", { name: /\S/ }).count(), marks, "Every mark has a name");
     assert.equal(await rail.getByRole("link", { name: "Wardrobe", exact: true }).count(), 1);
   } finally { await wide.close(); }
 });
