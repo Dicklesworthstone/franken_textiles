@@ -1648,10 +1648,11 @@ impl Contact {
     }
 
     pub(crate) fn has_friction(&self) -> bool {
-        self.params.mu > 0.0
-            || self.stick_slip.is_some_and(|s| s.mu_s > 0.0)
-            || self.self_params.is_some_and(|p| p.mu > 0.0)
-            || (self.self_params.is_some() && self.self_stick_slip.is_some_and(|s| s.mu_s > 0.0))
+        let body_mu = self.stick_slip.map_or(self.params.mu, |s| s.mu_s);
+        let self_mu = self
+            .self_params
+            .map_or(0.0, |p| self.self_stick_slip.map_or(p.mu, |s| s.mu_s));
+        body_mu > 0.0 || self_mu > 0.0
     }
 
     /// Checks a self-contact-enabled state: finite, non-degenerate triangles, positive thickness
@@ -3621,5 +3622,60 @@ mod tests {
                 .code,
             RefusalCode::InvalidDocument
         );
+
+        // Collider replacement must preserve explicit new policies instead of overwriting with None,
+        // keep surface-material vs stick-slip mutual exclusivity, and not leak self_stick_slip onto
+        // contacts without self-contact.
+        let prev_plain = self_layers(&x);
+        let upgraded = self_layers(&x)
+            .with_adaptive_barrier(policy, 1e-4, 1000.0, 9.81)
+            .unwrap()
+            .with_stick_slip(ss)
+            .unwrap()
+            .retain_surface_materials(Some(&prev_plain), &x)
+            .unwrap();
+        assert_eq!(upgraded.adaptive_barrier(), Some(policy));
+        assert_eq!(upgraded.stick_slip(), Some(ss));
+
+        // Fresh collider inherits prior policies when unset, but does not leak self_stick_slip
+        // if the replacement contact has no self-contact.
+        let prev_full = self_layers(&x)
+            .with_self_contact(&x, params())
+            .unwrap()
+            .with_adaptive_barrier(policy, 1e-4, 1000.0, 9.81)
+            .unwrap()
+            .with_stick_slip(ss)
+            .unwrap()
+            .with_self_stick_slip(ss)
+            .unwrap();
+        let inherited_body_only = self_layers(&x)
+            .retain_surface_materials(Some(&prev_full), &x)
+            .unwrap();
+        assert_eq!(inherited_body_only.adaptive_barrier(), Some(policy));
+        assert_eq!(inherited_body_only.stick_slip(), Some(ss));
+        assert_eq!(inherited_body_only.self_stick_slip(), None);
+
+        // Replacing a surface-material contact with stick-slip refuses instead of combining both.
+        let prev_mat = self_layers(&x)
+            .with_surface_materials(&x, &[0, 0], &mats, None)
+            .unwrap();
+        assert_eq!(
+            self_layers(&x)
+                .with_stick_slip(ss)
+                .unwrap()
+                .retain_surface_materials(Some(&prev_mat), &x)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Replacing a stick-slip contact with explicit surface materials drops uniform stick-slip.
+        let replaced_with_mat = self_layers(&x)
+            .with_surface_materials(&x, &[0, 0], &mats, None)
+            .unwrap()
+            .retain_surface_materials(Some(&prev_full), &x)
+            .unwrap();
+        assert_eq!(replaced_with_mat.stick_slip(), None);
+        assert_eq!(replaced_with_mat.self_stick_slip(), None);
     }
 }

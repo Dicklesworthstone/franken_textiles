@@ -217,20 +217,35 @@ impl Contact {
         x: &[Vec3],
     ) -> Result<Self, Refusal> {
         if let Some(prev) = previous {
-            self.adaptive_barrier = prev.adaptive_barrier;
-            self.stick_slip = prev.stick_slip;
-            self.self_stick_slip = prev.self_stick_slip;
+            if self.adaptive_barrier.is_none() {
+                self.adaptive_barrier = prev.adaptive_barrier;
+            }
+            if self.surface_materials.is_none() {
+                if self.stick_slip.is_none() {
+                    self.stick_slip = prev.stick_slip;
+                }
+                if self.self_params.is_some() && self.self_stick_slip.is_none() {
+                    self.self_stick_slip = prev.self_stick_slip;
+                }
+            }
         }
         if let Some(field) = previous.and_then(|c| c.surface_materials.as_ref()) {
-            field.validate_topology(&self.cloth, x.len())?;
-            self.params.thickness = field.max_half();
-            self.params.mu = field
-                .surfaces
-                .iter()
-                .map(|s| s.friction_body)
-                .fold(0.0, f64::max);
-            self.surface_materials = Some(field.clone());
-            self.params.validate()?;
+            if self.stick_slip.is_some() || self.self_stick_slip.is_some() {
+                return Err(invalid(
+                    "per-triangle surface materials cannot be combined with uniform stick-slip friction",
+                ));
+            }
+            if self.surface_materials.is_none() {
+                field.validate_topology(&self.cloth, x.len())?;
+                self.params.thickness = field.max_half();
+                self.params.mu = field
+                    .surfaces
+                    .iter()
+                    .map(|s| s.friction_body)
+                    .fold(0.0, f64::max);
+                self.surface_materials = Some(field.clone());
+                self.params.validate()?;
+            }
         }
         Ok(self)
     }
