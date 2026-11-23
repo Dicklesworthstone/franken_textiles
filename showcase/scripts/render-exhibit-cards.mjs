@@ -33,8 +33,8 @@ const captures = [
 const stills = [
   ["skirt", "public/media/skirt-atelier.jpg"],
   ["trousers", "public/media/trouser-form.jpg"],
-  // The review sheet is 2000 x 777 with three panels; this is its two rendered sleeves and their captions.
-  ["visual-fitting", "public/fittings/sleeve-contact-review.png", { left: 200, top: 30, width: 1110, height: 740 }],
+  // The review sheet is 2000 x 777 with three captioned panels; this is the cuff and hand of its second render.
+  ["visual-fitting", "public/fittings/sleeve-contact-review.png", { left: 978, top: 355, width: 306, height: 204 }],
   ["wardrobe", "public/media/wardrobe-hussar.jpg"],
   ["studios", "public/media/lab-draft.webp"],
   ["materials", "public/media/rig-cylinder.jpg"],
