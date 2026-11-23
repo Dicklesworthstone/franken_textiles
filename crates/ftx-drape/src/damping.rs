@@ -80,12 +80,16 @@ impl AirDrag {
                 "air density and drag coefficients must be nonnegative",
             ));
         }
-        if self.eps_v_m_s <= 0.0 {
+        if self.eps_v_m_s <= 0.0 || self.eps_v_m_s * self.eps_v_m_s <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                "air drag velocity regularization eps_v_m_s must be positive",
+                "air drag velocity regularization eps_v_m_s must be positive without underflowing eps_v^2",
             ));
         }
+        Refusal::finite(
+            "air drag velocity regularization cubed",
+            self.eps_v_m_s * self.eps_v_m_s * self.eps_v_m_s,
+        )?;
         Ok(())
     }
 
@@ -230,6 +234,20 @@ impl<'a> DampingStep<'a> {
             return Ok(None);
         }
         options.validate()?;
+        let c_v = vel.c_v();
+        if !(h.is_finite()
+            && h > 0.0
+            && c_v.is_finite()
+            && c_v > 0.0
+            && (1.0 / c_v).is_finite()
+            && (options.rayleigh_membrane_s / h).is_finite()
+            && (options.rayleigh_bending_s / h).is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("time step {h} s overflows damping velocity or strain-rate scaling"),
+            ));
+        }
         let tri_frames = if options.air_drag.is_some() {
             model
                 .membranes
@@ -395,9 +413,21 @@ fn wrap_angle_diff(mut d: f64) -> f64 {
 /// `r √(r² + ε²)` (quadratic drag at high speed, smooth linear Stokes drag near zero speed).
 fn smooth_drag_psi(r2: f64, eps: f64) -> (f64, f64) {
     let eps2 = eps * eps;
-    let u = (r2 + eps2).sqrt();
-    let psi = (u * (r2 + eps2) - eps * eps2) / 3.0;
-    (psi, u)
+    if eps2 > 0.0 && r2 <= eps2 {
+        // Rationalized form `r² ε (t² + 3t + 3) / (3 ((1 + t)√(1 + t) + 1))` for `t = r²/ε² ∈ [0, 1]`
+        // preserves all 53 bits and exact `0.0` at `r = 0` without catastrophic cancellation when
+        // `r ≪ ε` near Newton convergence.
+        let t = r2 / eps2;
+        let q = (1.0 + t).sqrt();
+        let u = eps * q;
+        let psi = r2 * eps * (t * t + 3.0 * t + 3.0) / (3.0 * ((1.0 + t) * q + 1.0));
+        (psi, u)
+    } else {
+        let s = r2 + eps2;
+        let u = s.sqrt();
+        let psi = (u * s - eps * eps2) / 3.0;
+        (psi, u)
+    }
 }
 
 fn air_drag_energy(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) -> f64 {
@@ -730,6 +760,28 @@ mod tests {
         );
         assert!(
             DampingOptions {
+                air_drag: Some(AirDrag {
+                    eps_v_m_s: 1e150,
+                    ..AirDrag::standard()
+                }),
+                ..DampingOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            DampingOptions {
+                air_drag: Some(AirDrag {
+                    eps_v_m_s: 1e-200,
+                    ..AirDrag::standard()
+                }),
+                ..DampingOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            DampingOptions {
                 rayleigh_membrane_s: -1e-4,
                 ..DampingOptions::default()
             }
@@ -744,5 +796,47 @@ mod tests {
             .validate()
             .is_err()
         );
+
+        // Tiny-velocity air drag potential must stay exact (zero cancellation at r << eps_v)
+        // and vanish identically at rest.
+        let (psi0, u0) = smooth_drag_psi(0.0, 1e-3);
+        assert_eq!(psi0, 0.0);
+        assert_eq!(u0, 1e-3);
+        let r = 1e-11_f64;
+        let (psi_tiny, u_tiny) = smooth_drag_psi(r * r, 1e-3);
+        let want_tiny = 0.5 * 1e-3 * r * r;
+        assert!(
+            (psi_tiny - want_tiny).abs() <= 1e-14 * want_tiny,
+            "psi_tiny={psi_tiny} want={want_tiny}"
+        );
+        assert!((u_tiny - 1e-3).abs() < 1e-15);
+
+        // Subnormal time step overflowing strain-rate or c_v scaling must refuse fail-closed.
+        let rest = vec![Vec2::ZERO, Vec2::new(0.02, 0.0), Vec2::new(0.0, 0.02)];
+        let model = ClothModel::new(
+            rest.clone(),
+            &[[0, 1, 2]],
+            Membrane::orthotropic(500.0, 300.0, 0.2, 60.0, 1.0),
+            2e-5,
+            0.15,
+        )
+        .unwrap();
+        let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let err = DampingStep::build(
+            &model,
+            DampingOptions {
+                air_drag: Some(AirDrag::standard()),
+                rayleigh_membrane_s: 1e-2,
+                rayleigh_bending_s: 0.0,
+            },
+            &x0,
+            1e-320,
+            VelocityMap::ImplicitEuler {
+                x0: &x0,
+                inv_h: 1.0 / 1e-320,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, RefusalCode::OutOfRange);
     }
 }
