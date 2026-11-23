@@ -134,10 +134,18 @@ export default function PoseScene({ onStatus, command }: {
     let range: [number, number] = [35, 135];
     let reached: [number, number] = [35, 35];
     const target: [number, number] = [35, 35];
-    let busy = false, moveId = 0;
+    let busy = false, pendingSettle = false, moveId = 0;
     type Play = { from: Float32Array; to: Float32Array; samples: Float32Array; seconds: number; began: number };
     const plays: Play[] = [];
     let replay: { frames: Float32Array; count: number; began: number } | null = null;
+
+    function stopReplay() {
+      if (!replay || !ready || !garment) return;
+      replay = null;
+      garment.update(toThree(ready.cloth));
+      if (status.phase === "replay") { status.phase = "ready"; publish(); }
+      paint();
+    }
 
     const guide = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: "#a24628", dashSize: 0.012, gapSize: 0.008 }));
     guide.visible = false;
@@ -159,6 +167,11 @@ export default function PoseScene({ onStatus, command }: {
       const d0 = target[0] - reached[0], d1 = target[1] - reached[1];
       const most = Math.max(Math.abs(d0), Math.abs(d1));
       if (most < 0.5) {
+        if (pendingSettle && !dragging) {
+          pendingSettle = false;
+          settle();
+          return;
+        }
         if (!dragging && plays.length === 0) { status.phase = "ready"; publish(); }
         return;
       }
@@ -172,7 +185,9 @@ export default function PoseScene({ onStatus, command }: {
     }
 
     function settle() {
-      if (busy || !ready) return;
+      if (!ready) return;
+      stopReplay();
+      if (busy) { pendingSettle = true; return; }
       busy = true;
       status.phase = "solving";
       publish();
@@ -182,9 +197,13 @@ export default function PoseScene({ onStatus, command }: {
     command.current = (c) => {
       if (!ready) return;
       if (c.kind === "settle") { settle(); return; }
+      stopReplay();
+      pendingSettle = false;
       target[0] = THREE.MathUtils.clamp(c.left, range[0], range[1]);
       target[1] = THREE.MathUtils.clamp(c.right, range[0], range[1]);
+      status.target = [...target];
       status.refused = undefined;
+      publish();
       pump();
     };
 
@@ -223,6 +242,7 @@ export default function PoseScene({ onStatus, command }: {
         publish();
       } else if (reply.type === "refused") {
         busy = false;
+        pendingSettle = false;
         target[0] = reached[0];
         target[1] = reached[1];
         Object.assign(status, { phase: "ready", refused: reply.message, target: [...reached] });
@@ -316,6 +336,7 @@ export default function PoseScene({ onStatus, command }: {
     const armAt = (event: PointerEvent) => {
       if (!bodyMesh || !bodyGeometry) return 0;
       const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return 0;
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
       ray.setFromCamera(pointer, camera);
       const found = ray.intersectObject(bodyMesh, false)[0];
@@ -325,6 +346,7 @@ export default function PoseScene({ onStatus, command }: {
     };
     const angleAt = (event: PointerEvent, side: number) => {
       const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return target[side];
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
       ray.setFromCamera(pointer, camera);
       const s = shoulders[side];
@@ -339,6 +361,8 @@ export default function PoseScene({ onStatus, command }: {
       if (event.button !== 0 || !event.isPrimary || status.phase === "loading" || status.phase === "sewing" || status.phase === "failed") return;
       const arm = armAt(event);
       if (!arm) return;
+      stopReplay();
+      pendingSettle = false;
       dragging = arm;
       dragFrom = { y: event.clientY, angle: target[arm - 1] };
       orbit.enabled = false;
@@ -359,6 +383,8 @@ export default function PoseScene({ onStatus, command }: {
       }
       const side = dragging - 1;
       target[side] = THREE.MathUtils.clamp(angleAt(event, side), range[0], range[1]);
+      status.target = [...target];
+      publish();
       showGuide(side);
       pump();
       event.preventDefault();
@@ -405,29 +431,36 @@ export default function PoseScene({ onStatus, command }: {
       } else if (ready && garment && plays.length) {
         const play = plays[0], n = ready.summary.cloth_vertices * 3, stride = n + 1;
         if (play.began < 0) play.began = now;
-        const count = play.samples.length / stride;
-        const span = Math.max(play.seconds, 0.12) * 1000, t = Math.min(1, (now - play.began) / span) * play.seconds;
-        // The sample before and after the clock, and the body between the move's two ends as the solver moved it.
-        let k = 0;
-        while (k < count - 1 && play.samples[k * stride] < t) k++;
-        const t1 = play.samples[k * stride], t0 = k ? play.samples[(k - 1) * stride] : 0;
-        const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
-        if (blend.length !== n) blend = new Float32Array(n);
-        for (let j = 0; j < n; j++) {
-          const b = play.samples[k * stride + 1 + j];
-          const a = k ? play.samples[(k - 1) * stride + 1 + j] : b;
-          blend[j] = a * (1 - f) + b * f;
-        }
-        garment.update(toThree(blend, new Float32Array(n)));
-        const g = play.seconds > 0 ? t / play.seconds : 1;
-        if (bodyBlend.length !== play.to.length) bodyBlend = new Float32Array(play.to.length);
-        for (let j = 0; j < play.to.length; j++) bodyBlend[j] = play.from[j] * (1 - g) + play.to[j] * g;
-        setBody(bodyBlend.slice());
-        dirty = true;
-        if (t >= play.seconds) {
+        const count = Math.floor(play.samples.length / stride);
+        if (count === 0) {
           setBody(play.to);
+          dirty = true;
           plays.shift();
           if (!plays.length && !busy) pump();
+        } else {
+          const span = Math.max(play.seconds, 0.12) * 1000, t = Math.min(1, (now - play.began) / span) * play.seconds;
+          // The sample before and after the clock, and the body between the move's two ends as the solver moved it.
+          let k = 0;
+          while (k < count - 1 && play.samples[k * stride] < t) k++;
+          const t1 = play.samples[k * stride], t0 = k ? play.samples[(k - 1) * stride] : 0;
+          const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
+          if (blend.length !== n) blend = new Float32Array(n);
+          for (let j = 0; j < n; j++) {
+            const b = play.samples[k * stride + 1 + j];
+            const a = k ? play.samples[(k - 1) * stride + 1 + j] : b;
+            blend[j] = a * (1 - f) + b * f;
+          }
+          garment.update(toThree(blend, new Float32Array(n)));
+          const g = play.seconds > 0 ? t / play.seconds : 1;
+          if (bodyBlend.length !== play.to.length) bodyBlend = new Float32Array(play.to.length);
+          for (let j = 0; j < play.to.length; j++) bodyBlend[j] = play.from[j] * (1 - g) + play.to[j] * g;
+          setBody(bodyBlend.slice());
+          dirty = true;
+          if (t >= play.seconds) {
+            setBody(play.to);
+            plays.shift();
+            if (!plays.length && !busy) pump();
+          }
         }
       }
       if (dirty && alive) {
