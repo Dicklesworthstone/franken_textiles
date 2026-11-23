@@ -12,12 +12,26 @@ pub type Rings<'a> = &'a [&'a [Vec2]];
 
 /// GEOS `Distance::pointToSegment`.
 fn point_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f64 {
-    let dist = |q: Vec2| ((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y)).sqrt();
+    let dist = |q: Vec2| {
+        let (dx, dy) = (p.x - q.x, p.y - q.y);
+        let d2 = dx * dx + dy * dy;
+        if d2.is_finite() && (d2 > 0.0 || (dx == 0.0 && dy == 0.0)) {
+            d2.sqrt()
+        } else {
+            crate::det::hypot(dx, dy)
+        }
+    };
     if a.x == b.x && a.y == b.y {
         return dist(a);
     }
     let len2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
+    if len2 == 0.0 || !len2.is_finite() {
+        return dist(a).min(dist(b));
+    }
     let r = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / len2;
+    if !r.is_finite() {
+        return dist(a).min(dist(b));
+    }
     if r <= 0.0 {
         return dist(a);
     }
@@ -407,5 +421,24 @@ mod tests {
             Vec2::new(0.0, 10.0),
         ];
         assert_eq!(pole_of_inaccessibility(&[&inf_tri], 1.0), Vec2::ZERO);
+
+        // Subnormal and overflow-scale edges must not produce NaN via 0/0 or inf/inf in point_to_segment.
+        let tiny = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1e-200, 0.0),
+            Vec2::new(0.0, 1e-200),
+        ];
+        let d_tiny = boundary_distance(&[&tiny], Vec2::new(0.5e-200, 1.0));
+        assert!(
+            d_tiny.is_finite() && (d_tiny - 1.0).abs() < 1e-12,
+            "{d_tiny}"
+        );
+        let huge = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1e200, 0.0),
+            Vec2::new(0.0, 1e200),
+        ];
+        let d_huge = boundary_distance(&[&huge], Vec2::new(0.0, 0.0));
+        assert!(d_huge.is_finite() && d_huge == 0.0, "{d_huge}");
     }
 }

@@ -52,7 +52,7 @@ pub fn read_obj(text: &str) -> Result<ColouredMesh, String> {
                     .map(str::parse)
                     .collect::<Result<_, _>>()
                     .map_err(|_| bad())?;
-                if v.len() < 3 {
+                if v.len() < 3 || v.iter().any(|x| !x.is_finite()) {
                     return Err(bad());
                 }
                 m.vertices.push(Vec3::new(v[0], v[1], v[2]));
@@ -119,12 +119,15 @@ impl Scene {
             tris.extend(
                 m.triangles
                     .iter()
+                    .filter(|t| t.iter().all(|&i| i < m.vertices.len()))
                     .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
             );
-            if m.colours.is_empty() {
-                colours.extend(std::iter::repeat_n(SKIN, m.vertices.len()));
-            } else {
+            if m.colours.len() == m.vertices.len() {
                 colours.extend(m.colours.iter().copied());
+            } else {
+                colours.extend(
+                    (0..m.vertices.len()).map(|i| m.colours.get(i).copied().unwrap_or(SKIN)),
+                );
             }
         }
         // area-weighted vertex normals
@@ -208,6 +211,12 @@ impl Scene {
     fn slab(o: [f64; 3], inv: [f64; 3], n: &Node, t_max: f64) -> bool {
         let (mut t0, mut t1) = (0.0f64, t_max);
         for k in 0..3 {
+            if !inv[k].is_finite() {
+                if o[k] < n.lo[k] || o[k] > n.hi[k] {
+                    return false;
+                }
+                continue;
+            }
             let (a, b) = ((n.lo[k] - o[k]) * inv[k], (n.hi[k] - o[k]) * inv[k]);
             let (a, b) = if a <= b { (a, b) } else { (b, a) };
             t0 = t0.max(a);
@@ -354,6 +363,9 @@ fn radical_inverse(mut k: u32, b: u32) -> f64 {
 /// Renders `meshes` from `cam` at `width` × `height`: 8-bit RGB rows, top first.
 #[must_use]
 pub fn render(meshes: &[&ColouredMesh], cam: Camera, width: usize, height: usize) -> Vec<u8> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
     let scene = Scene::new(meshes);
     let (fwd, right, up) = cam.axes();
     // lights in the camera's frame: key from the upper left, fill from the right
@@ -475,9 +487,13 @@ fn crc32(bytes: &[u8]) -> u32 {
 #[must_use]
 pub fn png(width: usize, height: usize, rgb: &[u8]) -> Vec<u8> {
     let mut raw = Vec::with_capacity(height * (width * 3 + 1));
-    for row in rgb.chunks(width * 3) {
-        raw.push(0); // filter: none
-        raw.extend_from_slice(row);
+    if width > 0 {
+        for row in rgb.chunks(width * 3) {
+            raw.push(0); // filter: none
+            raw.extend_from_slice(row);
+        }
+    } else {
+        raw.resize(height, 0);
     }
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let chunk = |out: &mut Vec<u8>, kind: &[u8], data: &[u8]| {
@@ -521,10 +537,16 @@ pub fn still_camera(body: &ColouredMesh, garment: &ColouredMesh, view: &str) -> 
     };
     let (blo, bhi) = zs(body);
     let (glo, ghi) = zs(garment);
+    if ![blo, bhi, glo, ghi].iter().all(|v| v.is_finite()) || blo > bhi || glo > ghi {
+        return None;
+    }
     let tall = bhi - blo;
     let zc = (0.5 * (glo + ghi))
         .max(blo + 0.25 * tall)
         .min(blo + 0.8 * tall);
+    if !zc.is_finite() {
+        return None;
+    }
     let (s, c) = det::sin_cos(az.to_radians());
     Some(Camera {
         eye: Vec3::new(2.0 * s, -2.0 * c, zc + 0.12),
@@ -589,26 +611,27 @@ pub fn stills(
     width: usize,
     height: usize,
 ) -> Vec<(String, Vec<u8>)> {
-    [
+    let mut out = Vec::with_capacity(6);
+    for name in [
         "front",
         "side",
         "back",
         "three_quarter",
         "strain_front",
         "strain_back",
-    ]
-    .iter()
-    .map(|&name| {
+    ] {
         let cloth = if name.starts_with("strain_") {
             strain
         } else {
             garment
         };
-        let cam = still_camera(body, garment, name).expect("known native still");
+        let Some(cam) = still_camera(body, garment, name) else {
+            return Vec::new();
+        };
         let rgb = render(&[body, cloth], cam, width, height);
-        (format!("still_{name}.png"), png(width, height, &rgb))
-    })
-    .collect()
+        out.push((format!("still_{name}.png"), png(width, height, &rgb)));
+    }
+    out
 }
 
 /// A schematic felt fez (spec 04 §9.9), from finished radii/height in metres. Its base is open;
@@ -753,5 +776,49 @@ mod tests {
             (3, 1, [0.0, 0.0, 1.0])
         );
         assert!(read_obj("v 0 0 0\nf 1 2 3\n").is_err());
+        assert!(read_obj("v NaN 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").is_err());
+        assert!(read_obj("v 0 0 0 inf 0 0\nv 1 0 0 0 1 0\nv 0 1 0 0 0 1\nf 1 2 3\n").is_err());
+    }
+
+    #[test]
+    fn slab_hits_axis_aligned_ray_on_box_boundary_and_zero_dim_or_empty_inputs_do_not_panic() {
+        // Non-flat triangle spanning x in [0, 1], y in [0, 0], z in [0, 1].
+        let mesh = ColouredMesh {
+            vertices: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+            colours: vec![[0.5, 0.5, 0.5]; 3],
+        };
+        let scene = Scene::new(&[&mesh]);
+        // Axis-aligned rays with d.x == 0 and origin exactly on x == lo.x (0.0) or x == hi.x (1.0)
+        // must not produce 0 * inf = NaN false misses in Scene::slab.
+        assert!(
+            scene
+                .cast([0.0, -1.0, 0.25], [0.0, 1.0, 0.0], f64::INFINITY, false)
+                .is_some(),
+            "ray on lower x slab face must hit the triangle edge"
+        );
+        assert!(
+            scene
+                .cast([1.0, -1.0, 0.0], [0.0, 1.0, 0.0], f64::INFINITY, false)
+                .is_some(),
+            "ray on upper x slab face must hit the triangle corner"
+        );
+        // Zero-dimension render/png and empty-mesh still_camera/stills must never panic.
+        let cam = Camera {
+            eye: Vec3::new(0.0, -2.0, 0.5),
+            target: Vec3::new(0.0, 0.0, 0.5),
+            focal_over_sensor: 50.0 / 36.0,
+        };
+        assert!(render(&[&mesh], cam, 0, 10).is_empty());
+        assert!(render(&[&mesh], cam, 10, 0).is_empty());
+        assert!(!png(0, 4, &[]).is_empty());
+        let empty = ColouredMesh::default();
+        assert!(still_camera(&empty, &mesh, "front").is_none());
+        assert!(still_camera(&mesh, &empty, "front").is_none());
+        assert!(stills(&empty, &mesh, &mesh, 16, 16).is_empty());
     }
 }

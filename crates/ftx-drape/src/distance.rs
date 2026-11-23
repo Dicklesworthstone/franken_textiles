@@ -39,7 +39,7 @@ pub fn point_triangle_closest(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> ([f64; 3], 
         return ([0.0, 1.0, 0.0], Closest::PointPoint(0, 2));
     }
     let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 && d1 > d3 {
         let v = d1 / (d1 - d3);
         return ([1.0 - v, v, 0.0], Closest::PointEdge(0, 1, 2));
     }
@@ -49,18 +49,59 @@ pub fn point_triangle_closest(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> ([f64; 3], 
         return ([0.0, 0.0, 1.0], Closest::PointPoint(0, 3));
     }
     let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 && d2 > d6 {
         let w = d2 / (d2 - d6);
         return ([1.0 - w, 0.0, w], Closest::PointEdge(0, 1, 3));
     }
     let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    let bc_denom = (d4 - d3) + (d5 - d6);
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 && bc_denom > 0.0 {
+        let w = (d4 - d3) / bc_denom;
         return ([0.0, 1.0 - w, w], Closest::PointEdge(0, 2, 3));
     }
-    let denom = 1.0 / (va + vb + vc);
-    let (v, w) = (vb * denom, vc * denom);
-    ([1.0 - v - w, v, w], Closest::PointPlane)
+    let area_sum = va + vb + vc;
+    if area_sum > 0.0 && area_sum.is_finite() {
+        let denom = 1.0 / area_sum;
+        let (v, w) = (vb * denom, vc * denom);
+        return ([1.0 - v - w, v, w], Closest::PointPlane);
+    }
+    // Degenerate (collinear or collapsed) triangle: choose the closest valid edge or vertex
+    // instead of dividing by zero. Non-degenerate triangles never reach this branch.
+    let mut best_d2 = (p - a).norm2();
+    let mut best = ([1.0, 0.0, 0.0], Closest::PointPoint(0, 1));
+    for (idx, vtx, w) in [(2usize, b, [0.0, 1.0, 0.0]), (3usize, c, [0.0, 0.0, 1.0])] {
+        let d2 = (p - vtx).norm2();
+        if d2 < best_d2 {
+            best_d2 = d2;
+            best = (w, Closest::PointPoint(0, idx));
+        }
+    }
+    for (i, j, vi, vj, make_w) in [
+        (
+            1usize,
+            2usize,
+            a,
+            b,
+            (|t: f64| [1.0 - t, t, 0.0]) as fn(f64) -> [f64; 3],
+        ),
+        (1, 3, a, c, |t| [1.0 - t, 0.0, t]),
+        (2, 3, b, c, |t| [0.0, 1.0 - t, t]),
+    ] {
+        let e = vj - vi;
+        let e2 = e.norm2();
+        if e2 > 0.0 && e2.is_finite() {
+            let t = ((p - vi).dot(e) / e2).clamp(0.0, 1.0);
+            if t > 0.0 && t < 1.0 {
+                let q = vi + e * t;
+                let d2 = (p - q).norm2();
+                if d2 < best_d2 {
+                    best_d2 = d2;
+                    best = (make_w(t), Closest::PointEdge(0, i, j));
+                }
+            }
+        }
+    }
+    best
 }
 
 /// Closest parameters (s on a₀a₁, t on b₀b₁) of two segments and the feature pair (Ericson 5.1.9,
@@ -454,6 +495,62 @@ mod tests {
                     j.h[k][i]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn degenerate_and_collinear_triangles_return_finite_exact_closest_points() {
+        let p = Vec3::new(0.5, 0.3, 0.0);
+        let cases = [
+            // Collapsed edge a == b != c (previously divided 0/0 in edge ab check)
+            (
+                Vec3::ZERO,
+                Vec3::ZERO,
+                Vec3::new(1.0, 0.0, 0.0),
+                0.09,
+                Vec3::new(0.5, 0.0, 0.0),
+            ),
+            // Collapsed edge a == c != b
+            (
+                Vec3::ZERO,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::ZERO,
+                0.09,
+                Vec3::new(0.5, 0.0, 0.0),
+            ),
+            // Collapsed edge b == c != a
+            (
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::ZERO,
+                Vec3::ZERO,
+                0.09,
+                Vec3::new(0.5, 0.0, 0.0),
+            ),
+            // Fully collapsed point triangle a == b == c
+            (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0.34, Vec3::ZERO),
+            // Collinear triangle a, b, c with p projecting onto interior
+            (
+                Vec3::ZERO,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(2.0, 0.0, 0.0),
+                0.09,
+                Vec3::new(0.5, 0.0, 0.0),
+            ),
+        ];
+        for (a, b, c, expected_d2, expected_q) in cases {
+            let (w, kind) = point_triangle_closest(p, a, b, c);
+            assert!(w.iter().all(|v| v.is_finite()), "{w:?} {kind:?}");
+            assert!((w.iter().sum::<f64>() - 1.0).abs() < 1e-12, "{w:?}");
+            let q = a * w[0] + b * w[1] + c * w[2];
+            assert!(
+                (q - expected_q).norm() < 1e-12,
+                "closest point {q:?} vs {expected_q:?} ({kind:?})"
+            );
+            let d2 = squared_distance_f64([p, a, b, c], kind);
+            assert!(
+                d2.is_finite() && (d2 - expected_d2).abs() < 1e-12,
+                "d2={d2} vs {expected_d2} ({kind:?})"
+            );
         }
     }
 }
