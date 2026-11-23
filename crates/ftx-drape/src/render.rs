@@ -571,7 +571,7 @@ const SUB_PIXELS: [[f64; 2]; 4] = [
 const HIGHLIGHT: f64 = 2.0;
 
 /// The legible still darkens cloth within this distance (m) of a panel edge, by up to `EDGE_DARKENING`
-/// at the edge itself: about three pixels of a default 960-pixel still of a child's garment.
+/// at the edge itself: about three pixels of a default 960-pixel still, whose camera stands 2 m away.
 const EDGE_LINE_M: f64 = 0.005;
 const EDGE_DARKENING: f64 = 0.45;
 
