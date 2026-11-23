@@ -523,6 +523,18 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
   main .mk .mk-steps button{min-height:40px}
 }
 
+/* ---------- code: an edge that says the line goes on ----------
+   A command longer than its box scrolls sideways, and on a phone that is most of them, cut off mid-word with
+   nothing to show it. A faint glow sits at each edge of the box; a strip of the box's own colour travels with
+   the code and covers the glow at whichever end has been reached. */
+.ft-code pre{background:
+  linear-gradient(90deg,var(--dark) 45%,#16232b00) 0 0/30px 100% no-repeat local,
+  linear-gradient(270deg,var(--dark) 45%,#16232b00) 100% 0/30px 100% no-repeat local,
+  linear-gradient(90deg,#ffbd953d,#ffbd9500) 0 0/14px 100% no-repeat scroll,
+  linear-gradient(270deg,#ffbd953d,#ffbd9500) 100% 0/14px 100% no-repeat scroll;
+  /* Where scrollbars take up room (Windows, Linux) the default one is a white track across the dark box. */
+  scrollbar-width:thin;scrollbar-color:#536670 transparent}
+
 /* A section reached from the menu takes the keyboard focus, so that the next Tab continues from there
    (SiteHeader marks it). It is a landing place, not a control, and is not ringed. */
 [data-landing]:focus{outline:none}

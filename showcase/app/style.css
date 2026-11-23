@@ -134,7 +134,7 @@ p,li,dd,figcaption{text-wrap:pretty}
 /* Narrow screens: the three cards of a row sit side by side and are swiped, the next one showing at the edge.
    Stacked, nine picture cards would add about two thousand pixels to a page that is already long. */
 @media(max-width:820px){
-  .material-callouts{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:thin;
+  .material-callouts{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#8d8778 transparent;
     --gutter:clamp(22px,5.3vw,88px);margin-inline:calc(var(--gutter)*-1);padding-inline:var(--gutter);scroll-padding-inline:var(--gutter);padding-bottom:10px}
   .material-callouts>.thermal-callout{flex:0 0 min(78vw,340px);scroll-snap-align:start}
   .thermal-callout:hover{transform:none}
