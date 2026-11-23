@@ -50,6 +50,9 @@ fn residual(base: [Vec2; 3], p: Vec2) -> ([f64; 3], [f64; 3]) {
 }
 
 fn inverse(a: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    if a.iter().flatten().any(|x| !x.is_finite()) {
+        return None;
+    }
     let mut b = [[0.0; 6]; 3];
     let norm = a
         .iter()
@@ -82,6 +85,9 @@ fn inverse(a: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
         }
     }
     let out: [[f64; 3]; 3] = std::array::from_fn(|i| std::array::from_fn(|j| b[i][j + 3]));
+    if out.iter().flatten().any(|x| !x.is_finite()) {
+        return None;
+    }
     let inv_norm = out
         .iter()
         .map(|r| r.iter().map(|x| x.abs()).sum::<f64>())
@@ -497,5 +503,9 @@ mod tests {
         r = rest();
         r[5].x = f64::NAN;
         assert!(BendingPatch::new([0, 1, 2, 3, 4, 5], r, tensor()).is_err());
+        assert!(
+            inverse([[1.0, 0.0, f64::NAN], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]).is_none(),
+            "inverse must reject non-finite entries instead of absorbing NaN in row-sum norms"
+        );
     }
 }

@@ -1678,6 +1678,9 @@ pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f
     let s = 0.1; // C-IPC's choice: a step may close a gap to 10 % of its start value
     let mean = dp.iter().fold(Vec3::ZERO, |a, b| a + *b) / 4.0;
     let rel: [Vec3; 4] = dp.map(|d| d - mean);
+    if rel.iter().any(|v| !v.is_finite()) {
+        return 0.0;
+    }
     let (ga, gb): (&[Vec3], &[Vec3]) = match pair {
         Pair::VertexTri { .. } | Pair::TriVertex { .. } | Pair::SelfVertexTri { .. } => {
             (&rel[..1], &rel[1..])
