@@ -113,20 +113,57 @@ pub fn edge_edge_closest(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> ((f64, f64),
     let (d1, d2, r) = (a1 - a0, b1 - b0, a0 - b0);
     let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
     let (c, b) = (d1.dot(r), d1.dot(d2));
+    // Degenerate (zero-length) segments fall back to exact point-point or point-edge
+    // classification instead of dividing by zero (Ericson 5.1.9).
+    if a <= 0.0 && e <= 0.0 {
+        return ((0.0, 0.0), Closest::PointPoint(0, 2));
+    }
+    if a <= 0.0 {
+        let t = (f / e).clamp(0.0, 1.0);
+        let kind = if t == 0.0 {
+            Closest::PointPoint(0, 2)
+        } else if t == 1.0 {
+            Closest::PointPoint(0, 3)
+        } else {
+            Closest::PointEdge(0, 2, 3)
+        };
+        return ((0.0, t), kind);
+    }
+    if e <= 0.0 {
+        let s = (-c / a).clamp(0.0, 1.0);
+        let kind = if s == 0.0 {
+            Closest::PointPoint(0, 2)
+        } else if s == 1.0 {
+            Closest::PointPoint(1, 2)
+        } else {
+            Closest::PointEdge(2, 0, 1)
+        };
+        return ((s, 0.0), kind);
+    }
     let denom = a * e - b * b;
     let (mut s, mut t) = if denom <= 1e-12 * a * e {
         // The Gram determinant subtracts nearly equal numbers. Cross-product ratios avoid
         // that cancellation; the threshold selects arithmetic, not a parallel geometry model.
         let n = d1.cross(d2);
         let n2 = n.norm2();
-        if n2 > 0.0 {
-            let s = (d2.cross(r).dot(n) / n2).clamp(0.0, 1.0);
-            let t = if s > 0.0 && s < 1.0 {
-                d1.cross(r).dot(n) / n2
+        if n2 > 0.0 && n2.is_finite() {
+            let s_raw = d2.cross(r).dot(n) / n2;
+            if s_raw.is_finite() {
+                let s = s_raw.clamp(0.0, 1.0);
+                let t = if s > 0.0 && s < 1.0 {
+                    let t_raw = d1.cross(r).dot(n) / n2;
+                    if t_raw.is_finite() {
+                        t_raw
+                    } else {
+                        (b * s + f) / e
+                    }
+                } else {
+                    (b * s + f) / e
+                };
+                (s, t)
             } else {
-                (b * s + f) / e
-            };
-            (s, t)
+                (0.0, f / e)
+            }
         } else {
             // A vanishing cross product retains the existing parallel boundary convention.
             (0.0, f / e)
@@ -550,6 +587,89 @@ mod tests {
             assert!(
                 d2.is_finite() && (d2 - expected_d2).abs() < 1e-12,
                 "d2={d2} vs {expected_d2} ({kind:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn degenerate_edges_return_finite_exact_closest_points() {
+        let cases = [
+            // Collapsed second edge projecting onto interior of first edge.
+            (
+                [
+                    Vec3::ZERO,
+                    Vec3::new(2.0, 0.0, 0.0),
+                    Vec3::new(0.5, 0.3, 0.0),
+                    Vec3::new(0.5, 0.3, 0.0),
+                ],
+                0.09,
+                Closest::PointEdge(2, 0, 1),
+            ),
+            // Collapsed second edge projecting past endpoint of first edge.
+            (
+                [
+                    Vec3::ZERO,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(2.0, 3.0, 0.0),
+                    Vec3::new(2.0, 3.0, 0.0),
+                ],
+                10.0,
+                Closest::PointPoint(1, 2),
+            ),
+            // Collapsed first edge projecting onto interior of second edge.
+            (
+                [
+                    Vec3::new(0.5, 0.4, 0.0),
+                    Vec3::new(0.5, 0.4, 0.0),
+                    Vec3::ZERO,
+                    Vec3::new(2.0, 0.0, 0.0),
+                ],
+                0.16,
+                Closest::PointEdge(0, 2, 3),
+            ),
+            // Collapsed first edge projecting before start of second edge.
+            (
+                [
+                    Vec3::new(-1.0, 2.0, 0.0),
+                    Vec3::new(-1.0, 2.0, 0.0),
+                    Vec3::ZERO,
+                    Vec3::new(2.0, 0.0, 0.0),
+                ],
+                5.0,
+                Closest::PointPoint(0, 2),
+            ),
+            // Both edges collapsed to points.
+            (
+                [
+                    Vec3::new(1.0, 2.0, 3.0),
+                    Vec3::new(1.0, 2.0, 3.0),
+                    Vec3::new(4.0, 6.0, 3.0),
+                    Vec3::new(4.0, 6.0, 3.0),
+                ],
+                25.0,
+                Closest::PointPoint(0, 2),
+            ),
+        ];
+        for (pts, expected_d2, expected_kind) in cases {
+            let ((s, t), kind) = edge_edge_closest(pts[0], pts[1], pts[2], pts[3]);
+            assert!(
+                s.is_finite()
+                    && t.is_finite()
+                    && (0.0..=1.0).contains(&s)
+                    && (0.0..=1.0).contains(&t),
+                "non-finite or out-of-range params ({s}, {t}) for {pts:?}"
+            );
+            assert_eq!(kind, expected_kind);
+            let qa = pts[0] * (1.0 - s) + pts[1] * s;
+            let qb = pts[2] * (1.0 - t) + pts[3] * t;
+            assert!(((qa - qb).norm2() - expected_d2).abs() < 1e-12);
+            let jet = squared_distance(pts, [false; 4], kind);
+            assert!(
+                jet.v.is_finite()
+                    && (jet.v - expected_d2).abs() < 1e-12
+                    && jet.g.iter().all(|v| v.is_finite())
+                    && jet.h.iter().flatten().all(|v| v.is_finite()),
+                "non-finite jet {jet:?} for {kind:?}"
             );
         }
     }

@@ -757,12 +757,11 @@ mod tests {
                     "p={p:?} i={i} g={} fd={fd_g}",
                     j.g[i]
                 );
-                for k in 0..2 {
+                for (k, &h_ik) in j.h[i].iter().enumerate() {
                     let fd_h = (eval(pp).g[k] - eval(pm).g[k]) / (2.0 * eps);
                     assert!(
-                        (j.h[i][k] - fd_h).abs() < 1e-6 * fd_h.abs().max(1.0),
-                        "p={p:?} ({i},{k}) h={} fd={fd_h}",
-                        j.h[i][k]
+                        (h_ik - fd_h).abs() < 1e-6 * fd_h.abs().max(1.0),
+                        "p={p:?} ({i},{k}) h={h_ik} fd={fd_h}",
                     );
                 }
             }
