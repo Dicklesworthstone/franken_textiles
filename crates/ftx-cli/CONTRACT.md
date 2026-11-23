@@ -478,13 +478,25 @@ override source records. Explicit fused-only and flat inputs retain their suppli
 hashes identify the original file bytes, and the input is never rewritten. This CLI freshness exception
 does not change fitting numerics or promote model estimates to measurements. Direct invalid-record
 controls and full-model fresh/poisoned-cache comparisons live in the existing workflow tests.
-- `ftx render DRAPE_DIR [--res WxH] [--json]` (default 960x540, each side 16 to 8192, at most 16 million
-  pixels per view): the six stills of an
+- `ftx render DRAPE_DIR [--res WxH] [--shading standard|legible] [--json]` (default 960x540, each side
+  16 to 8192, at most 16 million pixels per view): the six stills of an
   `ftx drape` run (`ftx_drape::render`) from its `body.obj`, `garment.obj` and `garment_strain.obj`, written
   into DRAPE_DIR as `still_{front,side,back,three_quarter,strain_front,strain_back}.png`, printing
   `{"stills": {view: path}}` as the reference's `blender_sew.py --stills-from` does; no Blender. A missing
   or unreadable OBJ, empty mesh or non-finite geometry is refused (`io`, `invalid_document`).
-- `ftx render BASELINE_DIR --compare REVISED_DIR --view VIEW --out NEW_DIR [--res WxH] [--json]`
+  `--shading legible` writes a second set, `still_<view>_legible.png`, beside those and leaves them as
+  they are; `--shading standard` (the default) is the set above, whose pixels a checksum test in
+  `ftx_drape::render` holds to what they were before the option existed. The legible set draws the same
+  geometry through the same cameras for reading folds and edges by eye: four rays a pixel, 16 ambient
+  rays a ray and, on the four construction views only, a highlight that grows as the view grazes the
+  cloth and a dark line inside every panel edge (hems, openings, and seams, whose two sides the drape's
+  mesh keeps apart). The strain views get the extra rays and nothing else, because there the colour is
+  the reading. It is a drawing aid with no reference counterpart: its constants are fixed in code, come
+  from no material record and are the same for every cloth, so it shows no fabric's sheen and supports
+  no physics or fit claim. `inspect-pixel` names the same place for a pixel of either set. The JSON
+  envelope carries `"shading"`; an unknown shading is refused (`invalid_document`).
+- `ftx render BASELINE_DIR --compare REVISED_DIR --view VIEW --out NEW_DIR [--res WxH]
+  [--shading standard|legible] [--json]`
   renders one native view of each scene at the baseline camera with the same raster dimensions.
   It keeps the original scene files and writes `before.png` and `after.png` in the new directory.
   The report indicates whether the posed bodies have equal vertices and faces. Use the

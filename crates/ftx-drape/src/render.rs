@@ -14,6 +14,17 @@
 //! image is the same bits however many threads draw it (rows are shared across `available_parallelism`;
 //! one thread on wasm).
 //!
+//! [`Shading::Legible`] is a second way to draw the same geometry through the same camera, for reading
+//! folds and edges by eye. One ray a pixel aliases a fine wrinkle and a matte surface under 8 ambient
+//! rays flattens it, so it casts four rays a pixel on a fixed rotated grid and averages them in linear
+//! light, takes 16 stratified ambient directions a ray (64 different ones a pixel), and on cloth adds a
+//! highlight that grows as the view grazes the surface and a dark line just inside every panel edge
+//! (a hem, an opening, and a seam where the mesh keeps the two panels' vertices apart). Where the
+//! cloth's colours are the strain scale it adds neither, because there the colour is the reading. It is
+//! a drawing aid and not a picture of a fabric: its constants are fixed here, come from no material
+//! record and are the same for every cloth. The standard still is untouched by it, bit for bit, and a
+//! pixel of either still names the same place (`pick_still` casts through the pixel's centre).
+//!
 //! Provenance (frankensim, same author, MIT + OpenAI/Anthropic rider, commit `7b70bc9e`): the deterministic
 //! median-split BVH (`TriMesh::build`) and the watertight shear-space ray–triangle test (`tri_hit`, Woop,
 //! Benthin and Wald) from `crates/fs-render/src/charts.rs`; the sRGB encode and 8-bit quantize from
@@ -102,6 +113,8 @@ struct Scene {
     colours: Vec<[f64; 3]>,
     nodes: Vec<Node>,
     order: Vec<usize>,
+    /// The first triangle of each mesh, in the order the meshes were given.
+    first: Vec<usize>,
 }
 
 struct Hit {
@@ -110,10 +123,22 @@ struct Hit {
     bary: [f64; 3],
 }
 
+/// What a primary ray found, ready for lighting.
+struct Surface {
+    /// Colour interpolated from the triangle's corners (linear RGB).
+    col: [f64; 3],
+    /// Unit normal, smoothed over the corners and turned towards the eye.
+    n: Vec3,
+    /// A point just off the surface, where secondary rays start.
+    lo: [f64; 3],
+}
+
 impl Scene {
     fn new(meshes: &[&ColouredMesh]) -> Self {
         let (mut p, mut tris, mut colours) = (Vec::new(), Vec::new(), Vec::new());
+        let mut first = Vec::with_capacity(meshes.len());
         for m in meshes {
+            first.push(tris.len());
             let base = p.len();
             p.extend(m.vertices.iter().map(|v| [v.x, v.y, v.z]));
             tris.extend(
@@ -152,6 +177,7 @@ impl Scene {
             colours,
             nodes: Vec::new(),
             order: Vec::new(),
+            first,
         };
         let mut order: Vec<usize> = (0..s.tris.len()).collect();
         if !order.is_empty() {
@@ -306,6 +332,142 @@ impl Scene {
         }
         best
     }
+
+    /// The surface a primary ray from `eye` along `d` met at `h`.
+    fn surface(&self, eye: Vec3, d: Vec3, h: &Hit) -> Surface {
+        let t = self.tris[h.tri];
+        let mut n = Vec3::ZERO;
+        let mut col = [0.0; 3];
+        for (k, &v) in t.iter().enumerate() {
+            n += self.normals[v] * h.bary[k];
+            for (c, &cv) in col.iter_mut().zip(&self.colours[v]) {
+                *c += cv * h.bary[k];
+            }
+        }
+        let mut n = n.normalized();
+        if n.dot(d) > 0.0 {
+            n = -n;
+        }
+        let p = eye + d * h.t;
+        let lift = p + n * 1e-4;
+        Surface {
+            col,
+            n,
+            lo: [lift.x, lift.y, lift.z],
+        }
+    }
+
+    /// The cosine of the light from `l` on the surface; nothing where it faces away or lies in shadow.
+    fn lit(&self, s: &Surface, l: Vec3) -> f64 {
+        let c = s.n.dot(l);
+        if c <= 0.0
+            || self
+                .cast(s.lo, [l.x, l.y, l.z], f64::INFINITY, true)
+                .is_some()
+        {
+            0.0
+        } else {
+            c
+        }
+    }
+
+    /// The share of `dirs` (in the frame of the normal) that leave the surface without meeting anything
+    /// within 0.1 m: ambient occlusion.
+    fn open(&self, s: &Surface, dirs: &[[f64; 3]]) -> f64 {
+        let n = s.n;
+        let a = if n.x.abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let tu = n.cross(a).normalized();
+        let tv = n.cross(tu);
+        dirs.iter()
+            .filter(|d| {
+                let w = tu * d[0] + tv * d[1] + n * d[2];
+                self.cast(s.lo, [w.x, w.y, w.z], 0.1, true).is_none()
+            })
+            .count() as f64
+            / dirs.len() as f64
+    }
+
+    /// The edges that belong to exactly one of the triangles from `first_cloth` on: where the cloth's
+    /// mesh ends. That is a hem or an opening, and also a seam wherever the mesh keeps the two panels'
+    /// vertices apart, as a drape's `garment.obj` does.
+    fn panel_edges(&self, first_cloth: usize) -> PanelEdges {
+        let mut sides: Vec<[usize; 2]> = Vec::new();
+        for tri in self.tris.iter().skip(first_cloth) {
+            for k in 0..3 {
+                let (a, b) = (tri[k], tri[(k + 1) % 3]);
+                sides.push([a.min(b), a.max(b)]);
+            }
+        }
+        // sorted, never hashed: the same edges in the same order on every run and every target
+        sides.sort_unstable();
+        let mut edges = Vec::new();
+        let mut i = 0;
+        while i < sides.len() {
+            let mut j = i + 1;
+            while j < sides.len() && sides[j] == sides[i] {
+                j += 1;
+            }
+            if j == i + 1 {
+                edges.push(sides[i]);
+            }
+            i = j;
+        }
+        let mut start = vec![0usize; self.p.len() + 1];
+        for e in &edges {
+            for &v in e {
+                start[v + 1] += 1;
+            }
+        }
+        for v in 0..self.p.len() {
+            start[v + 1] += start[v];
+        }
+        let mut next = start.clone();
+        let mut at = vec![0usize; 2 * edges.len()];
+        for (e, ends) in edges.iter().enumerate() {
+            for &v in ends {
+                at[next[v]] = e;
+                next[v] += 1;
+            }
+        }
+        PanelEdges { edges, start, at }
+    }
+
+    /// Distance (m) from the hit to the nearest panel edge that ends at a corner of the hit's triangle;
+    /// `None` if no such edge does. Exact for a line narrower than the mesh's triangles.
+    fn panel_edge_distance(&self, panel: &PanelEdges, h: &Hit) -> Option<f64> {
+        let corner = |v: usize| Vec3::new(self.p[v][0], self.p[v][1], self.p[v][2]);
+        let t = self.tris[h.tri];
+        let p = corner(t[0]) * h.bary[0] + corner(t[1]) * h.bary[1] + corner(t[2]) * h.bary[2];
+        let mut nearest: Option<f64> = None;
+        for &v in &t {
+            for &e in &panel.at[panel.start[v]..panel.start[v + 1]] {
+                let [a, b] = panel.edges[e].map(corner);
+                let along = b - a;
+                let length2 = along.dot(along);
+                let s = if length2 > 0.0 {
+                    ((p - a).dot(along) / length2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let d = (p - (a + along * s)).norm();
+                nearest = Some(nearest.map_or(d, |best| best.min(d)));
+            }
+        }
+        nearest
+    }
+}
+
+/// The edges where the cloth's mesh ends, and which of them end at each vertex.
+struct PanelEdges {
+    /// Each edge's two vertices.
+    edges: Vec<[usize; 2]>,
+    /// `at[start[v]..start[v + 1]]` are the edges that end at vertex `v`.
+    start: Vec<usize>,
+    at: Vec<usize>,
 }
 
 /// A pinhole camera.
@@ -336,6 +498,118 @@ impl Camera {
             (forward + right * px + up * py).normalized()
         }
     }
+
+    /// Rays through a point of a pixel, given as fractions of the pixel from its upper-left corner;
+    /// (0.5, 0.5) is the centre, where `pixel_rays` casts.
+    fn sub_pixel_rays(self, [w, h]: [usize; 2]) -> impl Fn(usize, usize, [f64; 2]) -> Vec3 {
+        let (forward, right, up) = self.axes();
+        let half_w = 0.5 / self.focal_over_sensor;
+        let aspect = h as f64 / w as f64;
+        move |x, y, [fx, fy]| {
+            let px = ((x as f64 + fx) / w as f64 * 2.0 - 1.0) * half_w;
+            let py = (1.0 - (y as f64 + fy) / h as f64 * 2.0) * half_w * aspect;
+            (forward + right * px + up * py).normalized()
+        }
+    }
+}
+
+/// How a still is shaded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shading {
+    /// One ray through each pixel's centre, a matte surface and 8 ambient rays. Every still written
+    /// before this choice existed is this one, bit for bit.
+    #[default]
+    Standard,
+    /// For reading folds and edges by eye: four rays a pixel, 16 ambient rays a ray, and on cloth a
+    /// grazing highlight and a dark line inside panel edges. A drawing aid whose constants describe no
+    /// fabric.
+    Legible,
+}
+
+impl Shading {
+    /// Reads `standard` or `legible`.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "standard" => Some(Self::Standard),
+            "legible" => Some(Self::Legible),
+            _ => None,
+        }
+    }
+
+    /// The name [`Shading::parse`] reads.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Legible => "legible",
+        }
+    }
+
+    /// What a still's file name carries after its view. Nothing for the standard still, whose name is
+    /// the one it always had.
+    #[must_use]
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Standard => "",
+            Self::Legible => "_legible",
+        }
+    }
+}
+
+/// Where in a pixel the legible still casts its four rays: a rotated grid, one ray in each row and each
+/// column of the pixel's 4 × 4 subdivision.
+const SUB_PIXELS: [[f64; 2]; 4] = [
+    [0.375, 0.125],
+    [0.875, 0.375],
+    [0.125, 0.625],
+    [0.625, 0.875],
+];
+
+/// Strength of the legible still's grazing highlight. A drawing constant, the same for every cloth,
+/// chosen by eye on a dark bolero: enough to show a fold's flank, short of washing the seam colours out.
+const HIGHLIGHT: f64 = 2.0;
+
+/// The legible still darkens cloth within this distance (m) of a panel edge, by up to `EDGE_DARKENING`
+/// at the edge itself: about three pixels of a default 960-pixel still of a child's garment.
+const EDGE_LINE_M: f64 = 0.005;
+const EDGE_DARKENING: f64 = 0.45;
+
+/// The legible still's ambient directions for the ray through `SUB_PIXELS[sample]`: a cosine-weighted
+/// hemisphere cut into 4 rings × 4 sectors, one direction in each of the 16 cells. The four rays of a
+/// pixel take four different points of every cell (the same rotated grid as the sub-pixels), so a pixel
+/// looks along 64 different directions.
+fn stratified_hemisphere(sample: usize) -> Vec<[f64; 3]> {
+    let [in_ring, in_sector] = SUB_PIXELS[sample % SUB_PIXELS.len()];
+    let mut dirs = Vec::with_capacity(16);
+    for ring in 0..4 {
+        for sector in 0..4 {
+            let u = (f64::from(ring) + in_ring) / 4.0;
+            let v = (f64::from(sector) + in_sector) / 4.0;
+            let r = det::sqrt(u);
+            let (s, c) = det::sin_cos(2.0 * std::f64::consts::PI * v);
+            dirs.push([r * c, r * s, det::sqrt(1.0 - u)]);
+        }
+    }
+    dirs
+}
+
+/// The legible still's highlight from one light, before its strength: the Charlie sheen distribution at
+/// roughness 0.25, where its exponent is 4 and it reads (3/π) sin⁴ of the half-angle (Estevez and Kulla,
+/// "Production Friendly Microfacet Sheen BRDF", 2017), with the visibility term 1 / (4 (n·l + n·v − n·l n·v))
+/// of Neubelt and Pettineo ("Crafting a Next-Gen Material Pipeline for The Order: 1886", 2013). `lit` is the
+/// light's cosine on the surface, already nothing in shadow. The term grows as the view grazes the
+/// surface, which is what shows a fold turning away. It measures no cloth.
+fn grazing(n: Vec3, to_eye: Vec3, l: Vec3, lit: f64) -> f64 {
+    if lit <= 0.0 {
+        return 0.0;
+    }
+    // a floor on the view's cosine keeps the term finite at a silhouette
+    let nov = n.dot(to_eye).max(0.05);
+    let noh = n.dot((to_eye + l).normalized()).clamp(0.0, 1.0);
+    let sin2 = 1.0 - noh * noh;
+    let distribution = 3.0 * std::f64::consts::FRAC_1_PI * sin2 * sin2;
+    distribution * lit / (4.0 * (lit + nov - lit * nov))
 }
 
 /// The sRGB encode of linear light in [0, 1], then 8 bits (frankensim `fs-img` `film.rs`).
@@ -363,6 +637,40 @@ fn radical_inverse(mut k: u32, b: u32) -> f64 {
 /// Renders `meshes` from `cam` at `width` × `height`: 8-bit RGB rows, top first.
 #[must_use]
 pub fn render(meshes: &[&ColouredMesh], cam: Camera, width: usize, height: usize) -> Vec<u8> {
+    render_with(
+        meshes,
+        meshes.len(),
+        cam,
+        [width, height],
+        Shading::Standard,
+        false,
+    )
+}
+
+/// One still of a body and its cloth from `cam`: 8-bit RGB rows, top first. `strain` says the cloth's
+/// colours are the strain scale, to which [`Shading::Legible`] adds no highlight and no edge line.
+#[must_use]
+pub fn still(
+    body: &ColouredMesh,
+    cloth: &ColouredMesh,
+    cam: Camera,
+    [width, height]: [usize; 2],
+    shading: Shading,
+    strain: bool,
+) -> Vec<u8> {
+    render_with(&[body, cloth], 1, cam, [width, height], shading, !strain)
+}
+
+/// `meshes[cloth..]` are cloth and the ones before them the body; `mark_cloth` lets the legible shading
+/// add its highlight and edge line to the cloth. Neither matters to the standard shading.
+fn render_with(
+    meshes: &[&ColouredMesh],
+    cloth: usize,
+    cam: Camera,
+    [width, height]: [usize; 2],
+    shading: Shading,
+    mark_cloth: bool,
+) -> Vec<u8> {
     if width == 0 || height == 0 {
         return Vec::new();
     }
@@ -381,65 +689,80 @@ pub fn render(meshes: &[&ColouredMesh], cam: Camera, width: usize, height: usize
         })
         .collect();
     let ray = cam.pixel_rays([width, height]);
-    let pixel = |x: usize, y: usize| -> [u8; 3] {
+    let o = [cam.eye.x, cam.eye.y, cam.eye.z];
+    let backdrop = |y: usize| -> [f64; 3] {
+        let g = 0.32 + 0.18 * (1.0 - y as f64 / height as f64);
+        [g, g, g * 1.02]
+    };
+    // the standard still: one ray through the pixel's centre
+    let standard = |x: usize, y: usize| -> [u8; 3] {
         let d = ray(x, y);
-        let o = [cam.eye.x, cam.eye.y, cam.eye.z];
-        let dd = [d.x, d.y, d.z];
-        let rgb = match scene.cast(o, dd, f64::INFINITY, false) {
-            None => {
-                let g = 0.32 + 0.18 * (1.0 - y as f64 / height as f64);
-                [g, g, g * 1.02]
-            }
+        let rgb = match scene.cast(o, [d.x, d.y, d.z], f64::INFINITY, false) {
+            None => backdrop(y),
             Some(h) => {
-                let t = scene.tris[h.tri];
-                let mut n = Vec3::ZERO;
-                let mut col = [0.0; 3];
-                for (k, &v) in t.iter().enumerate() {
-                    n += scene.normals[v] * h.bary[k];
-                    for (c, &cv) in col.iter_mut().zip(&scene.colours[v]) {
-                        *c += cv * h.bary[k];
-                    }
-                }
-                let mut n = n.normalized();
-                if n.dot(d) > 0.0 {
-                    n = -n;
-                }
-                let p = cam.eye + d * h.t;
-                let lift = p + n * 1e-4;
-                let lo = [lift.x, lift.y, lift.z];
-                let lit = |l: Vec3| -> f64 {
-                    let c = n.dot(l);
-                    if c <= 0.0
-                        || scene
-                            .cast(lo, [l.x, l.y, l.z], f64::INFINITY, true)
-                            .is_some()
-                    {
-                        0.0
-                    } else {
-                        c
-                    }
-                };
-                // ambient occlusion over 0.1 m in the frame of n
-                let a = if n.x.abs() < 0.9 {
-                    Vec3::new(1.0, 0.0, 0.0)
-                } else {
-                    Vec3::new(0.0, 1.0, 0.0)
-                };
-                let tu = n.cross(a).normalized();
-                let tv = n.cross(tu);
-                let open = ao
-                    .iter()
-                    .filter(|s| {
-                        let w = tu * s[0] + tv * s[1] + n * s[2];
-                        scene.cast(lo, [w.x, w.y, w.z], 0.1, true).is_none()
-                    })
-                    .count() as f64
-                    / ao.len() as f64;
-                let light = 0.30 * open + 0.75 * lit(key) + 0.25 * n.dot(fill).max(0.0);
-                col.map(|c| c * light)
+                let s = scene.surface(cam.eye, d, &h);
+                let open = scene.open(&s, &ao);
+                let light = 0.30 * open + 0.75 * scene.lit(&s, key) + 0.25 * s.n.dot(fill).max(0.0);
+                s.col.map(|c| c * light)
             }
         };
         rgb.map(srgb8)
+    };
+    // the legible still: four rays, each with its own turn of the ambient directions, averaged in linear
+    // light before the sRGB encode
+    let legible = shading == Shading::Legible;
+    let sub_ray = cam.sub_pixel_rays([width, height]);
+    let hemispheres: Vec<Vec<[f64; 3]>> = if legible {
+        (0..SUB_PIXELS.len()).map(stratified_hemisphere).collect()
+    } else {
+        Vec::new()
+    };
+    let first_cloth = scene.first.get(cloth).copied().unwrap_or(scene.tris.len());
+    let panel = (legible && mark_cloth).then(|| scene.panel_edges(first_cloth));
+    let detailed = |x: usize, y: usize| -> [u8; 3] {
+        let mut sum = [0.0; 3];
+        for (offset, dirs) in SUB_PIXELS.iter().zip(&hemispheres) {
+            let d = sub_ray(x, y, *offset);
+            let rgb = match scene.cast(o, [d.x, d.y, d.z], f64::INFINITY, false) {
+                None => backdrop(y),
+                Some(h) => {
+                    let s = scene.surface(cam.eye, d, &h);
+                    let open = scene.open(&s, dirs);
+                    let (from_key, from_fill) = (scene.lit(&s, key), s.n.dot(fill).max(0.0));
+                    let light = 0.30 * open + 0.75 * from_key + 0.25 * from_fill;
+                    let mut rgb = s.col.map(|c| c * light);
+                    if let Some(panel) = panel.as_ref().filter(|_| h.tri >= first_cloth) {
+                        // the highlight takes half the cloth's colour and fades in a crease as the
+                        // ambient light does
+                        let glance = HIGHLIGHT
+                            * open
+                            * (0.75 * grazing(s.n, -d, key, from_key)
+                                + 0.25 * grazing(s.n, -d, fill, from_fill));
+                        for (c, base) in rgb.iter_mut().zip(s.col) {
+                            *c += glance * (0.5 * base + 0.5);
+                        }
+                        if let Some(distance) = scene.panel_edge_distance(panel, &h)
+                            && distance < EDGE_LINE_M
+                        {
+                            let keep = 1.0 - EDGE_DARKENING * (1.0 - distance / EDGE_LINE_M);
+                            rgb = rgb.map(|c| c * keep);
+                        }
+                    }
+                    rgb
+                }
+            };
+            for (total, c) in sum.iter_mut().zip(rgb) {
+                *total += c;
+            }
+        }
+        sum.map(|c| srgb8(c / SUB_PIXELS.len() as f64))
+    };
+    let pixel = |x: usize, y: usize| -> [u8; 3] {
+        if legible {
+            detailed(x, y)
+        } else {
+            standard(x, y)
+        }
     };
     let threads = std::thread::available_parallelism()
         .map_or(1, usize::from)
@@ -611,6 +934,19 @@ pub fn stills(
     width: usize,
     height: usize,
 ) -> Vec<(String, Vec<u8>)> {
+    stills_shaded(body, garment, strain, [width, height], Shading::Standard)
+}
+
+/// The six stills in `shading`, named `still_<view><suffix>.png` with [`Shading::suffix`], so that a
+/// legible set sits beside the standard one and replaces none of it.
+#[must_use]
+pub fn stills_shaded(
+    body: &ColouredMesh,
+    garment: &ColouredMesh,
+    strain: &ColouredMesh,
+    [width, height]: [usize; 2],
+    shading: Shading,
+) -> Vec<(String, Vec<u8>)> {
     let mut out = Vec::with_capacity(6);
     for name in [
         "front",
@@ -620,16 +956,16 @@ pub fn stills(
         "strain_front",
         "strain_back",
     ] {
-        let cloth = if name.starts_with("strain_") {
-            strain
-        } else {
-            garment
-        };
+        let of_strain = name.starts_with("strain_");
+        let cloth = if of_strain { strain } else { garment };
         let Some(cam) = still_camera(body, garment, name) else {
             return Vec::new();
         };
-        let rgb = render(&[body, cloth], cam, width, height);
-        out.push((format!("still_{name}.png"), png(width, height, &rgb)));
+        let rgb = still(body, cloth, cam, [width, height], shading, of_strain);
+        out.push((
+            format!("still_{name}{}.png", shading.suffix()),
+            png(width, height, &rgb),
+        ));
     }
     out
 }
@@ -754,6 +1090,277 @@ mod tests {
         );
         // the same bits on one thread and on several
         assert_eq!(img, render(&[&red], cam, 40, 30));
+    }
+
+    /// A lit, shadowed and occluded scene small enough to pin: a strip standing on a floor in front of a
+    /// wall, seen from the three-quarter side so that pixels miss, hit lit cloth, hit cloth in the strip's
+    /// shadow and hit creases where the ambient rays are blocked.
+    fn pinned_scene() -> (ColouredMesh, ColouredMesh, Camera) {
+        let mut body = quad(0.5, [0.0; 3]);
+        body.colours.clear(); // skin tone, as a body is read
+        for v in &mut body.vertices {
+            v.y += 0.12;
+        }
+        let mut cloth = ColouredMesh::default();
+        // a 6 x 6 sheet folded into three pleats along x, coloured by column
+        for j in 0..=6 {
+            for i in 0..=6 {
+                let (x, z) = (-0.3 + 0.1 * i as f64, 0.2 + 0.1 * j as f64);
+                let y = if i % 2 == 0 { 0.0 } else { -0.06 };
+                cloth.vertices.push(Vec3::new(x, y, z));
+                cloth
+                    .colours
+                    .push([0.2 + 0.1 * i as f64, 0.35, 0.8 - 0.1 * i as f64]);
+            }
+        }
+        for j in 0..6 {
+            for i in 0..6 {
+                let a = j * 7 + i;
+                cloth
+                    .triangles
+                    .extend([[a, a + 1, a + 8], [a, a + 8, a + 7]]);
+            }
+        }
+        let cam = Camera {
+            eye: Vec3::new(0.9, -1.6, 0.75),
+            target: Vec3::new(0.0, 0.0, 0.5),
+            focal_over_sensor: 50.0 / 36.0,
+        };
+        (body, cloth, cam)
+    }
+
+    #[test]
+    fn the_standard_still_keeps_the_bits_it_had_before_the_legible_mode_existed() {
+        let (body, cloth, cam) = pinned_scene();
+        let img = render(&[&body, &cloth], cam, 96, 72);
+        assert_eq!(img.len(), 96 * 72 * 3);
+        // CRC-32 of the 8-bit RGB rows, taken from the renderer as it stood at commit a1268bba, its last
+        // change before the legible mode.
+        assert_eq!(crc32(&img), 0x0c4d_f707, "crc {:#010x}", crc32(&img));
+        // the standard shading is that picture whichever door it is asked through, strain colours or not
+        for strain in [false, true] {
+            let same = still(&body, &cloth, cam, [96, 72], Shading::Standard, strain);
+            assert_eq!(same, img);
+        }
+    }
+
+    #[test]
+    fn the_legible_still_is_the_same_bits_every_time_and_softens_a_silhouette() {
+        let (body, cloth, cam) = pinned_scene();
+        let draw = || still(&body, &cloth, cam, [96, 72], Shading::Legible, false);
+        let legible = draw();
+        assert_eq!(legible.len(), 96 * 72 * 3);
+        assert_eq!(legible, draw());
+        assert_ne!(legible, render(&[&body, &cloth], cam, 96, 72));
+
+        // one flat grey square on the backdrop: the standard still has two greys along a row that
+        // crosses its side, the legible still a third between them where the side cuts a pixel
+        let grey = quad(1.0, [0.5; 3]);
+        let nothing = ColouredMesh::default();
+        let cam = Camera {
+            eye: Vec3::new(0.013, -2.0, 1.0),
+            target: Vec3::new(0.013, 0.0, 1.0),
+            focal_over_sensor: 50.0 / 36.0,
+        };
+        let row = |shading| -> Vec<u8> {
+            let img = still(&nothing, &grey, cam, [64, 48], shading, true);
+            (0..64).map(|x| img[(24 * 64 + x) * 3]).collect()
+        };
+        let (hard, soft) = (row(Shading::Standard), row(Shading::Legible));
+        let (backdrop, square) = (hard[0], hard[32]);
+        assert_ne!(backdrop, square);
+        assert!(hard.iter().all(|&v| v == backdrop || v == square));
+        let between = |v: u8| v > backdrop.min(square) && v < backdrop.max(square);
+        assert!(soft.iter().any(|&v| between(v)), "{soft:?}");
+        // away from the side the two stills agree: a strain still gets no highlight and no line
+        assert_eq!((soft[0], soft[32]), (backdrop, square));
+    }
+
+    #[test]
+    fn the_ambient_directions_are_64_different_unit_vectors_above_the_surface() {
+        let mut all: Vec<[f64; 3]> = Vec::new();
+        for sample in 0..SUB_PIXELS.len() {
+            let dirs = stratified_hemisphere(sample);
+            assert_eq!(dirs.len(), 16);
+            all.extend(dirs);
+        }
+        // a cosine-weighted hemisphere has mean height 2/3, and the pixel's 64 directions keep it
+        let mean = all.iter().map(|d| d[2]).sum::<f64>() / 64.0;
+        assert!((mean - 2.0 / 3.0).abs() < 0.005, "{mean}");
+        for d in &all {
+            let length2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            assert!((length2 - 1.0).abs() < 1e-12 && d[2] > 0.0, "{d:?}");
+        }
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                let apart = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0, f64::max);
+                assert!(apart > 1e-3, "{a:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_highlight_grows_at_a_glance_and_is_added_to_cloth_only() {
+        let n = Vec3::new(0.0, 0.0, 1.0);
+        let l = Vec3::new(0.6, 0.0, 0.8);
+        let facing = grazing(n, n, l, n.dot(l));
+        // seen edge-on from the light's side, as a fold turning away from a camera beside its light is
+        let glancing = grazing(n, Vec3::new(0.995, 0.0, 0.1).normalized(), l, n.dot(l));
+        assert!(
+            facing > 0.0 && glancing > 20.0 * facing,
+            "{facing} {glancing}"
+        );
+        assert!(glancing.is_finite() && glancing < 1.0);
+        // nothing from a light the surface does not see, and nothing at the silhouette itself blows up
+        assert_eq!(grazing(n, n, l, 0.0), 0.0);
+        assert!(grazing(n, Vec3::new(1.0, 0.0, 0.0), l, n.dot(l)).is_finite());
+
+        // the same slanted sheet, once as the cloth and once as the body
+        let mut sheet = quad(1.0, [0.3, 0.3, 0.6]);
+        for v in &mut sheet.vertices {
+            v.y = 3.0 * v.x; // turned most of the way edge-on to a camera on -y
+        }
+        let far = ColouredMesh {
+            vertices: vec![
+                Vec3::new(50.0, 50.0, 50.0),
+                Vec3::new(50.1, 50.0, 50.0),
+                Vec3::new(50.0, 50.0, 50.1),
+            ],
+            triangles: vec![[0, 1, 2]],
+            colours: Vec::new(),
+        };
+        let cam = Camera {
+            eye: Vec3::new(0.0, -2.0, 1.0),
+            target: Vec3::new(0.0, 0.0, 1.0),
+            focal_over_sensor: 50.0 / 36.0,
+        };
+        let middle = |img: Vec<u8>| -> [u8; 3] {
+            let at = (24 * 64 + 32) * 3;
+            [img[at], img[at + 1], img[at + 2]]
+        };
+        let as_cloth = middle(still(&far, &sheet, cam, [64, 48], Shading::Legible, false));
+        let as_strain = middle(still(&far, &sheet, cam, [64, 48], Shading::Legible, true));
+        let as_body = middle(still(&sheet, &far, cam, [64, 48], Shading::Legible, false));
+        assert!(
+            (0..3).all(|k| as_cloth[k] > as_body[k]),
+            "{as_cloth:?} {as_body:?}"
+        );
+        assert_eq!(as_strain, as_body);
+    }
+
+    /// A flat `cells` × `cells` sheet of side `side` (m) in the plane y = 0, its lower-left corner at
+    /// (0, 0, 0); each cell is cut along the diagonal from its lower-left corner.
+    fn sheet(cells: usize, side: f64, colour: [f64; 3]) -> ColouredMesh {
+        let mut m = ColouredMesh::default();
+        let step = side / cells as f64;
+        for j in 0..=cells {
+            for i in 0..=cells {
+                m.vertices
+                    .push(Vec3::new(step * i as f64, 0.0, step * j as f64));
+                m.colours.push(colour);
+            }
+        }
+        let w = cells + 1;
+        for j in 0..cells {
+            for i in 0..cells {
+                let a = j * w + i;
+                m.triangles
+                    .extend([[a, a + 1, a + w + 1], [a, a + w + 1, a + w]]);
+            }
+        }
+        m
+    }
+
+    #[test]
+    fn panel_edges_are_where_the_cloth_mesh_ends_and_never_the_bodys() {
+        // an open body triangle, then a 3 x 3 sheet: 12 edges round the sheet, none of the body's
+        let body = ColouredMesh {
+            vertices: vec![
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(0.0, 1.0, 1.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+            colours: Vec::new(),
+        };
+        let cloth = sheet(3, 0.03, [0.5; 3]);
+        let scene = Scene::new(&[&body, &cloth]);
+        assert_eq!(scene.first, [0, 1]);
+        let panel = scene.panel_edges(scene.first[1]);
+        assert_eq!(panel.edges.len(), 12);
+        assert!(panel.edges.iter().all(|e| e[0] >= 3 && e[1] >= 3));
+        assert_eq!(panel.at.len(), 24);
+        assert_eq!(panel.start[..4], [0; 4]);
+        // each of the sheet's 12 rim vertices ends two of them, each of its 4 inner vertices none
+        let ends = |v: usize| panel.start[v + 1] - panel.start[v];
+        let rim = |i: usize, j: usize| i == 0 || i == 3 || j == 0 || j == 3;
+        for j in 0..4 {
+            for i in 0..4 {
+                assert_eq!(ends(3 + j * 4 + i), if rim(i, j) { 2 } else { 0 });
+            }
+        }
+
+        // cell (0, 1) on the left side: its first triangle only touches the rim at a corner, and a point
+        // a tenth of a cell in from that corner is a tenth of a cell from the rim
+        let touching = 1 + 2 * 3;
+        assert_eq!(scene.tris[touching], [3 + 4, 3 + 5, 3 + 9]);
+        let near = Hit {
+            t: 1.0,
+            tri: touching,
+            bary: [0.9, 0.05, 0.05],
+        };
+        let d = scene.panel_edge_distance(&panel, &near).unwrap();
+        assert!((d - 0.001).abs() < 1e-12, "{d}");
+        // the middle cell touches no rim vertex
+        let inner = Hit {
+            t: 1.0,
+            tri: 1 + 2 * 4,
+            bary: [0.3, 0.3, 0.4],
+        };
+        assert_eq!(scene.panel_edge_distance(&panel, &inner), None);
+
+        // two sheets that meet with vertices of their own, as a drape writes a seam: both sides are edges
+        let mut pair = sheet(1, 0.01, [0.5; 3]);
+        let second = sheet(1, 0.01, [0.5; 3]);
+        pair.triangles
+            .extend(second.triangles.iter().map(|t| t.map(|v| v + 4)));
+        pair.vertices.extend(
+            second
+                .vertices
+                .iter()
+                .map(|v| Vec3::new(v.x + 0.01, 0.0, v.z)),
+        );
+        pair.colours.extend(second.colours);
+        let scene = Scene::new(&[&body, &pair]);
+        assert_eq!(scene.panel_edges(1).edges.len(), 8);
+    }
+
+    #[test]
+    fn the_legible_still_draws_a_dark_line_inside_a_panel_edge() {
+        // a 10 cm sheet seen square on from 0.3 m: about 1.1 mm a pixel at 192 across
+        let cloth = sheet(8, 0.1, [0.5; 3]);
+        let nothing = ColouredMesh::default();
+        let cam = Camera {
+            eye: Vec3::new(0.05, -0.3, 0.05),
+            target: Vec3::new(0.05, 0.0, 0.05),
+            focal_over_sensor: 50.0 / 36.0,
+        };
+        let row = |shading, strain| -> Vec<u8> {
+            let img = still(&nothing, &cloth, cam, [192, 144], shading, strain);
+            (0..192).map(|x| img[(72 * 192 + x) * 3]).collect()
+        };
+        let hard = row(Shading::Standard, false);
+        let first = hard.iter().position(|&v| v != hard[0]).unwrap();
+        let lined = row(Shading::Legible, false);
+        // the second pixel inside the sheet is wholly on it and within the 5 mm line; the middle is not
+        assert!(lined[first + 1] + 8 < lined[96], "{lined:?}");
+        // the line fades out by 5 mm (under five pixels) and the far side has one too
+        assert!(lined[first + 6].abs_diff(lined[96]) <= 1, "{lined:?}");
+        let last = 191 - hard.iter().rev().position(|&v| v != hard[0]).unwrap();
+        assert!(lined[last - 1] + 8 < lined[96], "{lined:?}");
+        // none where the colours are the strain scale
+        let plain = row(Shading::Legible, true);
+        assert_eq!(plain[first + 1], plain[96]);
     }
 
     #[test]

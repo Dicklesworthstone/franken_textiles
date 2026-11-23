@@ -85,8 +85,9 @@ const USAGE: &str = "usage:
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--res 960x540] [--json] (start-state stills and numbers; no drape)
-  ftx render DRAPE_DIR [--res 960x540] [--json]
-  ftx render DRAPE_DIR --compare REVISED_DIR --view VIEW --out NEW_DIR [--res 960x540] [--json]
+  ftx render DRAPE_DIR [--res 960x540] [--shading standard|legible] [--json]
+             (legible: a second set, still_<view>_legible.png, drawn for reading folds and edges; describes no fabric)
+  ftx render DRAPE_DIR --compare REVISED_DIR --view VIEW --out NEW_DIR [--res 960x540] [--shading standard|legible] [--json]
   ftx inspect-pixel ROUND_DIR --view front|side|back|three_quarter|strain_front|strain_back --pixel X,Y [--json]
   ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]
   ftx viewer SIMDIR --check-contact [--json]

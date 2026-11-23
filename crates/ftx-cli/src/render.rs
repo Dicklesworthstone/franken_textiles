@@ -1,52 +1,71 @@
 //! `ftx render DIR [--res WxH]`: the six stills of an `ftx drape` run (`ftx_drape::render`), written into DIR
 //! as `still_<view>.png` from its `body.obj`, `garment.obj` and `garment_strain.obj` (the counterpart of the
 //! reference's `blender_sew.py --stills-from DIR`, with no Blender).
+//!
+//! `--shading legible` writes a second set, `still_<view>_legible.png`, beside those and leaves them as
+//! they are: the same geometry through the same cameras, drawn for reading folds and edges by eye. It is
+//! a drawing aid whose constants describe no fabric (see `ftx_drape::render::Shading`).
 
 use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode};
-use ftx_drape::render::{ColouredMesh, png, render, still_camera, stills};
+use ftx_drape::render::{ColouredMesh, Shading, png, still, still_camera, stills_shaded};
 use serde_json::{Value, json};
 
 use super::{Args, bad_input, known_options, required};
 
 pub(super) fn cmd_render(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "render", &["res", "compare", "view", "out"])?;
+    known_options(
+        args,
+        "render",
+        &["res", "compare", "view", "out", "shading"],
+    )?;
     if args.positional.len() != 2 {
         return Err(bad_input("ftx render needs exactly one drape directory"));
     }
     let dir = Path::new(&args.positional[1]);
     let (width, height) = resolution(args.options.get("res").map(String::as_str))?;
+    let shading = shading(args.options.get("shading").map(String::as_str))?;
     if let Some(revised) = args.options.get("compare") {
         return compare(
             dir,
             Path::new(revised),
             required(args, "view")?,
             Path::new(required(args, "out")?),
-            width,
-            height,
+            (width, height),
+            shading,
         );
     }
     if args.options.contains_key("view") || args.options.contains_key("out") {
         return Err(bad_input("--view and --out need --compare"));
     }
     let mut written = serde_json::Map::new();
-    for (name, png) in images(dir, width, height)? {
+    for (name, png) in shaded(dir, width, height, shading)? {
         let path = dir.join(&name);
         std::fs::write(&path, png)
             .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))?;
         let view = name
             .trim_start_matches("still_")
             .trim_end_matches(".png")
+            .trim_end_matches(shading.suffix())
             .to_string();
         written.insert(view, json!(path.display().to_string()));
     }
     let text = json!({"stills": written}).to_string();
     Ok((
-        json!({"stills": written, "width": width, "height": height}),
+        json!({"stills": written, "width": width, "height": height, "shading": shading.name()}),
         0,
         text,
     ))
+}
+
+/// `--shading`: the standard still unless asked for the legible one.
+fn shading(value: Option<&str>) -> Result<Shading, Refusal> {
+    match value {
+        None => Ok(Shading::Standard),
+        Some(name) => Shading::parse(name)
+            .ok_or_else(|| bad_input(format!("--shading {name}: give standard or legible"))),
+    }
 }
 
 fn compare(
@@ -54,8 +73,8 @@ fn compare(
     revised: &Path,
     view: &str,
     out: &Path,
-    width: usize,
-    height: usize,
+    (width, height): (usize, usize),
+    shading: Shading,
 ) -> Result<(Value, i32, String), Refusal> {
     if crate::round::regular(out, true)? {
         return Err(bad_input("the comparison output directory must be new"));
@@ -86,7 +105,7 @@ fn compare(
         png(
             width,
             height,
-            &render(&[body, cloth], camera, width, height),
+            &still(body, cloth, camera, [width, height], shading, strain),
         )
     };
     let before = draw(&before_body, &before_cloth);
@@ -97,7 +116,8 @@ fn compare(
     crate::round::write_new(&before_path, &before)?;
     crate::round::write_new(&after_path, &after)?;
     let report = json!({"view":view, "width":width, "height":height, "camera":"baseline",
-        "same_body_geometry":same_body, "before":before_path, "after":after_path});
+        "shading":shading.name(), "same_body_geometry":same_body, "before":before_path,
+        "after":after_path});
     Ok((report.clone(), 0, report.to_string()))
 }
 
@@ -155,10 +175,26 @@ pub(super) fn images(
     width: usize,
     height: usize,
 ) -> Result<Vec<(String, Vec<u8>)>, Refusal> {
+    shaded(dir, width, height, Shading::Standard)
+}
+
+/// The complete still set in `shading`, named `still_<view>.png` or `still_<view>_legible.png`.
+fn shaded(
+    dir: &Path,
+    width: usize,
+    height: usize,
+    shading: Shading,
+) -> Result<Vec<(String, Vec<u8>)>, Refusal> {
     let body = read_mesh(dir, "body.obj")?;
     let garment = read_mesh(dir, "garment.obj")?;
     let strain = checked_strain(dir, &garment)?;
-    Ok(stills(&body, &garment, &strain, width, height))
+    Ok(stills_shaded(
+        &body,
+        &garment,
+        &strain,
+        [width, height],
+        shading,
+    ))
 }
 
 fn read_mesh(dir: &Path, name: &str) -> Result<ColouredMesh, Refusal> {
@@ -197,9 +233,12 @@ mod tests {
         }
         let original_before = fs::read(before.join("still_front.png")).unwrap();
         let original_after = fs::read(after.join("still_front.png")).unwrap();
-        let (report, code, _) = compare(&before, &after, "front", &out, 40, 32).unwrap();
+        let standard = Shading::Standard;
+        let (report, code, _) =
+            compare(&before, &after, "front", &out, (40, 32), standard).unwrap();
         assert_eq!(code, 0);
         assert_eq!(report["same_body_geometry"], true);
+        assert_eq!(report["shading"], "standard");
         assert_eq!(fs::read(out.join("before.png")).unwrap(), original_before);
         let rendered_after = fs::read(out.join("after.png")).unwrap();
         assert_ne!(rendered_after, original_before);
@@ -212,8 +251,64 @@ mod tests {
             fs::read(after.join("still_front.png")).unwrap(),
             original_after
         );
-        assert!(compare(&before, &after, "front", &out, 16, 16).is_err());
+        assert!(compare(&before, &after, "front", &out, (16, 16), standard).is_err());
         assert_eq!(fs::read(out.join("after.png")).unwrap(), rendered_after);
+
+        // the legible pair goes to a directory of its own and is a different drawing of the same scenes
+        let legible_out = root.join("pair-legible");
+        let (report, code, _) = compare(
+            &before,
+            &after,
+            "front",
+            &legible_out,
+            (40, 32),
+            Shading::Legible,
+        )
+        .unwrap();
+        assert_eq!((code, &report["shading"]), (0, &json!("legible")));
+        assert_ne!(
+            fs::read(legible_out.join("before.png")).unwrap(),
+            original_before
+        );
+        assert_eq!(fs::read(out.join("before.png")).unwrap(), original_before);
+    }
+
+    #[test]
+    fn the_legible_set_is_six_files_of_its_own_and_an_unknown_shading_is_refused() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ftx-render-legible-{}-{stamp}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let body = "v -0.3 0 0\nv 0.3 0 0\nv -0.3 0 1.5\nf 1 2 3\n";
+        let cloth = "v -0.3 -0.1 0.2\nv 0.3 -0.1 0.2\nv -0.3 -0.1 1.2\nf 1 2 3\n";
+        fs::write(dir.join("body.obj"), body).unwrap();
+        for name in ["garment.obj", "garment_strain.obj"] {
+            fs::write(dir.join(name), cloth).unwrap();
+        }
+        let standard = images(&dir, 40, 32).unwrap();
+        assert_eq!(
+            standard,
+            shaded(&dir, 40, 32, Shading::Standard).unwrap(),
+            "the standard set is the one ftx render has always written"
+        );
+        let legible = shaded(&dir, 40, 32, Shading::Legible).unwrap();
+        assert_eq!(legible.len(), 6);
+        for ((plain_name, plain), (name, drawn)) in standard.iter().zip(&legible) {
+            let view = plain_name.trim_end_matches(".png");
+            assert_eq!(name, &format!("{view}_legible.png"));
+            assert_eq!(&drawn[..8], b"\x89PNG\r\n\x1a\n");
+            assert_ne!(plain, drawn, "{name}");
+        }
+
+        assert_eq!(shading(None).unwrap(), Shading::Standard);
+        assert_eq!(shading(Some("standard")).unwrap(), Shading::Standard);
+        assert_eq!(shading(Some("legible")).unwrap(), Shading::Legible);
+        let refused = shading(Some("glossy")).unwrap_err();
+        assert_eq!(refused.code, RefusalCode::InvalidDocument);
+        assert!(refused.message.contains("standard or legible"));
     }
 
     #[test]

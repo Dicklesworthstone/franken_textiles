@@ -808,6 +808,18 @@ colours, and the `fabric-fold-viewer/1` payload embedded in `assets/fold_viewer_
 skill's page with offline module packaging). The page's verdict line shows the run's own gating
 and advisory flags from `metrics`.
 
+**Stills.** `render` is a deterministic ray caster for looking at a drape: `stills` returns the six
+views as PNGs (four in the seam colours, two in the strain colours) and `pick_still` names the cloth
+triangle under a pixel. Every pixel is its own arithmetic, so the bytes do not depend on the thread count, and a
+checksum test holds the standard still to its pixels. `Shading::Legible` (`still`, `stills_shaded`) is a
+second drawing of the same geometry through the same cameras, for reading folds and edges by eye:
+four rays a pixel averaged in linear light, 16 stratified ambient rays a ray, and on cloth in the seam
+colours a grazing highlight (the Charlie sheen distribution at one fixed roughness) and a dark line
+inside every panel edge. No claim: the highlight and the line are drawing constants fixed in
+`render.rs`. They come from no material record, are the same for every cloth, and say nothing about a
+fabric's sheen, weight or hand; a still of either kind is a picture of solver output and never evidence
+of fit. The strain views take the extra rays only.
+
 **Offline viewer dependency.** `viewer_html` embeds the existing Three.js 0.160.0 renderer and
 OrbitControls as base64 data-URL imports, with the complete MIT notice in each HTML file. The
 template requires exactly one payload, renderer, controls and license marker. It is shared by
