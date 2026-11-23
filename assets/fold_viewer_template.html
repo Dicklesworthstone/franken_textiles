@@ -32,6 +32,8 @@ p { margin: 4px 0 10px; }
 button, select { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
                  padding: 6px 12px; cursor: pointer; }
 button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); min-width: 84px; }
+.views { display: inline-flex; gap: 4px; align-items: center; }
+.views button { padding: 4px 9px; font-size: 13px; }
 label { white-space: nowrap; }
 .ok { color: var(--ok); } .bad { color: var(--bad); }
 #error { color: var(--bad); }
@@ -56,11 +58,20 @@ label { white-space: nowrap; }
     <label><input type="radio" name="colour" value="seam_rgb" checked> seam colours</label>
     <label><input type="radio" name="colour" value="strain_rgb"> strain at the end</label>
     <label><input type="checkbox" id="showBody" checked> dress form</label>
+    <label><input type="checkbox" id="showWire"> mesh</label>
+    <label>shading <select id="shading"><option value="studio" selected>studio</option><option value="legible">legible</option></select></label>
     <label>speed <select id="speed"><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
+    <span class="views" role="group" aria-label="Camera views">
+      <button type="button" data-view="three_quarter">¾</button>
+      <button type="button" data-view="front">Front</button>
+      <button type="button" data-view="side">Side</button>
+      <button type="button" data-view="back">Back</button>
+    </span>
   </div>
   <p class="mut">Drag to turn, scroll or pinch to zoom. Seam colours match the flat pattern (the same colour on both
-    sides of a seam). Strain is the cloth at the end of the drape: red stretched, blue compressed (±3 %). This
-    is the simulation, judged by the flags above; the muslin is the truth.</p>
+    sides of a seam). Strain is the cloth at the end of the drape: red stretched, blue compressed (±3 %). Studio and
+    legible shading are display aids for reading folds, not measured fabric finishes. This is the simulation, judged
+    by the flags above; the muslin is the truth.</p>
   <p id="error"></p>
 </main>
 <script type="module">
@@ -93,10 +104,34 @@ try {
   const strainChoice = document.querySelector('input[value="strain_rgb"]');
   strainChoice.disabled = !colours.strain_rgb;
   geo.setAttribute("color", seamColour);
-  const cloth = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85 }));
+  const clothMat = new THREE.MeshPhysicalMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    roughness: 0.88,
+    metalness: 0.0,
+    sheen: 0.55,
+    sheenRoughness: 0.72,
+    sheenColor: new THREE.Color(0xf6f2ea),
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  const cloth = new THREE.Mesh(geo, clothMat);
+  cloth.castShadow = true;
+  cloth.receiveShadow = true;
+  const wireMat = new THREE.MeshBasicMaterial({
+    color: 0x1d2430,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.24,
+    depthWrite: false,
+  });
+  const wire = new THREE.Mesh(geo, wireMat);
+  wire.visible = false;
 
   const scene = new THREE.Scene();
   scene.add(cloth);
+  scene.add(wire);
   let body = null;
   if (D.body.vertices) {                                   // Blender is z-up, three.js y-up: (x, y, z) -> (x, z, -y)
     const bv = new Float32Array(bytes(D.body.vertices).buffer), b2 = new Float32Array(bv.length);
@@ -105,17 +140,52 @@ try {
     bg.setAttribute("position", new THREE.BufferAttribute(b2, 3));
     bg.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(D.body.triangles).buffer), 1));
     bg.computeVertexNormals();
-    body = new THREE.Mesh(bg, new THREE.MeshStandardMaterial({ color: 0xd2ad94, roughness: 0.7 }));
+    body = new THREE.Mesh(bg, new THREE.MeshPhysicalMaterial({
+      color: 0xd2ad94,
+      roughness: 0.78,
+      metalness: 0.0,
+      sheen: 0.14,
+      sheenRoughness: 0.92,
+    }));
+    body.castShadow = true;
+    body.receiveShadow = true;
     scene.add(body);
   }
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8478, 1.6));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-  sun.position.set(1.2, 2.5, 2.0);
-  scene.add(sun);
+  const hemi = new THREE.HemisphereLight(0xfdfbf7, 0x8c8578, 1.15);
+  scene.add(hemi);
+  const keyLight = new THREE.DirectionalLight(0xfff6ea, 1.55);
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.set(1024, 1024);
+  keyLight.shadow.bias = -0.0005;
+  keyLight.shadow.normalBias = 0.003;
+  scene.add(keyLight);
+  scene.add(keyLight.target);
+  const fillLight = new THREE.DirectionalLight(0xdce8ff, 0.50);
+  fillLight.position.set(-1.6, 1.0, 1.2);
+  scene.add(fillLight);
+  const rimLight = new THREE.DirectionalLight(0xfff2dd, 0.70);
+  rimLight.position.set(-0.4, 1.8, -2.2);
+  scene.add(rimLight);
+  function applyShading(mode) {
+    const legible = mode === "legible";
+    clothMat.roughness = legible ? 0.94 : 0.88;
+    clothMat.sheen = legible ? 0.82 : 0.55;
+    clothMat.sheenRoughness = legible ? 0.60 : 0.72;
+    hemi.intensity = legible ? 0.65 : 1.15;
+    keyLight.intensity = legible ? 2.15 : 1.55;
+    fillLight.intensity = legible ? 0.28 : 0.50;
+    rimLight.intensity = legible ? 1.05 : 0.70;
+    renderer.toneMappingExposure = legible ? 1.02 : 1.04;
+  }
 
   const stage = $("stage");
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.04;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   stage.prepend(renderer.domElement);
   const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 50);
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -142,6 +212,35 @@ try {
   const backward = new THREE.Vector3(0.3, 0.12, 1).normalize();
   const right = new THREE.Vector3().crossVectors(camera.up, backward).normalize();
   const up = new THREE.Vector3().crossVectors(backward, right);
+  function fitShadowRig(box) {
+    if (box.isEmpty()) return;
+    const centre = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(0.15, size.length() * 0.55);
+    keyLight.target.position.copy(centre);
+    keyLight.position.copy(centre).add(new THREE.Vector3(1.1, 2.1, 1.6).multiplyScalar(radius));
+    const cam = keyLight.shadow.camera;
+    const pad = radius * 1.4;
+    cam.left = -pad; cam.right = pad; cam.top = pad; cam.bottom = -pad;
+    cam.near = radius * 0.2; cam.far = radius * 6.5;
+    cam.updateProjectionMatrix();
+    fillLight.position.copy(centre).add(new THREE.Vector3(-1.8, 0.9, 1.1).multiplyScalar(radius));
+    rimLight.position.copy(centre).add(new THREE.Vector3(-0.5, 1.6, -2.0).multiplyScalar(radius));
+  }
+  const VIEW_DIRS = {
+    three_quarter: new THREE.Vector3(0.3, 0.12, 1).normalize(),
+    front: new THREE.Vector3(0, 0.06, 1).normalize(),
+    side: new THREE.Vector3(1, 0.06, 0).normalize(),
+    back: new THREE.Vector3(0, 0.06, -1).normalize(),
+  };
+  function setCameraView(name) {
+    const dir = VIEW_DIRS[name];
+    if (!dir || !fittedBox) return;
+    const centre = fittedBox.getCenter(new THREE.Vector3());
+    controls.target.copy(centre);
+    camera.position.copy(centre).addScaledVector(dir, fitDistance);
+    controls.update();
+  }
   let fittedBox = null, fitDistance = 0;
   function fitCamera(box) {
     const centre = box.getCenter(new THREE.Vector3());
@@ -169,10 +268,17 @@ try {
     }
     fittedBox = box;
     fitDistance = distance;
+    fitShadowRig(box);
     controls.update();
   }
 
-  function theme() { scene.background = new THREE.Color(getComputedStyle(document.body).getPropertyValue("--stage").trim()); }
+  function theme() {
+    const bg = new THREE.Color(getComputedStyle(document.body).getPropertyValue("--stage").trim());
+    scene.background = bg;
+    const lum = 0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b;
+    wireMat.color.setHex(lum < 0.35 ? 0xf2eee6 : 0x1d2430);
+    wireMat.opacity = lum < 0.35 ? 0.28 : 0.22;
+  }
   theme();
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", theme);
   function resize() {
@@ -234,6 +340,12 @@ try {
     geo.setAttribute("color", colours.strain_rgb);
   });
   $("showBody").addEventListener("change", () => setFrame(frame));
+  $("showWire").addEventListener("change", (e) => { wire.visible = e.target.checked; });
+  $("shading").addEventListener("change", (e) => applyShading(e.target.value));
+  document.querySelectorAll("button[data-view]").forEach((btn) => {
+    btn.addEventListener("click", () => setCameraView(btn.dataset.view));
+  });
+  applyShading($("shading").value);
   setFrame(0);
 
   function loop(now) {
