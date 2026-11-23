@@ -34,8 +34,8 @@ const captures = [
 const stills = [
   ["skirt", "public/media/skirt-atelier.jpg"],
   ["trousers", "public/media/trouser-form.jpg"],
-  // The review sheet is 2000 x 777 with three captioned panels; this is the cuff and hand of its second render.
-  ["visual-fitting", "public/fittings/sleeve-contact-review.png", { left: 978, top: 355, width: 306, height: 204 }],
+  // The second cut's studio render is 744 x 1199; this is its cuff and hand.
+  ["visual-fitting", "public/fittings/sleeve-335.webp", { left: 120, top: 560, width: 600, height: 400 }],
   ["wardrobe", "public/media/wardrobe-hussar.jpg"],
   ["studios", "public/media/lab-draft.webp"],
   ["materials", "public/media/rig-cylinder.jpg"],
@@ -54,10 +54,11 @@ const strips = [
 const drawings = [
   ["pattern", "public/sundress/master.svg", { left: 2, top: 640, width: 1380, height: 920 }],
 ];
-// The two sleeve pictures of the visual-fitting review sheet, at their own size and without its captions.
+// The two cuts of the visual fitting, as the how-it-works page shows them (4K studio renders of the
+// re-run fitting, cropped to the arm).
 const details = [
-  ["sleeve-before", "public/fittings/sleeve-contact-review.png", { left: 233, top: 70, width: 310, height: 500 }],
-  ["sleeve-after", "public/fittings/sleeve-contact-review.png", { left: 977, top: 70, width: 310, height: 500 }],
+  ["sleeve-before", "public/fittings/sleeve-385.webp", { left: 0, top: 0, width: 744, height: 1199 }],
+  ["sleeve-after", "public/fittings/sleeve-335.webp", { left: 0, top: 0, width: 744, height: 1199 }],
 ];
 // Portraits of the sewn garments: the middle of each construction film's poster, where the form stands.
 const portraits = ["sundress", "blue", "flare", "ensemble", "trousers", "bolero"];

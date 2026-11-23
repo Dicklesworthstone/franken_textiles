@@ -113,12 +113,12 @@ export default function Home() {
       <div className="hm-loop-figure" role="group" aria-label="One sleeve, two tries, seen from the same camera">
         <figure>
           <img src="/media/home/sleeve-before.webp" width={310} height={500} loading="lazy" decoding="async"
-            alt="A jacket sleeve on a simulated arm. The cuff reaches past the knuckles and covers most of the hand."/>
-          <figcaption><strong>First try</strong>The cuff covers the hand.</figcaption>
+            alt="A jacket sleeve on a child's arm. The cuff runs through the hand, with the thumb and fingers showing through the cloth."/>
+          <figcaption><strong>First try</strong>The cuff runs through the hand, so the solver refuses it.</figcaption>
         </figure>
         <figure>
           <img src="/media/home/sleeve-after.webp" width={310} height={500} loading="lazy" decoding="async"
-            alt="The same sleeve from the same camera, shorter. It ends at the wrist and the whole hand shows."/>
+            alt="The same sleeve from the same camera, 50 mm shorter. It ends at the wrist and the whole hand is clear."/>
           <figcaption><strong>Second try</strong>The pattern’s sleeve is 50 mm shorter and ends above the hand.</figcaption>
         </figure>
       </div>

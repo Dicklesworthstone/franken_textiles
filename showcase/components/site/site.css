@@ -190,6 +190,14 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 /* ---------- how-it-works figures & crate DAG ---------- */
 .ft-visual-frame{display:block;border:1px solid #cfc7b6;border-radius:4px;overflow:hidden;background:#f6f3ea;margin-bottom:14px}
 .ft-visual-frame img{display:block;width:100%;height:auto}
+/* Two renders of one cuff and the flat change between them, side by side on the studio's paper. */
+.ft-fitting-pair{display:grid;grid-template-columns:1fr 1fr .86fr;gap:12px;margin:0 0 18px}
+.ft-fitting-pair figure{margin:0;display:flex;flex-direction:column;gap:8px}
+.ft-fitting-pair img{display:block;width:100%;height:auto;aspect-ratio:744/1199;object-fit:contain;border-radius:6px;background:#ece7df}
+.ft-fitting-pair figure:last-child img{background:#f7f4ed;border:1px solid #e3ddcf;padding:10% 8%}
+.ft-fitting-pair figcaption{font-size:13.5px;line-height:1.5;color:#4c585c}
+.ft-fitting-pair figcaption strong{display:block;font:500 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink);margin-bottom:3px}
+@media(max-width:640px){.ft-fitting-pair{grid-template-columns:1fr 1fr}.ft-fitting-pair figure:last-child{grid-column:1/-1;max-width:60%;margin:0 auto}}
 .ft-knuckle-card{display:flex;align-items:center;gap:18px;margin:20px 0;padding:14px 16px;background:var(--paper-2);border:1px solid var(--rule-paper);border-left:3px solid #2b5a4d;border-radius:3px}
 .ft-knuckle-card img{width:min(32vw,132px);height:auto;flex-shrink:0;border-radius:2px;border:1px solid #c8c0af}
 .ft-knuckle-card figcaption{font-size:14.5px;line-height:1.58;color:#394644}

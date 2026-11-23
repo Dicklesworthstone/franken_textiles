@@ -71,22 +71,30 @@ export default function HowItWorks() {
 
     <section id="visual-fitting" className="ft-block"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">A visual fitting</p><h2>Let the hands show.</h2>
-        <p>Two bolero cuts, one reference body and one change to the flat pattern.</p></div>
+        <p>Two cuts of one bolero on the same synthetic child, and one change to the flat pattern.</p></div>
       <div className="ft-prose">
-        <a className="ft-visual-frame" href="/fittings/sleeve-contact-review.png"><img src="/fittings/sleeve-contact-review.png" width="2000" height="777"
-          alt="The two bolero cuffs from the same camera beside their flat sleeve outlines. Both archived trajectories failed the full-body contact audit."/></a>
-        <p>A pixel at the left cuff traces back to the <code>hem</code> edge of the <code>sleeve</code> pattern.
-          Shortening the draft from 385 to 335 mm moves the cuff towards the wrist and passes the flat-pattern check.
-          Both views use the same body and camera.</p>
-        <p>The current full-body contact audit finds the cloth crossing the displayed body at frame 87 in both archived
-          wrist-collider drapes — neither the contact audit nor the oracle-frozen bolero draft is weakened to hide it.</p>
-        <figure className="ft-knuckle-card">
-          <img src="/fittings/sleeve-knuckle-review.png" width="166" height="268" loading="lazy"
-            alt="The revised 335 mm sleeve ends just above the hand in the new knuckle-collider run."/>
-          <figcaption>A fresh run of the 335 mm cut with opt-in <code>--hands knuckle</code> passed the flat check
-            and the full-body contact audit across all 49 recorded physical frames. The 385 mm cut over the hand still
-            refuses honestly — now with a picture of where it starts through the hand.</figcaption>
-        </figure>
+        <div className="ft-fitting-pair">
+          <figure>
+            <img src="/fittings/sleeve-385.webp" width="744" height="1199" loading="lazy"
+              alt="A jacket sleeve on a child's arm, seen from the front. The cuff passes through the hand, with the thumb and fingers showing through the cloth."/>
+            <figcaption><strong>First cut · 385 mm</strong>The cuff runs through the hand. The solver does not draw cloth
+              inside a body, so it refuses this drape and keeps the state it refused: this one.</figcaption>
+          </figure>
+          <figure>
+            <img src="/fittings/sleeve-335.webp" width="744" height="1199" loading="lazy"
+              alt="The same sleeve from the same camera, 50 mm shorter. It ends at the wrist and the whole hand is clear of it."/>
+            <figcaption><strong>Second cut · 335 mm</strong>The cuff stops at the wrist. The drape finishes and stays
+              clear of the whole body, hand included, on every recorded frame.</figcaption>
+          </figure>
+          <figure>
+            <img src="/fittings/sleeve-outlines.svg" width="521" height="726" loading="lazy"
+              alt="The left sleeve of both cuts laid one over the other. The second is 50 millimetres shorter at the cuff."/>
+            <figcaption><strong>The change</strong>The same sleeve piece, 50 mm shorter at the cuff. Dashed: the first cut.</figcaption>
+          </figure>
+        </div>
+        <p>A point on the cuff in the first picture traces back to the <code>hem</code> edge of the
+          <code>sleeve</code> piece in the pattern. That is how an assistant knows which line of the flat pattern to
+          move. Both pictures use the same body and the same camera; only the pattern changed.</p>
         <CodeBlock title="Pixel-to-pattern inspection and knuckle contact audit" code={inspectCmd}/>
         <div className="ft-hero-actions"><a className="ft-text-link" href="/fittings/bolero-revision-A4.pdf" download>
           Print the revised A4 pattern <span aria-hidden="true" className="arrow"/></a>
@@ -97,8 +105,8 @@ export default function HowItWorks() {
           Both flat dimensions passed their checks. The 3D replay goes from the flat pieces through sewing
           and gravity drape. The contact audit checked all 49 physical frames against the full displayed
           body and the other cloth panels.</p>
-        <div className="ft-visual-frame"><img src="/fittings/bolero-full-hand-detail.webp" width="525" height="280"
-          loading="lazy" alt="Three-quarter and side views of the simulated bolero showing where the cuffs end at the hands."/></div>
+        <div className="ft-visual-frame"><img src="/fittings/bolero-full-hand-views.webp" width="1941" height="900"
+          loading="lazy" alt="Three-quarter and side views of the simulated bolero on a tailor's form, showing where the cuffs end at the hands."/></div>
         <p>The simulation used default cloth properties. A sewn sample is still needed to assess fit.</p>
         <div className="ft-hero-actions">
           <a className="primary" href="/fittings/bolero-full-hand-replay.html">Replay the cut in 3D</a>
