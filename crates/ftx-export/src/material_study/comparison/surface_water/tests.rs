@@ -4824,7 +4824,7 @@ fn finite_liquid_supply_demand_ledger_admits_shortfall_tiny_unmet_and_refuses_fo
 
     // 4. Tiny post-exhaustion shortfalls (2^-40 relative to 1 kg delivered) must be admitted
     // at their own scale and catch both zeroed-out unmet and balanced tiny forgeries.
-    let tiny = 2.0_f64.powi(-40);
+    let tiny = 1.0 / (1_u64 << 40) as f64;
     let motion = json!({
         "keyframes": [{"time_s": 1.}, {"time_s": 2.}],
         "duration_s": 2.
