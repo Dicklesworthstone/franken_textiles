@@ -489,6 +489,169 @@ export function buildMaterialVaporSurfaceConditions(boundary) {
   return JSON.stringify({ schema: "ftx-vapor-surface-conditions/1", boundaries: [boundary] });
 }
 
+// Retain source tokens while locating only the object members this authoring operation changes.
+// Checking every object's keys prevents ambiguous source records from disappearing in JSON.parse.
+function waterSourceDocument(raw, label, array = false) {
+  const value = parse(raw, label);
+  if (array ? !Array.isArray(value) : !value || typeof value !== "object" || Array.isArray(value)) {
+    throw Error(`${label} must be a JSON ${array ? "array" : "object"}.`);
+  }
+  let at = 0, open, close;
+  const members = new Map();
+  const whitespace = () => {
+    while (at < raw.length && " \t\r\n".includes(raw[at])) at++;
+  };
+  const string = () => {
+    const start = at++;
+    while (at < raw.length) {
+      if (raw[at++] === "\\") at++;
+      else if (raw[at - 1] === '"') return raw.slice(start, at);
+    }
+    throw Error(`${label} must be valid JSON.`);
+  };
+  const scan = depth => {
+    whitespace();
+    if (raw[at] === "{" || raw[at] === "[") {
+      if (depth >= 128) throw Error(`${label} exceeds 128 levels of source nesting.`);
+      const object = raw[at] === "{", end = object ? "}" : "]", keys = new Set();
+      if (depth === 0) open = at;
+      at++;
+      let start = at;
+      whitespace();
+      if (raw[at] !== end) for (;;) {
+        let key;
+        if (object) {
+          key = JSON.parse(string());
+          if (keys.has(key)) throw Error(`${label} contains a duplicate JSON member: ${key}.`);
+          keys.add(key);
+          whitespace(); at++; whitespace(); // JSON.parse already checked the colon.
+        }
+        const valueStart = at;
+        scan(depth + 1);
+        const valueEnd = at;
+        whitespace();
+        if (depth === 0 && object) members.set(key, { start, valueStart, valueEnd, end: at });
+        if (raw[at] === end) break;
+        at++; start = at; whitespace();
+      }
+      if (depth === 0) close = at;
+      at++;
+    } else if (raw[at] === '"') string();
+    else while (at < raw.length && !",]} \t\r\n".includes(raw[at])) at++;
+  };
+  scan(0);
+  return { raw, value, members, open, close };
+}
+
+function composeWaterSource(document, replacements, removed = []) {
+  const fields = [], seen = new Set();
+  for (const [key, member] of document.members) {
+    if (removed.includes(key)) continue;
+    seen.add(key);
+    fields.push(own(replacements, key) ? document.raw.slice(member.start, member.valueStart) +
+      replacements[key] + document.raw.slice(member.valueEnd, member.end) :
+      document.raw.slice(member.start, member.end));
+  }
+  for (const [key, raw] of Object.entries(replacements)) if (!seen.has(key)) fields.push(`${JSON.stringify(key)}:${raw}`);
+  return document.raw.slice(0, document.open + 1) + fields.join(",") + document.raw.slice(document.close);
+}
+
+/** Compose independently supplied liquid/ambient records without rewriting material qualification. */
+export function buildMaterialTextileWaterPolicy(state, intervalCount) {
+  const optional = ["supply", "finiteReservoir", "ambientExchange", "ambientExchangeByInterval"];
+  object(state, ["water", ...optional], ["water"], "Direct textile-water sources");
+  if (!Number.isSafeInteger(intervalCount) || intervalCount < 1 || intervalCount > 16) {
+    throw Error("Textile-water sources need 1–16 saved motion intervals.");
+  }
+  let sourceBytes = 0;
+  for (const raw of Object.values(state)) {
+    if (typeof raw !== "string") throw Error("Each textile-water source must retain its original JSON text.");
+    sourceBytes += bytes(raw);
+    if (sourceBytes > MAX_REQUEST_BYTES) throw Error("Textile-water source files exceed 16 MiB combined.");
+  }
+  const water = waterSourceDocument(state.water, "Original textile-water policy");
+  if (!optional.some(key => own(state, key))) return state.water;
+  if (own(state, "ambientExchange") && own(state, "ambientExchangeByInterval")) {
+    throw Error("Choose a constant ambient source or one source per saved interval, not both.");
+  }
+  const supplyEdit = own(state, "supply") || own(state, "finiteReservoir");
+  const ambientEdit = own(state, "ambientExchange") || own(state, "ambientExchangeByInterval");
+  const versions = [2, 3, 4, 5].map(version => `ftx-textile-surface-water/${version}`);
+  if (!versions.includes(water.value.schema)) {
+    throw Error("Liquid-source composition requires an original water policy version /2–5; initial-only water needs its own supply qualification first.");
+  }
+  const memberText = (document, key, label) => {
+    const member = document.members.get(key);
+    if (!member) throw Error(`${label} is missing from the original policy.`);
+    return document.raw.slice(member.valueStart, member.valueEnd);
+  };
+  const replacements = {};
+  const supply = waterSourceDocument(own(state, "supply") ? state.supply :
+    memberText(water, "supply", "Liquid delivery"), "Original liquid delivery");
+  if (!["ftx-textile-liquid-supply/1", "ftx-textile-liquid-supply/2"].includes(supply.value.schema) ||
+      (supply.value.schema === "ftx-textile-liquid-supply/1" && own(supply.value, "finite_reservoir"))) {
+    throw Error("Liquid delivery must use supply /1 without a finite donor or supply /2 with an explicit finite donor.");
+  }
+  const bindings = water.value.bindings, delivered = supply.value.bindings;
+  if (!bindings || typeof bindings !== "object" || Array.isArray(bindings) ||
+      !delivered || typeof delivered !== "object" || Array.isArray(delivered)) {
+    throw Error("Water and liquid delivery need explicit physical-instance bindings.");
+  }
+  const names = Object.keys(bindings);
+  if (!names.length || names.length > 65536 || Object.keys(delivered).length !== names.length || names.some(key => !own(delivered, key))) {
+    throw Error("Liquid delivery must bind exactly the same physical instances as the original water policy.");
+  }
+  for (const binding of Object.values(delivered)) {
+    if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
+        ["rate_kg_m2_s", "temperature_c"].some(key => !Array.isArray(binding[key]) || binding[key].length !== intervalCount)) {
+      throw Error("Every liquid delivery binding needs one rate and temperature per saved motion interval.");
+    }
+  }
+  let supplied = supply.raw;
+  if (own(state, "finiteReservoir")) {
+    const donor = waterSourceDocument(state.finiteReservoir, "Original finite liquid donor");
+    if (donor.value.schema !== "ftx-textile-liquid-reservoir/1") throw Error("Use an original ftx-textile-liquid-reservoir/1 donor.");
+    supplied = composeWaterSource(supply, { schema: '"ftx-textile-liquid-supply/2"', finite_reservoir: donor.raw });
+  } else if (supply.value.schema === "ftx-textile-liquid-supply/2" &&
+      (!supply.value.finite_reservoir || typeof supply.value.finite_reservoir !== "object" || Array.isArray(supply.value.finite_reservoir))) {
+    throw Error("Finite liquid delivery needs its original finite donor object.");
+  }
+  if (supplyEdit) replacements.supply = supplied;
+  if (ambientEdit && water.value.schema !== "ftx-textile-surface-water/5") {
+    throw Error("Ambient sources require an original water /5 policy with its qualified finite vapor reservoir.");
+  }
+  if (water.value.schema === "ftx-textile-surface-water/5") {
+    const reservoir = waterSourceDocument(memberText(water, "vapor_reservoir", "Finite vapor reservoir"), "Original finite vapor reservoir");
+    const version = reservoir.value.schema;
+    const constant = own(reservoir.value, "ambient_exchange"), scheduled = own(reservoir.value, "ambient_exchange_by_interval");
+    if (!["ftx-textile-vapor-reservoir/1", "ftx-textile-vapor-reservoir/2"].includes(version) ||
+        (constant && scheduled) || (version.endsWith("/1") && scheduled) || (version.endsWith("/2") && constant)) {
+      throw Error("Original vapor storage must declare one unambiguous constant or scheduled ambient mode.");
+    }
+    if (ambientEdit) {
+      const schedule = own(state, "ambientExchangeByInterval");
+      const boundary = waterSourceDocument(schedule ? state.ambientExchangeByInterval : state.ambientExchange,
+        "Original ambient vapor exchange", schedule);
+      const entries = schedule ? boundary.value : [boundary.value];
+      if (schedule && entries.length !== intervalCount) throw Error("Supply one ambient source per saved motion interval.");
+      if (entries.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry) || entry.schema !== "ftx-textile-vapor-exchange/1")) {
+        throw Error("Each ambient source must be an original ftx-textile-vapor-exchange/1 object.");
+      }
+      replacements.vapor_reservoir = composeWaterSource(reservoir, {
+        schema: JSON.stringify(`ftx-textile-vapor-reservoir/${schedule ? 2 : 1}`),
+        [schedule ? "ambient_exchange_by_interval" : "ambient_exchange"]: boundary.raw,
+      }, [schedule ? "ambient_exchange" : "ambient_exchange_by_interval"]);
+    } else if (version.endsWith("/2") &&
+        (!Array.isArray(reservoir.value.ambient_exchange_by_interval) || reservoir.value.ambient_exchange_by_interval.length !== intervalCount)) {
+      throw Error("Original ambient exchange needs one source per saved motion interval.");
+    }
+  }
+  // Physical domains, source consent, material locks and the wet/phase laws remain native checks.
+  const request = composeWaterSource(water, replacements);
+  bytes(request, MAX_REQUEST_BYTES, "Composed textile-water policy exceeds 16 MiB.");
+  return request;
+}
+
 function motionLiquidSources(sources) {
   const fields = ["surface_water", "surface_water_alternatives", "coupled_water_alternatives"];
   object(sources, [...fields, "mechanical_coupling"], [], "Original textile-water policies");
