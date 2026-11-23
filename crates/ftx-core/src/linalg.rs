@@ -23,6 +23,9 @@ pub fn lstsq<const N: usize>(a: &[[f64; N]], b: &[f64]) -> [f64; N] {
     if m == 0 || N == 0 {
         return [0.0; N];
     }
+    if a.iter().flatten().any(|v| !v.is_finite()) || b.iter().any(|v| !v.is_finite()) {
+        return [f64::NAN; N];
+    }
     // Scale extreme-magnitude systems so squared column norms and `alpha * beta` neither overflow
     // to infinity (silently skipping Jacobi rotations) nor underflow to zero. Normal-magnitude
     // systems stay at scale 1.0 to preserve bit-identical trajectories.
@@ -32,13 +35,13 @@ pub fn lstsq<const N: usize>(a: &[[f64; N]], b: &[f64]) -> [f64; N] {
         .copied()
         .map(f64::abs)
         .fold(0.0_f64, f64::max);
-    let a_scale = if a_max.is_finite() && a_max > 0.0 && !(1e-60..=1e60).contains(&a_max) {
+    let a_scale = if a_max > 0.0 && !(1e-60..=1e60).contains(&a_max) {
         a_max
     } else {
         1.0
     };
     let b_max = b.iter().copied().map(f64::abs).fold(0.0_f64, f64::max);
-    let b_scale = if b_max.is_finite() && b_max > 0.0 && !(1e-60..=1e60).contains(&b_max) {
+    let b_scale = if b_max > 0.0 && !(1e-60..=1e60).contains(&b_max) {
         b_max
     } else {
         1.0
@@ -191,6 +194,19 @@ mod tests {
                 (x[0] - 1.0).abs() < 1e-13 && (x[1] - 2.0).abs() < 1e-13,
                 "scale={scale:e}: got {x:?}"
             );
+        }
+    }
+
+    #[test]
+    fn non_finite_inputs_return_nan_instead_of_zeros() {
+        for (a, b) in [
+            ([[f64::INFINITY, 0.0], [0.0, 1.0]], [1.0, 2.0]),
+            ([[f64::NAN, 1e100], [1e100, 1e100]], [1.0, 2.0]),
+            ([[1.0, 0.0], [0.0, 1.0]], [f64::NAN, 2.0]),
+            ([[1.0, 0.0], [0.0, 1.0]], [1.0, f64::NEG_INFINITY]),
+        ] {
+            let x = lstsq(&a, &b);
+            assert!(x.iter().all(|v| v.is_nan()), "expected NaNs, got {x:?}");
         }
     }
 }
