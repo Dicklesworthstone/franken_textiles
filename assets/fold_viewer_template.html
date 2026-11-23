@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fold-up Viewer</title>
-<meta name="description" content="The sewing pattern folding up around the measured dress form, frame by frame (from the Blender fold-up).">
+<meta name="description" content="Replay the flat sewing pattern, seam joins and draped garment in 3D.">
 <style>
 :root { --bg: #f6f4ef; --panel: #ffffff; --fg: #1d1c1a; --mut: #6a665e; --line: #dcd7cc; --accent: #23407a;
         --accent-fg: #ffffff; --stage: #e9e6df; --ok: #1d7a3a; --bad: #b3261e; }
@@ -117,21 +117,67 @@ try {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  // frame the whole fold (board included) and the form
-  const box = new THREE.Box3(new THREE.Vector3(lo[0], lo[2], -D.hi[1]), new THREE.Vector3(D.hi[0], D.hi[2], -lo[1]));
-  if (body) box.union(new THREE.Box3().setFromObject(body));
-  const centre = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
-  controls.target.copy(centre);
-  camera.position.set(centre.x + 0.3 * size.length(), centre.y + 0.12 * size.length(), centre.z + 1.0 * size.length());
+  // The recorded placement cuts from separate panels to the dressed form. Frame each station.
+  const cut = contact?.first_physical ?? 0;
+  const point = new THREE.Vector3();
+  const boardBox = new THREE.Box3();
+  for (let i = 0; i < cut * V * 3; i += 3) {
+    boardBox.expandByPoint(point.set(lo[0] + Q[i] * sc[0], lo[2] + Q[i + 2] * sc[2], -lo[1] - Q[i + 1] * sc[1]));
+  }
+  const dressedBox = new THREE.Box3();
+  if (solved) {
+    for (let i = 0; i < solved.length; i += 3) {
+      dressedBox.expandByPoint(point.set(solved[i], solved[i + 2], -solved[i + 1]));
+    }
+  } else {
+    dressedBox.min.set(lo[0], lo[2], -D.hi[1]);
+    dressedBox.max.set(D.hi[0], D.hi[2], -lo[1]);
+  }
+  if (body) dressedBox.union(new THREE.Box3().setFromObject(body));
+
+  const backward = new THREE.Vector3(0.3, 0.12, 1).normalize();
+  const right = new THREE.Vector3().crossVectors(camera.up, backward).normalize();
+  const up = new THREE.Vector3().crossVectors(backward, right);
+  let fittedBox = null, fitDistance = 0;
+  function fitCamera(box) {
+    const centre = box.getCenter(new THREE.Vector3());
+    const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 0.86;
+    const halfWidth = halfHeight * camera.aspect;
+    let distance = camera.near * 2;
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          point.set(x, y, z).sub(centre);
+          distance = Math.max(distance, point.dot(backward) + Math.max(
+            Math.abs(point.dot(right)) / halfWidth, Math.abs(point.dot(up)) / halfHeight, camera.near * 2,
+          ));
+        }
+      }
+    }
+    if (fittedBox) {
+      // Keep the visitor's orbit, pan and zoom relative to the newly framed station.
+      camera.position.sub(controls.target).multiplyScalar(distance / fitDistance);
+      controls.target.add(centre.sub(fittedBox.getCenter(point)));
+      camera.position.add(controls.target);
+    } else {
+      controls.target.copy(centre);
+      camera.position.copy(centre).addScaledVector(backward, distance);
+    }
+    fittedBox = box;
+    fitDistance = distance;
+    controls.update();
+  }
 
   function theme() { scene.background = new THREE.Color(getComputedStyle(document.body).getPropertyValue("--stage").trim()); }
   theme();
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", theme);
   function resize() {
     const w = stage.clientWidth, h = stage.clientHeight;
+    if (!w || !h) return;
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    if (fittedBox) fitCamera(fittedBox);
   }
   new ResizeObserver(resize).observe(stage);
   resize();
@@ -152,8 +198,10 @@ try {
     geo.attributes.position.needsUpdate = true;
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
+    const box = frame < cut ? boardBox : dressedBox;
+    if (fittedBox !== box) fitCamera(box);
     $("frame").value = frame;
-    $("phase").textContent = D.phase[frame];
+    $("phase").textContent = frame === 0 && cut > 0 ? "Flat pattern pieces" : D.phase[frame];
     $("count").textContent = `${frame + 1} / ${F}`;
   }
   $("frame").max = F - 1;
