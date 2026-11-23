@@ -240,11 +240,23 @@ def turned_stand(center, floor, hip, radius):
     return xyz, np.array(faces)
 
 
-def trim_top(points, faces, height):
-    """Cut the presentation form at a horizontal plane and cover its exposed opening."""
-    below = points[:, 2] < height
+def trim_top(points, faces, height, keep_above=False, only=None):
+    """Cut the presentation form at a horizontal plane and cover its exposed opening.
+
+    By default the part below the plane is kept (the cut at the neck). With `keep_above` the part above
+    it is kept (the cut at the hip of a jacket's form). `only` limits the cut to faces whose three
+    vertices it marks; other faces are kept whole. Triangles that cross the plane are split exactly on
+    it, so the cut is a clean line and not the stepped outline of whole triangles.
+    """
+    below = points[:, 2] >= height if keep_above else points[:, 2] < height
+    if only is not None:
+        exempt = ~only[faces].all(axis=1)
+        whole = faces[exempt].tolist()
+        faces = faces[~exempt]
+    else:
+        whole = []
     kept = below[faces]
-    triangles = faces[kept.all(axis=1)].tolist()
+    triangles = whole + faces[kept.all(axis=1)].tolist()
     vertices, edge_points = [], {}
     for face in faces[kept.any(axis=1) & ~kept.all(axis=1)]:
         polygon = []
@@ -636,15 +648,16 @@ def render(args):
             half_width = .125 if bolero else .27
             trunk = np.abs(body[:, 0]) < half_width
             drop = np.ptp(recorded[-1, :, 2]) * .28
-            if bolero:
-                visible &= (body[:, 2] >= hip) | ~trunk
-            else:
+            if not bolero:
                 floor = min(hip-drop, recorded[-1, :, 2].min()-.022, body[~trunk, 2].min()-.025)
                 visible &= (body[:, 2] >= hip) | (~trunk & (body[:, 2] >= floor))
             ring = body[trunk & (np.abs(body[:, 2]-hip)<.016)]
             low, high = ring.min(axis=0), ring.max(axis=0)
             mount = (hip, drop, (low+high)/2, (high[0]-low[0])*.48)
         body_faces = body_faces[visible[body_faces].all(axis=1)]
+        if bolero:
+            # The trunk ends on its plate in a clean line; the arms and hands are kept whole.
+            body, body_faces = trim_top(body, body_faces, mount[0], keep_above=True, only=trunk)
         body, body_faces = trim_top(body, body_faces, head)
         if lower_body or bolero:
             body_faces = main_component(body_faces, len(body))
