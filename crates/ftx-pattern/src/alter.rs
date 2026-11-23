@@ -501,7 +501,7 @@ pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result
         if cap.id != inst.id {
             return Err(invalid("cap-ease seams must use one cap instance"));
         }
-        if eids.iter().any(|e| e.ends_with(".L")) {
+        if cap.mirrored || cap.side == crate::Side::L || eids.iter().any(|e| e.ends_with(".L")) {
             return Err(invalid(
                 "use drafted (.R) cap edges; the mirrored copy follows",
             ));
@@ -706,5 +706,53 @@ mod tests {
         let before = doc.clone();
         assert!(move_vertex(&doc, "r", "c", 1.0, 1.0).is_err());
         assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn cap_ease_refuses_mirrored_left_cap_edges_like_true_seam() {
+        let sleeve = json!({
+            "id": "sleeve", "name": "SLEEVE", "cut": {"qty": 2},
+            "vertices": {"ua_b": [-50, 0], "hem_b": [-40, -100], "hem_f": [40, -100], "ua_f": [50, 0], "top": [0, 60]},
+            "edges": [
+                {"id": "under_b", "from": "ua_b", "to": "hem_b"},
+                {"id": "hem", "from": "hem_b", "to": "hem_f"},
+                {"id": "under_f", "from": "hem_f", "to": "ua_f"},
+                {"id": "cap_f", "from": "ua_f", "to": "top"},
+                {"id": "cap_b", "from": "top", "to": "ua_b"}
+            ],
+            "notches": [], "grain": [[0, -10], [0, -80]]
+        });
+        let bodice = json!({
+            "id": "bodice", "name": "BODICE", "cut": {"qty": 2},
+            "vertices": {"a": [0, 0], "b": [70, 0], "c": [70, 70], "d": [0, 70]},
+            "edges": [
+                {"id": "hem", "from": "a", "to": "b"},
+                {"id": "arm_f", "from": "b", "to": "c"},
+                {"id": "arm_b", "from": "c", "to": "d"},
+                {"id": "side", "from": "d", "to": "a"}
+            ],
+            "notches": [], "grain": [[20, 10], [20, 50]]
+        });
+        let doc = json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [bodice, sleeve],
+            "seams": [
+                {"id": "arm_f_R", "a": "sleeve.R/cap_f", "b": "bodice.R/arm_f"},
+                {"id": "arm_b_R", "a": "sleeve.R/cap_b", "b": "bodice.R/arm_b"},
+                {"id": "arm_f_L", "a": "sleeve.L/cap_f", "b": "bodice.L/arm_f"},
+                {"id": "arm_b_L", "a": "sleeve.L/cap_b", "b": "bodice.L/arm_b"}
+            ]
+        });
+        let err =
+            cap_ease(&doc, "sleeve", &["arm_f_L".into(), "arm_b_L".into()], 1.15).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(
+            err.message.contains("drafted (.R)"),
+            "expected drafted (.R) refusal, got {err:?}"
+        );
+        let ok = cap_ease(&doc, "sleeve", &["arm_f_R".into(), "arm_b_R".into()], 1.15).unwrap();
+        let top_y = ok["pieces"][1]["vertices"]["top"][1].as_f64().unwrap();
+        assert!(top_y > 60.0, "expected cap height to grow, got {top_y}");
     }
 }
