@@ -24670,7 +24670,7 @@ test('opt-in thumb_pose wires fail-closed across both workbenches, workers, stud
       mCalls.push({ path: 'configured', settings: JSON.parse(settings) });
       return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
     },
-    evaluate_material_scenario: (_b, _p, _r, measurements) => {
+    material_scenario_study: (_b, _p, _s, _r, measurements) => {
       mCalls.push({ path: 'scenario', measurements: JSON.parse(measurements) });
       return JSON.stringify(scenarioReport());
     }
@@ -24695,24 +24695,33 @@ test('opt-in thumb_pose wires fail-closed across both workbenches, workers, stud
   assert.equal((await mw.send({ ...suppBase, request: 6, bytes: new Uint8Array([1]).buffer, measurementPose: { arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, thumb_pose: null } })).type, 'error');
   assert.equal((await mw.send({ ...suppBase, request: 7, bytes: new Uint8Array([1]).buffer, measurementAcceptedFit: '{"schema":"ftx-body-fit/1"}', measurementArmDeg: 35, measurementAcceptedPose: { thumb_pose: { left_rotation_vector_rad: [4, 0, 0], right_rotation_vector_rad: [0, 0, 0] } } })).type, 'error');
 
-  const dCalls = [];
-  const dw = await draftingWorkerModule({
+  const dwSent = [], dCalls = [];
+  const dwValues = {
+    default: async () => {}, program_info: () => '{}', calibration_dictionaries: () => '["DICT_4X4_50"]',
+    run: () => ({ page: () => '{"status":"CONVERGED","zip":"round.zip"}', zip: () => new Uint8Array([1]),
+      file: n => new TextEncoder().encode(n === 'pattern.json' ? '{"pieces":[{"placement":{"part":"torso"}}]}' : '{}'), free() {} }),
     WebBody: class { free() {} },
-    run_round: () => ({ json: () => JSON.stringify({ title: 'Bolero', status: 'CONVERGED', basis: {}, files: { 'pattern.json': '{}', 'measurements.json': '{}', 'fit_spec.json': '{}' } }), files: () => '{}', free() {} }),
-    fold_up: () => { dCalls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up: () => { dCalls.push({ path: 'legacy' }); return { report: () => '{"gating":[]}', viewer: () => '<html/>', free() {} }; },
     fold_up_configured: (_b, _p, _m, _f, settings) => {
       dCalls.push({ path: 'configured', settings: JSON.parse(settings) });
-      return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
+      return { report: () => '{"gating":[],"settled":true}', viewer: () => '<html/>', free() {} };
     }
-  });
-  await dw.send({ type: 'body', request: 1, bytes: new Uint8Array([1]).buffer });
-  await dw.send({ type: 'run', request: 2, args: { program: 'zouave_bolero' } });
-  assert.equal((await dw.send({ type: 'fold', request: 3, selfContactMm: 2, twoStart: false, armDeg: 35 })).type, 'folded');
+  };
+  const dwCtx = vm.createContext({ JSON, Date, TextDecoder, Uint8Array, WebAssembly, Error, self: {}, onmessage: null, postMessage: m => dwSent.push(m) });
+  const dwImports = new vm.SyntheticModule(Object.keys(dwValues), function () { for (const [n, v] of Object.entries(dwValues)) this.setExport(n, v); }, { context: dwCtx });
+  await dwImports.link(() => {}); await dwImports.evaluate();
+  const dwMod = new vm.SourceTextModule(read('worker.js'), { context: dwCtx, importModuleDynamically: () => dwImports });
+  await dwMod.link(() => {}); await dwMod.evaluate();
+  const dwSend = async data => { await dwCtx.onmessage({ data }); return dwSent.at(-1); };
+  assert.equal((await dwSend({ type: 'init', pkg: './pkg/' })).type, 'ready');
+  await dwSend({ type: 'body', request: 2, bytes: new Uint8Array([1]).buffer });
+  await dwSend({ type: 'run', request: 3, req: {} });
+  assert.equal((await dwSend({ type: 'fold', request: 4, round: 3, body: 2 })).type, 'folded');
   assert.equal(dCalls.at(-1).path, 'legacy');
-  assert.equal((await dw.send({ type: 'fold', request: 4, selfContactMm: 2, twoStart: false, armDeg: 35, thumbPose: validThumb })).type, 'folded');
+  assert.equal((await dwSend({ type: 'fold', request: 5, round: 3, body: 2, thumbPose: validThumb })).type, 'folded');
   assert.equal(dCalls.at(-1).path, 'configured');
   assert.deepEqual(plain(dCalls.at(-1).settings.thumb_pose), validThumb);
-  assert.equal((await dw.send({ type: 'fold', request: 5, selfContactMm: 2, twoStart: false, armDeg: 35, thumbPose: { left_rotation_vector_rad: [4, 0, 0], right_rotation_vector_rad: [0, 0, 0] } })).type, 'error');
+  assert.equal((await dwSend({ type: 'fold', request: 6, round: 3, body: 2, thumbPose: { left_rotation_vector_rad: [4, 0, 0], right_rotation_vector_rad: [0, 0, 0] } })).type, 'error');
 
   // 4. Pattern workbench (index.html): dispatch, summary display, invalidation, bidirectional handoffs.
   const idx = draftingPage();
