@@ -53,5 +53,7 @@
   Cache-Control: public, max-age=0, must-revalidate, no-transform
 /workbench/:page
   Cache-Control: public, max-age=0, must-revalidate, no-transform
+/fittings/bolero-full-hand-replay
+  Cache-Control: public, max-age=0, must-revalidate, no-transform
 /fittings/bolero-full-hand-replay.html
   Cache-Control: public, max-age=0, must-revalidate, no-transform
