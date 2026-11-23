@@ -565,6 +565,95 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             {
                 let _ = write!(out, " Self stick-slip friction: μs = {mu_s}, μk = {mu_k}.");
             }
+            if let Some(mesh) = sim["numerical"]["mesh"].as_object() {
+                let mut parts = Vec::new();
+                if let Some(min_s) = mesh
+                    .get("options")
+                    .and_then(|o| o.get("min_spacing_mm"))
+                    .and_then(Value::as_f64)
+                {
+                    parts.push(format!("min spacing {min_s} mm"));
+                }
+                if let Some(cvt) = mesh
+                    .get("options")
+                    .and_then(|o| o.get("cvt_iterations"))
+                    .and_then(Value::as_u64)
+                    && cvt > 0
+                {
+                    parts.push(format!("{cvt} CVT passes"));
+                }
+                if let Some(min_ang) = mesh
+                    .get("quality")
+                    .and_then(|q| q.get("min_angle_deg"))
+                    .and_then(Value::as_f64)
+                {
+                    parts.push(format!("min angle {min_ang:.1}°"));
+                }
+                if !parts.is_empty() {
+                    let _ = write!(out, " Mesh: {}.", xml_escape(&parts.join(", ")));
+                }
+            }
+            if let Some(constr) = sim["numerical"]["construction"].as_object()
+                && let Some(opt) = constr.get("options").and_then(Value::as_object)
+            {
+                let mut parts = Vec::new();
+                let hw = opt
+                    .get("hem_width_mm")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let hm = opt
+                    .get("hem_mass_multiplier")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0);
+                let hb = opt
+                    .get("hem_bending_multiplier")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0);
+                if hw > 0.0 && (hm > 1.0 || hb > 1.0) {
+                    parts.push(format!("hem {hw} mm ({hm}× mass, {hb}× bend)"));
+                }
+                let sw = opt
+                    .get("seam_width_mm")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let sm = opt
+                    .get("seam_mass_multiplier")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0);
+                let sb = opt
+                    .get("seam_bending_multiplier")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0);
+                if sm > 1.0 || sb > 1.0 {
+                    parts.push(format!("seam {sw} mm ({sm}× mass, {sb}× bend)"));
+                }
+                if !parts.is_empty() {
+                    let _ = write!(
+                        out,
+                        " Construction (uncalibrated): {}.",
+                        xml_escape(&parts.join(", "))
+                    );
+                }
+            }
+            if let Some(rep) = sim["numerical"]["start_self_repulsion"].as_object()
+                && let (Some(sep_m), Some(stiff), Some(period)) = (
+                    rep.get("min_separation_m").and_then(Value::as_f64),
+                    rep.get("stiffness").and_then(Value::as_f64),
+                    rep.get("period").and_then(Value::as_u64),
+                )
+            {
+                let _ = write!(
+                    out,
+                    " Start self-repulsion: {:.1} mm (stiffness {stiff}, period {period}).",
+                    sep_m * 1e3
+                );
+            }
+            if let Some(creases) = sim["numerical"]["authored_crease_hinges"]
+                .as_u64()
+                .filter(|&n| n > 0)
+            {
+                let _ = write!(out, " Authored creases: {creases} hinge(s).");
+            }
             if let Some(settle) = sim["numerical"]["settling"].as_object()
                 && let (Some(steps), Some(max_steps)) = (
                     settle.get("steps").and_then(Value::as_u64),

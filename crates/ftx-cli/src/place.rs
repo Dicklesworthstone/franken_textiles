@@ -26,7 +26,10 @@ use ftx_drape::scene::{
 };
 use ftx_drape::start::{RELAX_MAX_ITERS, RELAX_TARGET_P95};
 use ftx_drape::start::{edge_strain, face_edges};
-use ftx_drape::{GarmentMesh, NearestTree, WrapPlacement, build_garment, start_state};
+use ftx_drape::{
+    GarmentMesh, MeshOptions, NearestTree, SelfRepulsionOptions, WrapPlacement, build_garment,
+    build_garment_with_options, mesh_quality, start_state, start_state_with_repulsion,
+};
 use ftx_pattern::Pattern;
 use serde_json::{Map, Value, json};
 
@@ -1025,6 +1028,10 @@ pub(super) struct Staging<'a> {
     pub label: &'a str,
     /// Mesh edge length (mm).
     pub spacing: f64,
+    /// Opt-in curvature/gather-adaptive meshing and bounded Lloyd CVT options.
+    pub mesh: MeshOptions,
+    /// Opt-in spatial-hash cloth–cloth self-repulsion during start-state relaxation.
+    pub start_self_repulsion: Option<SelfRepulsionOptions>,
     /// Elastic stiffness EA (N), which sets a casing's cut length.
     pub elastic_ea: f64,
     pub frames: &'a dyn PartFrames,
@@ -1057,6 +1064,8 @@ fn stages(
         pattern: source,
         label,
         spacing,
+        mesh: mesh_options,
+        start_self_repulsion,
         elastic_ea,
         frames,
         collision: skin,
@@ -1078,7 +1087,11 @@ fn stages(
         cut_length = casings_at_cut_length(source, &elastics);
         &cut_length
     };
-    let mesh = build_garment(pattern, spacing)?;
+    let mesh = if mesh_options.is_default() {
+        build_garment(pattern, spacing)?
+    } else {
+        build_garment_with_options(pattern, spacing, mesh_options)?
+    };
     if mesh.verts2d.is_empty() {
         return Err(Refusal::new(
             RefusalCode::InvalidDocument,
@@ -1104,7 +1117,12 @@ fn stages(
     // squat) before it places any cloth. Report that here instead of stopping: the pictures still help.
     let body_surface = body_surface_report(skin);
     let tree = NearestTree::new(skin.0.to_vec(), skin.1.to_vec())?;
-    let start = start_state(&mesh, wrapped.clone(), &tree);
+    let start = match start_self_repulsion {
+        Some(repulsion) => {
+            start_state_with_repulsion(&mesh, wrapped.clone(), &tree, Some(repulsion))?
+        }
+        None => start_state(&mesh, wrapped.clone(), &tree),
+    };
     let depth = |x: &[Vec3]| -> Vec<f64> { x.iter().map(|p| tree.signed_distance(*p)).collect() };
     let (wrap_depth, start_depth) = (depth(&wrapped), depth(&start.relaxed));
 
@@ -1213,6 +1231,15 @@ fn stages(
             Err(refusal) => json!({"admitted": false, "refusal": refusal}),
         };
     }
+    if !mesh_options.is_default() {
+        report["mesh"] = json!({
+            "options": mesh_options,
+            "quality": mesh_quality(&mesh),
+        });
+    }
+    if let Some(repulsion) = start_self_repulsion {
+        report["start_self_repulsion"] = json!(repulsion);
+    }
     workspace::write_json(&out.join("placement.json"), &report)?;
     Ok((report, mesh))
 }
@@ -1227,6 +1254,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "model",
             "body-fit",
             "spacing-mm",
+            "min-spacing-mm",
+            "cvt-iters",
+            "max-turning-angle-rad",
+            "gather-refinement",
+            "start-self-repulsion",
+            "start-repulsion-mm",
+            "start-repulsion-stiffness",
+            "start-repulsion-period",
             "arm-deg",
             "thumb-pose",
             "legs",
@@ -1270,6 +1305,8 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             pattern: &source,
             label: pattern_path,
             spacing,
+            mesh: material.options.mesh,
+            start_self_repulsion: material.options.start_self_repulsion,
             elastic_ea: material.options.elastic_ea,
             frames: &frames,
             collision: (&skin.vertices, &skin.triangles),
@@ -2155,6 +2192,8 @@ mod tests {
             pattern: &pattern,
             label: "outfit.json",
             spacing: 10.0,
+            mesh: ftx_drape::MeshOptions::default(),
+            start_self_repulsion: None,
             elastic_ea: ftx_drape::run::DrapeOptions::default().elastic_ea,
             frames: &Form,
             collision: (&vertices, &triangles),
@@ -2451,5 +2490,38 @@ mod tests {
             .find("ftx place draws the fully relaxed start")
             .unwrap();
         assert!(stretch_pos < place_pos);
+    }
+
+    #[test]
+    fn place_accepts_adaptive_mesh_and_start_self_repulsion_options() {
+        let args = crate::parse(
+            &[
+                "place",
+                "absent-pattern.json",
+                "--measurements",
+                "absent-meas.json",
+                "--out",
+                "absent-out",
+                "--min-spacing-mm",
+                "6",
+                "--cvt-iters",
+                "4",
+                "--start-self-repulsion",
+                "--start-repulsion-mm",
+                "5",
+                "--start-repulsion-stiffness",
+                "0.6",
+                "--start-repulsion-period",
+                "5",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let err = super::run(&args).unwrap_err();
+        assert!(
+            !err.message.contains("unknown option"),
+            "ftx place must recognize mesh and start-self-repulsion options: {}",
+            err.message
+        );
     }
 }

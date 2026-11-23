@@ -70,6 +70,9 @@ const USAGE: &str = "usage:
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
             [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
+            [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
+            [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
+            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -81,6 +84,9 @@ const USAGE: &str = "usage:
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
             [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
+            [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
+            [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
+            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N]
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
@@ -88,6 +94,8 @@ const USAGE: &str = "usage:
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
+            [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
+            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N]
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--res 960x540] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--shading standard|legible] [--json]
              (legible: a second set, still_<view>_legible.png, drawn for reading folds and edges; describes no fabric)
@@ -136,13 +144,13 @@ const USAGE: &str = "usage:
   ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--weight-kg KG] [--bmi KG_PER_M2] [--taken-on DATE] [--json]
   ftx measure add FILE --name NAME --value 55cm [--value 55.5cm] [--sigma 1cm] [--provenance SOURCE] [--out FILE] [--json]
   ftx measure validate FILE [--json]
-  ftx measure calib-sheet --paper letter|a4 --out DIR [--squares-x N] [--squares-y N] [--square-mm MM] [--marker-mm MM] [--json]
-  ftx measure calibrate-camera FILE [--out FILE] [--json]
-  ftx measure photo-scale --image PNG [--paper letter|a4|auto] [--sheet JSON] [--out FILE] [--json]
-  ftx measure photo-scale --reference JSON [--out FILE] [--json]
-  ftx measure sheet-pose --image PNG --sheet JSON [--out FILE] [--json]
-  ftx measure sheet-pose --reference JSON [--calibration JSON] [--out FILE] [--json]
-  ftx measure measure-photo --image PNG|--reference JSON --points JSON [--paper letter|a4|auto] [--sheet JSON]
+  ftx measure calib-sheet --paper letter|a4 --out DIR [--square-mm MM] [--marker-mm MM] [--dictionary NAME] [--json]
+  ftx measure calibrate-camera (FILE | --images MANIFEST --sheet JSON [--detector-python PY]) [--corner-noise JSON] [--out FILE] [--json]
+  ftx measure photo-scale --image PNG [--paper letter|a4|auto] [--sheet JSON [--detector-python PY]] [--lens FILE --lens-id ID --rotation-cw-deg DEG [--independent-calibration-evidence TEXT]] [--out FILE] [--json]
+  ftx measure photo-scale --reference JSON [--lens FILE --lens-id ID --rotation-cw-deg DEG [--independent-calibration-evidence TEXT]] [--out FILE] [--json]
+  ftx measure sheet-pose --reference JSON [--calibration JSON --lens-id ID] [--out FILE] [--json]
+  ftx measure measure-photo --image PNG|--reference JSON --points JSON [--paper letter|a4|auto] [--sheet JSON [--detector-python PY]]
+      [--lens FILE --lens-id ID --rotation-cw-deg DEG [--independent-calibration-evidence TEXT]]
       [--camera-distance-mm MM] [--depth-offset-mm MM] [--click-px PX] [--bootstrap N] [--seed N]
       [--taken-on DATE] [--out FILE] [--json]
   ftx measure girth-from-section (--from FILE | --width-mm W --depth-mm D) [--level waist|chest|hip]
@@ -218,6 +226,8 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 || name == "time-subdivision"
                 || name == "air-drag"
                 || name == "adaptive-barrier"
+                || name == "construction-standard"
+                || name == "start-self-repulsion"
                 || measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
@@ -557,12 +567,8 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
         obj(&skin.vertices, &skin.triangles, None).as_bytes(),
     )?;
     let doc = Value::Object(doc);
-    write(
-        "body.json",
-        serde_json::to_string_pretty(&doc)
-            .unwrap_or_default()
-            .as_bytes(),
-    )?;
+    let doc_bytes = serde_json::to_string_pretty(&doc).map_err(|e| bad_input(e.to_string()))?;
+    write("body.json", doc_bytes.as_bytes())?;
     let skinning_note = if skinning == SkinningMode::LinearBlend {
         String::new()
     } else {
@@ -1047,6 +1053,97 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
             )?);
         }
     }
+    if let Some(v) = args.options.get("min-spacing-mm") {
+        opts.mesh.min_spacing_mm = Some(v.parse().map_err(|_| {
+            bad_input("--min-spacing-mm must be a positive finite distance in millimetres")
+        })?);
+    }
+    if let Some(v) = args.options.get("cvt-iters") {
+        opts.mesh.cvt_iterations = v
+            .parse()
+            .map_err(|_| bad_input("--cvt-iters must be a non-negative integer"))?;
+    }
+    if let Some(v) = args.options.get("max-turning-angle-rad") {
+        opts.mesh.max_turning_angle_rad = v
+            .parse()
+            .map_err(|_| bad_input("--max-turning-angle-rad must be a finite angle in radians"))?;
+    }
+    if let Some(v) = args.options.get("gather-refinement") {
+        opts.mesh.gather_refinement = v
+            .parse()
+            .map_err(|_| bad_input("--gather-refinement must be a finite factor >= 1.0"))?;
+    }
+    if args.options.contains_key("construction-standard") {
+        opts.construction = ftx_drape::ConstructionMechanicsOptions::standard();
+    }
+    for (name, slot, desc) in [
+        (
+            "hem-width-mm",
+            &mut opts.construction.hem_width_mm,
+            "a finite non-negative hem width in millimetres",
+        ),
+        (
+            "hem-mass-mult",
+            &mut opts.construction.hem_mass_multiplier,
+            "a finite multiplier >= 1.0",
+        ),
+        (
+            "hem-bending-mult",
+            &mut opts.construction.hem_bending_multiplier,
+            "a finite multiplier >= 1.0",
+        ),
+        (
+            "seam-width-mm",
+            &mut opts.construction.seam_width_mm,
+            "a finite non-negative seam-allowance width in millimetres",
+        ),
+        (
+            "seam-mass-mult",
+            &mut opts.construction.seam_mass_multiplier,
+            "a finite multiplier >= 1.0",
+        ),
+        (
+            "seam-bending-mult",
+            &mut opts.construction.seam_bending_multiplier,
+            "a finite multiplier >= 1.0",
+        ),
+    ] {
+        if let Some(v) = args.options.get(name) {
+            *slot = v
+                .parse()
+                .map_err(|_| bad_input(format!("--{name} must be {desc}")))?;
+        }
+    }
+    if args.options.contains_key("start-self-repulsion") {
+        let mut rep = ftx_drape::SelfRepulsionOptions::default();
+        if let Some(v) = args.options.get("start-repulsion-mm") {
+            rep.min_separation_m = v.parse::<f64>().map_err(|_| {
+                bad_input("--start-repulsion-mm must be a positive finite distance in millimetres")
+            })? * 1e-3;
+        }
+        if let Some(v) = args.options.get("start-repulsion-stiffness") {
+            rep.stiffness = v.parse().map_err(|_| {
+                bad_input("--start-repulsion-stiffness must be a finite factor in (0, 1]")
+            })?;
+        }
+        if let Some(v) = args.options.get("start-repulsion-period") {
+            rep.period = v
+                .parse()
+                .map_err(|_| bad_input("--start-repulsion-period must be a positive integer"))?;
+        }
+        opts.start_self_repulsion = Some(rep);
+    } else if let Some(name) = [
+        "start-repulsion-mm",
+        "start-repulsion-stiffness",
+        "start-repulsion-period",
+    ]
+    .into_iter()
+    .find(|key| args.options.contains_key(*key))
+    {
+        return Err(bad_input(format!(
+            "--{name} requires --start-self-repulsion"
+        )));
+    }
     opts.validate()?;
     Ok(opts)
 }
@@ -1208,6 +1305,21 @@ fn cmd_drape_bound(
             "self-stick-slip-mus",
             "self-stick-slip-muk",
             "self-stick-slip-v",
+            "min-spacing-mm",
+            "cvt-iters",
+            "max-turning-angle-rad",
+            "gather-refinement",
+            "construction-standard",
+            "hem-width-mm",
+            "hem-mass-mult",
+            "hem-bending-mult",
+            "seam-width-mm",
+            "seam-mass-mult",
+            "seam-bending-mult",
+            "start-self-repulsion",
+            "start-repulsion-mm",
+            "start-repulsion-stiffness",
+            "start-repulsion-period",
             "model",
             "time-step-s",
             "newton-tol-m-s",
@@ -1345,6 +1457,8 @@ fn cmd_drape_bound(
                 pattern: &pattern,
                 label: pattern_path,
                 spacing: material.options.spacing,
+                mesh: material.options.mesh,
+                start_self_repulsion: material.options.start_self_repulsion,
                 elastic_ea: material.options.elastic_ea,
                 frames: &frames,
                 collision: (&skin.vertices, &skin.triangles),
@@ -2633,7 +2747,8 @@ mod tests {
             let round_err = round::cmd_round(&round_args).unwrap_err();
             assert_ne!(round_err.code, RefusalCode::Io, "{}", round_err.message);
             assert!(
-                !round_err.message.contains("unknown option"),
+                !round_err.message.contains("has no option")
+                    && !round_err.message.contains("unknown option"),
                 "round must recognize solver/integrator options: {}",
                 round_err.message
             );
@@ -2696,6 +2811,26 @@ mod tests {
                     "0.5",
                     "--self-stick-slip-muk",
                     "0.25",
+                    "--min-spacing-mm",
+                    "5.0",
+                    "--cvt-iters",
+                    "4",
+                    "--max-turning-angle-rad",
+                    "0.25",
+                    "--gather-refinement",
+                    "2.2",
+                    "--construction-standard",
+                    "--hem-width-mm",
+                    "18.0",
+                    "--seam-bending-mult",
+                    "4.5",
+                    "--start-self-repulsion",
+                    "--start-repulsion-mm",
+                    "3.5",
+                    "--start-repulsion-stiffness",
+                    "0.6",
+                    "--start-repulsion-period",
+                    "2",
                 ]
                 .map(String::from),
             )
@@ -2725,8 +2860,37 @@ mod tests {
             rich.self_stick_slip,
             Some(ftx_drape::StickSlipFriction::new(0.5, 0.25, 0.02).unwrap())
         );
+        assert_eq!(rich.mesh.min_spacing_mm, Some(5.0));
+        assert_eq!(rich.mesh.cvt_iterations, 4);
+        assert_eq!(rich.mesh.max_turning_angle_rad, 0.25);
+        assert_eq!(rich.mesh.gather_refinement, 2.2);
+        assert_eq!(rich.construction.hem_width_mm, 18.0);
+        assert_eq!(rich.construction.hem_mass_multiplier, 2.0);
+        assert_eq!(rich.construction.hem_bending_multiplier, 4.0);
+        assert_eq!(rich.construction.seam_bending_multiplier, 4.5);
+        let rep = rich.start_self_repulsion.unwrap();
+        assert!((rep.min_separation_m - 0.0035).abs() < 1e-12);
+        assert_eq!(rep.stiffness, 0.6);
+        assert_eq!(rep.period, 2);
 
-        // Valid FTX-27e flags must pass known_options on both `drape` and `round --sim`.
+        // Non-physical command without --self-contact-mm must refuse --self-stick-slip-*.
+        let no_sc = drape_options(
+            &parse(
+                &[
+                    "place",
+                    "--self-stick-slip-mus",
+                    "0.5",
+                    "--self-stick-slip-muk",
+                    "0.25",
+                ]
+                .map(String::from),
+            )
+            .unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(no_sc.code, RefusalCode::InvalidDocument);
+
+        // Valid FTX-27d/e/f/g flags must pass known_options on both `drape` and `round --sim`.
         for cmd_argv in [
             vec![
                 "drape",
@@ -2746,6 +2910,34 @@ mod tests {
                 "0.25",
                 "--self-stick-slip-v",
                 "0.015",
+                "--min-spacing-mm",
+                "5.0",
+                "--cvt-iters",
+                "4",
+                "--max-turning-angle-rad",
+                "0.25",
+                "--gather-refinement",
+                "2.0",
+                "--construction-standard",
+                "--hem-width-mm",
+                "16.0",
+                "--hem-mass-mult",
+                "2.2",
+                "--hem-bending-mult",
+                "4.0",
+                "--seam-width-mm",
+                "12.0",
+                "--seam-mass-mult",
+                "2.0",
+                "--seam-bending-mult",
+                "3.5",
+                "--start-self-repulsion",
+                "--start-repulsion-mm",
+                "3.0",
+                "--start-repulsion-stiffness",
+                "0.5",
+                "--start-repulsion-period",
+                "2",
             ],
             vec![
                 "round",
@@ -2766,6 +2958,34 @@ mod tests {
                 "0.25",
                 "--self-stick-slip-v",
                 "0.015",
+                "--min-spacing-mm",
+                "5.0",
+                "--cvt-iters",
+                "4",
+                "--max-turning-angle-rad",
+                "0.25",
+                "--gather-refinement",
+                "2.0",
+                "--construction-standard",
+                "--hem-width-mm",
+                "16.0",
+                "--hem-mass-mult",
+                "2.2",
+                "--hem-bending-mult",
+                "4.0",
+                "--seam-width-mm",
+                "12.0",
+                "--seam-mass-mult",
+                "2.0",
+                "--seam-bending-mult",
+                "3.5",
+                "--start-self-repulsion",
+                "--start-repulsion-mm",
+                "3.0",
+                "--start-repulsion-stiffness",
+                "0.5",
+                "--start-repulsion-period",
+                "2",
             ],
         ] {
             let parsed = parse(&cmd_argv.iter().map(|s| (*s).into()).collect::<Vec<_>>()).unwrap();
@@ -2775,8 +2995,8 @@ mod tests {
                 round::cmd_round(&parsed).unwrap_err()
             };
             assert!(
-                !err.message.contains("unknown option"),
-                "{} must recognize FTX-27e options: {}",
+                !err.message.contains("has no option") && !err.message.contains("unknown option"),
+                "{} must recognize FTX-27d/e/f/g options: {}",
                 cmd_argv[0],
                 err.message
             );
@@ -2804,10 +3024,20 @@ mod tests {
             vec!["--self-stick-slip-muk", "0.2"],
             vec![
                 "--self-stick-slip-mus",
-                "0.5",
+                "0.2",
                 "--self-stick-slip-muk",
-                "0.25",
+                "0.5",
             ],
+            vec!["--min-spacing-mm", "0.0"],
+            vec!["--max-turning-angle-rad", "0.2"],
+            vec!["--gather-refinement", "2.5"],
+            vec!["--cvt-iters", "99"],
+            vec!["--hem-width-mm", "15.0"],
+            vec!["--hem-mass-mult", "0.5"],
+            vec!["--seam-width-mm", "10.0"],
+            vec!["--start-repulsion-mm", "3.0"],
+            vec!["--start-self-repulsion", "--start-repulsion-mm", "0.0"],
+            vec!["--start-self-repulsion", "--start-repulsion-period", "0"],
         ] {
             let mut argv = vec!["drape", "absent-pattern.json"];
             argv.extend(bad.iter().copied());
@@ -2815,7 +3045,7 @@ mod tests {
             let err = cmd_drape(&args).unwrap_err();
             assert_ne!(err.code, RefusalCode::Io, "{}", err.message);
             assert!(
-                !err.message.contains("unknown option"),
+                !err.message.contains("has no option") && !err.message.contains("unknown option"),
                 "drape must recognize physics realism options: {}",
                 err.message
             );
@@ -2827,7 +3057,8 @@ mod tests {
             let round_err = round::cmd_round(&round_args).unwrap_err();
             assert_ne!(round_err.code, RefusalCode::Io, "{}", round_err.message);
             assert!(
-                !round_err.message.contains("unknown option"),
+                !round_err.message.contains("has no option")
+                    && !round_err.message.contains("unknown option"),
                 "round must recognize physics realism options: {}",
                 round_err.message
             );
