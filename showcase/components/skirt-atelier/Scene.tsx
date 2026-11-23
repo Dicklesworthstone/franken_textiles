@@ -166,13 +166,17 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
       const printedFace=[print,reverse,reverse],plainFace=[dyed,lining,lining],checkFace=[check,check,check];
       const finished=mesh(shell.geometry,plainFace);finished.frustumCulled=false;finished.castShadow=true;
       const panel=col(0xffffff);panel.vertexColors=true;
-      const strain=new T.MeshBasicMaterial({vertexColors:true,side:T.DoubleSide});materials.push(strain);
+      // Lit like the cloth, so the gores' folds still read under the colour scale.
+      const strain=new T.MeshStandardMaterial({vertexColors:true,side:T.DoubleSide,roughness:.88,metalness:0});materials.push(strain);
       const geom=new T.BufferGeometry(),cloth=mesh(geom,print);
       geom.setIndex(top.tri);geom.setAttribute("uv",new T.Float32BufferAttribute(top.uvMm.map(x=>x/410),2));
       const palette=[0xb86a42,0xddb475,0x61918a,0x738ca4,0x8d6e8d,0xa4a569].map(x=>new T.Color(x));
       const panelRGB=new Float32Array(n*3);
       top.panels.forEach(([a,b],p)=>{for(let i=a;i<b;i++)palette[p].toArray(panelRGB,3*i);});
-      const dyes=new T.BufferAttribute(panelRGB,3),heat=new T.BufferAttribute(color,3,true);
+      // The strain colours are stored as display (sRGB) bytes; decode them, as three.js expects linear colour.
+      const heatRGB=new Float32Array(color.length),decode=new T.Color();
+      for(let i=0;i<color.length;i+=3)decode.setRGB(color[i]/255,color[i+1]/255,color[i+2]/255,T.SRGBColorSpace).toArray(heatRGB,i);
+      const dyes=new T.BufferAttribute(panelRGB,3),heat=new T.BufferAttribute(heatRGB,3);
       const thread=new T.LineBasicMaterial({color:0xd1a576});materials.push(thread);
       const stitchGeometry=new T.BufferGeometry();geometries.push(stitchGeometry);
       const seams=new T.LineSegments(stitchGeometry,thread);scene.add(seams);

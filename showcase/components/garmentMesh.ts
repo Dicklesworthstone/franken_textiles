@@ -124,8 +124,9 @@ export function createGarmentMesh(data: Exhibit, frames: Float32Array, onBody = 
     vertexColors: true, side: THREE.DoubleSide, roughness: 0.93,
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
   });
-  const strain = new THREE.MeshBasicMaterial({
-    vertexColors: true, side: THREE.DoubleSide, toneMapped: false,
+  // Lit like the cloth, so the folds and the jacket's shape still read under the colour scale.
+  const strain = new THREE.MeshStandardMaterial({
+    vertexColors: true, side: THREE.DoubleSide, roughness: 0.88, metalness: 0,
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
   });
   const group = new THREE.Group();

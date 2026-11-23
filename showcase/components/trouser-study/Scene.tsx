@@ -50,7 +50,8 @@ export default function Scene(props:Props) {
     const bodyMaterial=formMaterial();
     bodyMaterial.clippingPlanes=[cutPlane];bodyMaterial.side=T.DoubleSide;
     const body=object(geo(model.body,model.mesh.body),bodyMaterial);
-    const ink=new T.MeshBasicMaterial({vertexColors:true,side:T.DoubleSide});
+    // Lit like the cloth, so the gathers still read under the colour scale.
+    const ink=new T.MeshStandardMaterial({vertexColors:true,side:T.DoubleSide,roughness:.88,metalness:0});
     materials.push(ink);
     let cloth:ReturnType<typeof dressCloth>|undefined;
     if(model.cloth.length){
