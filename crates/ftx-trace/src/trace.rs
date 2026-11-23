@@ -310,11 +310,17 @@ pub fn make_channel(img: &Bgr, channel: &str, bg: [f64; 3]) -> Result<(Gray, boo
     })
 }
 
+/// Maximum morphological structuring-element side (pixels) accepted by [`binarize`],
+/// [`find_piece_contours`], and [`trace_image`] (prevents `w * h` OOM / overflow on wasm32).
+const MAX_KERNEL_PX: i64 = 1024;
+/// Maximum explicit outline stroke width (pixels) so `odd(1.5 * wd + 1.0, 3) <= MAX_KERNEL_PX`.
+const MAX_STROKE_PX: f64 = 680.0;
+
 /// `binarize`: an Otsu or adaptive mask (255 = ink / piece), with Otsu's frame deciding
 /// polarity in both modes, then closed.
 ///
 /// # Errors
-/// A malformed raster or an unknown method.
+/// A malformed raster, an oversized closing kernel, or an unknown method.
 pub fn binarize(
     ch: &Gray,
     method: &str,
@@ -324,6 +330,9 @@ pub fn binarize(
 ) -> Result<(Gray, PyJson), String> {
     if ch.w == 0 || ch.h == 0 || ch.w.checked_mul(ch.h) != Some(ch.data.len()) {
         return Err("binarize needs a nonempty, correctly sized grayscale raster".into());
+    }
+    if close_px > MAX_KERNEL_PX {
+        return Err(format!("close_px must be at most {MAX_KERNEL_PX}"));
     }
     let (t, mut m) = threshold::otsu_binary(ch);
     let (w, h) = (m.w, m.h);
@@ -438,6 +447,8 @@ pub fn find_piece_contours(
         || mask.h == 0
         || mask.w.checked_mul(mask.h) != Some(mask.data.len())
         || !min_area_frac.is_finite()
+        || open_px.is_some_and(|k| k > MAX_KERNEL_PX)
+        || stroke.is_some_and(|s| !s.is_finite() || s < 0.0 || s > MAX_STROKE_PX)
     {
         return Vec::new();
     }
@@ -510,6 +521,9 @@ pub fn find_piece_contours(
             }
         };
         let k = open_px.unwrap_or_else(|| if ring { odd(1.5 * wd + 1.0, 3) } else { 5 });
+        if k > MAX_KERNEL_PX {
+            continue;
+        }
         let solid_o = if k >= 2 {
             let se = Kernel::ellipse(k as usize, k as usize);
             morph::open_close(&solid, &se)
@@ -1509,10 +1523,18 @@ fn validate_trace_options(opts: &TraceOptions) -> Result<(), String> {
     if !opts.corner_deg.is_finite() || !opts.soft_deg.is_finite() {
         return Err("corner thresholds must be finite".into());
     }
+    if opts.close_px > MAX_KERNEL_PX {
+        return Err(format!("close_px must be at most {MAX_KERNEL_PX}"));
+    }
+    if opts.open_px.is_some_and(|k| k > MAX_KERNEL_PX) {
+        return Err(format!("open_px must be at most {MAX_KERNEL_PX}"));
+    }
     if let Some(s) = opts.stroke
-        && (!s.is_finite() || s < 0.0)
+        && (!s.is_finite() || s < 0.0 || s > MAX_STROKE_PX)
     {
-        return Err("stroke width must be a finite non-negative number".into());
+        return Err(format!(
+            "stroke width must be a finite number in 0..={MAX_STROKE_PX}"
+        ));
     }
     if let Some(rgb) = opts.bg_rgb
         && rgb.iter().any(|v| !v.is_finite())
@@ -2073,6 +2095,52 @@ mod tests {
             ..TraceOptions::default()
         };
         assert!(trace_image(&ok_img, None, &bad_erase).is_err());
+
+        let bad_close = TraceOptions {
+            close_px: MAX_KERNEL_PX + 1,
+            ..TraceOptions::default()
+        };
+        assert!(trace_image(&ok_img, None, &bad_close).is_err());
+        assert!(
+            binarize(
+                &Gray::filled(4, 4, 255),
+                "otsu",
+                false,
+                None,
+                MAX_KERNEL_PX + 1
+            )
+            .is_err()
+        );
+
+        let bad_open = TraceOptions {
+            open_px: Some(MAX_KERNEL_PX + 1),
+            ..TraceOptions::default()
+        };
+        assert!(trace_image(&ok_img, None, &bad_open).is_err());
+        assert!(
+            find_piece_contours(
+                &Gray::filled(4, 4, 255),
+                0.01,
+                None,
+                Some(MAX_KERNEL_PX + 1)
+            )
+            .is_empty()
+        );
+
+        let bad_stroke = TraceOptions {
+            stroke: Some(MAX_STROKE_PX + 1.0),
+            ..TraceOptions::default()
+        };
+        assert!(trace_image(&ok_img, None, &bad_stroke).is_err());
+        assert!(
+            find_piece_contours(
+                &Gray::filled(4, 4, 255),
+                0.01,
+                Some(MAX_STROKE_PX + 1.0),
+                None,
+            )
+            .is_empty()
+        );
 
         let mask_src = MaskSource {
             source: None,

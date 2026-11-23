@@ -50,13 +50,21 @@ pub fn fit_scale(
             "scale-fit produced a non-positive or non-finite scale".into(),
         ));
     }
-    let r4 = |p: Vec2| Vec2::new(py::round(p.x * k, 4), py::round(p.y * k, 4));
+    let r4 = |p: Vec2| -> Result<Vec2, PyError> {
+        let out = Vec2::new(py::round(p.x * k, 4), py::round(p.y * k, 4));
+        if !out.is_finite() {
+            return Err(PyError::Value(
+                "scale-fit produced non-finite coordinates".into(),
+            ));
+        }
+        Ok(out)
+    };
     for p in &mut data.pieces {
         for (_, v) in &mut p.vertices.0 {
-            *v = r4(*v);
+            *v = r4(*v)?;
         }
         if let Some([g0, g1]) = p.grain.as_ref().and_then(Grain::points) {
-            p.grain = Some(Grain::Points(vec![r4(g0), r4(g1)]));
+            p.grain = Some(Grain::Points(vec![r4(g0)?, r4(g1)?]));
         }
         for it in p
             .internal
@@ -65,11 +73,16 @@ pub fn fit_scale(
             .chain(p.trace_marks.iter_mut().flatten())
         {
             for q in &mut it.pts {
-                *q = r4(*q);
+                *q = r4(*q)?;
             }
             if let Some(off) = it.extra.get("offset").and_then(Value::as_f64) {
-                it.extra
-                    .insert("offset".into(), json!(py::round(off * k, 3)));
+                let scaled = py::round(off * k, 3);
+                if !scaled.is_finite() {
+                    return Err(PyError::Value(
+                        "scale-fit produced a non-finite mark offset".into(),
+                    ));
+                }
+                it.extra.insert("offset".into(), json!(scaled));
             }
         }
         if let Some(tr) = p.extra.get_mut("trace").and_then(Value::as_object_mut)
@@ -79,7 +92,13 @@ pub fn fit_scale(
             for row in rows.iter_mut().filter_map(Value::as_array_mut) {
                 for (i, c) in row.iter_mut().enumerate() {
                     if let Some(x) = c.as_f64() {
-                        *c = json!(if i < 2 { x / k } else { x });
+                        let v = if i < 2 { x / k } else { x };
+                        if !v.is_finite() {
+                            return Err(PyError::Value(
+                                "scale-fit produced a non-finite to_px entry".into(),
+                            ));
+                        }
+                        *c = json!(v);
                     }
                 }
             }
@@ -90,32 +109,57 @@ pub fn fit_scale(
         .get("px_per_unit")
         .and_then(Value::as_f64)
         .unwrap_or(1.0);
-    meta.insert("px_per_unit".into(), json!(ppu_before / k));
+    let ppu_after = ppu_before / k;
+    if !ppu_after.is_finite() {
+        return Err(PyError::Value(
+            "scale-fit produced a non-finite px_per_unit".into(),
+        ));
+    }
+    let mm_per_px = if ppu_before == 0.0 {
+        Value::Null
+    } else {
+        let v = k / ppu_before;
+        if !v.is_finite() {
+            return Err(PyError::Value(
+                "scale-fit produced a non-finite mm_per_px".into(),
+            ));
+        }
+        json!(v)
+    };
+    meta.insert("px_per_unit".into(), json!(ppu_after));
     meta.insert("scale_status".into(), json!("FITTED"));
-    let res: Vec<(String, f64, f64, f64, f64)> = rows
-        .iter()
-        .map(|(r, t, l)| {
-            (
-                r.clone(),
-                *t,
-                py::round(*l, 4),
-                py::round(k * l, 3),
-                py::round((k * l - t) / t * 100.0, 3),
-            )
-        })
-        .collect();
+    let mut res: Vec<(String, f64, f64, f64, f64)> = Vec::with_capacity(rows.len());
+    for (r, t, l) in &rows {
+        let meas_r = py::round(*l, 4);
+        let fitted = py::round(k * l, 3);
+        let pct = py::round((k * l - t) / t * 100.0, 3);
+        if !meas_r.is_finite() || !fitted.is_finite() || !pct.is_finite() {
+            return Err(PyError::Value(
+                "scale-fit produced a non-finite residual".into(),
+            ));
+        }
+        res.push((r.clone(), *t, meas_r, fitted, pct));
+    }
     let squares: Vec<f64> = res.iter().map(|x| x.4 * x.4).collect();
-    let rms = (np::pairwise_sum(&squares) / squares.len() as f64).sqrt();
+    let rms = py::round(
+        (np::pairwise_sum(&squares) / squares.len() as f64).sqrt(),
+        3,
+    );
+    if !rms.is_finite() {
+        return Err(PyError::Value(
+            "scale-fit produced a non-finite rms residual".into(),
+        ));
+    }
     let warning = res.iter().any(|x| x.4.abs() > 2.0).then_some(
         "targets disagree by more than 2 %: at least one known length (or its ref) is wrong",
     );
     let report = json!({
         "k": k,
-        "mm_per_px": if ppu_before == 0.0 { Value::Null } else { json!(k / ppu_before) },
+        "mm_per_px": mm_per_px,
         "targets": res.iter().map(|(r, t, l, f, p)| json!({
             "ref": r, "target_mm": t, "measured_before": l, "fitted_mm": f, "residual_pct": p
         })).collect::<Vec<_>>(),
-        "rms_pct": py::round(rms, 3),
+        "rms_pct": rms,
         "warning": warning,
     });
     meta.insert("scale_fit".into(), report.clone());
@@ -170,6 +214,25 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("non-positive or non-finite scale"), "{err}");
+
+        // Finite k that overflows scaled coordinates or ppu metadata must also refuse cleanly.
+        let mut huge_ppu = doc.clone();
+        huge_ppu
+            .meta
+            .as_mut()
+            .unwrap()
+            .insert("px_per_unit".into(), json!(1e-200));
+        let err = fit_scale(&huge_ppu, &[("p1/e1".into(), 1e150)])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-finite"), "{err}");
+
+        let mut huge_vert = doc.clone();
+        huge_vert.pieces[0].vertices.0[2].1 = Vec2::new(1e160, 50.0);
+        let err = fit_scale(&huge_vert, &[("p1/e1".into(), 1e152)])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-finite"), "{err}");
 
         // Valid target still scales cleanly.
         let (scaled, report) = fit_scale(&doc, &[("p1/e1".into(), 200.0)]).unwrap();
