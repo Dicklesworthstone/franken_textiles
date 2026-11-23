@@ -5089,4 +5089,51 @@ test("guided scenario options accept opt-in FTX-27 physics/meshing realism, omit
   assert.throws(()=>single({...base,options:{...base.options,construction:{...realism.construction,hem_width_mm:0}}}),/Construction mechanics/);
   assert.throws(()=>single({...base,options:{...base.options,start_self_repulsion:{min_separation_m:0.004,stiffness:0.5,period:0}}}),/Start self-repulsion/);
   assert.throws(()=>single({...base,options:{...base.options,mesh:{unknown:1}}}),/unsupported/i);
+
+  // start_self_repulsion.max_candidate_checks (60b5fec2): valid 1..=128_000_000, fail-closed outside range.
+  const boundedRep = JSON.parse(single({...base,options:{...base.options,start_self_repulsion:{...realism.start_self_repulsion,max_candidate_checks:500000}}}));
+  assert.equal(boundedRep.options.start_self_repulsion.max_candidate_checks, 500000);
+  for(const bad of [0, -1, 1.5, 128000001, null, '100']) {
+    assert.throws(()=>single({...base,options:{...base.options,start_self_repulsion:{...realism.start_self_repulsion,max_candidate_checks:bad}}}),/max_candidate_checks/);
+  }
+});
+
+test('regional comparison objectives retain distinct region identities, enforce nominal strain/contact scope, and require matching region for worst-case guidance', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const context={drape:true,surface:true,motion:true,materialStrain:true,contactLoads:true};
+  const objectives=[
+    {metric:'max_warp_green_strain',direction:'minimize'},
+    {metric:'max_warp_green_strain',region:'neck <β>',direction:'minimize'},
+    {metric:'max_warp_green_strain',region:'cuff',direction:'maximize'},
+    {metric:'motion_peak_body_contact_resultant_n',region:'cuff',direction:'minimize'},
+  ];
+  const input={...state(),basis:'nominal',objectives,constraints:[{metric:'max_warp_green_strain',maximum:0.25}]};
+  const before=JSON.stringify(input),result=JSON.parse(build(input,context));
+  assert.equal(JSON.stringify(input),before);
+  assert.deepEqual(result.comparison.objectives,objectives);
+  assert.throws(()=>build({...input,objectives:[objectives[1],{...objectives[1],direction:'maximize'}]},context),/unique within/);
+  for(const region of [null,'','  ',false,0,{},'β'.repeat(257)]) {
+    assert.throws(()=>build({...input,objectives:[{metric:'max_warp_green_strain',region,direction:'minimize'}]},context),/region name/);
+  }
+  assert.throws(()=>build({...input,objectives:[{metric:'stock_area_m2',region:'cuff',direction:'minimize'}]},context),/Regional goals support nominal/);
+  assert.throws(()=>build({...input,basis:'reported_bounds',objectives:[{metric:'max_warp_green_strain',region:'cuff',direction:'minimize'}]},context),/Regional goals support nominal/);
+  assert.throws(()=>build(input,{...context,motion:false}),/requested motion_contact_loads/);
+
+  // Worst-case adaptive guidance requires identical metric, direction, basis, and region across all cases.
+  const adaptiveDesign=namedDesign({objective:'consumer_worst_case'});delete adaptiveDesign.caseKey;
+  const cuffPolicy={basis:'nominal',objectives:[{metric:'max_warp_green_strain',region:'cuff',direction:'minimize'}]};
+  const neckPolicy={basis:'nominal',objectives:[{metric:'max_warp_green_strain',region:'neck',direction:'minimize'}]};
+  const unionPolicy={basis:'nominal',objectives:[{metric:'max_warp_green_strain',direction:'minimize'}]};
+  const sameMatrix={drape:true,surface:false,motion:true,materialStrain:true,matrix:{maxEvaluations:16,cases:[
+    {key:'a',surface:false,motion:true,materialStrain:true,comparison:cuffPolicy},
+    {key:'b',surface:false,motion:true,materialStrain:true,comparison:cuffPolicy}]}};
+  assert.ok(build({...state(),design:adaptiveDesign,objectives:cuffPolicy.objectives},sameMatrix));
+  for(const mismatch of [neckPolicy, unionPolicy]) {
+    const diffMatrix={...sameMatrix,matrix:{...sameMatrix.matrix,cases:[sameMatrix.matrix.cases[0],
+      {key:'b',surface:false,motion:true,materialStrain:true,comparison:mismatch}]}};
+    assert.throws(()=>build({...state(),design:adaptiveDesign,objectives:cuffPolicy.objectives},diffMatrix),/identical metric, direction and comparison basis \(including region\)/);
+  }
+  const badRegionMatrix={...sameMatrix,matrix:{...sameMatrix.matrix,cases:[sameMatrix.matrix.cases[0],
+    {key:'b',surface:false,motion:true,materialStrain:true,comparison:{basis:'nominal',objectives:[{metric:'max_warp_green_strain',region:'  ',direction:'minimize'}]}}]}};
+  assert.throws(()=>build({...state(),design:adaptiveDesign,objectives:cuffPolicy.objectives},badRegionMatrix),/explicit metric\/direction objectives/);
 });

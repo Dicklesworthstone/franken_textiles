@@ -1437,12 +1437,16 @@ export function buildMaterialScenarioRequest(state) {
     }
   }
   if (own(options, "start_self_repulsion") && options.start_self_repulsion !== null) {
-    const rKeys = ["min_separation_m", "stiffness", "period"];
-    const r = object(options.start_self_repulsion, rKeys, rKeys, "Start self-repulsion");
+    const rKeys = ["min_separation_m", "stiffness", "period", "max_candidate_checks"];
+    const r = object(options.start_self_repulsion, rKeys, ["min_separation_m", "stiffness", "period"], "Start self-repulsion");
     if (typeof r.min_separation_m !== "number" || !Number.isFinite(r.min_separation_m) || r.min_separation_m <= 0 || r.min_separation_m > 0.1 ||
         typeof r.stiffness !== "number" || !Number.isFinite(r.stiffness) || r.stiffness <= 0 || r.stiffness > 1 ||
         !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
       throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
+    }
+    if (own(r, "max_candidate_checks") &&
+        (!Number.isSafeInteger(r.max_candidate_checks) || r.max_candidate_checks < 1 || r.max_candidate_checks > 128000000)) {
+      throw Error("Start self-repulsion max_candidate_checks must be an integer in 1–128000000.");
     }
   }
   if (!Number.isSafeInteger(state.maxMeshPoints) || state.maxMeshPoints < 3 || state.maxMeshPoints > 32768) {
@@ -1770,8 +1774,9 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
       const first = policies[0];
       if (policies.some(policy => !Array.isArray(policy?.objectives) || policy.objectives.length !== 1 ||
         policy.basis !== first.basis || policy.objectives[0]?.metric !== first.objectives[0]?.metric ||
+        (policy.objectives[0]?.region ?? null) !== (first.objectives[0]?.region ?? null) ||
         policy.objectives[0]?.direction !== first.objectives[0]?.direction)) {
-        throw Error("Worst-case guidance needs one identical metric, direction and comparison basis in every case.");
+        throw Error("Worst-case guidance needs one identical metric, direction and comparison basis (including region) in every case.");
       }
       return;
     }
@@ -2016,7 +2021,8 @@ function matrixContext(value) {
         !policy.objectives.length || policy.objectives.length > 16 || policy.objectives.some(objective =>
           !objective || typeof objective !== "object" || Array.isArray(objective) ||
           typeof objective.metric !== "string" || !objective.metric.trim() ||
-          !["minimize", "maximize"].includes(objective.direction))) {
+          !["minimize", "maximize"].includes(objective.direction) ||
+          (own(objective, "region") && (typeof objective.region !== "string" || !objective.region.trim() || bytes(objective.region) > 512)))) {
         throw Error("Each supplied case comparison needs a declared basis and 1–16 explicit metric/direction objectives.");
       }
       // This is an original engine policy, not a guided-policy draft. Rust admits its complete
@@ -2211,10 +2217,19 @@ export function buildMaterialStudyRequest(state, scenario) {
   if (!Array.isArray(state.objectives) || !state.objectives.length || state.objectives.length > 16) throw Error("Choose 1–16 comparison objectives.");
   const metrics = new Set();
   for (const objective of state.objectives) {
-    object(objective, ["metric", "direction"], ["metric", "direction"], "Comparison objective");
+    object(objective, ["metric", "direction", "region"], ["metric", "direction"], "Comparison objective");
     if (!["minimize", "maximize"].includes(objective.direction)) throw Error("Choose a supported objective and direction.");
-    if (metrics.has(objective.metric)) throw Error("Comparison objectives must be unique.");
-    metrics.add(objective.metric);
+    const regional = own(objective, "region");
+    if (regional && (typeof objective.region !== "string" || !objective.region.trim() || bytes(objective.region) > 512)) {
+      throw Error("A regional comparison objective needs an exact nonempty region name of at most 512 UTF-8 bytes.");
+    }
+    const identity = JSON.stringify([objective.metric, regional ? objective.region : null]);
+    if (metrics.has(identity)) throw Error("Comparison objectives must be unique within each region or the whole selected scope.");
+    metrics.add(identity);
+    if (regional && (state.basis !== "nominal" || !["material_strain", "motion_material_strain", "contact_loads", "motion_contact_loads"]
+      .includes(METRIC_CONSUMERS[objective.metric]))) {
+      throw Error("Regional goals support nominal initial or complete-motion material strain and body contact forces only.");
+    }
     metric(objective.metric, state.basis);
   }
   const constraints = own(state, "constraints") ? state.constraints : [];

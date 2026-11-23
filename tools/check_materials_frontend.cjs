@@ -25420,4 +25420,246 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   assert.equal(gs.current().messages.length, beforeEmptyMesh + 1, gs.e.error.textContent);
   const cvtScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
   assert.deepEqual(cvtScen.options.mesh, { cvt_iterations: 4 });
+
+  // 7. start_self_repulsion.max_candidate_checks (60b5fec2): both workers omit default 32M, forward valid custom values, refuse invalid; both workbenches accept explicit default 32M and refuse custom values on handoff.
+  assert.equal((await mw.send({ ...baseFold, request: 20, bytes: new Uint8Array([1]).buffer,
+    startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 32000000 } })).type, 'result');
+  assert.equal(Object.hasOwn(mCalls.at(-1).settings.start_self_repulsion, 'max_candidate_checks'), false);
+  assert.equal((await mw.send({ ...baseFold, request: 21, bytes: new Uint8Array([1]).buffer,
+    startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 500000 } })).type, 'result');
+  assert.equal(mCalls.at(-1).settings.start_self_repulsion.max_candidate_checks, 500000);
+  assert.equal((await mw.send({ ...baseFold, request: 22, bytes: new Uint8Array([1]).buffer,
+    startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 0 } })).type, 'error');
+
+  const dwSent = [], dwCalls = [];
+  const dwValues = {
+    default: async () => {}, program_info: () => '{}', calibration_dictionaries: () => '["DICT_4X4_50"]',
+    run: () => ({ page: () => '{"status":"CONVERGED","zip":"round.zip"}', zip: () => new Uint8Array([1]),
+      file: n => new TextEncoder().encode(n === 'pattern.json' ? '{"pieces":[{"placement":{"part":"torso"}}]}' : '{}'), free() {} }),
+    WebBody: class { free() {} },
+    fold_up: () => { dwCalls.push({ path: 'legacy' }); return { report: () => '{"gating":[]}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      dwCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"gating":[],"settled":true}', viewer: () => '<html/>', free() {} };
+    },
+  };
+  const dwCtx = vm.createContext({ JSON, Date, TextDecoder, Uint8Array, WebAssembly, Error, self: {}, onmessage: null, postMessage: m => dwSent.push(m) });
+  const dwImports = new vm.SyntheticModule(Object.keys(dwValues), function () { for (const [n, v] of Object.entries(dwValues)) this.setExport(n, v); }, { context: dwCtx });
+  await dwImports.link(() => {}); await dwImports.evaluate();
+  const dwMod = new vm.SourceTextModule(read('worker.js'), { context: dwCtx, importModuleDynamically: () => dwImports });
+  await dwMod.link(() => {}); await dwMod.evaluate();
+  const dwSend = async data => { await dwCtx.onmessage({ data }); return dwSent.at(-1); };
+  assert.equal((await dwSend({ type: 'init', pkg: './pkg/' })).type, 'ready');
+  await dwSend({ type: 'body', request: 2, bytes: new Uint8Array([1]).buffer });
+  await dwSend({ type: 'run', request: 3, req: {} });
+  assert.equal((await dwSend({ type: 'fold', request: 4, round: 3, body: 2,
+    startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 32000000 } })).type, 'folded');
+  assert.equal(Object.hasOwn(dwCalls.at(-1).settings.start_self_repulsion, 'max_candidate_checks'), false);
+  assert.equal((await dwSend({ type: 'fold', request: 5, round: 3, body: 2,
+    startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 500000 } })).type, 'folded');
+  assert.equal(dwCalls.at(-1).settings.start_self_repulsion.max_candidate_checks, 500000);
+  assert.equal((await dwSend({ type: 'fold', request: 6, round: 3, body: 2,
+    startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 128000001 } })).type, 'error');
+
+  const customChecksToken = '7'.repeat(32);
+  const customChecksRej = await pageModule({ roundToken: customChecksToken });
+  await customChecksRej.windowEvents.message({
+    origin: 'https://unit.invalid', source: customChecksRej.opener,
+    data: {
+      type: 'ftx-round-sources', token: customChecksToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        start_self_repulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 500000 } },
+    },
+  });
+  assert.match(customChecksRej.e.roundImportText.textContent, /refused/i);
+
+  const defChecksToken = '8'.repeat(32);
+  const defChecksOk = await pageModule({ roundToken: defChecksToken });
+  await defChecksOk.windowEvents.message({
+    origin: 'https://unit.invalid', source: defChecksOk.opener,
+    data: {
+      type: 'ftx-round-sources', token: defChecksToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        start_self_repulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 32000000 } },
+    },
+  });
+  assert.equal(defChecksOk.e.drapeStartRepulsion.checked, true);
+});
+
+test('guided regional objectives author exact regions, freeze named-case snapshots, deduplicate columns, and render regional adaptive readings', async () => {
+  const { p } = await guidedScenarioSetup();
+  guidedStrainRegionControls(p);
+  saveGuidedStrainRegion(p);
+  saveGuidedStrainRegion(p, 'cuff', 'sleeve.R', '20,0\n60,0\n60,30\n20,30');
+
+  // Author regional objectives alongside union objectives and regional limits.
+  const saveGoal = (region, metric, direction = 'minimize') => {
+    p.e.guidedRegionalObjectiveName.value = region;
+    p.e.guidedRegionalObjectiveMetric.value = metric;
+    p.e.guidedRegionalObjectiveDirection.value = direction;
+    p.e.saveRegionalObjective.onclick();
+  };
+  saveGoal('right elbow', 'max_warp_green_strain', 'minimize');
+  saveGoal('cuff', 'max_warp_green_strain', 'maximize');
+  saveRegionalLimit(p, 'cuff', 'max_warp_green_strain', '0.2');
+  p.e.guidedWarpMaxLimit.value = '0.3';
+  await p.e.scenario.onclick();
+  const sent = p.current().messages.at(-1);
+  assert.equal(sent.type, 'scenario', p.e.error.textContent);
+  const req = JSON.parse(sent.studyRequest);
+  assert.deepEqual(req.comparison.objectives.slice(-2), [
+    { metric: 'max_warp_green_strain', region: 'right elbow', direction: 'minimize' },
+    { metric: 'max_warp_green_strain', region: 'cuff', direction: 'maximize' },
+  ]);
+
+  // Clear limits must NOT clear regional objectives; stale buttons cannot mutate replaced entries.
+  p.emit(scenarioReport());
+  const oldRemoveGoal = descendants(p.e.guidedRegionalObjectives).find(n => n.textContent === 'Remove goal cuff: max_warp_green_strain');
+  saveGoal('cuff', 'max_warp_green_strain', 'minimize');
+  oldRemoveGoal.onclick();
+  assert.equal(p.e.guidedRegionalObjectives.children.length, 2);
+  p.e.clearRegionalConstraints.onclick();
+  assert.equal(p.e.guidedRegionalConstraints.children.length, 0);
+  assert.equal(p.e.guidedRegionalObjectives.children.length, 2, 'clearing limits must leave regional objectives intact');
+
+  // Named-case snapshot freezes regional objectives independently.
+  guidedNamedCases(p);
+  p.e.guidedScenarioPolicySource.value = 'snapshot';
+  p.e.guidedScenarioPolicySource.handlers.change();
+  await saveGuidedCase(p, 'elbow-focus');
+  p.e.clearRegionalObjectives.onclick();
+  assert.equal(p.e.guidedRegionalObjectives.children.length, 0);
+  await p.e.scenario.onclick();
+  const snapCases = JSON.parse(p.current().messages.at(-1).scenarioRequest).cases;
+  assert.deepEqual(snapCases[0].comparison.objectives.slice(-2), [
+    { metric: 'max_warp_green_strain', region: 'right elbow', direction: 'minimize' },
+    { metric: 'max_warp_green_strain', region: 'cuff', direction: 'minimize' },
+  ]);
+
+  // Malformed regional objectives refuse cleanly; pattern replacement clears saved goals.
+  p.emit(scenarioReport());
+  saveGoal('cuff', 'max_warp_green_strain', 'minimize');
+  const beforeText = visibleText(p.e.guidedRegionalObjectives);
+  for (const [name, metric, dir] of [['', 'max_warp_green_strain', 'minimize'], ['β'.repeat(257), 'max_warp_green_strain', 'minimize'],
+    ['cuff', 'stock_area_m2', 'minimize'], ['cuff', 'max_warp_green_strain', 'sideways']]) {
+    saveGoal(name, metric, dir);
+    assert.equal(visibleText(p.e.guidedRegionalObjectives), beforeText);
+    assert.equal(p.e.error.hidden, false);
+  }
+  p.select('patternFile', '{"pieces":[{"id":"replacement"}]}');
+  await p.e.patternFile.onchange();
+  assert.equal(p.e.guidedRegionalObjectives.children.length, 0);
+  assert.equal(p.e.guidedRegionalObjectiveName.value, '');
+
+  // Comparison table deduplicates by (metric, region ?? null): union constraint stays visible when objective is regional, and matching (metric, region) constraint is not duplicated.
+  const disp = await pageModule();
+  await disp.load();
+  scenarioInputs(disp);
+  const rep = scenarioReport();
+  rep.comparison = {
+    policy: {
+      basis: 'nominal', allow_mixed_protocols: false, required_consumers: [],
+      objectives: [{ metric: 'max_warp_green_strain', region: 'cuff', direction: 'minimize' }],
+      constraints: [
+        { metric: 'max_warp_green_strain', basis: 'nominal', maximum: 0.3 },
+        { metric: 'max_warp_green_strain', region: 'cuff', basis: 'nominal', maximum: 0.15 },
+      ],
+    },
+    frontier: ['A'], incomparable: [],
+    alternatives: [{
+      key: 'A', eligible: true, dominated_by: [], exclusions: [],
+      readings: { max_warp_green_strain: { value: 0.25, unit: '1' } },
+      regional_readings: { cuff: { max_warp_green_strain: { value: 0.11, unit: '1' } } },
+    }],
+  };
+  await disp.e.scenario.onclick();
+  disp.emit(rep);
+  const sec = section(disp, 'Fresh drape and heat alternatives');
+  const cmpTable = descendants(sec).find(n => n.tag === 'table' && n.children[0].textContent === 'Declared computed objectives — authoritative Rust comparison');
+  // Columns: Alternative, Admission, Dominated by, cuff objective (0.11 1), union constraint (0.25 1) -> 5 columns total (no duplicate cuff constraint, no hidden union constraint).
+  assert.deepEqual(plain(cmpTable.children[2].children.map(n => n.textContent)), ['A', 'Eligible', 'None reported', '0.11 1', '0.25 1']);
+  assert.equal(descendants(sec).some(n => 'innerHTML' in n), false);
+
+  // Scalar adaptive design renders regional objective label, exact regional trial reading (NOT union), and regional operating-case readings.
+  const ad = await pageModule();
+  await ad.load();
+  ad.select('studyRequest', '{}');
+  const adRep = designReport();
+  adRep.design_search = {
+    schema: 'ftx-design-adaptive-search/1', evaluations: 1, qualified_designs: 1, selected_designs: 1, stop_reason: 'converged',
+    consumer_guidance: {
+      basis: 'nominal', material_key: 'baseline', evaluations: 1, reserved_evaluations: 4,
+      objective: { metric: 'max_warp_green_strain', region: 'cuff', direction: 'minimize' },
+      best_trial_key: 't1', best_reading: { value: 0.11, unit: '1' },
+    },
+    rows: [{
+      selected: true, max_fit_band_violation_mm: 0, total_fit_band_violation_mm: 0,
+      design: { key: 't1', variables_mm: { hem: 0 }, validation: { passed: true }, fit: { status: 'available', value: { passed: true } } },
+      consumer_comparison: {
+        eligible: true, exclusions: [],
+        readings: { max_warp_green_strain: { value: 0.99, unit: '1' } },
+        regional_readings: { cuff: { max_warp_green_strain: { value: 0.11, unit: '1' } } },
+      },
+      consumer_cases: [{
+        key: 'case-1',
+        comparison: {
+          eligible: true, exclusions: [],
+          readings: {},
+          regional_readings: { cuff: { max_warp_green_strain: { value: 0.11, unit: '1' } } },
+        },
+      }],
+    }],
+  };
+  await ad.e.study.onclick();
+  ad.emit(adRep);
+  const adSec = section(ad, 'Fixed-pattern manufacturing alternatives');
+  assert.match(visibleText(adSec), /Declared objective: max_warp_green_strain — region cuff \(minimize\)/);
+  const trialsTable = descendants(adSec).find(n => n.tag === 'table' && n.children[0].textContent === 'Adaptive alteration trials');
+  assert.match(visibleText(trialsTable), /0\.11 1/);
+  assert.doesNotMatch(visibleText(trialsTable), /0\.99 1/);
+  const caseTable = descendants(adSec).find(n => n.tag === 'table' && n.children[0].textContent === 't1: operating-case admission');
+  assert.match(visibleText(caseTable), /max_warp_green_strain — region cuff: 0\.11 1/);
+  assert.equal(descendants(adSec).some(n => 'innerHTML' in n), false);
+
+  // Multi-case Pareto adaptive view renders regional objectives, regional constraints, and exact regional readings per case.
+  const mp = await pageModule();
+  await mp.load();
+  mp.select('studyRequest', '{}');
+  const mpRep = designReport();
+  mpRep.design_search = {
+    schema: 'ftx-design-adaptive-search/1', evaluations: 1, qualified_designs: 1, selected_designs: 1, stop_reason: 'converged',
+    consumer_guidance: {
+      basis: 'nominal', material_key: 'baseline', case_aggregation: 'pareto', case_order: ['standing'],
+      case_policies: {
+        standing: {
+          basis: 'nominal',
+          objectives: [{ metric: 'max_warp_green_strain', region: 'cuff', direction: 'minimize' }],
+          constraints: [{ metric: 'max_warp_green_strain', region: 'neck', basis: 'nominal', maximum: 0.2 }],
+        },
+      },
+      pareto_frontier: { retention_capacity: 2, evaluated_trial_keys: ['t1'], retained_trial_keys: ['t1'], unretained_trial_keys: [] },
+      evaluations: 1, reserved_evaluations: 4,
+    },
+    rows: [{
+      selected: true, max_fit_band_violation_mm: 0, total_fit_band_violation_mm: 0,
+      design: { key: 't1', variables_mm: { hem: 0 }, validation: { passed: true }, fit: { status: 'available', value: { passed: true } } },
+      consumer_cases: [{
+        key: 'standing',
+        comparison: {
+          eligible: true, exclusions: [],
+          readings: { max_warp_green_strain: { value: 0.88, unit: '1' } },
+          regional_readings: { cuff: { max_warp_green_strain: { value: 0.14, unit: '1' } } },
+        },
+      }],
+    }],
+  };
+  await mp.e.study.onclick();
+  mp.emit(mpRep);
+  const mpSec = section(mp, 'Fixed-pattern manufacturing alternatives');
+  const mpPolicies = descendants(mpSec).find(n => n.tag === 'table' && n.children[0].textContent === 'Adaptive guidance policies by operating case');
+  assert.match(visibleText(mpPolicies), /max_warp_green_strain — region cuff \(minimize\)/);
+  assert.match(visibleText(mpPolicies), /max_warp_green_strain — region neck: minimum Unbounded; maximum 0\.2/);
+  const mpTrials = descendants(mpSec).find(n => n.tag === 'table' && n.children[0].textContent === 'Adaptive alteration trials');
+  assert.match(visibleText(mpTrials), /max_warp_green_strain — region cuff \(minimize\): 0\.14 1/);
+  assert.doesNotMatch(visibleText(mpTrials), /0\.88 1/);
 });

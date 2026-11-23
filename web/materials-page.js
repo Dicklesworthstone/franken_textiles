@@ -70,6 +70,7 @@ let guidedDesignCaseNomination = null;
 const guidedScenarioDrafts = [], guidedScenarioButtons = [];
 const guidedMaterialStrainRegions = new Map(), guidedMaterialStrainRegionButtons = [];
 const guidedContactRegions = new Map(), guidedContactRegionButtons = [];
+const guidedRegionalObjectives = new Map(), guidedRegionalObjectiveButtons = [];
 const guidedRegionalConstraints = new Map(), guidedRegionalConstraintButtons = [];
 const guidedMotionKeyframes = [], guidedMotionButtons = [];
 const guidedMotionWaterAmbientIntervals = new Map(), guidedMotionWaterAmbientButtons = [];
@@ -384,9 +385,12 @@ function controls() {
   for (const button of guidedMotionButtons) button.disabled = !source || !guidedScenarioMode() || motionMode !== "form";
   $("addScenarioCase").disabled ||= motionMode === "form" && !guidedMotionKeyframes.length;
   $("guidedScenarioGoals").hidden = !guided;
-  for (const id of ["guidedRegionalMetric", "guidedRegionalName", "guidedRegionalMinimum", "guidedRegionalMaximum", "saveRegionalConstraint"]) {
+  for (const id of ["guidedRegionalObjectiveMetric", "guidedRegionalObjectiveName", "guidedRegionalObjectiveDirection", "saveRegionalObjective",
+    "guidedRegionalMetric", "guidedRegionalName", "guidedRegionalMinimum", "guidedRegionalMaximum", "saveRegionalConstraint"]) {
     $(id).disabled = !source || !guided;
   }
+  $("clearRegionalObjectives").disabled = !source || !guided || !guidedRegionalObjectives.size;
+  for (const button of guidedRegionalObjectiveButtons) button.disabled = !source || !guided;
   $("clearRegionalConstraints").disabled = !source || !guided || !guidedRegionalConstraints.size;
   for (const button of guidedRegionalConstraintButtons) button.disabled = !source || !guided;
   $("guidedMaterialStrainControls").hidden = !$("guidedMaterialStrain").checked;
@@ -1058,9 +1062,10 @@ function screenedSelection(row) {
     return row.selection_json;
   } catch { return null; }
 }
-function metricUsesBounds(policy, name) {
-  return (policy?.basis === "reported_bounds" && policy.objectives.some(o => o.metric === name)) ||
-    (policy?.constraints || []).some(c => c.metric === name && (c.basis ?? policy.basis) === "reported_bounds");
+function metricUsesBounds(policy, name, region = null) {
+  if (region != null) return false;
+  return (policy?.basis === "reported_bounds" && policy.objectives.some(o => o.metric === name && o.region == null)) ||
+    (policy?.constraints || []).some(c => c.metric === name && c.region == null && (c.basis ?? policy.basis) === "reported_bounds");
 }
 function objectiveComparison(parent, r) {
   const motionQualified = r.motion_required === true;
@@ -1085,7 +1090,8 @@ function objectiveComparison(parent, r) {
       "Any separately requested motion or transient heat must be inspected in its own result.";
   parent.append(scope);
   const objectives = r.policy.objectives;
-  const constraints = r.policy.constraints.filter(c => c.region != null || !objectives.some(o => o.metric === c.metric));
+  const constraints = r.policy.constraints.filter(c =>
+    !objectives.some(o => o.metric === c.metric && (o.region ?? null) === (c.region ?? null)));
   const metrics = [...objectives, ...constraints];
   const wetFilmLabels = {
     motion_wet_film_evaporated_mass_kg: "Modeled covered evaporation",
@@ -1243,7 +1249,7 @@ function objectiveComparison(parent, r) {
         const q = o.region != null ? row.regional_readings?.[o.region]?.[o.metric] : row.readings[o.metric];
         if (!q) return "Unknown";
         const range = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
-          metricUsesBounds(r.policy, o.metric) ? "; reported range unknown" : "";
+          metricUsesBounds(r.policy, o.metric, o.region) ? "; reported range unknown" : "";
         return `${metric(q.value)} ${q.unit}${range}`;
       })]);
   }
@@ -1324,7 +1330,7 @@ function materialStrainComparison(parent, key, output, dependency, requested, mo
       const selection = document.createElement("p");
       selection.textContent = "Each region selects whole production triangles whose centroids lie in its flat-material polygon, including its boundary. " +
         "The same source triangles are followed through motion. Boundaries are not cut into triangles; unselected cloth is outside these strain summaries. " +
-        "Selected scope and comparison objectives use the disjoint union of these regions; the named rows show each region separately.";
+        "Selected scope and union comparison objectives use the disjoint union of these regions; named regional objectives and rows use each region separately.";
       parent.append(selection);
     }
     const note = document.createElement("p");
@@ -2322,6 +2328,21 @@ function designComparison(op, parent, study, casePolicies = {}) {
       const limitingCases = (nominal, endpoints) => nominal ?
         `; nominal limiting case: ${nominal}` + (endpoints ?
           `; lower endpoint case: ${endpoints[0]}; upper endpoint case: ${endpoints[1]}` : "") : "";
+      const objectiveLabel = item => item ? `${item.metric}${item.region != null ? ` — region ${item.region}` : ""}` : "Unknown";
+      const objectiveReading = (candidate, item) =>
+        item?.region != null ? candidate?.regional_readings?.[item.region]?.[item.metric] : candidate?.readings?.[item?.metric];
+      const formatComparisonReadings = (comparison, policyKey) => {
+        const policy = policyFor(policyKey);
+        const parts = Object.entries(comparison?.readings || {}).map(([key, value]) =>
+          `${key}: ${readingText(value, policy ? metricUsesBounds(policy, key) :
+            bounded && objectives.some(objective => objective.metric === key && objective.region == null))}`);
+        for (const [region, entries] of Object.entries(comparison?.regional_readings || {})) {
+          for (const [key, value] of Object.entries(entries || {})) {
+            parts.push(`${key} — region ${region}: ${readingText(value, false)}`);
+          }
+        }
+        return parts.join("; ") || "Unavailable";
+      };
       const readingText = (reading, needsBounds = bounded) => {
         if (!reading) return "Unknown";
         const range = reading.reported_bounds ?
@@ -2356,8 +2377,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
             `Every declared case must admit ${severalMaterials ? "a material/design pair" : "a selected trial"}. Each case keeps its own objectives, directions, comparison basis and source protocols. ` +
             (severalMaterials ? "Within each material, dominance requires no worse outcomes in every case and a strict improvement in at least one case. " :
               "Dominance requires no worse outcomes in every case and a strict improvement in at least one case. ") :
-            pareto ? `Declared objectives: ${objectives.map(item => `${item.metric} (${item.direction})`).join("; ") || "Unknown"}. ` :
-              `Declared objective: ${guidance.objective?.metric ?? "Unknown"} (${guidance.objective?.direction ?? "Unknown"}). `) +
+            pareto ? `Declared objectives: ${objectives.map(item => `${objectiveLabel(item)} (${item.direction})`).join("; ") || "Unknown"}. ` :
+              `Declared objective: ${objectiveLabel(guidance.objective)} (${guidance.objective?.direction ?? "Unknown"}). `) +
           (pareto ? `Retention capacity: ${metric(pareto.retention_capacity)} geometries. ` +
             "Polling also explores incomparable admitted designs, including those omitted from the output cache. " +
             "The displayed frontier covers evaluated trials only; the retained subset is not a complete frontier or a single winner. " +
@@ -2397,8 +2418,8 @@ function designComparison(op, parent, study, casePolicies = {}) {
             ["Case", "Objective basis", "Objectives and directions", "Inclusive constraints", "Required consumers", "Protocol comparison"]);
           for (const { key, policy } of policies) {
             cells(cases, [key, basisText(policy.basis),
-              policy.objectives.map(item => `${item.metric} (${item.direction})`).join("; "),
-              (policy.constraints || []).map(item => `${item.metric}: minimum ${item.minimum == null ? "Unbounded" : metric(item.minimum)}; ` +
+              policy.objectives.map(item => `${objectiveLabel(item)} (${item.direction})`).join("; "),
+              (policy.constraints || []).map(item => `${objectiveLabel(item)}: minimum ${item.minimum == null ? "Unbounded" : metric(item.minimum)}; ` +
                 `maximum ${item.maximum == null ? "Unbounded" : metric(item.maximum)} (${basisText(item.basis || policy.basis)})`).join("; ") || "None",
               (policy.required_consumers || []).join(", ") || "Objective consumers",
               policy.allow_mixed_protocols ? "Mixed protocols explicitly admitted" : "Matching case protocols required"]);
@@ -2453,7 +2474,7 @@ function designComparison(op, parent, study, casePolicies = {}) {
         const passed = design.validation?.passed === true && fit?.passed === true;
         const candidate = row.consumer_comparison;
         const reading = worstCase && bounded ? row.consumer_worst_case?.reading :
-          candidate?.readings?.[guidance?.objective?.metric];
+          objectiveReading(candidate, guidance?.objective);
         const caseDecisions = row.consumer_cases || [];
         const materialDecisions = row.consumer_materials || [];
         const attempted = severalMaterials ? materialDecisions.length > 0 : matrixPareto ? caseDecisions.length > 0 : !!candidate;
@@ -2478,9 +2499,9 @@ function designComparison(op, parent, study, casePolicies = {}) {
             matrixPareto ? policies.map(({ key, policy }) => {
               const decision = caseDecisions.find(item => item.key === key);
               return `${key} [${basisText(policy.basis)}]: ` + policy.objectives.map(item =>
-                `${item.metric} (${item.direction}): ${readingText(decision?.comparison?.readings?.[item.metric], policy.basis === "reported_bounds")}`).join("; ");
+                `${objectiveLabel(item)} (${item.direction}): ${readingText(objectiveReading(decision?.comparison, item), item.region == null && policy.basis === "reported_bounds")}`).join("; ");
             }).join(" | ") || "Unknown" :
-              pareto ? objectives.map(item => `${item.metric}: ${readingText(candidate?.readings?.[item.metric])}`).join("; ") || "Unknown" :
+              pareto ? objectives.map(item => `${objectiveLabel(item)}: ${readingText(objectiveReading(candidate, item), item.region == null && bounded)}`).join("; ") || "Unknown" :
                 readingText(reading) + (worstCase && reading ?
                 limitingCases(row.consumer_case_key, row.consumer_worst_case?.reported_bound_case_keys) : ""),
             ...(pareto ? [admitted ? ((pareto.evaluated_trial_keys || []).includes(design.key) ?
@@ -2494,9 +2515,7 @@ function designComparison(op, parent, study, casePolicies = {}) {
             const decisions = item.cases?.length ? item.cases : [{ comparison: item.comparison, refusal: item.refusal }];
             for (const decision of decisions) cells(materials, [item.material_key,
               item.eligible === true ? "Eligible guidance material" : "Excluded guidance material", decision.key ?? "Single study",
-              Object.entries(decision.comparison?.readings || {}).map(([key, value]) =>
-                `${key}: ${readingText(value, policyFor(decision.key) ? metricUsesBounds(policyFor(decision.key), key) :
-                  bounded && objectives.some(objective => objective.metric === key))}`).join("; ") || "Unavailable",
+              formatComparisonReadings(decision.comparison, decision.key),
               [item.admission_refusal?.message, item.refusal?.message, decision.refusal?.message,
                 ...(decision.comparison?.exclusions || []).map(reason => reason.message)]
                 .filter((message, index, all) => message && all.indexOf(message) === index).join("; ") || "None"]);
@@ -2507,9 +2526,7 @@ function designComparison(op, parent, study, casePolicies = {}) {
             ["Case", "Admission", "Readings", "Exclusions or consumer refusal"]);
           for (const item of row.consumer_cases) cells(cases, [item.key,
             item.comparison?.eligible === true ? "Eligible under declared policy" : "Excluded",
-            Object.entries(item.comparison?.readings || {}).map(([key, value]) =>
-              `${key}: ${readingText(value, policyFor(item.key) ? metricUsesBounds(policyFor(item.key), key) :
-                bounded && objectives.some(item => item.metric === key))}`).join("; ") || "Unavailable",
+            formatComparisonReadings(item.comparison, item.key),
             [...(item.comparison?.exclusions || []).map(reason => reason.message), item.refusal?.message]
               .filter(Boolean).join("; ") || "None"]);
         }
@@ -5898,13 +5915,16 @@ function checkedRealismOptions(settings, maxSpacing = 12) {
   }
   if (settings.start_self_repulsion !== undefined) {
     const r = settings.start_self_repulsion;
-    const rKeys = ["min_separation_m", "stiffness", "period"];
-    if (!r || typeof r !== "object" || Array.isArray(r) || Object.keys(r).length !== 3 ||
+    const rKeys = ["min_separation_m", "stiffness", "period", "max_candidate_checks"];
+    if (!r || typeof r !== "object" || Array.isArray(r) ||
         Object.keys(r).some(k => !rKeys.includes(k)) ||
         typeof r.min_separation_m !== "number" || !Number.isFinite(r.min_separation_m) || r.min_separation_m <= 0 || r.min_separation_m > 0.1 ||
         typeof r.stiffness !== "number" || !Number.isFinite(r.stiffness) || r.stiffness <= 0 || r.stiffness > 1 ||
         !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
       throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
+    }
+    if (Object.hasOwn(r, "max_candidate_checks") && r.max_candidate_checks !== 32000000) {
+      throw Error("Start self-repulsion custom max_candidate_checks is not supported by the workbench controls.");
     }
     out.start_self_repulsion = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
   }
@@ -6336,6 +6356,52 @@ async function loadGuidedScenarioCases() {
   }
   refreshGuidedDesignCases(); controls();
 }
+function changedGuidedRegionalObjectives() {
+  if (guidedStudyMode()) invalidate(["study", "scenario",
+    ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true);
+  else controls();
+}
+function showGuidedRegionalObjectives() {
+  const parent = $("guidedRegionalObjectives"); parent.replaceChildren(); guidedRegionalObjectiveButtons.length = 0;
+  for (const [key, objective] of guidedRegionalObjectives) {
+    const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
+    label.textContent = `${objective.region}: ${objective.metric} (${objective.direction}, nominal)`;
+    const current = () => source && guidedStudyMode() && guidedRegionalObjectives.get(key) === objective;
+    const edit = document.createElement("button"); edit.type = "button"; edit.textContent = `Edit goal ${objective.region}: ${objective.metric}`;
+    edit.onclick = () => {
+      if (!current()) return;
+      $("guidedRegionalObjectiveName").value = objective.region;
+      $("guidedRegionalObjectiveMetric").value = objective.metric;
+      $("guidedRegionalObjectiveDirection").value = objective.direction;
+      controls();
+    };
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = `Remove goal ${objective.region}: ${objective.metric}`;
+    remove.onclick = () => {
+      if (!current()) return;
+      guidedRegionalObjectives.delete(key); showGuidedRegionalObjectives(); changedGuidedRegionalObjectives();
+    };
+    row.append(label, edit, remove); parent.append(row); guidedRegionalObjectiveButtons.push(edit, remove);
+  }
+  $("guidedRegionalObjectivesSummary").textContent = guidedRegionalObjectives.size ?
+    `${guidedRegionalObjectives.size} regional goals saved. They count toward the 16 comparison objectives and require the nominal objective basis.` :
+    "No regional goals saved. Goal checkboxes above still apply to the whole selected scope.";
+}
+function saveGuidedRegionalObjective() {
+  if (!source || !guidedStudyMode()) return;
+  try {
+    const region = $("guidedRegionalObjectiveName").value, metric = $("guidedRegionalObjectiveMetric").value;
+    const direction = $("guidedRegionalObjectiveDirection").value;
+    if (!region.trim() || new Blob([region]).size > 512) throw Error("Enter the exact saved region name, at most 512 UTF-8 bytes.");
+    const directional = guidedDirectionalMetrics.some(([, name]) => name === metric);
+    const contact = guidedMetrics.some(([id, name]) => id.includes("Contact") && name === metric);
+    if (!directional && !contact) throw Error("Choose a regional material-strain or body-contact metric.");
+    if (!["minimize", "maximize"].includes(direction)) throw Error("Choose minimize or maximize for the regional goal.");
+    const key = JSON.stringify([metric, region]);
+    if (!guidedRegionalObjectives.has(key) && guidedRegionalObjectives.size >= 16) throw Error("Choose at most 16 comparison objectives.");
+    guidedRegionalObjectives.set(key, { metric, region, direction });
+    showGuidedRegionalObjectives(); changedGuidedRegionalObjectives();
+  } catch (e) { error(String(e.message || e)); }
+}
 function changedGuidedRegionalConstraints() {
   if (guidedStudyMode()) invalidate(["study", "scenario",
     ...($("guidedScenarioPolicySource").value === "snapshot" ? ["scenarioDraft"] : [])], true);
@@ -6422,6 +6488,7 @@ function guidedComparisonInput(number, stockMode = guidedStockMode()) {
     .map(([, metric, direction]) => ({ metric, direction })));
   objectives.push(...guidedTransportMetrics.filter(([id]) => $(`${id}Goal`).checked)
     .map(([id, metric]) => ({ metric, direction: $(`${id}Direction`).value })));
+  objectives.push(...[...guidedRegionalObjectives.values()].map(objective => ({ ...objective })));
   const limitBasis = $("guidedLimitBasis").value || "inherit";
   if (!["inherit", "nominal", "reported_bounds"].includes(limitBasis)) throw Error("Choose the basis for comparison limits.");
   const constraints = metrics.filter(([id]) => $(`${id}Limit`).value.trim() ||
@@ -7868,6 +7935,15 @@ $("clearContactRegions").onclick = () => {
   if (!$("guidedContactLoads").checked || $("guidedContactLoadsScope").value !== "regions") return;
   guidedContactRegions.clear(); showGuidedContactRegions(); changedGuidedScenarioDraft();
 };
+$("saveRegionalObjective").onclick = saveGuidedRegionalObjective;
+$("clearRegionalObjectives").onclick = () => {
+  if (!source || !guidedStudyMode()) return;
+  guidedRegionalObjectives.clear(); showGuidedRegionalObjectives(); changedGuidedRegionalObjectives();
+};
+for (const id of ["guidedRegionalObjectiveMetric", "guidedRegionalObjectiveName", "guidedRegionalObjectiveDirection"]) {
+  $(id).addEventListener("change", changedGuidedRegionalObjectives);
+  if (id === "guidedRegionalObjectiveName") $(id).addEventListener("input", changedGuidedRegionalObjectives);
+}
 $("saveRegionalConstraint").onclick = saveGuidedRegionalConstraint;
 $("clearRegionalConstraints").onclick = () => {
   if (!source || !guidedStudyMode()) return;
@@ -8590,6 +8666,10 @@ function resetGuidedScenarios() {
   $("guidedContactLoadsInstances").value = "";
   guidedContactRegions.clear(); showGuidedContactRegions();
   for (const id of ["guidedContactRegionName", "guidedContactRegionInstance", "guidedContactRegionPolygon"]) $(id).value = "";
+  guidedRegionalObjectives.clear(); showGuidedRegionalObjectives();
+  $("guidedRegionalObjectiveName").value = "";
+  $("guidedRegionalObjectiveMetric").value = "max_warp_green_strain";
+  $("guidedRegionalObjectiveDirection").value = "minimize";
   guidedRegionalConstraints.clear(); showGuidedRegionalConstraints();
   for (const id of ["guidedRegionalName", "guidedRegionalMinimum", "guidedRegionalMaximum"]) $(id).value = "";
   $("guidedRegionalMetric").value = "max_warp_green_strain";

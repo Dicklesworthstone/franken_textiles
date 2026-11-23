@@ -449,15 +449,22 @@ onmessage = async (ev) => {
       }
       if (msg.startSelfRepulsion !== undefined) {
         const r = msg.startSelfRepulsion;
-        const rKeys = ["min_separation_m", "stiffness", "period"];
+        const rKeys = ["min_separation_m", "stiffness", "period", "max_candidate_checks"];
         if (!r || typeof r !== "object" || Array.isArray(r) ||
-            Object.keys(r).length !== 3 || Object.keys(r).some(k => !rKeys.includes(k)) ||
+            Object.keys(r).some(k => !rKeys.includes(k)) ||
             typeof r.min_separation_m !== "number" || !Number.isFinite(r.min_separation_m) || r.min_separation_m <= 0 || r.min_separation_m > 0.1 ||
             typeof r.stiffness !== "number" || !Number.isFinite(r.stiffness) || r.stiffness <= 0 || r.stiffness > 1 ||
             !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
           throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
         }
-        settings.start_self_repulsion = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+        const out = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+        if (Object.hasOwn(r, "max_candidate_checks")) {
+          if (!Number.isSafeInteger(r.max_candidate_checks) || r.max_candidate_checks < 1 || r.max_candidate_checks > 128000000) {
+            throw Error("Start self-repulsion max_candidate_checks must be an integer in 1–128000000.");
+          }
+          if (r.max_candidate_checks !== 32000000) out.max_candidate_checks = r.max_candidate_checks;
+        }
+        settings.start_self_repulsion = out;
       }
       const configured = (!imported && armDeg !== 35) ||
         settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
