@@ -1123,6 +1123,25 @@ continuous-time bound or propagated result interval is added. See the
 [guided controls](browser-material-workbench.md#compare-textile-owned-water-and-latent-heat) and
 [native water model](textile-surface-water.md).
 
+The guided **Finite liquid delivery and ambient vapor exchange** controls also expose these
+nominal kilogram objectives and inclusive limits:
+
+| Metric | Owner and meaning |
+|---|---|
+| `textile_water_requested_supply_mass_kg` | Complete reference-area delivery demand, including time after the finite donor is empty. |
+| `textile_water_unmet_supply_mass_kg` | Demand that the finite donor could not supply; this is not a physical water inventory. |
+| `textile_water_remaining_supply_mass_kg` | Remaining shared donor stock, separately from water already on the textile. |
+| `textile_water_ambient_vapor_inflow_mass_kg` | Cumulative vapor entering from the independently qualified ambient boundary. |
+| `textile_water_ambient_vapor_outflow_mass_kg` | Cumulative reservoir vapor leaving through that boundary. |
+
+The first three require finite liquid supply version 2. Older admitted donor receipts can still
+provide remaining stock, but cannot provide requested or unmet delivery without a verified demand
+ledger. Ambient readings require a qualified constant or interval boundary; a sealed reservoir
+leaves them unavailable, while an explicitly qualified zero-conductance boundary reports zero.
+The existing native admission checks remain authoritative. Criteria share the same motion and
+textile-water requirements in single, named-case and adaptive studies; unsupported reported bounds
+refuse. Saved named-case limits retain their original values when the current controls change.
+
 Two nominal mechanical-load criteria use the same fully admitted coupled history:
 
 | Metric | Meaning |

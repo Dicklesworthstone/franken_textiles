@@ -169,9 +169,9 @@ const guidedTransportMetrics = [
   ["guidedTextileVaporSampleMin", "textile_water_min_sample_vapor_pressure_pa"],
   ["guidedTextileVaporSampleMax", "textile_water_max_sample_vapor_pressure_pa"],
   ["guidedTextileVaporRemaining", "textile_water_remaining_vapor_mass_kg"],
+  ["guidedTextileVaporHeatRemoved", "textile_water_isothermal_heat_removed_j"],
   ["guidedTextileAmbientInflow", "textile_water_ambient_vapor_inflow_mass_kg"],
   ["guidedTextileAmbientOutflow", "textile_water_ambient_vapor_outflow_mass_kg"],
-  ["guidedTextileVaporHeatRemoved", "textile_water_isothermal_heat_removed_j"],
   ["guidedTextileFinalMass", "textile_water_final_inertial_mass_kg"],
   ["guidedTextilePeakMass", "textile_water_max_sample_inertial_mass_kg"],
   ["guidedTransientSurfaceInsideEnergy", "transient_surface_inside_energy_j"],
@@ -1100,9 +1100,9 @@ function objectiveComparison(parent, r) {
     textile_water_evaporated_mass_kg: "Evaporated textile water",
     textile_water_remaining_mass_kg: "Remaining textile liquid",
     textile_water_supplied_mass_kg: "Supplied textile liquid",
-    textile_water_requested_supply_mass_kg: "Requested finite-donor liquid delivery",
-    textile_water_unmet_supply_mass_kg: "Unmet finite-donor liquid shortfall",
-    textile_water_remaining_supply_mass_kg: "Remaining finite-donor liquid inventory",
+    textile_water_requested_supply_mass_kg: "Requested liquid delivery",
+    textile_water_unmet_supply_mass_kg: "Unmet liquid delivery",
+    textile_water_remaining_supply_mass_kg: "Remaining donor liquid",
     textile_water_condensed_mass_kg: "Condensed textile water",
     textile_water_drained_mass_kg: "Drained textile water",
     textile_water_latent_energy_j: "Textile evaporation latent energy",
@@ -1111,9 +1111,9 @@ function objectiveComparison(parent, r) {
     textile_water_min_sample_vapor_pressure_pa: "Minimum sampled finite-reservoir vapor pressure",
     textile_water_max_sample_vapor_pressure_pa: "Maximum sampled finite-reservoir vapor pressure",
     textile_water_remaining_vapor_mass_kg: "Remaining finite-reservoir vapor",
-    textile_water_ambient_vapor_inflow_mass_kg: "Ambient vapor inflow to finite reservoir",
-    textile_water_ambient_vapor_outflow_mass_kg: "Ambient vapor outflow from finite reservoir",
     textile_water_isothermal_heat_removed_j: "Finite-reservoir isothermal heat removed",
+    textile_water_ambient_vapor_inflow_mass_kg: "Incoming ambient vapor",
+    textile_water_ambient_vapor_outflow_mass_kg: "Outgoing reservoir vapor",
     textile_water_final_inertial_mass_kg: "Final wet-cloth inertial mass",
     textile_water_max_sample_inertial_mass_kg: "Maximum sampled wet-cloth inertial mass"
   };
@@ -1149,24 +1149,28 @@ function objectiveComparison(parent, r) {
       "Source uncertainty, physical garment validation and a globally optimal design are not established.";
     parent.append(textileWater);
   }
-  if (metrics.some(o => ["textile_water_requested_supply_mass_kg", "textile_water_unmet_supply_mass_kg",
-    "textile_water_remaining_supply_mass_kg"].includes(o.metric))) {
-    const donor = document.createElement("p");
-    donor.textContent = "Finite liquid-donor criteria require supply version 2 (`ftx-textile-liquid-supply/2`) with a shared constant-temperature donor in the same case. " +
-      "Remaining donor inventory is distinct from liquid retained on the textile. Requested and unmet delivery require the donor demand ledger and stay unavailable for unlimited feeds or older receipts without inventing zero shortfalls.";
-    parent.append(donor);
-  }
   if (metrics.some(o => ["textile_water_final_vapor_pressure_pa", "textile_water_min_sample_vapor_pressure_pa",
     "textile_water_max_sample_vapor_pressure_pa", "textile_water_remaining_vapor_mass_kg",
-    "textile_water_ambient_vapor_inflow_mass_kg", "textile_water_ambient_vapor_outflow_mass_kg",
     "textile_water_isothermal_heat_removed_j"].includes(o.metric))) {
     const reservoir = document.createElement("p");
     reservoir.textContent = "Finite-vapor criteria require an admitted textile-water /5 reservoir in the same case. " +
       "Pressure extrema include the initial reservoir and retained mechanical endpoints, without continuous-time or substep bounds. " +
-      "Ambient inflow and outflow require a separately qualified constant or per-interval ambient exchange boundary; closed reservoirs leave both unavailable without inventing zeros. " +
       "Isothermal heat removed is signed: positive removes heat from the reservoir; negative supplies heat to hold its declared temperature. " +
       "A missing reservoir leaves these readings unavailable.";
     parent.append(reservoir);
+  }
+  if (metrics.some(o => ["textile_water_requested_supply_mass_kg", "textile_water_unmet_supply_mass_kg",
+    "textile_water_remaining_supply_mass_kg"].includes(o.metric))) {
+    const donor = document.createElement("p");
+    donor.textContent = "Finite liquid-source criteria keep requested delivery, post-exhaustion shortfall and remaining donor stock separate from liquid retained on the textile. " +
+      "Demand continues over the complete accepted history after stock runs out. A missing finite donor or older receipts without demand leave the corresponding readings unavailable.";
+    parent.append(donor);
+  }
+  if (metrics.some(o => ["textile_water_ambient_vapor_inflow_mass_kg", "textile_water_ambient_vapor_outflow_mass_kg"].includes(o.metric))) {
+    const ambient = document.createElement("p");
+    ambient.textContent = "Ambient vapor criteria retain cumulative incoming and outgoing transfer separately through the independently qualified constant or interval boundary. " +
+      "A sealed finite reservoir leaves these readings unavailable; an admitted zero-conductance boundary can report zero transfer.";
+    parent.append(ambient);
   }
   if (metrics.some(o => ["textile_water_final_inertial_mass_kg", "textile_water_max_sample_inertial_mass_kg"].includes(o.metric))) {
     const wetMass = document.createElement("p");
@@ -1571,17 +1575,17 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         ...(condensing ? [metric(water.condensation_latent_energy_j), metric(water.incoming_vapor_sensible_energy_j)] : []), metric(water.balance_error_j)]);
       if (finiteSupply) {
         const donor = water.supply_reservoir, source = water.request?.supply?.finite_reservoir;
-        const hasDemand = donor.requested_liquid_mass_kg !== undefined || donor.unmet_liquid_mass_kg !== undefined;
         const inventory = table(parent, `${key}: finite shared liquid supply`,
           ["Initial donor liquid (kg)", "Remaining donor liquid (kg)", "Delivered to textile (kg)",
-            ...(hasDemand ? ["Requested delivery (kg)", "Unmet delivery (kg)", "Demand residual (kg)"] : []),
             "Mass residual (kg)", "Donor temperature (°C)", "Elapsed time (s)", "Exhaustion events"]);
         cells(inventory, [metric(donor.initial_liquid_mass_kg), metric(donor.remaining_liquid_mass_kg),
-          metric(donor.supplied_liquid_mass_kg),
-          ...(hasDemand ? [metric(donor.requested_liquid_mass_kg), metric(donor.unmet_liquid_mass_kg),
-            metric(donor.demand_balance_error_kg)] : []),
-          metric(donor.mass_balance_error_kg),
+          metric(donor.supplied_liquid_mass_kg), metric(donor.mass_balance_error_kg),
           metric(donor.temperature_c), metric(donor.elapsed_seconds), metric(donor.exhaustion_events)]);
+        const demand = table(parent, `${key}: complete liquid delivery demand`,
+          ["Requested liquid (kg)", "Unmet delivery (kg)", "Demand residual (kg)"]);
+        cells(demand, [donor.requested_liquid_mass_kg == null ? "Unavailable" : metric(donor.requested_liquid_mass_kg),
+          donor.unmet_liquid_mass_kg == null ? "Unavailable" : metric(donor.unmet_liquid_mass_kg),
+          donor.demand_balance_error_kg == null ? "Unavailable" : metric(donor.demand_balance_error_kg)]);
         const donorEnergy = table(parent, `${key}: finite liquid donor sensible energy`,
           ["Donor enthalpy change (J)", "Exported liquid enthalpy (J)", "Enthalpy residual (J)"]);
         cells(donorEnergy, [metric(donor.liquid_enthalpy_change_j), metric(donor.exported_liquid_enthalpy_j),

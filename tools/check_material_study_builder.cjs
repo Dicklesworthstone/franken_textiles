@@ -3549,6 +3549,35 @@ test('finite-vapor criteria retain signed reservoir heat and guide existing mate
   }
 });
 
+const textileSupplyExchangeMetrics=['textile_water_requested_supply_mass_kg','textile_water_unmet_supply_mass_kg',
+  'textile_water_remaining_supply_mass_kg','textile_water_ambient_vapor_inflow_mass_kg','textile_water_ambient_vapor_outflow_mass_kg'];
+test('finite liquid delivery and ambient exchange criteria use nominal water histories in single and adaptive named studies', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const objectives=textileSupplyExchangeMetrics.map((metric,i)=>({metric,direction:i%2?'maximize':'minimize'})),
+    constraints=textileSupplyExchangeMetrics.map(metric=>({metric,minimum:0,maximum:0.125}));
+  const input={...state(),objectives,constraints,requiredConsumers:['transient_surface']};
+  const before=JSON.stringify(input),result=JSON.parse(build(input,textileWaterContext()));
+  assert.equal(JSON.stringify(input),before);assert.deepEqual(result.comparison.objectives,objectives);
+  assert.deepEqual(result.comparison.constraints,constraints);
+  for(const metric of textileSupplyExchangeMetrics) {
+    for(const policy of [{objectives:[{metric,direction:'minimize'}]},{constraints:[{metric,maximum:0}]}]) {
+      for(const key of ['motion','transientSurface','textileWater'])
+        assert.throws(()=>build({...state(),...policy},{...textileWaterContext(),[key]:false}),/requested transient_surface|Textile-water criteria/);
+      assert.throws(()=>build({...state(),...policy,basis:'reported_bounds'},textileWaterContext()),/reported-bound comparison/);
+    }
+  }
+  const complete={surface:false,motion:true,transientSurface:true,textileWater:true};
+  const cases=namedContext(['cold','warm'].map(key=>({key,...complete})));
+  for(const objective of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
+    const design=namedDesign({objective});if(['consumer_worst_case','consumer_matrix_pareto'].includes(objective))delete design.caseKey;
+    const goals=objective.includes('pareto')?objectives:objectives.slice(0,1);
+    const named=JSON.parse(build({...input,objectives:goals,design},cases));
+    assert.equal(named.design_adaptive.objective,objective);assert.deepEqual(named.comparison.objectives,goals);
+    assert.deepEqual(named.comparison.constraints,constraints);
+  }
+  assert.throws(()=>build(input,namedContext([{key:'cold',...complete},{key:'warm',...complete,textileWater:false}])),/warm inherits.*textile-water/);
+});
+
 test('textile-water objectives and limits require actual water, motion and transient heat inputs together', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const context=textileWaterContext();
@@ -4738,7 +4767,7 @@ test('saved study accepted-fit pose metadata validates, freezes and refuses inva
   assert.throws(()=>build(noFit,workbenchModel()),/accepted body-fit source/i);
 });
 
-test('direct liquid-water composition splices supply, finite donor and constant or per-interval ambient exchange byte-for-byte', async () => {
+test('direct liquid-water composition in motion requests delegates to canonical water composition and preserves exact bytes', async () => {
   const {buildMaterialMotionRequest:build,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
   const twoKeyframes=()=>{
     const base=motionState(),heat=dryMotionHeat();
@@ -4748,8 +4777,8 @@ test('direct liquid-water composition splices supply, finite donor and constant 
   };
   const waterNoSupply=' {\r\n"schema":"ftx-textile-surface-water/5","bindings":{"front.R":{"material_sha256":"'+'a'.repeat(64)+
     '","initial_liquid_kg_m2":1.25000e-2}},"enthalpy_reference_c":-0.0,"latent_heat_j_kg":18446744073709551615,'+
-    '"source":{"reference":"test:base-water café 🧵"},"vapor_reservoir":{"schema":"ftx-textile-vapor-reservoir/2","initial_vapor_mass_kg":1.000e-3}}\r\n';
-  const supplyRaw=' {\r\n"schema":"ftx-textile-liquid-supply/2","bindings":{"front.R":{"rate_kg_m2_s":[1.25000e-2,0.0],"temperature_c":[40,-0.0]}},'+
+    '"source":{"reference":"test:base-water café 🧵"},"vapor_reservoir":{"schema":"ftx-textile-vapor-reservoir/1","initial_vapor_mass_kg":1.000e-3}}\r\n';
+  const supplyRaw=' {\r\n"schema":"ftx-textile-liquid-supply/1","bindings":{"front.R":{"rate_kg_m2_s":[1.25000e-2,0.0],"temperature_c":[40,-0.0]}},'+
     '"source":{"reference":"test:supply café 🧵","id":18446744073709551615}}\r\n';
   const donorRaw=' {\r\n"schema":"ftx-textile-liquid-reservoir/1","initial_liquid_mass_kg":5.000e-3,"temperature_c":40,'+
     '"source":{"reference":"test:donor café 🧵"}}\r\n';
@@ -4759,46 +4788,48 @@ test('direct liquid-water composition splices supply, finite donor and constant 
     '"source":{"reference":"test:ambient-1 🧵"}}\r\n';
   const waterWithInlineSupply=waterNoSupply.replace('"vapor_reservoir":',`"supply":${supplyRaw},"vapor_reservoir":`);
 
-  // Case 1: separate supply + separate finite_reservoir + constant ambient_exchange
+  // Case 1: separate supply/1 + separate finite_reservoir upgrades supply schema to /2 + constant ambient_exchange
   const motion=twoKeyframes(),before=JSON.stringify(motion);
   const liquid1={surface_water:waterNoSupply,supply:supplyRaw,finite_reservoir:donorRaw,ambient_exchange:ambient0};
   const raw1=build(motion,liquid1),parsed1=JSON.parse(raw1);
   assert.equal(JSON.stringify(motion),before);
   assert.ok(raw1.includes(donorRaw));assert.ok(raw1.includes(ambient0));
   assert.match(raw1,/18446744073709551615/);assert.match(raw1,/1\.25000e-2/);assert.match(raw1,/"enthalpy_reference_c":-0\.0/);assert.match(raw1,/test:base-water café 🧵/);
+  assert.equal(parsed1.transient_surface.surface_water.supply.schema,'ftx-textile-liquid-supply/2');
   assert.deepEqual(parsed1.transient_surface.surface_water.supply.finite_reservoir,JSON.parse(donorRaw));
+  assert.equal(parsed1.transient_surface.surface_water.vapor_reservoir.schema,'ftx-textile-vapor-reservoir/1');
   assert.deepEqual(parsed1.transient_surface.surface_water.vapor_reservoir.ambient_exchange,JSON.parse(ambient0));
   const saved1=single({...scenarioState(),motion,motionLiquid:liquid1,maxMotionTrials:1024,maxVertexFrames:16000000});
   assert.ok(saved1.includes(raw1));
   const named1=matrix({maxEvaluations:2,cases:[{key:'composed',scenario:saved1}]});
   assert.ok(named1.includes(saved1));
 
-  // Case 2: inline supply + separate finite_reservoir + per-interval ambient_exchange_by_interval
+  // Case 2: inline supply/1 + separate finite_reservoir + per-interval ambient_exchange_by_interval upgrades vapor_reservoir to /2
   const liquid2={surface_water:waterWithInlineSupply,finite_reservoir:donorRaw,ambient_exchange_by_interval:[ambient0,ambient1]};
   const raw2=build(motion,liquid2),parsed2=JSON.parse(raw2);
   assert.ok(raw2.includes(donorRaw));assert.ok(raw2.includes(ambient0));assert.ok(raw2.includes(ambient1));
+  assert.equal(parsed2.transient_surface.surface_water.supply.schema,'ftx-textile-liquid-supply/2');
   assert.deepEqual(parsed2.transient_surface.surface_water.supply.finite_reservoir,JSON.parse(donorRaw));
+  assert.equal(parsed2.transient_surface.surface_water.vapor_reservoir.schema,'ftx-textile-vapor-reservoir/2');
   assert.deepEqual(parsed2.transient_surface.surface_water.vapor_reservoir.ambient_exchange_by_interval,[JSON.parse(ambient0),JSON.parse(ambient1)]);
   assert.equal(Object.hasOwn(parsed2.transient_surface.surface_water.vapor_reservoir,'ambient_exchange'),false);
 
+  // Case 3: replacing existing ambient_exchange with per-interval schedule removes old ambient_exchange cleanly
+  const waterWithAmbient=waterWithInlineSupply.replace('"initial_vapor_mass_kg":1.000e-3',`"initial_vapor_mass_kg":1.000e-3,"ambient_exchange":${ambient0}`);
+  const switched=JSON.parse(build(motion,{surface_water:waterWithAmbient,ambient_exchange_by_interval:[ambient0,ambient1]}));
+  assert.equal(switched.transient_surface.surface_water.vapor_reservoir.schema,'ftx-textile-vapor-reservoir/2');
+  assert.equal(Object.hasOwn(switched.transient_surface.surface_water.vapor_reservoir,'ambient_exchange'),false);
+
   // Fail-closed refusals
-  const waterWithAmbient=waterNoSupply.replace('"initial_vapor_mass_kg":1.000e-3',`"initial_vapor_mass_kg":1.000e-3,"ambient_exchange":${ambient0}`);
-  const waterWithNoVapor=' {"schema":"ftx-textile-surface-water/2","bindings":{}}\n';
-  const supplyWithDonor=supplyRaw.replace('"source":',`"finite_reservoir":${donorRaw},"source":`);
-  const waterWithInlineDonor=waterNoSupply.replace('"vapor_reservoir":',`"supply":${supplyWithDonor},"vapor_reservoir":`);
+  const waterWithNoVapor=' {"schema":"ftx-textile-surface-water/2","bindings":{"front.R":{}},"supply":'+supplyRaw+'}\n';
   for(const [bad,pattern] of [
     [{surface_water_alternatives:'['+waterNoSupply+']',supply:supplyRaw},/compose only with direct water/],
     [{surface_water_alternatives:'['+waterNoSupply+']',finite_reservoir:donorRaw},/compose only with direct water/],
     [{surface_water_alternatives:'['+waterNoSupply+']',ambient_exchange:ambient0},/compose only with direct water/],
     [{coupled_water_alternatives:'[{"surface_water":'+waterNoSupply+',"mechanical_coupling":{}}]',ambient_exchange_by_interval:[ambient0,ambient1]},/compose only with direct water/],
     [{surface_water:waterNoSupply,ambient_exchange:ambient0,ambient_exchange_by_interval:[ambient0,ambient1]},/not both/],
-    [{surface_water:waterWithInlineSupply,supply:supplyRaw},/already declares "supply"/],
-    [{surface_water:waterNoSupply,supply:supplyWithDonor,finite_reservoir:donorRaw},/already declares "finite_reservoir"/],
-    [{surface_water:waterWithInlineDonor,finite_reservoir:donorRaw},/already declares "finite_reservoir"/],
-    [{surface_water:waterNoSupply,finite_reservoir:donorRaw},/must already declare "supply"/],
-    [{surface_water:waterWithNoVapor,ambient_exchange:ambient0},/must already declare a "vapor_reservoir"/],
-    [{surface_water:waterWithAmbient,ambient_exchange:ambient0},/already declares ambient exchange/],
-    [{surface_water:waterWithAmbient,ambient_exchange_by_interval:[ambient0,ambient1]},/already declares ambient exchange/],
+    [{surface_water:waterNoSupply,finite_reservoir:donorRaw},/Liquid delivery is missing/],
+    [{surface_water:waterWithNoVapor,ambient_exchange:ambient0},/water \/5/],
     [{surface_water:waterNoSupply,ambient_exchange_by_interval:[ambient0]},/per saved motion interval/],
     [{surface_water:waterNoSupply,ambient_exchange_by_interval:[]},/per saved motion interval/],
     [{surface_water:waterNoSupply,ambient_exchange_by_interval:[ambient0,ambient1,ambient0]},/per saved motion interval/],
@@ -4814,7 +4845,7 @@ test('direct liquid-water composition splices supply, finite donor and constant 
   assert.throws(()=>build(motion,{surface_water:waterNoSupply,supply:big}),/16 MiB/);
 });
 
-test('finite liquid-donor demand and ambient vapor exchange criteria stay nominal on transient_surface', async () => {
+test('finite liquid-donor demand and ambient vapor exchange criteria stay nominal on transient_surface with mixed-basis limits', async () => {
   const {buildMaterialStudyRequest:build}=await modulePromise;
   const donorAndAmbient=[
     'textile_water_requested_supply_mass_kg',
@@ -4823,28 +4854,9 @@ test('finite liquid-donor demand and ambient vapor exchange criteria stay nomina
     'textile_water_ambient_vapor_inflow_mass_kg',
     'textile_water_ambient_vapor_outflow_mass_kg',
   ];
-  const objectives=donorAndAmbient.map((metric,i)=>({metric,direction:i%2?'maximize':'minimize'}));
-  const constraints=donorAndAmbient.map(metric=>({metric,minimum:0,maximum:0.5}));
-  const input={...state(),objectives,constraints,requiredConsumers:['transient_surface']};
-  const result=JSON.parse(build(input,textileWaterContext()));
-  assert.deepEqual(result.comparison.objectives,objectives);
-  assert.deepEqual(result.comparison.constraints,constraints);
-  assert.deepEqual(result.comparison.required_consumers,['transient_surface']);
-
-  const cases=namedContext(['cold','warm'].map(key=>({key,surface:false,motion:true,transientSurface:true,textileWater:true})));
-  for(const objective of ['consumer_comparison','consumer_pareto','consumer_worst_case','consumer_matrix_pareto']) {
-    const design=namedDesign({objective});if(['consumer_worst_case','consumer_matrix_pareto'].includes(objective))delete design.caseKey;
-    const goals=objective.includes('pareto')?objectives:objectives.slice(0,1);
-    const out=JSON.parse(build({...input,objectives:goals,design},cases));
-    assert.equal(out.design_adaptive.objective,objective);
-    assert.deepEqual(out.comparison.objectives,goals);
-    assert.deepEqual(out.comparison.constraints,constraints);
-  }
-
   const boundedContext={...wetFilmContext(),...textileWaterContext()};
   const bounded={...state(),basis:'reported_bounds',objectives:[{metric:wetFilmMetrics[0],direction:'maximize'}]};
   for(const metric of donorAndAmbient) {
-    assert.throws(()=>build({...state(),objectives:[{metric,direction:'minimize'}]},{...textileWaterContext(),textileWater:false}),/Textile-water criteria/);
     assert.throws(()=>build({...state(),constraints:[{metric,minimum:2,maximum:1}]},textileWaterContext()),/finite ordered/);
     assert.throws(()=>build({...state(),basis:'reported_bounds',objectives:[{metric,direction:'minimize'}]},boundedContext),/reported-bound comparison/);
     assert.throws(()=>build({...bounded,constraints:[{metric,maximum:1}]},boundedContext),/reported-bound comparison/);
@@ -4852,4 +4864,189 @@ test('finite liquid-donor demand and ambient vapor exchange criteria stay nomina
     assert.equal(mixed.comparison.basis,'reported_bounds');
     assert.deepEqual(mixed.comparison.constraints,[{metric,basis:'nominal',minimum:0,maximum:1}]);
   }
+});
+
+// Independent source composition preserves physical qualification and original numeric tokens.
+function textileWaterCompositionSources() {
+  const bindings = `{"front.R":{"material_sha256":"${"a".repeat(64)}","initial_liquid_kg_m2":1.25000e-2},` +
+    `"lining.L":{"material_sha256":"${"b".repeat(64)}","initial_liquid_kg_m2":-0.0}}`;
+  const waterSource = '{"reference":"test:water café 🧵","note":"Literal braces } [ and comma , plus \\"quoted\\" text",' +
+    '"count":18446744073709551615,"nested":[{"same":1},{"same":2}]}';
+  const deliverySource = '{"reference":"test:delivery café 🧵","note":"Original delivery","accessed_on":"2026-11-22","count":18446744073709551615}';
+  const supply = ' \r\n{"schema":"ftx-textile-liquid-supply/1","bindings":{' +
+    '"front.R":{"rate_kg_m2_s":[1.000e-3,2e-3],"temperature_c":[20.0,20.0]},' +
+    '"lining.L":{"rate_kg_m2_s":[-0.0,3.000e-3],"temperature_c":[20.0,20.0]}},' +
+    '"source":' + deliverySource + ',"evidence":"estimate","allow_estimates":false,"method":"Original acquisition"}\r\n';
+  const donor = ' \r\n{"schema":"ftx-textile-liquid-reservoir/1","model":"well_mixed_constant_temperature_liquid_inventory/1",' +
+    '"initial_liquid_mass_kg":3.40000e-5,"temperature_c":20.0,"source":{"reference":"test:donor","note":"Synthetic stock","accessed_on":"2026-11-22"},' +
+    '"evidence":"estimate","allow_estimates":false,"method":"Explicit inventory","qualification":"Original stock qualification"}\r\n';
+  const ambient = ' \r\n{"schema":"ftx-textile-vapor-exchange/1","model":"linear_pressure_vapor_exchange/1",' +
+    '"conductance_kg_pa_s":2.50000e-9,"ambient_vapor_pressure_pa":100.00,"ambient_temperature_c":20.0,' +
+    '"reservoir_pressure_domain_pa":[0.0,200.0],"source":{"reference":"test:ambient","note":"Original boundary","accessed_on":"2026-11-22"},' +
+    '"evidence":"estimate","allow_estimates":false,"method":"Original boundary law","qualification":"Independent ambient qualification"}\r\n';
+  const reservoir = '{"schema":"ftx-textile-vapor-reservoir/1","model":"isothermal_constant_vapor_capacitance/1",' +
+    '"vapor_capacitance_kg_pa":2.00000e-6,"initial_vapor_mass_kg":-0.0,"temperature_c":20.0,' +
+    '"pressure_domain_pa":[0.0,200.0],"source":{"reference":"test:one vapor owner","count":18446744073709551615},' +
+    '"allow_estimates":false,"ambient_exchange":' + ambient + '}';
+  const water = ' \r\n{"schema":"ftx-textile-surface-water/5","bindings":' + bindings +
+    ',"source":' + waterSource + ',"enthalpy_reference_c":-0.0,"supply":' + supply +
+    ',"condensation":{"schema":"ftx-textile-condensation/1","source":{"reference":"test:original reverse transport"}},' +
+    '"vapor_reservoir":' + reservoir + '}\r\n';
+  return { water, supply, donor, ambient, bindings, waterSource, deliverySource, reservoir };
+}
+
+test("guided direct textile-water composition retains no-op and exact independent delivery sources", async function() {
+  const {buildMaterialTextileWaterPolicy:build}=await modulePromise;
+  const f=textileWaterCompositionSources();
+  assert.equal(build({water:f.water},2),f.water);
+  const initial=' \r\n{"schema":"ftx-textile-surface-water/1","enthalpy_reference_c":-0.0}\r\n';
+  assert.equal(build({water:initial},1),initial,'No composition leaves earlier source policies byte-identical');
+  const supply=f.supply.replace('1.000e-3','4.50000e-3'),input=Object.freeze({water:f.water,supply});
+  const raw=build(input,2),value=JSON.parse(raw),original=JSON.parse(f.water);
+  assert.ok(raw.includes(supply));assert.ok(raw.includes(f.bindings));assert.ok(raw.includes(f.waterSource));
+  assert.ok(raw.includes(f.reservoir));assert.match(raw,/18446744073709551615/);assert.match(raw,/"enthalpy_reference_c":-0\.0/);
+  for(const key of Object.keys(original).filter(key=>key!=='supply'))assert.deepEqual(value[key],original[key],key);
+  assert.deepEqual(value.supply,JSON.parse(supply));assert.equal(value.supply.allow_estimates,false);
+  assert.equal(input.water,f.water);assert.equal(input.supply,supply);
+});
+
+test("guided direct textile-water composition attaches and replaces one finite donor without changing material qualification", async function() {
+  const {buildMaterialTextileWaterPolicy:build}=await modulePromise;
+  const f=textileWaterCompositionSources(),input={water:f.water,finiteReservoir:f.donor};
+  const before=JSON.stringify(input),raw=build(input,2),value=JSON.parse(raw);
+  assert.ok(raw.includes(f.donor));assert.ok(raw.includes(f.bindings));assert.ok(raw.includes(f.waterSource));assert.ok(raw.includes(f.deliverySource));
+  assert.match(raw,/"rate_kg_m2_s":\[1\.000e-3,2e-3\]/);assert.match(raw,/"rate_kg_m2_s":\[-0\.0,3\.000e-3\]/);
+  assert.equal(value.supply.schema,'ftx-textile-liquid-supply/2');
+  assert.deepEqual(value.supply.finite_reservoir,JSON.parse(f.donor));
+  assert.equal(value.supply.allow_estimates,false);assert.equal(value.supply.finite_reservoir.allow_estimates,false);
+  assert.deepEqual(value.condensation,JSON.parse(f.water).condensation);assert.equal(JSON.stringify(input),before);
+  const replacement=f.donor.replace('3.40000e-5','7.80000e-5');
+  const replaced=build({water:raw,finiteReservoir:replacement},2);
+  assert.ok(replaced.includes(replacement));assert.equal(replaced.includes('3.40000e-5'),false);
+  assert.deepEqual(JSON.parse(replaced).supply.finite_reservoir,JSON.parse(replacement));
+  const unlimited=build({water:replaced,supply:f.supply},2);
+  assert.ok(unlimited.includes(f.supply));assert.equal(Object.hasOwn(JSON.parse(unlimited).supply,'finite_reservoir'),false);
+});
+
+test("guided direct textile-water composition switches ambient sources while preserving one vapor owner", async function() {
+  const {buildMaterialTextileWaterPolicy:build}=await modulePromise;
+  const f=textileWaterCompositionSources(),later=f.ambient.replace('100.00','150.00').replace('test:ambient','test:later');
+  const schedule=' \r\n['+f.ambient+','+later+']\r\n';
+  const raw=build({water:f.water,finiteReservoir:f.donor,ambientExchangeByInterval:schedule},2),value=JSON.parse(raw);
+  assert.ok(raw.includes(schedule));assert.ok(raw.includes(f.donor));assert.ok(raw.includes(f.waterSource));
+  assert.equal(value.vapor_reservoir.schema,'ftx-textile-vapor-reservoir/2');
+  assert.equal(Object.hasOwn(value.vapor_reservoir,'ambient_exchange'),false);
+  const original=JSON.parse(f.reservoir);
+  for(const key of Object.keys(original).filter(key=>!['schema','ambient_exchange'].includes(key)))assert.deepEqual(value.vapor_reservoir[key],original[key],key);
+  assert.match(raw,/"vapor_capacitance_kg_pa":2\.00000e-6/);assert.match(raw,/"initial_vapor_mass_kg":-0\.0/);
+  const fixed=build({water:raw,ambientExchange:later},2),constant=JSON.parse(fixed).vapor_reservoir;
+  assert.equal(constant.schema,'ftx-textile-vapor-reservoir/1');assert.equal(Object.hasOwn(constant,'ambient_exchange_by_interval'),false);
+  assert.ok(fixed.includes(later));assert.deepEqual(constant.ambient_exchange,JSON.parse(later));
+  assert.deepEqual(JSON.parse(fixed).supply,value.supply,'Changing ambient boundaries retains the finite donor');
+  const closed=JSON.parse(f.water);delete closed.vapor_reservoir.ambient_exchange;
+  assert.ok(build({water:JSON.stringify(closed),ambientExchange:f.ambient},2).includes(f.ambient));
+});
+
+test("guided direct textile-water composition requires complete matching motion schedules and physical-instance identity", async function() {
+  const {buildMaterialTextileWaterPolicy:build}=await modulePromise;
+  const f=textileWaterCompositionSources(),baseline=JSON.parse(f.supply);
+  for(const mutate of [
+    value=>{delete value.bindings['lining.L'];},
+    value=>{value.bindings.extra=value.bindings['front.R'];},
+    value=>{value.bindings.front=value.bindings['front.R'];delete value.bindings['front.R'];},
+    value=>{value.bindings=[];},
+    value=>{value.bindings['front.R']=null;},
+    value=>{value.bindings['front.R'].rate_kg_m2_s=[1];},
+    value=>{value.bindings['lining.L'].temperature_c=[20,20,20];},
+    value=>{value.bindings['lining.L'].rate_kg_m2_s=1;},
+  ]) {
+    const supply=structuredClone(baseline);mutate(supply);
+    assert.throws(()=>build({water:f.water,supply:JSON.stringify(supply)},2),/bindings|instances|interval/i);
+  }
+  const renamed=f.water.replaceAll('front.R','__proto__'),supply=f.supply.replaceAll('front.R','__proto__');
+  const value=JSON.parse(build({water:renamed,supply},2));
+  assert.equal(Object.hasOwn(value.bindings,'__proto__'),true);assert.equal(Object.hasOwn(value.supply.bindings,'__proto__'),true);
+  const water=JSON.parse(f.water);water.vapor_reservoir.schema='ftx-textile-vapor-reservoir/2';
+  delete water.vapor_reservoir.ambient_exchange;water.vapor_reservoir.ambient_exchange_by_interval=[JSON.parse(f.ambient)];
+  assert.throws(()=>build({water:JSON.stringify(water),supply:f.supply},2),/one source per saved motion interval/);
+  const schedule='['+f.ambient+','+f.ambient+']';
+  assert.doesNotThrow(()=>build({water:JSON.stringify(water),ambientExchangeByInterval:schedule},2));
+});
+
+test("guided direct textile-water composition refuses incompatible schemas and ambiguous source modes", async function() {
+  const {buildMaterialTextileWaterPolicy:build}=await modulePromise;
+  const f=textileWaterCompositionSources(),schedule='['+f.ambient+','+f.ambient+']';
+  for(const version of [1,6])assert.throws(()=>build({water:f.water.replace('surface-water/5','surface-water/'+version),supply:f.supply},2),/version/);
+  for(const version of [2,3,4])assert.throws(()=>build({water:f.water.replace('surface-water/5','surface-water/'+version),ambientExchange:f.ambient},2),/water \/5/);
+  assert.throws(()=>build({water:f.water,ambientExchange:f.ambient,ambientExchangeByInterval:schedule},2),/not both/);
+  for(const raw of ['null','[]','{}','[null,null]','['+f.ambient+']','['+f.ambient+','+f.ambient+','+f.ambient+']',
+    '[{"schema":"wrong"},{"schema":"wrong"}]'])assert.throws(()=>build({water:f.water,ambientExchangeByInterval:raw},2),/array|interval|source/i);
+  for(const raw of ['null','[]','{}'])assert.throws(()=>build({water:f.water,ambientExchange:raw},2),/object|source/);
+  for(const mutate of [
+    value=>{delete value.vapor_reservoir;},value=>{value.vapor_reservoir=null;},
+    value=>{value.vapor_reservoir.schema='unsupported';},
+    value=>{value.vapor_reservoir.ambient_exchange_by_interval=[];},
+    value=>{value.vapor_reservoir.schema='ftx-textile-vapor-reservoir/2';},
+  ]) {
+    const water=JSON.parse(f.water);mutate(water);
+    assert.throws(()=>build({water:JSON.stringify(water),ambientExchange:f.ambient},2),/reservoir|storage|ambient|object/i);
+  }
+  for(const raw of ['null','[]','{}',f.donor.replace('reservoir/1','reservoir/2')])assert.throws(()=>build({water:f.water,finiteReservoir:raw},2));
+  const supply=JSON.parse(f.supply);supply.finite_reservoir=null;
+  assert.throws(()=>build({water:f.water,supply:JSON.stringify(supply),finiteReservoir:f.donor},2),/supply \/1/);
+  supply.schema='ftx-textile-liquid-supply/2';
+  assert.throws(()=>build({water:f.water,supply:JSON.stringify(supply)},2),/finite donor/);
+  for(const input of [{water:f.water,supply:null},{water:f.water,finiteReservoir:{}},{water:f.water,ambientExchange:undefined},
+    {water:f.water,surface_water_alternatives:'[{}]'},{surface_water:f.water}])assert.throws(()=>build(input,2));
+  for(const count of [0,17,1.5,NaN,Infinity,'2',undefined])assert.throws(()=>build({water:f.water,supply:f.supply},count),/interval/);
+});
+
+test("guided direct textile-water composition rejects duplicate JSON members at every source depth", async function() {
+  const {buildMaterialTextileWaterPolicy:build}=await modulePromise;
+  const f=textileWaterCompositionSources();
+  const duplicate='{"reference":"one","ref\\u0065rence":"two"}';
+  const root=f.water.replace('"schema":"ftx-textile-surface-water/5"',
+    '"schema":"ftx-textile-surface-water/5","sch\\u0065ma":"ftx-textile-surface-water/5"');
+  assert.throws(()=>build({water:root},2),/duplicate JSON member/);
+  assert.throws(()=>build({water:f.water.replace(f.waterSource,duplicate),supply:f.supply},2),/duplicate JSON member/);
+  const nested=f.water.replace('"nested":[{"same":1},{"same":2}]','"nested":[{"same":1,"s\\u0061me":2}]');
+  assert.throws(()=>build({water:nested,ambientExchange:f.ambient},2),/duplicate JSON member/);
+  for(const [key,raw] of [['supply',f.supply],['finiteReservoir',f.donor],['ambientExchange',f.ambient]]) {
+    const ambiguous=raw.replace('"source":{','"source":{"reference":"duplicate",');
+    assert.throws(()=>build({water:f.water,[key]:ambiguous},2),/duplicate JSON member/,key);
+  }
+  const ambient=f.ambient.replace('"source":{','"source":{"reference":"duplicate",');
+  assert.throws(()=>build({water:f.water,ambientExchangeByInterval:'['+f.ambient+','+ambient+']'},2),/duplicate JSON member/);
+  const badSupply=f.supply.replace('"source":{','"source":{"reference":"duplicate",');
+  assert.throws(()=>build({water:f.water.replace(f.supply,badSupply),supply:f.supply},2),/duplicate JSON member/,'Replacing a field must not hide an ambiguous original');
+  assert.doesNotThrow(()=>build({water:f.water,supply:f.supply},2),'Repeated names in different objects and quoted JSON punctuation remain valid');
+});
+
+test("guided direct textile-water composition bounds all source bytes nesting and composed output", async function() {
+  const {buildMaterialTextileWaterPolicy:build}=await modulePromise;
+  const f=textileWaterCompositionSources(),maximum=16*1024*1024;
+  const nested='{"source":'+'['.repeat(128)+'0'+']'.repeat(128)+'}';
+  assert.throws(()=>build({water:nested},1),/128 levels/);
+  const water=JSON.stringify({schema:'ftx-textile-surface-water/2',bindings:{sheet:{}},supply:{
+    schema:'ftx-textile-liquid-supply/1',bindings:{sheet:{rate_kg_m2_s:[0],temperature_c:[20]}}}});
+  const donor='{"schema":"ftx-textile-liquid-reservoir/1"}';
+  assert.throws(()=>build({water:water+' '.repeat(maximum-water.length),finiteReservoir:donor},1),/16 MiB combined/);
+  assert.throws(()=>build({water:water+' '.repeat(maximum-water.length-donor.length),finiteReservoir:donor},1),/Composed.*16 MiB/);
+  for(const raw of ['', '{', 'null', '[]'])assert.throws(()=>build({water:raw},1));
+  assert.equal(build({water:f.water},2),f.water,'A refusal does not retain mutated source state');
+});
+
+test("guided direct textile-water composition survives authored motion named cases and frozen replay", async function() {
+  const {buildMaterialTextileWaterPolicy:build,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const f=textileWaterCompositionSources(),schedule=' [\r\n'+f.ambient+','+f.ambient+']\r\n';
+  const composed=build({water:f.water,finiteReservoir:f.donor,ambientExchangeByInterval:schedule},2);
+  const heat=dryMotionHeat();heat.boundaries.push({...heat.boundaries[0],outside_c:10});
+  const motion={...motionState(),keyframes:[...motionState().keyframes,{time_s:0.5,arm_abduction_deg:35}],transient_surface:heat};
+  const scenario=single({...scenarioState(),motion,motionLiquid:{surface_water:composed},maxMotionTrials:1024,maxVertexFrames:16000000});
+  assert.ok(scenario.includes(composed));assert.ok(scenario.includes(schedule));assert.ok(scenario.includes(f.donor));
+  assert.match(scenario,/18446744073709551615/);assert.match(scenario,/"initial_liquid_kg_m2":1\.25000e-2/);
+  const named=matrix({maxEvaluations:2,cases:[{key:'finite source',scenario}]});
+  assert.ok(named.includes(scenario));assert.deepEqual(JSON.parse(named).cases[0].scenario.motion.transient_surface.surface_water,JSON.parse(composed));
+  const frozen=named;motion.keyframes[0].time_s=0.2;heat.boundaries[0].outside_c=99;
+  build({water:f.water,supply:f.supply},2);assert.equal(named,frozen);
 });
