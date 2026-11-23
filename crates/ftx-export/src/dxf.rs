@@ -127,24 +127,26 @@ fn checked_turn_and_curve_points(
         }
         if spacing.is_finite() && spacing > 0.0 {
             let stop = total - spacing * 0.5;
-            let count = ((stop - spacing) / spacing).ceil();
-            if !count.is_finite() || count > MAX_CURVE_POINTS as f64 {
-                return Err(Refusal::new(
-                    RefusalCode::OutOfRange,
-                    format!(
-                        "DXF curve run ({total} mm) exceeds the {MAX_CURVE_POINTS}-point limit at {spacing} mm spacing"
-                    ),
-                ));
-            }
-            if count > 0.0 {
-                if curves.len().saturating_add(count as usize) > MAX_CURVE_POINTS {
+            if stop > spacing {
+                let count = ((stop - spacing) / spacing).ceil();
+                if !count.is_finite() || count > MAX_CURVE_POINTS as f64 {
                     return Err(Refusal::new(
                         RefusalCode::OutOfRange,
-                        format!("DXF curve points exceed the {MAX_CURVE_POINTS}-point limit"),
+                        format!(
+                            "DXF curve run ({total} mm) exceeds the {MAX_CURVE_POINTS}-point limit at {spacing} mm spacing"
+                        ),
                     ));
                 }
-                for s in ftx_core::np::arange(spacing, stop, spacing) {
-                    curves.push(ftx_core::polyline::at_fractions(&run, &[s / total])[0]);
+                if count > 0.0 {
+                    if curves.len().saturating_add(count as usize) > MAX_CURVE_POINTS {
+                        return Err(Refusal::new(
+                            RefusalCode::OutOfRange,
+                            format!("DXF curve points exceed the {MAX_CURVE_POINTS}-point limit"),
+                        ));
+                    }
+                    for s in ftx_core::np::arange(spacing, stop, spacing) {
+                        curves.push(ftx_core::polyline::at_fractions(&run, &[s / total])[0]);
+                    }
                 }
             }
         }
@@ -948,6 +950,16 @@ mod tests {
             assert!(!turns.is_empty());
             assert!(curves.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
         }
+
+        // Huge finite spacing larger than every run yields zero arange samples without error.
+        let (turns_huge, curves_huge) =
+            checked_turn_and_curve_points(&ring, true, 15.0, f64::MAX).unwrap();
+        assert!(!turns_huge.is_empty());
+        assert!(
+            curves_huge
+                .iter()
+                .all(|p| p.x.is_finite() && p.y.is_finite())
+        );
 
         // Tiny spacing or huge scale must refuse / stay bounded instead of OOMing in np::arange.
         let err = checked_turn_and_curve_points(&ring, true, 15.0, 1e-9).unwrap_err();
