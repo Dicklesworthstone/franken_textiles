@@ -83,7 +83,7 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
       <div className="sd-viewbar">{failedCut === cut ? <><p role="status">Recorded construction · 3D unavailable</p>
         <button type="button" onClick={()=>setFailedCut(null)}>Retry 3D</button></> : <><div>{cameras.map(preset =>
         <button key={preset} aria-pressed={view.preset === preset} onClick={() => setView({ preset })}>{preset}</button>)}</div>
-        <p>Drag to turn · scroll to zoom</p></>}</div>
+        <p>Drag to turn · scroll to zoom · right-drag to move</p></>}</div>
     </div>
     <div className="sd-sewn-text"><p className="kicker">From flat pattern to sewn dress</p><h3>{cuts[cut].name}</h3>
       <p>Follow the shoulders, side seams and waist as the solver joins the four pieces. Use <b>Waist profile</b> to inspect the folds from the side.</p>

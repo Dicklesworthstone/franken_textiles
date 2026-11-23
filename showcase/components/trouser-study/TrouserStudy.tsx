@@ -101,7 +101,7 @@ export default function TrouserStudy({study}:{study:Study}){
           {visible&&gpu?<Scene model={visible} plane={cut?y:null} clip={cut&&clip} strain={strain&&!cut} view={view} step={step} onError={()=>setGpu(false)}/>:
             <div className="ts-placeholder"><img src="/media/trouser-form.jpg" alt="Reference rendering of the standing trouser study"/><span role="status">{error||(!gpu?"Recorded view · WebGL unavailable":"Loading surface…")}</span></div>}
           <div className="ts-cameras" aria-label="Camera">{["Three-quarter","Profile","Back"].map((name,i)=><button key={name} aria-pressed={view===i} onClick={()=>setView(i)}>{name}</button>)}</div>
-        </div><figcaption><span>{cut?"Section plane shown at scale":strain?"Native endpoint strain":"Native garment surface"}</span><span>Drag to orbit</span></figcaption></figure>
+        </div><figcaption><span>{cut?"Section plane shown at scale":strain?"Native endpoint strain":"Native garment surface"}</span><span>Drag to turn · scroll to zoom · right-drag to move</span></figcaption></figure>
         <aside className="ts-panel">
           <h2>{cut?"Inside the folds":station==="Elastic"?"At the waistband":"Bend the knees"}</h2>
           <p>{cut?"Move a horizontal plane through the form. Each line traces its intersection with a real mesh.":station==="Elastic"?"Change the axial stiffness of the elastic casings. The waist and both cuffs use the same value.":"Compare the sewn trousers on the same 92 cm figure. In the quarter squat, the hips bend 25° and the knees bend 27.5°."}</p>

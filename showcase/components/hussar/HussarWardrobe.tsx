@@ -33,7 +33,7 @@ export default function HussarWardrobe(){
         <Scene regiment={regiment} layer={layer} framing={framing} section={section} layout={layout} onFailure={failure} onPiece={readPiece}/>}
       <span className="hu-plate">{layer==="Dressed"?"Costume reconstruction":"Pattern study · "+layer}</span>
       <span className="hu-tag">{layer!=="Dressed"?layer+" · "+section:regiment==="Compare"?"Putbus, 1761 · Wrangel, 1765":regiment==="Blue"?"Putbus’s Blue Hussars · 1761":"Wrangel’s Yellow Hussars · 1765"}</span>
-    </div>{!failed&&<div className="costume-camera"><span>Drag to turn · Scroll to zoom</span>
+    </div>{!failed&&<div className="costume-camera"><span>Drag to turn · scroll to zoom · right-drag to move</span>
       {options("Viewpoint",layer==="Dressed"?["Uniform","Bust","Chest","Side","Reverse"] as const:["Uniform","Chest","Side","Reverse"] as const,framing.preset,preset=>setFraming({preset}))}</div>}</div>
     <aside className="costume-settings"><p className="kicker">{layer==="Dressed"?"Swedish Pomerania":"The cutting table"}</p>
       <h2 id="costume-heading">{layer==="Dressed"?"In full dress.":layer+" pattern."}</h2>

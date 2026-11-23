@@ -565,7 +565,7 @@ export default function SewingOrderLab() {
               <div className="so-legend">
                 <span><i className="lg-3d-a" /> Cyan: Side A</span>
                 <span><i className="lg-3d-b" /> Gold: Side B</span>
-                <span>Drag to orbit · Scroll to zoom</span>
+                <span>Drag to turn · scroll to zoom · right-drag to move</span>
               </div>
             </section>
           </div>

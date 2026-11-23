@@ -3,6 +3,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { fullControls } from "./viewControls";
 import { PlaybackMark } from "../InlineFilm";
 import { replayAsset } from "../replayAsset";
 import {cuttingTable,sampleIndex} from "../construction/replay";
@@ -161,8 +162,10 @@ export default function SolverDrape(props: SolverDrapeProps) {
     surface.appendChild(el);
     const scene = new T.Scene(), camera = new T.OrthographicCamera(-1, 1, 1, -1, 0.05, 12);
     const orbit = new OrbitControls(camera, el);
-    orbit.enablePan = false; orbit.minZoom = 0.6; orbit.maxZoom = 5; orbit.rotateSpeed = 0.72;
-    orbit.minPolarAngle = 0.9; orbit.maxPolarAngle = 1.85;
+    orbit.minZoom = 0.6; orbit.maxZoom = 5; orbit.rotateSpeed = 0.72;
+    orbit.minPolarAngle = 0.3; orbit.maxPolarAngle = 1.85;
+    // Hands the camera back to the film; set once the recording has loaded.
+    let followAgain = () => {};
     const studio = lightStudio(renderer, scene, "warm");
     const form = formMaterial(undefined, { inset: FORM_INSET }), body = new T.BufferGeometry();
     const disposables: { dispose(): void }[] = [];
@@ -177,7 +180,7 @@ export default function SolverDrape(props: SolverDrapeProps) {
       camera.updateProjectionMatrix();
     };
     function orient(yaw: number, target: number, half: number, wide = 0.34, elevation = 0.07, x=stand.x, z=stand.z) {
-      span = half; reach = wide; camera.zoom = 1; project(); orbit.target.set(x, stand.y + target, z);
+      span = half; reach = wide; camera.zoom = 1; project(); orbit.target.set(x, stand.y + target, z); view3d.retarget(orbit.target);
       camera.position.set(4 * Math.sin(yaw) * Math.cos(elevation), 4 * Math.sin(elevation), 4 * Math.cos(yaw) * Math.cos(elevation)).add(orbit.target);
       orbit.update(); draw();
     }
@@ -204,6 +207,7 @@ export default function SolverDrape(props: SolverDrapeProps) {
     const observer = new ResizeObserver(resize); observer.observe(surface); resize();
     orbit.addEventListener("change", draw); orbit.addEventListener("start", took);
     el.addEventListener("keydown", keydown); el.addEventListener("webglcontextlost", lost);
+    const view3d = fullControls(orbit, el, { paint: draw, home: () => followAgain() });
     const pose: Pose = (yaw, targetCm, spanCm) => { steered = true; orient(yaw, targetCm / 100, spanCm / 100); };
     if (captureHook && new URLSearchParams(location.search).has("capture")) window[captureHook] = pose;
 
@@ -386,11 +390,12 @@ export default function SolverDrape(props: SolverDrapeProps) {
       // Draw the opening frame straight away, so the finished garment does not flash before the flat cut.
       const opening = startsFinished() ? frameCount - 1 : 0;
       latest.current = { ...latest.current, frame: opening };
+      followAgain = () => { steered = false; shownFrame = -1; change(); };
       apply.current = change; change(); setFrame(opening); setInfo(drape);
     }).catch(() => { if (!signal.aborted) fail.current(); });
     return () => {
       abort.abort(); apply.current = null; if (captureHook && window[captureHook] === pose) delete window[captureHook];
-      observer.disconnect(); orbit.removeEventListener("change", draw); orbit.removeEventListener("start", took); orbit.dispose();
+      observer.disconnect(); view3d.dispose(); orbit.removeEventListener("change", draw); orbit.removeEventListener("start", took); orbit.dispose();
       el.removeEventListener("keydown", keydown); el.removeEventListener("webglcontextlost", lost);
       for (const item of disposables) item.dispose();
       body.dispose(); form.dispose(); studio.dispose(); renderer.dispose(); renderer.forceContextLoss(); el.remove();

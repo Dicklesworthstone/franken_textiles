@@ -5,6 +5,7 @@ import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createGarmentMesh, type Exhibit, type StudioMode } from "./garmentMesh";
 import { formMaterial, lightStudio, prepareRenderer } from "./atelier3d/studio";
+import { fullControls } from "./atelier3d/viewControls";
 import { replayAsset } from "./replayAsset";
 
 type Props = {
@@ -78,7 +79,7 @@ export default function DrapeRoomScene(props: Props) {
     catch {latest.current.onError(latest.current.run);return;}
     const canvas=renderer.domElement;
     canvas.tabIndex=0; canvas.setAttribute("role","img");
-    canvas.setAttribute("aria-label","Bolero on its fitted Anny form. Drag or use left and right arrows to turn. Pinch or use plus and minus to zoom. Home resets the camera.");
+    canvas.setAttribute("aria-label","Bolero on its fitted Anny form. Drag or use the arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Home resets the camera.");
     el.append(canvas);
     renderer.setClearColor(0,0);
     prepareRenderer(renderer); renderer.localClippingEnabled=true;
@@ -86,10 +87,8 @@ export default function DrapeRoomScene(props: Props) {
     const studio=lightStudio(renderer,scene,"warm");
     const camera=new T.OrthographicCamera(-1,1,1,-1,.02,6);
     const controls=new OrbitControls(camera,canvas);
-    canvas.style.touchAction="pan-y";
-    controls.enablePan=false;controls.enableZoom=false; // A wheel over the landing page still scrolls.
-    controls.minPolarAngle=.65;controls.maxPolarAngle=1.73;
-    controls.touches.ONE=T.TOUCH.ROTATE;
+    controls.minZoom=.7;controls.maxZoom=4;
+    controls.minPolarAngle=.2;controls.maxPolarAngle=1.73; // From above, never from under the floor.
     // The body is a tailor's form in the fitted body's own shape. Nothing is painted onto it.
     const plaster=formMaterial(undefined,{inset:.0025});
     const bust=plaster.clone();
@@ -115,7 +114,7 @@ export default function DrapeRoomScene(props: Props) {
     let loaded="", reset=latest.current.reset;
     let w=1,h=1;
     function home(){
-      camera.zoom=1;controls.target.set(0,.178,.065);
+      camera.zoom=1;controls.target.set(0,.177,.065);
       camera.position.set(.55,.42,1.8);camera.updateProjectionMatrix();controls.update();
     }
     function render(){
@@ -128,8 +127,6 @@ export default function DrapeRoomScene(props: Props) {
       if(reset!==nextReset){reset=nextReset;home();}
       const t=mode==="strain"||mode==="contact"?1:frame/(current.frames-1);
       const opened=Math.max(0,1-t*2.2);
-      const centerY=.177;
-      camera.position.y+=centerY-controls.target.y; controls.target.y=centerY;
       const half=Math.max(.36,(current.halfWidth+opened*.23)/(w/h))+opened*.045;
       camera.top=half;camera.bottom=-half;camera.left=-half*w/h;camera.right=-camera.left;camera.updateProjectionMatrix();
       current.garment.pose(mode,t,false,w/h);
@@ -161,33 +158,16 @@ export default function DrapeRoomScene(props: Props) {
       camera.updateProjectionMatrix();if(!controls.update())render();
     };
     if(new URLSearchParams(location.search).get("capture")==="pose-room")window.ftxPoseCamera=capture;
-    function zoom(value:number){camera.zoom=T.MathUtils.clamp(value,.7,2.8);camera.updateProjectionMatrix();render();}
-    function keys(e:KeyboardEvent){
-      if(e.ctrlKey||e.metaKey||e.altKey)return;
-      if(e.key==="Home")home();
-      else if(e.key==="+"||e.key==="=")zoom(camera.zoom*1.14);
-      else if(e.key==="-")zoom(camera.zoom/1.14);
-      else if(e.key==="ArrowLeft"||e.key==="ArrowRight"){
-        const relative=camera.position.clone().sub(controls.target);
-        relative.applyAxisAngle(new T.Vector3(0,1,0),e.key==="ArrowLeft"?-.14:.14);
-        camera.position.copy(relative).add(controls.target);controls.update();
-      }else return;
-      e.preventDefault();render();
-    }
-    let pinch=0,startZoom=1;
-    const span=(e:TouchEvent)=>Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
-    const start=(e:TouchEvent)=>{if(e.touches.length===2){pinch=span(e);startZoom=camera.zoom;}};
-    const move=(e:TouchEvent)=>{if(e.touches.length===2&&pinch)zoom(startZoom*span(e)/pinch);};
-    const end=()=>{pinch=0;};
     const lost=(e:Event)=>{e.preventDefault();latest.current.onError(latest.current.run);};
     controls.addEventListener("change",render);
-    canvas.addEventListener("keydown",keys);canvas.addEventListener("dblclick",home);canvas.addEventListener("webglcontextlost",lost);
-    canvas.addEventListener("touchstart",start,{passive:true});canvas.addEventListener("touchmove",move,{passive:true});canvas.addEventListener("touchend",end);
-    home();resize();
+    canvas.addEventListener("webglcontextlost",lost);
+    home();
+    // Turning, moving, zooming, the keys and the reset are the site's shared ones.
+    const view=fullControls(controls,canvas,{paint:render,home,turnKeys:true});
+    resize();
     return ()=>{
-      request?.abort();observer.disconnect();controls.removeEventListener("change",render);controls.dispose();
-      canvas.removeEventListener("keydown",keys);canvas.removeEventListener("dblclick",home);canvas.removeEventListener("webglcontextlost",lost);
-      canvas.removeEventListener("touchstart",start);canvas.removeEventListener("touchmove",move);canvas.removeEventListener("touchend",end);
+      request?.abort();observer.disconnect();view.dispose();controls.removeEventListener("change",render);controls.dispose();
+      canvas.removeEventListener("webglcontextlost",lost);
       current?.dispose();empty.dispose();bust.dispose();plaster.dispose();ground.geometry.dispose();groundMaterial.dispose();
       pedestal.children.forEach(m=>(m as T.Mesh).geometry.dispose());brass.dispose();lacquer.dispose();studio.dispose();
       renderer.dispose();renderer.forceContextLoss();canvas.remove();draw.current=()=>{};change.current=()=>{};

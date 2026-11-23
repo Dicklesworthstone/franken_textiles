@@ -7,6 +7,7 @@ import * as T from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 import {finishEdges,linenCover} from "./textiles";
 import {ClothShell} from "../atelier3d/cloth";
+import {fullControls} from "../atelier3d/viewControls";
 import {cuttingTable,sewingFrame,type SewingPhases} from "../construction/replay";
 
 export type Surface="Check"|"Linen"|"Print"|"Panels"|"Strain"|"Hems";
@@ -42,20 +43,22 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
     const el=host.current!,key=cut+"-"+waist,abort=new AbortController();
     let renderer:T.WebGLRenderer;
     try{renderer=new T.WebGLRenderer({alpha:true,antialias:true,powerPreference:"low-power"});}catch{fail(key);return;}
-    renderer.setPixelRatio(capturePixelRatio(1.65));renderer.setClearColor(0,0);
+    renderer.setPixelRatio(capturePixelRatio(2));renderer.setClearColor(0,0);
     renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
     renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFSoftShadowMap;
     const canvas=renderer.domElement;el.append(canvas);canvas.tabIndex=0;
-    canvas.setAttribute("role","img");canvas.setAttribute("aria-label","Six-gore skirt on a fitted adult dress form. Drag or use the arrow keys to turn the form.");
+    canvas.setAttribute("role","img");canvas.setAttribute("aria-label","Six-gore skirt on a fitted adult dress form. Drag or use the arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Home resets the view.");
     const scene=new T.Scene(),camera=new T.OrthographicCamera(-1,1,1,-1,.01,10);
-    const controls=new OrbitControls(camera,canvas);controls.enablePan=false;controls.enableZoom=true;controls.minZoom=1;controls.maxZoom=2.4;
-    controls.minPolarAngle=dressForm?1.16:1.44;controls.maxPolarAngle=dressForm?1.7:1.60;controls.target.set(0,dressForm?-.035:-.205,0);
-    const cameraAt=(angle:number)=>{camera.position.set(Math.sin(angle)*2,controls.target.y+.10,Math.cos(angle)*2);controls.update();};
+    const controls=new OrbitControls(camera,canvas);controls.minZoom=.7;controls.maxZoom=4;
+    controls.minPolarAngle=.5;controls.maxPolarAngle=1.7;controls.target.set(0,dressForm?-.035:-.205,0); // Never from under the floor.
+    // The point the camera was last aimed at for the frame on show; the visitor moves the view from there.
+    const aim=controls.target.clone();
+    const cameraAt=(angle:number)=>{camera.position.set(controls.target.x+Math.sin(angle)*2,controls.target.y+.10,controls.target.z+Math.cos(angle)*2);controls.update();};
     cameraAt(.33);
     const paint=()=>renderer.render(scene,camera);
     controls.addEventListener("change",paint);
-    const keydown=(e:KeyboardEvent)=>{if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();cameraAt(controls.getAzimuthalAngle()+(e.key==="ArrowLeft"?-.15:.15));}};
-    canvas.addEventListener("keydown",keydown);
+    const home=()=>{camera.zoom=1;camera.updateProjectionMatrix();controls.target.copy(aim);cameraAt(.33);};
+    const look=fullControls(controls,canvas,{paint,home,turnKeys:true});
     let board:T.Box3|null=null;
     const resize=()=>{const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
       const a=w/h,normal=closeup.current?Math.max(.205,.23/a):dressForm?Math.max(.744,.34/a):Math.max(.432,.295/a);
@@ -64,11 +67,10 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
       Object.assign(camera,{left:-half*a,right:half*a,top:half,bottom:-half});
       camera.updateProjectionMatrix();renderer.setSize(w,h,false);paint();};
     reframe.current=()=>{const focus=board?.getCenter(new T.Vector3())??new T.Vector3(0,closeup.current ? .068 : dressForm ? -.035 : -.205,0);
-      camera.position.add(focus.clone().sub(controls.target));controls.target.copy(focus);camera.zoom=1;controls.update();resize();};
+      // Follow the subject, keeping however far the visitor has moved and zoomed the view.
+      const shift=focus.clone().sub(aim);camera.position.add(shift);controls.target.add(shift);aim.copy(focus);look.retarget(aim);controls.update();resize();};
     reframe.current();
     const observer=new ResizeObserver(resize);observer.observe(el);resize();
-    const scrollPage=(e:WheelEvent)=>{if(document.activeElement!==canvas&&!e.ctrlKey)e.stopImmediatePropagation();};
-    canvas.addEventListener("wheel",scrollPage,{capture:true,passive:true});
     scene.add(new T.HemisphereLight(0xfff7ee,0x797166,.82));
     const keyLight=new T.DirectionalLight(0xffecd9,2.6);keyLight.position.set(-1.75,1.65,1.1);
     keyLight.castShadow=true;keyLight.shadow.mapSize.set(1024,1024);
@@ -217,7 +219,7 @@ export default function Scene({cut,waist,patternStem,surface,step,detail,dressFo
       if(new URLSearchParams(location.search).has("capture"))window.ftxSkirtCamera=cameraAt;
     }).catch(()=>{if(!signal.aborted)fail(key);});
     return ()=>{abort.abort();refresh.current=null;reframe.current=null;if(window.ftxSkirtCamera===cameraAt)delete window.ftxSkirtCamera;
-      canvas.removeEventListener("webglcontextlost",lose);canvas.removeEventListener("keydown",keydown);canvas.removeEventListener("wheel",scrollPage,true);observer.disconnect();controls.dispose();
+      canvas.removeEventListener("webglcontextlost",lose);observer.disconnect();look.dispose();controls.dispose();
       geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());maps.forEach(t=>t.dispose());renderer.dispose();renderer.forceContextLoss();canvas.remove();};
   },[cut,waist,patternStem,dressForm,alternateHem,ready,fail]);
   return <div className="sa-canvas" ref={host}/>;

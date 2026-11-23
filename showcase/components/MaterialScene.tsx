@@ -5,6 +5,7 @@ import { capturePixelRatio } from "./atelier3d/capture-resolution";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { fullControls } from "./atelier3d/viewControls";
 import type { Experiment, Specimen } from "./materialExperiments";
 
 declare global { interface Window { ftxRigView?: (yaw: number) => void } }
@@ -143,7 +144,7 @@ export default function MaterialScene({ data, step, mesh, focus, camera, onFailu
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFShadowMap;
     const el = renderer.domElement;
     surface.appendChild(el); el.tabIndex=0; el.setAttribute("role","img");
-    el.setAttribute("aria-label", "3D material experiment. Drag or use arrow keys to orbit. Use plus and minus to zoom.");
+    el.setAttribute("aria-label", "3D material experiment. Drag or use the arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Zero resets the view.");
     const scene = new T.Scene();
     const generator = new T.PMREMGenerator(renderer), room = new RoomEnvironment();
     const environment = generator.fromScene(room, .04); scene.environment = environment.texture; scene.environmentIntensity=.75;
@@ -151,14 +152,16 @@ export default function MaterialScene({ data, step, mesh, focus, camera, onFailu
     const targetY = tubular ? 23 : 47;
     const cam = new T.OrthographicCamera(-90,90,90,-90,.1,2400);
     const orbit = new OrbitControls(cam, el);
-    orbit.target.set(0,targetY,0); orbit.enablePan=false; orbit.minZoom=.6; orbit.maxZoom=3;
+    orbit.target.set(0,targetY,0); orbit.minZoom=.6; orbit.maxZoom=5;
     const draw = () => { renderer.render(scene,cam); };
     function orient(yaw: number, elevation: number) {
-      cam.position.set(450*Math.sin(yaw)*Math.cos(elevation), targetY+450*Math.sin(elevation), 450*Math.cos(yaw)*Math.cos(elevation));
+      // About the target, which the visitor may have moved.
+      cam.position.set(450*Math.sin(yaw)*Math.cos(elevation), 450*Math.sin(elevation), 450*Math.cos(yaw)*Math.cos(elevation)).add(orbit.target);
       if(!orbit.update()) draw();
     }
     const home = tubular ? .52 : .15;
     orient(home,.24);
+    const look = fullControls(orbit, el, { paint: draw });
     scene.add(new T.HemisphereLight(0xffe9cd,0x737e81,.85));
     const key = new T.DirectionalLight(0xffead3,2.35);
     key.position.set(-190,140,75); key.castShadow=true; key.shadow.mapSize.set(1024,1024);
@@ -195,6 +198,7 @@ export default function MaterialScene({ data, step, mesh, focus, camera, onFailu
       key.shadow.needsUpdate=true;
       if (view.revision !== last) {
         last=view.revision; cam.zoom=view.name==="Fabric detail"?(tubular?1.7:1.5):1; cam.updateProjectionMatrix();
+        orbit.target.set(0,targetY,0);   // a named view starts from the rig's centre again
         const yaw=view.name==="Perspective"?home:view.name==="Fabric detail"?-.19:view.name==="Top"&&!tubular?Math.PI:0;
         orient(yaw,view.name==="Top"&&tubular?1.53:view.name==="Fabric detail"?.10:view.name==="Perspective"?.24:0);
       }
@@ -218,7 +222,7 @@ export default function MaterialScene({ data, step, mesh, focus, camera, onFailu
     resize();
     return () => {
       alive=false;update.current=null; if(window.ftxRigView===capture) delete window.ftxRigView;
-      observer.disconnect(); orbit.removeEventListener("change",draw);orbit.dispose();
+      observer.disconnect(); look.dispose(); orbit.removeEventListener("change",draw);orbit.dispose();
       el.removeEventListener("keydown",keydown);el.removeEventListener("webglcontextlost",lost);
       const resources=new Set<T.BufferGeometry | T.Material | T.Texture>();
       scene.traverse(o=>{if(o instanceof T.Mesh||o instanceof T.Line){resources.add(o.geometry);for(const m of [o.material].flat()){

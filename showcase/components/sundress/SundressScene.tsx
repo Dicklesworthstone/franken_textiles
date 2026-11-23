@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { capturePixelRatio } from "../atelier3d/capture-resolution";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { fullControls } from "../atelier3d/viewControls";
 import { buildDress } from "./model";
 import { registerDress } from "./registration";
 import { loadSundressBody } from "../fittedBody";
@@ -50,16 +51,16 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     let renderer:T.WebGLRenderer;
     try{renderer=new T.WebGLRenderer({antialias:true,alpha:true,powerPreference:"low-power",preserveDrawingBuffer:false});}
     catch{latest.current.onError();return;}
-    renderer.setPixelRatio(capturePixelRatio(1.65));renderer.outputColorSpace=T.SRGBColorSpace;
+    renderer.setPixelRatio(capturePixelRatio(2));renderer.outputColorSpace=T.SRGBColorSpace;
     renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=.94;
     renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFShadowMap;
     const el=renderer.domElement;surface.appendChild(el);el.tabIndex=0;
-    el.setAttribute("role","img");el.setAttribute("aria-label","Fitted adult Anny model wearing a garden sundress. Drag an arm to raise it. Drag the background or press arrow keys to orbit. Use plus and minus to zoom.");
+    el.setAttribute("role","img");el.setAttribute("aria-label","Fitted adult Anny model wearing a garden sundress. Drag an arm to raise it. Drag the background or press the arrow keys to turn the figure, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Zero resets the view.");
     const scene=new T.Scene(),camera=new T.OrthographicCamera(-100,100,100,-100,1,1800);
     camera.position.set(112,100,300);
     const controls=new OrbitControls(camera,el);
-    controls.target.set(0,88,0);controls.enablePan=false;controls.minZoom=.68;controls.maxZoom=3;
-    controls.minPolarAngle=Math.PI*.23;controls.maxPolarAngle=Math.PI*.65;controls.update();
+    controls.target.set(0,88,0);controls.minZoom=.68;controls.maxZoom=5;
+    controls.minPolarAngle=Math.PI*.08;controls.maxPolarAngle=Math.PI*.65;controls.update();
     scene.add(new T.HemisphereLight(0xfff4e3,0xa9b6c4,1.83));
     const light=new T.DirectionalLight(0xfff0e2,2.08);light.position.set(-115,240,165);light.target.position.set(0,75,0);
     light.shadow.mapSize.set(2048,2048);light.castShadow=true;
@@ -90,17 +91,26 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     redraw.current=()=>{
       const {form,view}=latest.current;latest.current.onReadings(fit(form));
       if(lastView!==view){
-        const base=view==="Bodice"?137:view==="Side seam"?115:89,delta=base-controls.target.y;
-        controls.target.y+=delta;camera.position.y+=delta;camera.zoom=view==="Full length"?1:2.4;
+        // A named view starts from the figure's axis again, wherever the visitor had moved the view.
+        const base=view==="Bodice"?137:view==="Side seam"?115:89,delta=new T.Vector3(0,base,0).sub(controls.target);
+        controls.target.add(delta);camera.position.add(delta);camera.zoom=view==="Full length"?1:2.4;
         if(view==="Side seam")camera.position.set(-313,base+15,77);
         else if(lastView==="Side seam")camera.position.set(112,base+13,300);
-        camera.updateProjectionMatrix();controls.update();lastView=view;
+        camera.updateProjectionMatrix();controls.update();look.retarget(controls.target);lastView=view;
       }
       paint();el.dataset.ready="true";
     };
     const mode=(yaw:number,elevation:number)=>{
-      const r=330;camera.position.set(r*Math.sin(yaw)*Math.cos(elevation),controls.target.y+r*Math.sin(elevation),r*Math.cos(yaw)*Math.cos(elevation));if(!controls.update())paint();
+      // About the target, which the visitor may have moved.
+      const r=330;camera.position.set(r*Math.sin(yaw)*Math.cos(elevation),r*Math.sin(elevation),r*Math.cos(yaw)*Math.cos(elevation)).add(controls.target);if(!controls.update())paint();
     };
+    const home=()=>{
+      const view=latest.current.view,base=view==="Bodice"?137:view==="Side seam"?115:89;
+      controls.target.set(0,base,0);camera.zoom=view==="Full length"?1:2.4;
+      if(view==="Side seam")camera.position.set(-313,base+15,77);else camera.position.set(112,base+13,300);
+      camera.updateProjectionMatrix();controls.update();paint();
+    };
+    const look=fullControls(controls,el,{paint,home});
     const capture=(params:Form,yaw:number,zoom=1,targetY=89,portrait=false)=>{
       const readings=fit({...initial,...params});ruler.visible=!portrait;controls.target.y=targetY;camera.zoom=zoom;camera.updateProjectionMatrix();mode(yaw,portrait?.10:.055);return readings;
     };
@@ -141,7 +151,7 @@ export default function SundressScene({form,view,onArm,onError,onReadings}:Props
     resize();redraw.current();
     return ()=>{
       redraw.current=null;if(window.ftxDressFrame===capture)delete window.ftxDressFrame;observer.disconnect();
-      controls.removeEventListener("change",paint);controls.dispose();
+      look.dispose();controls.removeEventListener("change",paint);controls.dispose();
       el.removeEventListener("pointerdown",down,true);el.removeEventListener("pointermove",move);el.removeEventListener("pointerup",up);el.removeEventListener("pointercancel",up);el.removeEventListener("lostpointercapture",up);
       el.removeEventListener("keydown",key);el.removeEventListener("webglcontextlost",lost);
       const resources=new Set<T.BufferGeometry|T.Material|T.Texture>();

@@ -5,6 +5,7 @@ import { capturePixelRatio } from "../atelier3d/capture-resolution";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { fullControls } from "../atelier3d/viewControls";
 import {readStudy,type Framing,type Layer,type Regiment,type RegimentView} from "./RegimentalStudy";
 import {makeMount,selectedPiece,type Ensemble,type Section,type Mount,type PieceReading} from "./PatternMount";
 
@@ -52,7 +53,7 @@ export default function HussarScene({regiment,layer,framing,section,layout,onFai
     const contactGeometry=new T.PlaneGeometry(16.5,34);
     const contacts=new T.Group();scene.add(contacts);
     for(let i=0;i<4;i++){const patch=new T.Mesh(contactGeometry,contactMaterial);patch.rotation.x=-Math.PI/2;contacts.add(patch);}
-    const orbit=new OrbitControls(camera,el);orbit.enablePan=false;orbit.minZoom=.62;orbit.maxZoom=4;orbit.rotateSpeed=.72;
+    const orbit=new OrbitControls(camera,el);orbit.minZoom=.62;orbit.maxZoom=4;orbit.rotateSpeed=.72;
     let height=112,aspect=1,previous:Settings|undefined,pending:Settings|undefined, mounted=true;
     const studies:Partial<Record<Regiment,Awaited<ReturnType<typeof readStudy>>>>={};
     const ensembles:Partial<Record<Regiment,Ensemble>>={}, mounts:ReturnType<typeof makeMount>[]=[];
@@ -71,7 +72,7 @@ export default function HussarScene({regiment,layer,framing,section,layout,onFai
     }
     function project(){camera.left=-height*aspect;camera.right=height*aspect;camera.top=height;camera.bottom=-height;camera.updateProjectionMatrix();}
     function orient(yaw:number,y:number,span:number,elevation=.075) {
-      height=span;project();orbit.target.set(0,y,0);
+      height=span;project();orbit.target.set(0,y,0);look.retarget(orbit.target);
       camera.position.set(360*Math.sin(yaw)*Math.cos(elevation),y+360*Math.sin(elevation),360*Math.cos(yaw)*Math.cos(elevation));
       if(!orbit.update())draw();
     }
@@ -119,16 +120,11 @@ export default function HussarScene({regiment,layer,framing,section,layout,onFai
       previous = next;
       el.dataset.ready = next.regiment + "-" + next.layer;
     }
-    const keydown=(e:KeyboardEvent)=>{
-      if(e.altKey||e.ctrlKey||e.metaKey)return;
-      let a=orbit.getAzimuthalAngle(), b=Math.PI/2-orbit.getPolarAngle();
-      switch(e.key){case "ArrowLeft":a-=.14;break;case "ArrowRight":a+=.14;break;case "ArrowUp":b+=.12;break;case "ArrowDown":b-=.12;break;
-        case "+":case "=":camera.zoom=Math.min(orbit.maxZoom,camera.zoom*1.15);break;case "-":camera.zoom=Math.max(orbit.minZoom,camera.zoom/1.15);break;default:return;}
-      e.preventDefault();orient(a,orbit.target.y,height,T.MathUtils.clamp(b,-1.3,1.3));
-    };
     const failure=(e:Event)=>{e.preventDefault();onFailure();};
+    // Turning, moving, zooming and the keys are the site's shared ones; the reset returns to the chosen viewpoint.
+    const look=fullControls(orbit,el,{paint:draw,turnKeys:true,home:()=>{if(previous)change(previous);}});
     const ro=new ResizeObserver(resize);ro.observe(surface);resize();orbit.addEventListener("change",draw);
-    el.addEventListener("keydown",keydown);el.addEventListener("webglcontextlost",failure);
+    el.addEventListener("webglcontextlost",failure);
     apply.current=change;
     const readPattern=async(reg:string):Promise<Ensemble>=>{
       const response=await fetch("/patterns/hussar-"+reg+".json");
@@ -143,7 +139,7 @@ export default function HussarScene({regiment,layer,framing,section,layout,onFai
     }).catch(()=>{if(mounted)onFailure();});
     if(capture)window.ftxCostumeFrame=orient;
     return ()=>{mounted=false;apply.current=null;if(window.ftxCostumeFrame===orient)delete window.ftxCostumeFrame;
-      ro.disconnect();orbit.removeEventListener("change",draw);orbit.dispose();el.removeEventListener("keydown",keydown);el.removeEventListener("webglcontextlost",failure);
+      ro.disconnect();look.dispose();orbit.removeEventListener("change",draw);orbit.dispose();el.removeEventListener("webglcontextlost",failure);
       clearCuts();Object.values(studies).forEach(s=>s.dispose());wool?.dispose();key.shadow.dispose();floor.geometry.dispose();floor.material.dispose();contactMap.dispose();contactGeometry.dispose();contactMaterial.dispose();lights.dispose();renderer.dispose();renderer.forceContextLoss();el.remove();};
   },[onFailure,onPiece]);
   useEffect(()=>{apply.current?.({regiment,layer,framing,section,layout});},[regiment,layer,framing,section,layout,onFailure]);

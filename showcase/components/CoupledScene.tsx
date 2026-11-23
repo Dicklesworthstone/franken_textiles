@@ -4,6 +4,7 @@ import { replayAsset } from "./replayAsset";
 import {useEffect,useRef} from "react";
 import * as T from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
+import {fullControls} from "./atelier3d/viewControls";
 import joint from "../public/exhibits/poses/ensemble.json";
 import {dressCloth} from "./atelier3d/garment";
 import {fabrics} from "./atelier3d/weave";
@@ -18,16 +19,20 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
     let renderer:T.WebGLRenderer;try{renderer=new T.WebGLRenderer({antialias:true,alpha:true});}catch{onError(joint.case);return;}
     renderer.setClearColor(0,0);prepareRenderer(renderer);
     const canvas=renderer.domElement;el.append(canvas);canvas.tabIndex=0;canvas.setAttribute("role","img");
-    canvas.setAttribute("aria-label","Bolero and trousers sewn together in one cloth-contact simulation. Drag or use arrow keys to turn.");
+    canvas.setAttribute("aria-label","Bolero and trousers sewn together in one cloth-contact simulation. Drag or use the arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Home resets the view.");
     const scene=new T.Scene(),camera=new T.OrthographicCamera(-1,1,1,-1,.01,6);
     const controls=new OrbitControls(camera,canvas);controls.target.set(0,-.056,.067);camera.position.set(.7,.17,1.7);controls.update();
-    controls.enablePan=false;controls.enableZoom=false;controls.minPolarAngle=1.19;controls.maxPolarAngle=1.68;
+    controls.minZoom=.7;controls.maxZoom=4;controls.minPolarAngle=.2;controls.maxPolarAngle=1.73; // Never from under the floor.
     const draw=()=>renderer.render(scene,camera);
-    const key=(e:KeyboardEvent)=>{if(!["ArrowLeft","ArrowRight"].includes(e.key))return;e.preventDefault();
-      const d=camera.position.clone().sub(controls.target).applyAxisAngle(new T.Vector3(0,1,0),e.key==="ArrowLeft"?-.16:.16);
-      camera.position.copy(d.add(controls.target));controls.update();};
     const lost=(e:Event)=>{e.preventDefault();onError(joint.case);};
-    controls.addEventListener("change",draw);canvas.addEventListener("keydown",key);canvas.addEventListener("webglcontextlost",lost);
+    controls.addEventListener("change",draw);canvas.addEventListener("webglcontextlost",lost);
+    // The point the camera was last aimed at for the frame on show; the visitor moves the view from there.
+    const aim=controls.target.clone();
+    const follow=(focus:T.Vector3)=>{
+      const shift=focus.clone().sub(aim);camera.position.add(shift);controls.target.add(shift);aim.copy(focus);view.retarget(aim);controls.update();
+    };
+    const home=()=>{camera.zoom=1;camera.updateProjectionMatrix();controls.target.copy(aim);camera.position.set(.7,.226,1.633).add(aim);controls.update();draw();};
+    const view=fullControls(controls,canvas,{paint:draw,home,turnKeys:true});
     // Half the figure's height and half its width; set from the body once it has loaded, so the whole figure is in view.
     let tall=.359,wide=.31;
     const resize=()=>{const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;const a=w/h,half=Math.max(tall,wide/a);
@@ -47,7 +52,7 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
       studio.frame(body.boundingSphere!.center,body.boundingSphere!.radius);
       const box=body.boundingBox!,middle=box.getCenter(new T.Vector3()),extent=box.getSize(new T.Vector3());
       tall=extent.y*.54;wide=Math.max(extent.x,extent.z)*.56;
-      camera.position.add(new T.Vector3(0,middle.y-controls.target.y,0));controls.target.set(0,middle.y,middle.z);controls.update();resize();
+      follow(new T.Vector3(0,middle.y,middle.z));resize();
       const floor=shadowFloor(body.boundingBox!.min.y-.0005);scene.add(floor.mesh);disposables.push(floor);
       // The first native sample supplies flat pattern coordinates. Bolero vertices come first.
       const packed=new Float32Array(data,8+bn*12+bi*4);
@@ -80,11 +85,12 @@ export default function CoupledScene({frame,onReady,onError}:{frame:number;onRea
         const focus=tracking?board.getCenter(new T.Vector3()):middle;
         const span=tracking?board.getSize(new T.Vector3()):extent;
         tall=Math.max(extent.y*.54,span.y*.58);wide=tracking?Math.hypot(span.x,span.z)*.57:Math.max(extent.x,extent.z)*.56;
-        camera.position.add(focus.clone().sub(controls.target));controls.target.copy(focus);controls.update();resize();
+        // Follow the subject, keeping however far the visitor has moved the view.
+        follow(focus);resize();
         canvas.dataset.nativeFrame=String(index);draw();};
       update.current();canvas.dataset.run=joint.case;canvas.dataset.full="true";canvas.dataset.coupled="true";onReady(joint.case);
     }).catch(()=>{if(!signal.aborted)onError(joint.case);});
-    return ()=>{abort.abort();update.current=()=>{};observer.disconnect();controls.dispose();canvas.removeEventListener("keydown",key);canvas.removeEventListener("webglcontextlost",lost);
+    return ()=>{abort.abort();update.current=()=>{};observer.disconnect();view.dispose();controls.dispose();canvas.removeEventListener("webglcontextlost",lost);
       for(const item of disposables)item.dispose();
       body.dispose();form.dispose();studio.dispose();renderer.dispose();renderer.forceContextLoss();canvas.remove();};
   },[onReady,onError]);

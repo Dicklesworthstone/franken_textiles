@@ -310,7 +310,7 @@ export default function InsideOutLab() {
                 >
                   <div className="io-stage-head">
                     <span>
-                      3D LAYERED GARMENT · DRAG TO ROTATE ALL LAYERS TOGETHER
+                      3D LAYERED GARMENT · DRAG TO TURN · SCROLL TO ZOOM · RIGHT-DRAG TO MOVE
                     </span>
                     <span>
                       SHELL {viewState.radialOffsetMm.shell.toFixed(0)} · FACING{" "}

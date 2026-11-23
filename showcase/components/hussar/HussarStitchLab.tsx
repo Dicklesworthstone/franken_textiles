@@ -608,7 +608,7 @@ export default function HussarStitchLab() {
                     {label}
                   </button>
                 ))}
-                <span className="hs-orbit-tip">Drag to orbit · Scroll to zoom</span>
+                <span className="hs-orbit-tip">Drag to turn · scroll to zoom · right-drag to move</span>
               </div>
             </section>
           </div>

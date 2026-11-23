@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { formMaterial, lightStudio, prepareRenderer, shadowFloor } from "../atelier3d/studio";
+import { fullControls } from "../atelier3d/viewControls";
 
 export type CameraPreset = "right-chest" | "left-chest" | "chest-front" | "full";
 export type RegimentLook = "Blue" | "Yellow";
@@ -91,7 +92,7 @@ export default function DolmanStitchScene({
     canvas.setAttribute("role", "img");
     canvas.setAttribute(
       "aria-label",
-      "Settled 3D 1761 Swedish hussar dolman showing registered Tajima DST embroidery stitches on the chest. Drag or use arrow keys to orbit, scroll or +/- to zoom.",
+      "Settled 3D 1761 Swedish hussar dolman showing registered Tajima DST embroidery stitches on the chest. Drag or use the arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Zero resets the view.",
     );
     surface.appendChild(canvas);
     prepareRenderer(renderer);
@@ -101,13 +102,17 @@ export default function DolmanStitchScene({
     const studio = lightStudio(renderer, scene, "warm");
     const camera = new T.OrthographicCamera(-1, 1, 1, -1, 0.01, 20);
     const orbit = new OrbitControls(camera, canvas);
-    orbit.enablePan = false;
     orbit.minZoom = 0.55;
-    orbit.maxZoom = 4.5;
+    orbit.maxZoom = 6;
     orbit.rotateSpeed = 0.85;
     orbit.zoomSpeed = 0.9;
     orbit.minPolarAngle = 0.12;
     orbit.maxPolarAngle = Math.PI - 0.12;
+    // Moving the view, the wheel, pinch and the reset are the site's shared ones. The reset returns to the chosen preset.
+    const look = fullControls(orbit, canvas, {
+      paint: () => paint(),
+      home: () => { applyCamera(stateRef.current.cameraPreset); paint(); },
+    });
 
     const disposables: { dispose(): void }[] = [];
 
@@ -237,6 +242,7 @@ export default function DolmanStitchScene({
       camera.updateProjectionMatrix();
       const ty = stand.y + cfg.targetY;
       orbit.target.set(stand.x, ty, stand.z + 0.02);
+      look.retarget(orbit.target);
       const r = 2.6;
       const elev = 0.08;
       camera.position.set(
@@ -392,6 +398,7 @@ export default function DolmanStitchScene({
     return () => {
       redrawRef.current = null;
       observer.disconnect();
+      look.dispose();
       orbit.removeEventListener("change", paint);
       canvas.removeEventListener("keydown", onKey);
       canvas.removeEventListener("webglcontextlost", onLost);

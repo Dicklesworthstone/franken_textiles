@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { fullControls } from "./atelier3d/viewControls";
 import { buildPieceOutline, projectWaistcoatPointTo3D } from "../public/labs/waistcoat.mjs";
 
 type SeamRecord = {
@@ -215,6 +217,8 @@ export default function InsideOutScene({
     targetPitch: PRESETS["Three-quarter"].pitch,
     targetDist: PRESETS["Three-quarter"].dist,
     targetTargetY: PRESETS["Three-quarter"].targetY,
+    // The camera is easing to the chosen preset. Cleared when it arrives or the visitor takes the view.
+    flying: false,
   });
   const sceneObjsRef = useRef<{
     renderer: THREE.WebGLRenderer;
@@ -245,6 +249,7 @@ export default function InsideOutScene({
     stateRef.current.targetPitch = p.pitch;
     stateRef.current.targetDist = p.dist;
     stateRef.current.targetTargetY = p.targetY;
+    stateRef.current.flying = true;
   }, [preset]);
 
   // Initialize Three.js renderer + lighting + drag controls once.
@@ -310,52 +315,62 @@ export default function InsideOutScene({
     const ro = new ResizeObserver(resize);
     ro.observe(host);
 
-    // Pointer drag-to-turn (rotates shell, facing, lining & pockets together!)
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    const onDown = (e: PointerEvent) => {
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      renderer.domElement.setPointerCapture(e.pointerId);
-    };
-    const onMove = (e: PointerEvent) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      stateRef.current.targetYaw -= dx * 0.009;
-      stateRef.current.targetPitch = Math.max(-0.55, Math.min(0.65, stateRef.current.targetPitch + dy * 0.007));
-    };
-    const onUp = () => {
-      dragging = false;
-    };
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      stateRef.current.targetDist = Math.max(0.55, Math.min(1.65, stateRef.current.targetDist + e.deltaY * 0.0008));
-    };
-    renderer.domElement.addEventListener("pointerdown", onDown);
-    renderer.domElement.addEventListener("pointermove", onMove);
-    renderer.domElement.addEventListener("pointerup", onUp);
-    renderer.domElement.addEventListener("pointercancel", onUp);
-    renderer.domElement.addEventListener("lostpointercapture", onUp);
-    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
-
-    let rafId = 0;
-    const renderLoop = () => {
+    // The site's shared camera: drag turns shell, facing, lining and pockets together, right-drag moves,
+    // the wheel and pinch zoom. A chosen preset is flown to until the visitor takes the view.
+    const canvas = renderer.domElement;
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", "The waistcoat's layers in 3D. Drag or use the arrow keys to turn them, right-drag or Shift with the arrow keys to move them, scroll, pinch or use plus and minus to zoom. Home returns to the chosen view.");
+    const orbit = new OrbitControls(camera, canvas);
+    orbit.enableDamping = true;
+    orbit.dampingFactor = 0.14;
+    orbit.minDistance = 0.4;
+    orbit.maxDistance = 2.4;
+    orbit.minPolarAngle = 0.25;
+    orbit.maxPolarAngle = 2.2;
+    const centre = new THREE.Vector3();
+    const place = () => {
       const st = stateRef.current;
-      st.yaw += (st.targetYaw - st.yaw) * 0.16;
-      st.pitch += (st.targetPitch - st.pitch) * 0.16;
-      st.dist += (st.targetDist - st.dist) * 0.16;
-      st.targetY += (st.targetTargetY - st.targetY) * 0.16;
+      orbit.target.copy(centre);
       camera.position.set(
         st.dist * Math.sin(st.yaw) * Math.cos(st.pitch),
-        st.targetY + st.dist * Math.sin(st.pitch),
+        st.dist * Math.sin(st.pitch),
         st.dist * Math.cos(st.yaw) * Math.cos(st.pitch),
-      );
-      camera.lookAt(0, st.targetY, 0);
+      ).add(centre);
+    };
+    centre.set(0, stateRef.current.targetY, 0);
+    place();
+    const taken = () => { stateRef.current.flying = false; };
+    orbit.addEventListener("start", taken);
+    const look = fullControls(orbit, canvas, { dark: true, turnKeys: true, home: () => { stateRef.current.flying = true; } });
+
+    let rafId = 0;
+    let inFlight = false;
+    const offset = new THREE.Vector3();
+    const renderLoop = () => {
+      const st = stateRef.current;
+      if (st.flying) {
+        if (!inFlight) {
+          // Start from wherever the visitor left the camera, turning the short way round.
+          inFlight = true;
+          centre.copy(orbit.target);
+          offset.copy(camera.position).sub(centre);
+          st.dist = offset.length();
+          st.pitch = Math.asin(THREE.MathUtils.clamp(offset.y / st.dist, -1, 1));
+          st.yaw = Math.atan2(offset.x, offset.z);
+          st.yaw += Math.round((st.targetYaw - st.yaw) / (2 * Math.PI)) * 2 * Math.PI;
+        }
+        st.yaw += (st.targetYaw - st.yaw) * 0.16;
+        st.pitch += (st.targetPitch - st.pitch) * 0.16;
+        st.dist += (st.targetDist - st.dist) * 0.16;
+        centre.set(centre.x * 0.84, centre.y + (st.targetTargetY - centre.y) * 0.16, centre.z * 0.84);
+        place();
+        look.retarget(centre);
+        const arrived = Math.abs(st.targetYaw - st.yaw) + Math.abs(st.targetPitch - st.pitch) + Math.abs(st.targetDist - st.dist)
+          + Math.abs(st.targetTargetY - centre.y) + Math.abs(centre.x) + Math.abs(centre.z) < 1e-3;
+        if (arrived) st.flying = false;
+      }
+      if (!st.flying) inFlight = false;
+      orbit.update();
       renderer.render(scene, camera);
       rafId = requestAnimationFrame(renderLoop);
     };
@@ -364,12 +379,9 @@ export default function InsideOutScene({
     return () => {
       cancelAnimationFrame(rafId);
       ro.disconnect();
-      renderer.domElement.removeEventListener("pointerdown", onDown);
-      renderer.domElement.removeEventListener("pointermove", onMove);
-      renderer.domElement.removeEventListener("pointerup", onUp);
-      renderer.domElement.removeEventListener("pointercancel", onUp);
-      renderer.domElement.removeEventListener("lostpointercapture", onUp);
-      renderer.domElement.removeEventListener("wheel", onWheel);
+      look.dispose();
+      orbit.removeEventListener("start", taken);
+      orbit.dispose();
       for (const d of sceneObjsRef.current?.disposables ?? []) d.dispose();
       coreGeom.dispose();
       coreMat.dispose();

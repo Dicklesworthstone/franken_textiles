@@ -46,7 +46,7 @@ export default function SundressLab(){
         <div className="sd-viewbar"><div>{(["Full length","Bodice","Side seam"] as const).map(v=><button key={v} aria-pressed={view===v} onClick={()=>{
           setView(v);if(v==="Side seam")setForm(f=>({...f,right:Math.max(75,f.right)}));
         }} disabled={failed}>{v}</button>)}</div>
-          <p>{failed?"WebGL unavailable · recorded view":"Drag a hand to pose · drag the ground to orbit"}</p></div>
+          <p>{failed?"WebGL unavailable · recorded view":"Drag a hand to pose · drag the ground to turn · scroll to zoom · right-drag to move"}</p></div>
       </section><section className="sd-controls" aria-label="Wearer and pose">
         <div className="sd-section"><h2>Wearer</h2><button className="sd-reset" onClick={()=>{setForm(initial);setView("Full length");}}>Reset</button></div>
         <div className="sd-poses" aria-label="Reference form comparisons">{samples.map(({name,bust,waist})=>

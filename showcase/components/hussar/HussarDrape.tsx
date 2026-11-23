@@ -30,5 +30,5 @@ type Props = { regiment: Regiment; framing: { preset: Framing }; onFailure?: () 
 export default function HussarDrape({ regiment, framing, onFailure, children }: Props) {
   return <SolverDrape source="/exhibits/hussar/dolman" recording={report} looks={looks} look={regiment} views={views} view={framing}
     mountAt={HIP_LINE} className="hu-making" captureHook="ftxHussarFrame" pieceName={pieceName} onFailure={onFailure}
-    label="The 1761 dolman from flat pattern to sewn jacket, draped by the cloth solver on a fitted adult form. Drag or use arrow keys to turn, and plus or minus to zoom.">{children}</SolverDrape>;
+    label="The 1761 dolman from flat pattern to sewn jacket, draped by the cloth solver on a fitted adult form. Drag or use the arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Zero returns to the film's own view.">{children}</SolverDrape>;
 }

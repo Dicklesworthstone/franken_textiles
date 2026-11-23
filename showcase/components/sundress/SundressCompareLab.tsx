@@ -189,14 +189,14 @@ function SideViewportCard({
   otherState,
   accentHex,
   cameraRef,
-  onCameraDrag,
+  onCameraHome,
 }: {
   side: "left" | "right";
   state: CompareState;
   otherState: CompareState;
   accentHex: string;
   cameraRef: React.MutableRefObject<SharedCameraState>;
-  onCameraDrag: (dx: number, dy: number, wheelDelta?: number) => void;
+  onCameraHome: () => void;
 }) {
   return (
     <section
@@ -226,7 +226,7 @@ function SideViewportCard({
           otherHemMm={otherState.accepted ? otherState.world.hemAboveSoleMm.mean : null}
           accentHex={accentHex}
           cameraRef={cameraRef}
-          onCameraDrag={onCameraDrag}
+          onCameraHome={onCameraHome}
           label={`Synchronized 3D native drape of fixed sundress on ${state.label} at 1:1 metre common world scale`}
         />
       ) : (
@@ -319,23 +319,24 @@ export default function SundressCompareLab() {
   // Single shared Three.js camera state driving BOTH left & right canvases identically!
   const cameraRef = useRef<SharedCameraState>({ ...COMPARE_CAMERAS["Full length"] });
 
-  const handleCameraDrag = useCallback((dx: number, dy: number, wheelDelta?: number) => {
-    const st = cameraRef.current;
-    if (wheelDelta) {
-      st.dist = Math.max(0.9, Math.min(3.4, st.dist + wheelDelta * 0.0012));
-    } else {
-      st.yaw -= dx * 0.008;
-      st.pitch = Math.max(-0.45, Math.min(0.65, st.pitch + dy * 0.006));
-    }
+  // Each viewport turns, moves and zooms the shared camera itself. The page only aims it at a preset, signed
+  // with no `from` so that both viewports apply it.
+  const aim = useCallback((name: CompareCameraPreset) => {
+    const p = COMPARE_CAMERAS[name], st = cameraRef.current;
+    st.yaw = p.yaw;
+    st.pitch = p.pitch;
+    st.dist = p.dist;
+    st.targetY = p.targetY;
+    st.x = 0;
+    st.z = 0;
+    st.stamp = (st.stamp ?? 0) + 1;
+    st.from = null;
   }, []);
+  const handleCameraHome = useCallback(() => aim(camPreset), [aim, camPreset]);
 
   const applyPreset = (name: CompareCameraPreset) => {
     setCamPreset(name);
-    const p = COMPARE_CAMERAS[name];
-    cameraRef.current.yaw = p.yaw;
-    cameraRef.current.pitch = p.pitch;
-    cameraRef.current.dist = p.dist;
-    cameraRef.current.targetY = p.targetY;
+    aim(name);
   };
 
   useEffect(() => {
@@ -484,7 +485,7 @@ export default function SundressCompareLab() {
                   otherState={rightState}
                   accentHex="#0e6766"
                   cameraRef={cameraRef}
-                  onCameraDrag={handleCameraDrag}
+                  onCameraHome={handleCameraHome}
                 />
                 <SideViewportCard
                   side="right"
@@ -492,7 +493,7 @@ export default function SundressCompareLab() {
                   otherState={leftState}
                   accentHex="#b84724"
                   cameraRef={cameraRef}
-                  onCameraDrag={handleCameraDrag}
+                  onCameraHome={handleCameraHome}
                 />
               </div>
 

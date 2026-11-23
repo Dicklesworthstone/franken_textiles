@@ -158,7 +158,7 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
       {outline && <div className="flat-inset"><svg viewBox={outline.box} role="img" aria-label={outline.name+" flat panel outline"}>
         <path d={outline.path} fill="none" stroke={outline.color} strokeWidth="2" vectorEffect="non-scaling-stroke"/></svg><span>Flat panel · {outline.name}</span></div>}
       {!available && <span className="loading mono" role="status">Loading geometry…</span>}
-      {available && <span className="orbit-note mono">Drag to orbit · Scroll to zoom</span>}
+      {available && <span className="orbit-note mono">Drag to turn · scroll to zoom · right-drag to move</span>}
     </div> : <div className="movie"><InlineFilm key={mediaId} id={mediaId} title={title} controls requested={!failed}/></div>}
     {failed && <p role="status" className="fallback">WebGL is unavailable on this device. The film shows the same garment.</p>}
     {live && <div className="controls">

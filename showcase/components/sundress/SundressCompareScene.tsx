@@ -2,16 +2,25 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { fullControls } from "../atelier3d/viewControls";
 import { publishedGeometry } from "../replayAsset";
 import { COMMON_WORLD_SCALE_M_PER_UNIT, parsePackedDrapeBuffer } from "../../public/labs/sundress-compare.mjs";
 
 export type CompareCameraPreset = "Full length" | "Hem elevation" | "Waist profile" | "Back";
 
+// One camera for both viewports. Whoever changes it raises `stamp` and signs `from`: a viewport signs with
+// its own token and the page with nothing, so each viewport applies every change but its own.
 export type SharedCameraState = {
   yaw: number;
   pitch: number;
   dist: number;
   targetY: number;
+  /** Where the visitor has moved the view sideways (m); zero in every preset. */
+  x?: number;
+  z?: number;
+  stamp?: number;
+  from?: unknown;
 };
 
 export const COMPARE_CAMERAS: Record<CompareCameraPreset, SharedCameraState> = {
@@ -77,7 +86,7 @@ export default function SundressCompareScene({
   otherHemMm,
   accentHex,
   cameraRef,
-  onCameraDrag,
+  onCameraHome,
   label,
 }: {
   sourceBase: string;
@@ -85,10 +94,14 @@ export default function SundressCompareScene({
   otherHemMm: number | null;
   accentHex: string;
   cameraRef: React.MutableRefObject<SharedCameraState>;
-  onCameraDrag: (dx: number, dy: number, wheelDelta?: number) => void;
+  /** The visitor asked for the opening view: the page applies its chosen preset to the shared camera. */
+  onCameraHome: () => void;
   label: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  // Kept in a ref so that a new callback from the page does not rebuild the WebGL scene.
+  const homeRef = useRef(onCameraHome);
+  useEffect(() => { homeRef.current = onCameraHome; }, [onCameraHome]);
   const ringGroupRef = useRef<{ group: THREE.Group; disposables: { dispose: () => void }[] } | null>(null);
   const [loadErr, setLoadErr] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -193,46 +206,56 @@ export default function SundressCompareScene({
     const ro = new ResizeObserver(resize);
     ro.observe(host);
 
-    // Dragging or zooming either viewport updates the single shared camera state!
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    const onDown = (e: PointerEvent) => {
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      renderer.domElement.setPointerCapture(e.pointerId);
+    // The site's shared camera on each viewport. Turning, moving or zooming either one writes the single
+    // shared state, and the other viewport follows it on its next frame.
+    const canvas = renderer.domElement;
+    const orbit = new OrbitControls(camera, canvas);
+    orbit.minDistance = 0.6;
+    orbit.maxDistance = 4.2;
+    orbit.minPolarAngle = 0.3;
+    orbit.maxPolarAngle = 2.0;
+    const token = {};
+    const offset = new THREE.Vector3();
+    let seen = -1;
+    let applying = false;
+    const look = fullControls(orbit, canvas, { dark: true, turnKeys: true, home: () => homeRef.current() });
+    const apply = (st: SharedCameraState) => {
+      applying = true;
+      orbit.target.set(st.x ?? 0, st.targetY, st.z ?? 0);
+      camera.position.set(
+        st.dist * Math.sin(st.yaw) * Math.cos(st.pitch),
+        st.dist * Math.sin(st.pitch),
+        st.dist * Math.cos(st.yaw) * Math.cos(st.pitch),
+      ).add(orbit.target);
+      // A preset is where "moved from" is measured from, in both viewports alike.
+      if (st.from == null) look.retarget(orbit.target);
+      orbit.update();
+      applying = false;
     };
-    const onMove = (e: PointerEvent) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      onCameraDrag(dx, dy);
+    const publish = () => {
+      if (applying) return;
+      const st = cameraRef.current;
+      offset.copy(camera.position).sub(orbit.target);
+      st.dist = offset.length();
+      st.pitch = Math.asin(THREE.MathUtils.clamp(offset.y / st.dist, -1, 1));
+      st.yaw = Math.atan2(offset.x, offset.z);
+      st.targetY = orbit.target.y;
+      st.x = orbit.target.x;
+      st.z = orbit.target.z;
+      st.stamp = (st.stamp ?? 0) + 1;
+      st.from = token;
+      seen = st.stamp;
     };
-    const onUp = () => {
-      dragging = false;
-    };
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      onCameraDrag(0, 0, e.deltaY);
-    };
-    renderer.domElement.addEventListener("pointerdown", onDown);
-    renderer.domElement.addEventListener("pointermove", onMove);
-    renderer.domElement.addEventListener("pointerup", onUp);
-    renderer.domElement.addEventListener("pointercancel", onUp);
-    renderer.domElement.addEventListener("lostpointercapture", onUp);
-    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+    // Added after the shared controls, so a view carried too far is brought back before it is published.
+    orbit.addEventListener("change", publish);
 
     const loop = () => {
       const st = cameraRef.current;
-      camera.position.set(
-        st.dist * Math.sin(st.yaw) * Math.cos(st.pitch),
-        st.targetY + st.dist * Math.sin(st.pitch),
-        st.dist * Math.cos(st.yaw) * Math.cos(st.pitch),
-      );
-      camera.lookAt(0, st.targetY, 0);
+      const stamp = st.stamp ?? 0;
+      if (stamp !== seen) {
+        seen = stamp;
+        if (st.from !== token) apply(st);
+      }
       renderer.render(scene, camera);
       rafId = requestAnimationFrame(loop);
     };
@@ -242,12 +265,9 @@ export default function SundressCompareScene({
       alive = false;
       cancelAnimationFrame(rafId);
       ro.disconnect();
-      renderer.domElement.removeEventListener("pointerdown", onDown);
-      renderer.domElement.removeEventListener("pointermove", onMove);
-      renderer.domElement.removeEventListener("pointerup", onUp);
-      renderer.domElement.removeEventListener("pointercancel", onUp);
-      renderer.domElement.removeEventListener("lostpointercapture", onUp);
-      renderer.domElement.removeEventListener("wheel", onWheel);
+      look.dispose();
+      orbit.removeEventListener("change", publish);
+      orbit.dispose();
       for (const d of ringGroupRef.current?.disposables ?? []) d.dispose();
       ringGroupRef.current = null;
       for (const d of disposables) d.dispose();
@@ -256,7 +276,7 @@ export default function SundressCompareScene({
       renderer.forceContextLoss();
       if (renderer.domElement.parentNode === host) host.removeChild(renderer.domElement);
     };
-  }, [sourceBase, accentHex, cameraRef, onCameraDrag, attempt]);
+  }, [sourceBase, accentHex, cameraRef, attempt]);
 
   // Update lightweight elevation reference rings whenever partner hem changes without tearing down WebGL!
   useEffect(() => {

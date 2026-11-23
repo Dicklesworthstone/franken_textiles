@@ -7,6 +7,7 @@ import type {loadSurface,loadTopology} from "./surface";
 import {dressCloth} from "../atelier3d/garment";
 import {fabrics} from "../atelier3d/weave";
 import {formMaterial,lightStudio,prepareRenderer} from "../atelier3d/studio";
+import {fullControls} from "../atelier3d/viewControls";
 import {cuttingTable,sewingFrame,type SewingPhases} from "../construction/replay";
 
 export type Model = Awaited<ReturnType<typeof loadSurface>> & {
@@ -26,13 +27,15 @@ export default function Scene(props:Props) {
     try {renderer=new T.WebGLRenderer({antialias:true,alpha:true,powerPreference:"low-power"});}
     catch {latest.current.onError();return;}
     const canvas=renderer.domElement;
-    canvas.setAttribute("role","img");canvas.setAttribute("aria-label","Orbit the trouser form. Left and right arrow keys rotate the camera.");
+    canvas.setAttribute("role","img");canvas.setAttribute("aria-label","The trouser form. Drag or use the arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Home resets the view.");
     canvas.tabIndex=0;canvas.dataset.run=model.key;el.append(canvas);
     prepareRenderer(renderer);renderer.localClippingEnabled=true;renderer.setClearColor(0,0);
     const scene=new T.Scene(), camera=new T.OrthographicCamera(-1,1,1,-1,.01,8);
     const studio=lightStudio(renderer,scene,"warm");
     const controls=new OrbitControls(camera,canvas);
-    controls.enablePan=false;controls.enableZoom=false;controls.minPolarAngle=.42;controls.maxPolarAngle=1.66;
+    controls.minZoom=.7;controls.maxZoom=4;controls.minPolarAngle=.2;controls.maxPolarAngle=1.66; // Never from under the floor.
+    // The point the camera was last aimed at for the frame on show; the visitor moves the view from there.
+    const aim=controls.target.clone();
     const meshes:T.BufferGeometry[]=[], materials:T.Material[]=[];
     function geo(v:Float32Array,ix:Uint16Array) {
       const g=new T.BufferGeometry();g.setAttribute("position",new T.BufferAttribute(v,3));
@@ -123,7 +126,9 @@ export default function Scene(props:Props) {
           cloth.update(xyz);
           board=staging?new T.Box3().setFromBufferAttribute(attr):null;
           const focus=board?.getCenter(new T.Vector3())??neutral;
-          camera.position.add(focus.clone().sub(controls.target));controls.target.copy(focus);controls.update();
+          // Follow the subject, keeping however far the visitor has moved the view.
+          const shift=focus.clone().sub(aim);
+          camera.position.add(shift);controls.target.add(shift);aim.copy(focus);look.retarget(aim);controls.update();
           body.visible=!staging;
           canvas.dataset.nativeFrame=String(frame);lastFrame=index;size();
         }
@@ -142,20 +147,20 @@ export default function Scene(props:Props) {
       camera.left=-half*w/h;camera.right=-camera.left;camera.top=half;camera.bottom=-half;
       camera.updateProjectionMatrix();renderer.setSize(w,h,false);render();
     }
-    function key(e:KeyboardEvent){
-      if(e.key!=="ArrowLeft"&&e.key!=="ArrowRight")return;
-      const d=camera.position.clone().sub(controls.target);
-      d.applyAxisAngle(new T.Vector3(0,1,0),e.key==="ArrowLeft"?-.13:.13);
-      camera.position.copy(d).add(controls.target);controls.update();e.preventDefault();
+    function home(){
+      camera.zoom=1;camera.updateProjectionMatrix();
+      camera.position.add(aim.clone().sub(controls.target));controls.target.copy(aim);
+      orbit([.57,1.57,3.25][Math.max(view,0)]);
     }
     function lost(e:Event){e.preventDefault();latest.current.onError();}
-    controls.addEventListener("change",render);canvas.addEventListener("keydown",key);canvas.addEventListener("webglcontextlost",lost);
+    controls.addEventListener("change",render);canvas.addEventListener("webglcontextlost",lost);
+    const look=fullControls(controls,canvas,{paint:render,home,turnKeys:true});
     const observer=new ResizeObserver(size);observer.observe(el);
     draw.current=update;size();update(latest.current);
     if(new URLSearchParams(location.search).has("capture"))window.ftxTrouserCamera=orbit;
     return ()=>{
       draw.current=()=>{};if(window.ftxTrouserCamera===orbit)delete window.ftxTrouserCamera;
-      observer.disconnect();controls.dispose();canvas.removeEventListener("keydown",key);canvas.removeEventListener("webglcontextlost",lost);
+      observer.disconnect();look.dispose();controls.dispose();canvas.removeEventListener("webglcontextlost",lost);
       for(const g of meshes)g.dispose();for(const m of new Set(materials))m.dispose();
       cloth?.dispose();studio.dispose();renderer.dispose();renderer.forceContextLoss();canvas.remove();
     };

@@ -73,7 +73,7 @@ export default function Atelier({home=false}:{home?:boolean}){
           {failed!==key&&<div className={"sa-scene"+(shown?" visible":"")}><Scene cut={cut} waist={waist} patternStem={run.patternStem} alternateHem={runs[altCut+"-"+waist]?.hemOutline} dressForm={dressForm} detail={detail} surface={surface} step={step} ready={ready} fail={fail}/></div>}
           <div className="sa-view-controls"><button disabled={!shown} aria-pressed={detail} onClick={()=>setDetail(!detail)}>{detail?"Whole skirt":"Waist detail"}</button>
           <button disabled={!shown} aria-pressed={dressForm} onClick={()=>{setLoaded("");setDressForm(!dressForm);}}>{dressForm?"Human body":"Dress form"}</button></div>
-          <figcaption>{failed===key?<a href="/media/skirt-atelier.mp4">Watch the 68 cm study film ↗</a>:shown?"Drag to turn · arrow keys to rotate":"Loading the 3D view"}</figcaption>
+          <figcaption>{failed===key?<a href="/media/skirt-atelier.mp4">Watch the 68 cm study film ↗</a>:shown?"Drag to turn · scroll to zoom · right-drag to move":"Loading the 3D view"}</figcaption>
         </figure>
       </div>
     </div>

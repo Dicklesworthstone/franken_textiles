@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { type Garment, type StudioMode, type PanelOutline, loadGarment } from "./garmentMesh";
 import { lightStudio, prepareRenderer } from "./atelier3d/studio";
+import { fullControls } from "./atelier3d/viewControls";
 
 type StudioProps = {
   garment: Garment;
@@ -51,7 +52,7 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     canvas.style.cssText = "width:100%;height:100%;display:block;cursor:grab";
     canvas.tabIndex = 0;
     canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", `Interactive ${garment} garment. Drag or use arrow keys to orbit. Pinch or use plus and minus to zoom. Home resets the view.`);
+    canvas.setAttribute("aria-label", `Interactive ${garment} garment. Drag or use arrow keys to turn it, right-drag or Shift with the arrow keys to move it, scroll, pinch or use plus and minus to zoom. Home resets the view.`);
     surface.appendChild(canvas);
     prepareRenderer(renderer);
     renderer.setClearColor(0, 0);
@@ -66,7 +67,6 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     orbit.maxZoom = 4;
     orbit.rotateSpeed = 0.8;
     orbit.zoomSpeed = 0.9;
-    orbit.enablePan = false;
     orbit.minPolarAngle = 0.03;
     orbit.maxPolarAngle = Math.PI - 0.03;
     const controller = new AbortController();
@@ -75,12 +75,14 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     let width = 0;
     let height = 0;
     let lastYaw: number | undefined;
-    let lastShadow: { frame: number; spread: number; mode: StudioMode; aspect: number } | undefined;
+    // What the key light's shadow map was last drawn for.
+    let lastCast: { frame: number; spread: number; mode: StudioMode; aspect: number } | undefined;
     let lastReset = state.current.resetKey;
     const radius = 5;
     function orient(azimuth: number, elevation: number) {
+      // About the target, which the visitor may have moved.
       camera.position.set(radius * Math.cos(elevation) * Math.sin(azimuth), radius * Math.sin(elevation),
-        radius * Math.cos(elevation) * Math.cos(azimuth));
+        radius * Math.cos(elevation) * Math.cos(azimuth)).add(orbit.target);
       return orbit.update();
     }
     function reset() {
@@ -107,13 +109,13 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
       const aspect = width / height;
       garmentMesh.pose(view.mode, view.frame, view.wire, aspect, view.seam, view.spread, view.panel);
       const frame = garmentMesh.sampledFrame;
-      if (!lastShadow || lastShadow.frame !== frame || lastShadow.spread !== view.spread || lastShadow.mode !== view.mode || lastShadow.aspect !== aspect) {
+      if (!lastCast || lastCast.frame !== frame || lastCast.spread !== view.spread || lastCast.mode !== view.mode || lastCast.aspect !== aspect) {
         studio.key.shadow.needsUpdate = true;
-        lastShadow = { frame, spread: view.spread, mode: view.mode, aspect };
+        lastCast = { frame, spread: view.spread, mode: view.mode, aspect };
       }
       // `resetKey` is a counter the parent bumps to ask for the home view.
       const resets = view.resetKey;
-      if (lastReset !== resets) {
+      if (resets - lastReset) {
         lastReset = resets;
         reset();
       }
@@ -166,8 +168,8 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
     orbit.addEventListener("start", down);
     orbit.addEventListener("end", up);
     canvas.addEventListener("keydown", keydown);
-    canvas.addEventListener("dblclick", reset);
     canvas.addEventListener("webglcontextlost", lost);
+    const view = fullControls(orbit, canvas, { paint, home: reset });
     redraw.current = update;
     loadGarment(garment, controller.signal).then((result) => {
       if (controller.signal.aborted) { result.dispose(); return; }
@@ -185,8 +187,8 @@ export default function Studio({ garment, mode = "cloth", frame = 1, wire = fals
       redraw.current = null;
       observer.disconnect();
       canvas.removeEventListener("keydown", keydown);
-      canvas.removeEventListener("dblclick", reset);
       canvas.removeEventListener("webglcontextlost", lost);
+      view.dispose();
       orbit.removeEventListener("change", paint);
       orbit.removeEventListener("start", down);
       orbit.removeEventListener("end", up);
