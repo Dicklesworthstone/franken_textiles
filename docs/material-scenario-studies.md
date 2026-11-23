@@ -1464,9 +1464,9 @@ the /1 request keeps its existing behavior and rejects `regions`.
 Regions may share welded vertices. Each region retains the complete assembled body
 force at those vertices, so **regional totals are not additive**. The existing six
 comparison objectives apply to the union of selected vertices, counted once. A nominal
-comparison constraint may additionally name an exact `region`, allowing different force
-limits on different regions without changing the objective scope. The admitted value appears
-in `regional_readings[region][metric]`; missing regions refuse without a union fallback.
+comparison objective or constraint may additionally name an exact `region`, allowing independent
+force preferences and limits on different regions. Omission keeps the selected union. The admitted
+value appears in `regional_readings[region][metric]`; missing regions refuse without a union fallback.
 Per-region peaks and their witnesses remain available for inspection. See
 [regional constraints](material-screening-and-studies.md#different-limits-for-individual-named-regions).
 

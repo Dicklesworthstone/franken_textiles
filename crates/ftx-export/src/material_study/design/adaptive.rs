@@ -1197,8 +1197,7 @@ impl Request {
                     best_trial_key: best.map(|index| discovery.rows[index].design.key.clone()),
                     best_reading: best
                         .and_then(|index| {
-                            discovery.rows[index]
-                                .consumer_reading(guidance.policy.objectives[0].metric)
+                            discovery.rows[index].consumer_reading(&guidance.policy.objectives[0])
                         })
                         .cloned(),
                     best_case_key: best
@@ -1251,10 +1250,8 @@ pub(in crate::material_study) fn worst_case_index(
 ) -> Result<usize, Refusal> {
     let mut worst: Option<(usize, &comparison::Reading)> = None;
     for (index, case) in cases.iter().enumerate() {
-        let reading = case
-            .comparison
-            .readings
-            .get(&objective.metric)
+        let reading = objective
+            .reading(&case.comparison)
             .filter(|reading| case.comparison.eligible && reading.value.is_finite())
             .ok_or_else(|| invalid("worst-case guidance needs every case's admitted reading"))?;
         if let Some((_, previous)) = worst {
@@ -1283,11 +1280,16 @@ fn worst_case_range(
     objective: &comparison::Objective,
 ) -> Result<WorstCaseRange, Refusal> {
     let nominal = worst_case_index(cases, objective)?;
-    let mut reading = cases[nominal].comparison.readings[&objective.metric].clone();
+    let mut reading = objective
+        .reading(&cases[nominal].comparison)
+        .expect("admitted worst-case reading")
+        .clone();
     let mut envelope: Option<[f64; 2]> = None;
     let mut witnesses = [0; 2];
     for (index, case) in cases.iter().enumerate() {
-        let source = &case.comparison.readings[&objective.metric];
+        let source = objective
+            .reading(&case.comparison)
+            .ok_or_else(|| invalid("worst-case range needs every case's admitted reading"))?;
         let bounds = source
             .reported_bounds
             .filter(|[lo, hi]| {
@@ -1780,10 +1782,10 @@ impl<T> Discovery<'_, '_, '_, T> {
                 // A change of limiting case must not compare unrelated case protocol hashes.
                 let objective = &guidance.policy.objectives[0];
                 let a = candidate
-                    .consumer_reading(objective.metric)
+                    .consumer_reading(objective)
                     .expect("admitted trial");
                 let b = current
-                    .consumer_reading(objective.metric)
+                    .consumer_reading(objective)
                     .expect("admitted incumbent");
                 let interval = |reading: &comparison::Reading| match guidance.policy.basis {
                     comparison::Basis::Nominal => [reading.value, reading.value],
@@ -2024,11 +2026,11 @@ fn constraint_progress(candidate: &Trial, current: &Trial) -> bool {
 }
 
 impl Trial {
-    fn consumer_reading(&self, metric: comparison::Metric) -> Option<&comparison::Reading> {
+    fn consumer_reading(&self, objective: &comparison::Objective) -> Option<&comparison::Reading> {
         self.consumer_worst_case
             .as_ref()
             .map(|range| &range.reading)
-            .or_else(|| self.consumer_comparison.as_ref()?.readings.get(&metric))
+            .or_else(|| objective.reading(self.consumer_comparison.as_ref()?))
     }
 
     fn flat_qualified(&self) -> bool {
@@ -2169,6 +2171,7 @@ mod worst_case_range_tests {
         ] {
             let objective = comparison::Objective {
                 metric: comparison::Metric::AssemblyMassKg,
+                region: None,
                 direction,
             };
             for reverse in [false, true] {
@@ -2209,6 +2212,7 @@ mod worst_case_range_tests {
         for direction in [Direction::Minimize, Direction::Maximize] {
             let objective = comparison::Objective {
                 metric: comparison::Metric::AssemblyMassKg,
+                region: None,
                 direction,
             };
             for bounds in [[2.0, 6.0], [4.0, 4.0]] {
@@ -2232,6 +2236,7 @@ mod worst_case_range_tests {
     fn worst_case_range_never_fills_or_repairs_invalid_case_readings() {
         let objective = comparison::Objective {
             metric: comparison::Metric::AssemblyMassKg,
+            region: None,
             direction: Direction::Minimize,
         };
         assert!(worst_case_range(&[], &objective).is_err());
@@ -2251,6 +2256,47 @@ mod worst_case_range_tests {
             }
             assert!(worst_case_range(&cases, &objective).is_err());
         }
+    }
+
+    #[test]
+    fn worst_case_guidance_reads_the_selected_region_and_rejects_missing_scopes() {
+        let metric = comparison::Metric::MotionMaxWarpGreenStrain;
+        let objective = comparison::Objective {
+            metric,
+            region: Some("cuff".into()),
+            direction: Direction::Minimize,
+        };
+        let mut cases = vec![
+            case("lower-cuff", 1., [1., 1.]),
+            case("higher-cuff", 1., [1., 1.]),
+        ];
+        for (case, (union, cuff)) in cases.iter_mut().zip([(0.8, 0.1), (0.3, 0.2)]) {
+            let reading = comparison::Reading {
+                value: union,
+                reported_bounds: None,
+                unit: "1".into(),
+                consumer: comparison::Consumer::MotionMaterialStrain,
+            };
+            case.comparison.readings.insert(metric, reading.clone());
+            case.comparison.regional_readings.insert(
+                "cuff".into(),
+                BTreeMap::from([(
+                    metric,
+                    comparison::Reading {
+                        value: cuff,
+                        ..reading
+                    },
+                )]),
+            );
+        }
+        assert_eq!(worst_case_index(&cases, &objective).unwrap(), 1);
+        let mut union = objective.clone();
+        union.region = None;
+        assert_eq!(worst_case_index(&cases, &union).unwrap(), 0);
+        assert!(worst_case_range(&cases, &objective).is_err());
+        cases[1].comparison.regional_readings.clear();
+        assert!(worst_case_index(&cases, &objective).is_err());
+        assert_eq!(worst_case_index(&cases, &union).unwrap(), 0);
     }
 }
 

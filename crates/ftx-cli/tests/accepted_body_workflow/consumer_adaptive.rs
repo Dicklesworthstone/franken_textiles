@@ -8,7 +8,8 @@ mod pareto;
 mod worst_case;
 
 #[test]
-fn regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_identity() {
+fn regional_guards_and_objectives_share_real_motion_and_preserve_adaptive_cache_and_scope_identity()
+{
     use ftx_export::material_study::Request;
     use ftx_pattern::Pattern;
     use ftx_wasm::materials::scenario::on_model;
@@ -265,6 +266,91 @@ fn regional_guards_share_real_motion_and_preserve_adaptive_cache_and_scope_ident
             );
         }
     }
+
+    // The same real producer now guides discovery on one named region, rather than its union.
+    // The two CLI routes below replay this scoped search against the portable authority.
+    let metric = "motion_max_warp_green_strain";
+    let region = "panel-center";
+    study["comparison"]["objectives"] = json!([
+        {"metric":metric,"region":region,"direction":"minimize"}
+    ]);
+    for other_region in [Some("seam-side"), None] {
+        let mut worst = study.clone();
+        worst["design_adaptive"]["objective"] = json!("consumer_worst_case");
+        worst["design_adaptive"]
+            .as_object_mut()
+            .unwrap()
+            .remove("case_key");
+        let mut other = matrix["cases"][0].clone();
+        other["key"] = json!("other-scope");
+        other["comparison"] = study["comparison"].clone();
+        if let Some(other_region) = other_region {
+            other["comparison"]["objectives"][0]["region"] = json!(other_region);
+        } else {
+            other["comparison"]["objectives"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("region");
+        }
+        let mismatch = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":8,
+            "cases":[matrix["cases"][0],other]});
+        let error = on_model(
+            &model,
+            &digest,
+            &pattern.to_string(),
+            &worst.to_string(),
+            &mismatch.to_string(),
+            &body.to_string(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("identical metric, region"),
+            "{error:?}"
+        );
+    }
+    let report = evaluate(&study);
+    let search = &report["manufacturing"]["design_search"];
+    let guidance = &search["consumer_guidance"];
+    assert_eq!(guidance["objective"], study["comparison"]["objectives"][0]);
+    let selected = search["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["selected"] == true)
+        .unwrap();
+    let reading = &selected["consumer_cases"][0]["comparison"]["regional_readings"][region][metric];
+    assert!(reading["value"].is_number(), "{selected}");
+    assert_eq!(guidance["best_reading"], *reading);
+    for trial in search["rows"].as_array().unwrap() {
+        if trial["consumer_cases"][0]["comparison"]["eligible"] == true {
+            let value = trial["consumer_cases"][0]["comparison"]["regional_readings"][region]
+                [metric]["value"]
+                .as_f64()
+                .unwrap();
+            assert!(reading["value"].as_f64().unwrap() <= value);
+        }
+    }
+    let selected_key = serde_json::to_string(&json!([selected["design"]["key"], "sheet"])).unwrap();
+    let final_candidate = report["cases"][0]["comparison"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == selected_key)
+        .unwrap();
+    assert_eq!(
+        final_candidate["regional_readings"][region][metric],
+        *reading
+    );
+    let retained = report["manufacturing"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(
+        report["evaluations"],
+        guidance["evaluations"].as_u64().unwrap() as usize + retained - 1,
+        "regional optimization reuses the retained physical result"
+    );
 
     let dir = setup();
     std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();

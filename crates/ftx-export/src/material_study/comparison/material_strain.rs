@@ -1248,6 +1248,143 @@ mod tests {
     }
 
     #[test]
+    fn regional_objectives_admit_exact_static_and_motion_readings_without_union_fallback() {
+        let (a, d, mut s) = regional_comparison_case(&[0, 2]);
+        let mut policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[
+                {"metric":"max_engineering_shear_green_strain","direction":"minimize"},
+                {"metric":"max_engineering_shear_green_strain","region":"left","direction":"minimize"},
+                {"metric":"max_engineering_shear_green_strain","region":"right","direction":"maximize"},
+                {"metric":"motion_min_weft_green_strain","region":"right","direction":"maximize"}]}))
+        .unwrap();
+        let request: Request =
+            serde_json::from_value(json!({"schema":"ftx-material-study/1"})).unwrap();
+        policy.validate(&request, true).unwrap();
+        let admitted = policy.candidate(&a, None, &d, &s);
+        assert!(admitted.eligible, "{}", json!(admitted));
+        for (objective, expected) in policy.objectives.iter().zip([0.3, 0.15, 0.3, -0.1]) {
+            let reading = objective.reading(&admitted).unwrap();
+            assert_eq!(reading.value, expected);
+            assert_eq!(reading.unit, "1");
+            assert!(reading.reported_bounds.is_none());
+        }
+        assert_eq!(admitted.regional_readings.len(), 2);
+        assert!(json!(policy)["objectives"][0].get("region").is_none());
+
+        policy.objectives[1].region = Some("missing".into());
+        let unknown = policy.candidate(&a, None, &d, &s);
+        assert!(!unknown.eligible);
+        assert!(policy.objectives[1].reading(&unknown).is_none());
+        assert_eq!(policy.objectives[0].reading(&unknown).unwrap().value, 0.3);
+        assert!(unknown.constraint_violations.is_none());
+        policy.objectives[1].region = Some("left".into());
+
+        s["motion"]["result"]["material_strain"]["status"] = json!("refused");
+        let partial = policy.candidate(&a, None, &d, &s);
+        assert!(!partial.eligible);
+        assert_eq!(policy.objectives[1].reading(&partial).unwrap().value, 0.15);
+        assert!(policy.objectives[3].reading(&partial).is_none());
+        policy.objectives.pop();
+        assert!(policy.candidate(&a, None, &d, &s).eligible);
+
+        let (a, d, s) = comparison_case(true);
+        let unscoped = policy.candidate(&a, None, &d, &s);
+        assert!(!unscoped.eligible);
+        assert!(unscoped.regional_readings.is_empty());
+        policy.objectives.truncate(1);
+        let legacy = policy.candidate(&a, None, &d, &s);
+        assert!(legacy.eligible);
+        assert!(json!(legacy).get("regional_readings").is_none());
+    }
+
+    #[test]
+    fn regional_objective_pareto_uses_each_scope_even_when_union_moves_the_other_way() {
+        let (a, d, s) = regional_comparison_case(&[0, 2]);
+        let mut policy: Policy = serde_json::from_value(json!({"basis":"nominal",
+            "objectives":[
+                {"metric":"max_engineering_shear_green_strain","region":"left","direction":"minimize"},
+                {"metric":"max_engineering_shear_green_strain","region":"right","direction":"maximize"}]}))
+        .unwrap();
+        let original = policy.candidate(&a, None, &d, &s);
+        assert!(original.eligible);
+        let metric = Metric::MaxEngineeringShearGreenStrain;
+        // Exercise the ordering of already admitted readings independently of their producer.
+        // Improving the left region while worsening the right is a tradeoff, not dominance.
+        let mut changed = original.clone();
+        changed
+            .regional_readings
+            .get_mut("left")
+            .unwrap()
+            .get_mut(&metric)
+            .unwrap()
+            .value = 0.1;
+        changed
+            .regional_readings
+            .get_mut("right")
+            .unwrap()
+            .get_mut(&metric)
+            .unwrap()
+            .value = 0.29;
+        changed.readings.get_mut(&metric).unwrap().value = 0.4;
+        assert!(!policy.prefers(&changed, &original));
+        assert!(!policy.prefers(&original, &changed));
+        changed
+            .regional_readings
+            .get_mut("right")
+            .unwrap()
+            .get_mut(&metric)
+            .unwrap()
+            .value = 0.31;
+        assert!(policy.prefers(&changed, &original));
+        assert!(Policy::prefers_cases([(&policy, &changed, &original)]));
+        policy.objectives.truncate(1);
+        assert!(policy.prefers(&changed, &original));
+        policy.objectives[0].region = None;
+        assert!(policy.prefers(&original, &changed));
+        policy.objectives[0].region = Some("missing".into());
+        assert!(!policy.prefers(&changed, &original));
+    }
+
+    #[test]
+    fn regional_objectives_require_unique_nominal_supported_scopes() {
+        let request: Request =
+            serde_json::from_value(json!({"schema":"ftx-material-study/1"})).unwrap();
+        let source = json!({"basis":"nominal","objectives":[
+            {"metric":"max_warp_green_strain","direction":"minimize"},
+            {"metric":"max_warp_green_strain","region":"left","direction":"minimize"},
+            {"metric":"max_warp_green_strain","region":"right","direction":"maximize"}]});
+        let policy: Policy = serde_json::from_value(source.clone()).unwrap();
+        policy.validate(&request, true).unwrap();
+        for (field, value) in [
+            ("region", json!(null)),
+            ("region", json!(42)),
+            ("region", json!("")),
+            ("region", json!(" \n\t")),
+            ("region", json!("é".repeat(257))),
+            ("region", json!("right")),
+            ("metric", json!("assembly_mass_kg")),
+        ] {
+            let mut changed = source.clone();
+            changed["objectives"][1][field] = value;
+            assert!(
+                match serde_json::from_value::<Policy>(changed) {
+                    Ok(policy) => policy.validate(&request, true).is_err(),
+                    Err(_) => true,
+                },
+                "field {field}"
+            );
+        }
+        let mut bounded = policy.clone();
+        bounded.basis = Basis::ReportedBounds;
+        assert!(bounded.validate(&request, true).is_err());
+        let mut duplicate = policy.clone();
+        duplicate.objectives.push(duplicate.objectives[1].clone());
+        duplicate.objectives.last_mut().unwrap().direction = Direction::Maximize;
+        assert!(duplicate.validate(&request, true).is_err());
+        assert!(policy.validate(&request, false).is_err());
+    }
+
+    #[test]
     fn regional_constraints_validate_exact_scopes_supported_metrics_and_nominal_basis() {
         let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1",
             "assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,
@@ -1261,11 +1398,6 @@ mod tests {
                 {"metric":"max_warp_green_strain","region":"right","basis":"nominal","maximum":0.4}]});
         let policy: Policy = serde_json::from_value(source.clone()).unwrap();
         policy.validate(&request, true).unwrap();
-        assert!(
-            serde_json::from_value::<Objective>(json!({"metric":"max_warp_green_strain",
-            "region":"left","direction":"minimize"}))
-            .is_err()
-        );
         for (field, value) in [
             ("region", json!(null)),
             ("region", json!(42)),
@@ -1317,6 +1449,7 @@ mod tests {
                 .iter()
                 .map(|&(metric, _)| Objective {
                     metric,
+                    region: None,
                     direction: Direction::Minimize,
                 })
                 .collect(),

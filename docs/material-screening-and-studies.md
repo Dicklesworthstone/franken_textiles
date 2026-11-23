@@ -1872,10 +1872,41 @@ and incomplete motion cannot supply a union or zero fallback. Explicit `region: 
 Constraints are unique by metric and optional region, with the existing total limit of 64.
 
 Regional guards use nominal values. Set `"basis": "nominal"` on each regional guard when the
-objectives use `reported_bounds`. Objectives and ordinary `readings` retain the selected union;
-`regional_readings[region][metric]` holds each separately admitted guard value. Guard violation
+objectives use `reported_bounds`. Ordinary `readings` retain the selected union;
+`regional_readings[region][metric]` holds each separately admitted regional value. Guard violation
 records retain the region through adaptive constraint restoration and named-case decisions.
 Regional body-force totals can share welded vertices and must not be added together.
+
+### Optimize a specific named region
+
+An objective can name the same exact `region` as a constraint. For example, improve the cuff's
+sampled strain while preserving an independent neck limit:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [
+    {"metric": "motion_max_warp_green_strain", "region": "cuff", "direction": "minimize"}
+  ],
+  "constraints": [
+    {"metric": "motion_max_warp_green_strain", "region": "neck", "maximum": 0.08}
+  ]
+}
+```
+
+The twelve strain and six body-contact metrics support this scope for both static and complete-motion
+results. Regional objectives require `comparison.basis: "nominal"`. Missing names, unsupported
+metrics, `region: null`, unavailable producers or incomplete motion refuse rather than borrowing
+the union. Omitting `region` keeps the original whole-selection objective. Objectives are unique
+by metric and optional region, so a Pareto comparison can independently minimize the same metric
+at the cuff and shoulder, with at most sixteen objectives in total.
+
+Consumer-guided adaptive alterations use the selected regional reading during polling and preserve
+it in the retained comparison and `best_reading`. The selected production result is reused for the
+final study. Worst-case guidance across named operating cases requires the same metric, direction
+and region in every case; all-case Pareto discovery retains each case's own scoped coordinates.
+These are conditional design preferences over simulated samples, not measured failure thresholds,
+contact pressure, comfort, a global optimum or proof of physical garment fit.
 
 ## Compare textile cooling and supplied liquid
 

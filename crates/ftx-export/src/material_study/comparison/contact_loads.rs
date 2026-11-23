@@ -974,6 +974,39 @@ mod tests {
                 assert_eq!(reading.consumer, metric.consumer());
             }
         }
+        let mut objective_policy = policy.clone();
+        objective_policy.constraints.clear();
+        objective_policy.objectives = values
+            .iter()
+            .flat_map(|&(metric, _)| {
+                ["left", "right"]
+                    .into_iter()
+                    .map(move |region| super::super::Objective {
+                        metric,
+                        region: Some(region.into()),
+                        direction: ftx_pattern::material_screen::Direction::Minimize,
+                    })
+            })
+            .collect();
+        objective_policy.validate(&request, true).unwrap();
+        let objectives = objective_policy.candidate(&alternative, None, &descriptor, &simulation);
+        assert!(objectives.eligible, "{}", json!(objectives));
+        for (objective, expected) in objective_policy
+            .objectives
+            .iter()
+            .zip(values.into_iter().flat_map(|(_, values)| values))
+        {
+            assert_eq!(objective.reading(&objectives).unwrap().value, expected);
+        }
+        // Shared welded vertices remain distinct local choices rather than additive loads.
+        assert_eq!(
+            objectives.readings[&Metric::BodyContactSumVertexForceN].value,
+            12.
+        );
+        assert_eq!(
+            objectives.regional_readings["right"][&Metric::BodyContactSumVertexForceN].value,
+            7.
+        );
         // The right region shares welded vertices with the left, but keeps its own 7 N sum.
         policy.constraints[3].minimum = None;
         policy.constraints[3].maximum = Some(6.);
