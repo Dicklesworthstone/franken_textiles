@@ -95,6 +95,9 @@ fn says_inches(text: &str) -> bool {
 }
 
 fn median(v: &[f64]) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
     let mut s = v.to_vec();
     s.sort_by(f64::total_cmp);
     let n = s.len();
@@ -215,7 +218,7 @@ pub fn label_consensus(pattern: &Pattern, labels: &[Value], tol: f64) -> Value {
             .collect();
         out.insert("rival_group".into(), Value::Array(group));
     }
-    if agree < 2 && n >= 2 {
+    if agree == 0 || (agree < 2 && n >= 2) {
         out.insert("no_consensus".into(), json!(true));
         for r in &mut rows {
             r.insert("inlier".into(), json!(false));
@@ -660,7 +663,7 @@ pub fn audit(doc: &PatternDoc, labels: Option<&[Value]>, o: &AuditOptions) -> Va
     let ppu = meta
         .get("px_per_unit")
         .and_then(Value::as_f64)
-        .filter(|x| *x != 0.0)
+        .filter(|x| x.is_finite() && *x > 0.0)
         .unwrap_or(1.0);
     for p in &doc.pieces {
         let Some(fold) = p.on_fold() else { continue };
@@ -1067,6 +1070,17 @@ mod tests {
         assert!((scale - 2.0).abs() < 1e-12, "got {consensus}");
         assert_eq!(consensus["unparseable"].as_array().unwrap().len(), 2);
         assert_eq!(consensus["inliers"].as_array().unwrap().len(), 2);
+
+        // Single label with NaN or negative tolerance must not panic in median(&[]).
+        for bad_tol in [f64::NAN, -0.05] {
+            let one = label_consensus(
+                &pat,
+                &[json!({"text": "200 mm", "value_mm": 200.0, "ref": "p1/e3"})],
+                bad_tol,
+            );
+            assert_eq!(one["scale_mm_per_unit"], Value::Null);
+            assert_eq!(one["no_consensus"], json!(true));
+        }
 
         // Also ensure audit() produces finite nominal scale and never panics on empty symmetric pieces.
         let mut degenerate = doc;

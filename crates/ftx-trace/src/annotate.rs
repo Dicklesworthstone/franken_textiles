@@ -52,6 +52,9 @@ fn trace_mut(piece: &mut Piece) -> Option<&mut Map<String, Value>> {
 /// angle, internal and trace-mark points, and the trace's `to_px` map.
 pub fn mirror_piece(piece: &mut Piece) {
     let xs: Vec<f64> = piece.vertices.iter().map(|(_, p)| p.x).collect();
+    if xs.is_empty() {
+        return;
+    }
     let cx = 0.5
         * (xs.iter().copied().fold(f64::INFINITY, f64::min)
             + xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
@@ -808,5 +811,16 @@ mod tests {
         let err = merge_at(piece, "c2").unwrap_err().to_string();
         assert!(err.contains("zero-length"), "{err}");
         assert!(piece.notches.as_ref().unwrap()[0].s.is_finite());
+
+        // Mirroring a piece with no vertices must not poison grain or marks with NaN.
+        let mut empty = square_doc().pieces.remove(0);
+        empty.vertices.0.clear();
+        empty.grain = Some(Grain::Points(vec![
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 50.0),
+        ]));
+        mirror_piece(&mut empty);
+        let [g0, g1] = empty.grain.as_ref().and_then(Grain::points).unwrap();
+        assert!(g0.x.is_finite() && g0.y.is_finite() && g1.x.is_finite() && g1.y.is_finite());
     }
 }

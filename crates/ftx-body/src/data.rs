@@ -393,6 +393,19 @@ impl AnnyData {
                 return Err(bad(format!("no anchors for phenotype feature '{feature}'")));
             }
         }
+        for feature in &self.header.phenotype.features {
+            if feature != "race" && !self.header.phenotype.anchors.contains_key(feature) {
+                return Err(bad(format!("no anchors for phenotype feature '{feature}'")));
+            }
+            if feature == "race"
+                && comp_counts.get("race").copied().unwrap_or(0) > 0
+                && self.header.phenotype.fixed_value <= 0.0
+            {
+                return Err(bad(
+                    "phenotype fixed_value must be positive when race components are present",
+                ));
+            }
+        }
         for (feature, anchors) in &self.header.phenotype.anchors {
             if anchors.is_empty()
                 || anchors.iter().any(|a| !a.is_finite())
@@ -604,6 +617,34 @@ mod tests {
         );
         assert_eq!(
             AnnyData::from_bytes(&bad_anchors, false).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Listed non-race feature without anchors (would panic indexing ph.anchors[f]) -> InvalidDocument.
+        let missing_feature_anchor = minimal_valid_ftxbody(
+            |h| {
+                h["phenotype"]["features"] = json!(["race", "height"]);
+            },
+            |_| {},
+        );
+        assert_eq!(
+            AnnyData::from_bytes(&missing_feature_anchor, false)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Zero fixed_value with race components (would divide 0/0 in coefficients) -> InvalidDocument.
+        let zero_race_fixed = minimal_valid_ftxbody(
+            |h| {
+                h["phenotype"]["fixed_value"] = json!(0.0);
+            },
+            |_| {},
+        );
+        assert_eq!(
+            AnnyData::from_bytes(&zero_race_fixed, false)
+                .unwrap_err()
+                .code,
             RefusalCode::InvalidDocument
         );
     }

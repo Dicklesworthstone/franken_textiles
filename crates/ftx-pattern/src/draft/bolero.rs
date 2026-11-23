@@ -524,6 +524,10 @@ pub fn braid_border(
     chain: &[&str],
     inset: f64,
 ) -> Result<Option<Vec<Vec2>>, Refusal> {
+    Refusal::finite("braid inset", inset)?;
+    if chain.is_empty() {
+        return Ok(None);
+    }
     let (outline, edges) = piece_outline(piece)?;
     let edge = |id: &str| {
         edges
@@ -534,14 +538,22 @@ pub fn braid_border(
     };
     let mut pts = edge(chain[0])?;
     for id in &chain[1..] {
-        pts.extend_from_slice(&edge(id)?[1..]);
+        let next = edge(id)?;
+        pts.extend_from_slice(next.get(1..).unwrap_or(&[]));
     }
     let n = pts.len();
+    if n < 2 {
+        return Ok(None);
+    }
     // pts[0] + 3 * inset * t0 / norm(t0)
     let ext_dir = |a: Vec2, b: Vec2| {
         let t = a - b;
         let l = (t.x * t.x + t.y * t.y).sqrt();
-        a + Vec2::new(3.0 * inset * t.x / l, 3.0 * inset * t.y / l)
+        if l > 0.0 && l.is_finite() {
+            a + Vec2::new(3.0 * inset * t.x / l, 3.0 * inset * t.y / l)
+        } else {
+            a
+        }
     };
     let mut ext = vec![ext_dir(pts[0], pts[1])];
     ext.extend_from_slice(&pts);
@@ -653,4 +665,41 @@ fn soutache(pat: &mut Value, s: &Map<String, Value>, chest: f64) -> Result<(), R
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn braid_border_handles_empty_chain_zero_end_segment_and_refuses_non_finite_inset() {
+        let piece = json!({
+            "id": "p",
+            "vertices": {"a": [0, 0], "b": [0, 0], "c": [100, 0], "d": [100, 100], "e": [0, 100]},
+            "edges": [
+                {"id": "zero", "from": "a", "to": "b"},
+                {"id": "bottom", "from": "b", "to": "c"},
+                {"id": "right", "from": "c", "to": "d"},
+                {"id": "top", "from": "d", "to": "e"},
+                {"id": "left", "from": "e", "to": "a"}
+            ]
+        });
+        assert_eq!(braid_border(&piece, &[], 10.0).unwrap(), None);
+        assert_eq!(
+            braid_border(&piece, &["bottom"], f64::NAN)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            braid_border(&piece, &["bottom"], f64::INFINITY)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        // Zero-length leading edge must not produce NaN during end-extension.
+        if let Some(pts) = braid_border(&piece, &["zero", "bottom"], 10.0).unwrap() {
+            assert!(pts.iter().all(|p| p.is_finite()));
+        }
+    }
 }

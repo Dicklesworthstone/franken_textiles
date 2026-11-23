@@ -97,22 +97,33 @@ pub(crate) fn point_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     if a == b {
         return dist(p, a);
     }
-    let len2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
-    let r = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / len2;
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    if len2 == 0.0 || !len2.is_finite() {
+        return det::hypot(p.x - a.x, p.y - a.y).min(det::hypot(p.x - b.x, p.y - b.y));
+    }
+    let r = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+    if !r.is_finite() {
+        return det::hypot(p.x - a.x, p.y - a.y).min(det::hypot(p.x - b.x, p.y - b.y));
+    }
     if r <= 0.0 {
         return dist(p, a);
     }
     if r >= 1.0 {
         return dist(p, b);
     }
-    let s = ((a.y - p.y) * (b.x - a.x) - (a.x - p.x) * (b.y - a.y)) / len2;
+    let s = ((a.y - p.y) * dx - (a.x - p.x) * dy) / len2;
     s.abs() * len2.sqrt()
 }
 
 /// GEOS `Distance::pointToLinePerpendicular`.
 fn point_to_line_perpendicular(p: Vec2, a: Vec2, b: Vec2) -> f64 {
-    let len2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
-    let s = ((a.y - p.y) * (b.x - a.x) - (a.x - p.x) * (b.y - a.y)) / len2;
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    if len2 == 0.0 || !len2.is_finite() {
+        return det::hypot(p.x - a.x, p.y - a.y);
+    }
+    let s = ((a.y - p.y) * dx - (a.x - p.x) * dy) / len2;
     s.abs() * len2.sqrt()
 }
 
@@ -740,6 +751,9 @@ fn triangle_eroded(t: &[Vec2], distance: f64) -> bool {
     let (p0, p1, p2) = (t[0], t[1], t[2]);
     let (l0, l1, l2) = (dist(p1, p2), dist(p0, p2), dist(p0, p1));
     let c = l0 + l1 + l2;
+    if c == 0.0 || !c.is_finite() {
+        return true;
+    }
     let centre = Vec2::new(
         (l0 * p0.x + l1 * p1.x + l2 * p2.x) / c,
         (l0 * p0.y + l1 * p1.y + l2 * p2.y) / c,
@@ -840,6 +854,11 @@ pub fn buffer(polygons: &[Polygon], distance: f64, join: Join) -> Result<Vec<Pol
     if !distance.is_finite() {
         return Err("buffer: distance must be a finite value".into());
     }
+    if let Join::Mitre(limit) = join
+        && !limit.is_finite()
+    {
+        return Err("buffer: mitre limit must be a finite value".into());
+    }
     let full = raw_curves(polygons, distance, join, None)?;
     if full.is_empty() {
         return Ok(Vec::new());
@@ -871,11 +890,16 @@ fn precision_scale_factor(polygons: &[Polygon], distance: f64, digits: i32) -> f
         .filter(|p| p.is_finite())
         .fold(0.0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
     let buf_env_max = env_max + 2.0 * if distance > 0.0 { distance } else { 0.0 };
+    if !buf_env_max.is_finite() || buf_env_max == 0.0 {
+        return 1.0;
+    }
     // the smallest power of ten above the envelope (`std::log(10.0)` is LN_10); `std::pow(10.0, n)` is
     // exact or correctly rounded
     let env_digits = (ln_correctly_rounded(buf_env_max) / std::f64::consts::LN_10 + 1.0) as i32;
     format!("1e{}", digits.saturating_sub(env_digits))
-        .parse()
+        .parse::<f64>()
+        .ok()
+        .filter(|s| s.is_finite() && *s > 0.0)
         .unwrap_or(1.0)
 }
 
@@ -1121,5 +1145,45 @@ mod tests {
                 assert!(poly.shell.iter().all(|p| p.is_finite()));
             }
         }
+    }
+
+    #[test]
+    fn non_finite_mitre_refuses_and_zero_envelope_or_extreme_segments_stay_finite() {
+        let sq = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(buffer(&[Polygon::new(sq.clone())], 1.0, Join::Mitre(bad)).is_err());
+        }
+        // Finite zero mitre falls back to bevel cleanly.
+        assert!(buffer(&[Polygon::new(sq)], 1.0, Join::Mitre(0.0)).is_ok());
+
+        // Zero-envelope and extreme-envelope precision scale factors remain finite and positive.
+        let origin_poly = Polygon::new(vec![Vec2::ZERO; 4]);
+        let s0 = precision_scale_factor(&[origin_poly], -1.0, 12);
+        assert!(s0.is_finite() && s0 > 0.0);
+        let huge_poly = Polygon::new(vec![Vec2::new(1e308, 0.0), Vec2::new(1e308, 1.0)]);
+        let sh = precision_scale_factor(&[huge_poly], 1e308, 12);
+        assert!(sh.is_finite() && sh > 0.0);
+
+        // Collapsed zero-area triangle counts as eroded rather than returning NaN < d (false).
+        assert!(triangle_eroded(&[Vec2::ZERO; 4], -1.0));
+
+        // Subnormal and extreme segments never return NaN distances.
+        let d_tiny = point_to_segment(
+            Vec2::new(0.5e-200, 1e-200),
+            Vec2::ZERO,
+            Vec2::new(1e-200, 0.0),
+        );
+        assert!(d_tiny.is_finite() && d_tiny >= 0.0);
+        let d_huge = point_to_segment(Vec2::new(0.5e200, 1e200), Vec2::ZERO, Vec2::new(1e200, 0.0));
+        assert!(d_huge.is_finite() && d_huge >= 0.0);
+        assert!(
+            point_to_line_perpendicular(Vec2::new(1.0, 1.0), Vec2::ZERO, Vec2::new(1e-200, 0.0))
+                .is_finite()
+        );
     }
 }
