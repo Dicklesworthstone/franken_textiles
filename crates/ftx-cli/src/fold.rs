@@ -171,10 +171,11 @@ pub(super) fn sim_points(args: &Args) -> Result<(Value, i32, String), Refusal> {
         };
         let drafted = levels.get(placement["y0_landmark"].as_str().unwrap_or("waist"))? - y0 + p.y;
         let final_z = (positions[index].z - floor) * 1000.0;
-        if !drafted.is_finite() || !final_z.is_finite() {
+        let rise = final_z - drafted;
+        if !drafted.is_finite() || !final_z.is_finite() || !rise.is_finite() {
             return Err(bad_input("non-finite corner height"));
         }
-        rows.push(json!({"point":key, "drafted_z":py::round(drafted, 1), "final_z":py::round(final_z, 1), "rise":py::round(final_z - drafted, 1)}));
+        rows.push(json!({"point":key, "drafted_z":py::round(drafted, 1), "final_z":py::round(final_z, 1), "rise":py::round(rise, 1)}));
     }
     if rows.is_empty() {
         return Err(bad_input("no torso corners in this fold-up"));
