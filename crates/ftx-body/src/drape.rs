@@ -298,18 +298,54 @@ fn bone(model: &AnnyModel, label: &str) -> Result<usize, Refusal> {
     })
 }
 
+fn validate_rest_frames(model: &AnnyModel, rest: &RestBody) -> Result<(), Refusal> {
+    let count = model.data().header.counts.bones;
+    if rest.bone_frames.len() != count || model.data().header.labels.bones.len() != count {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "rest bone frames and model bone labels must match the model's bone count",
+        ));
+    }
+    if rest
+        .bone_frames
+        .iter()
+        .any(|f| !f.t.is_finite() || f.m.rows.iter().flatten().any(|v| !v.is_finite()))
+    {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "a rest bone frame holds a non-finite number",
+        ));
+    }
+    Ok(())
+}
+
+fn rest_bone_dir(rest: &RestBody, bone_idx: usize, label: &str) -> Result<Vec3, Refusal> {
+    let raw = rest.bone_frames[bone_idx].m.col(1);
+    let norm = raw.norm();
+    if !(norm.is_finite() && norm > 0.0) {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            format!("bone {label} has a degenerate rest axis"),
+        ));
+    }
+    Ok(raw / norm)
+}
+
 /// The joint rotations of `pose` on this rest body, in a fixed order (arms L, R; straightening L,
 /// R; then legs).
 ///
 /// # Errors
 /// [`RefusalCode::OutOfRange`] for an abduction outside 0–180°; [`RefusalCode::InvalidDocument`] when
-/// the model lacks a posed bone.
+/// the model lacks a posed bone or `rest.bone_frames` disagrees with the model;
+/// [`RefusalCode::NonFinite`] for non-finite rest frames; [`RefusalCode::DegenerateGeometry`] for a
+/// degenerate arm bone axis or undefined abduction plane.
 pub fn joint_rotations(
     model: &AnnyModel,
     rest: &RestBody,
     pose: &Pose,
 ) -> Result<Vec<JointRotation>, Refusal> {
     pose.validate()?;
+    validate_rest_frames(model, rest)?;
     let mut out = Vec::new();
     let angles = pose.arm_pose.map_or([pose.arm_abduction_deg; 2], |arms| {
         [
@@ -320,19 +356,32 @@ pub fn joint_rotations(
     for (label, deg) in ["upperarm01.L", "upperarm01.R"].into_iter().zip(angles) {
         let Some(deg) = deg else { continue };
         let b = bone(model, label)?;
-        let d = rest.bone_frames[b].m.col(1).normalized();
+        let d = rest_bone_dir(rest, b, label)?;
         let theta0 = det::acos((-d.z).clamp(-1.0, 1.0));
+        let angle = theta0 - deg.to_radians();
+        let axis_raw = d.cross(Vec3::new(0.0, 0.0, -1.0));
+        let axis_norm = axis_raw.norm();
+        if axis_norm <= 1e-12 {
+            if angle.abs() <= 1e-12 {
+                continue;
+            }
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!("bone {label} is vertical and has no unique abduction plane"),
+            ));
+        }
         out.push(JointRotation {
             bone: b,
-            axis: d.cross(Vec3::new(0.0, 0.0, -1.0)).normalized(),
-            angle: theta0 - deg.to_radians(),
+            axis: axis_raw / axis_norm,
+            angle,
         });
     }
     if pose.straight_arms {
         for side in ["L", "R"] {
             let dir = |label: &str| -> Result<(usize, Vec3), Refusal> {
-                let b = bone(model, &format!("{label}.{side}"))?;
-                Ok((b, rest.bone_frames[b].m.col(1).normalized()))
+                let full = format!("{label}.{side}");
+                let b = bone(model, &full)?;
+                Ok((b, rest_bone_dir(rest, b, &full)?))
             };
             let ((_, d1), (b2, d2), (b3, d3)) =
                 (dir("upperarm01")?, dir("upperarm02")?, dir("lowerarm01")?);
@@ -385,23 +434,7 @@ fn thumb_local_rotations(
             checked_thumb_rotation("right", thumbs.right_rotation_vector_rad)?,
         ),
     ];
-    let count = model.data().header.counts.bones;
-    if rest.bone_frames.len() != count || model.data().header.labels.bones.len() != count {
-        return Err(Refusal::new(
-            RefusalCode::InvalidDocument,
-            "rest bone frames and model bone labels must match the model's bone count",
-        ));
-    }
-    if rest
-        .bone_frames
-        .iter()
-        .any(|f| !f.t.is_finite() || f.m.rows.iter().flatten().any(|v| !v.is_finite()))
-    {
-        return Err(Refusal::new(
-            RefusalCode::NonFinite,
-            "a rest bone frame holds a non-finite number",
-        ));
-    }
+    validate_rest_frames(model, rest)?;
     let mut out = Vec::with_capacity(2);
     for (label, (vector, angle)) in rotations {
         if angle != 0.0 {
@@ -1125,6 +1158,27 @@ pub fn trimmed_skin(
         }
     }
     let k = data.header.counts.influences;
+    let expected_weights = vertices.len().checked_mul(k);
+    if vertices.len() != data.header.counts.vertices
+        || k == 0
+        || expected_weights != Some(data.vertex_bone_weights.len())
+        || expected_weights != Some(data.vertex_bone_indices.len())
+        || data
+            .vertex_bone_indices
+            .iter()
+            .any(|&b| b as usize >= parents.len())
+    {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "body mesh vertices or skinning tables do not match the body model",
+        ));
+    }
+    if data.vertex_bone_weights.iter().any(|w| !w.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "body model skinning weights hold a non-finite number",
+        ));
+    }
     let dropped: Vec<bool> = (0..vertices.len())
         .map(|v| {
             let row = &data.vertex_bone_weights[v * k..(v + 1) * k];
@@ -1750,6 +1804,81 @@ mod tests {
             joint_rotations_with_thumbs(&model, &malformed, &Pose::rest(), &thumbs)
                 .unwrap_err()
                 .code,
+            RefusalCode::NonFinite
+        );
+        // Plain joint_rotations and pose_deltas must enforce the same rest-frame checks and
+        // refuse degenerate or vertical arm bone axes instead of emitting zero-axis rotations.
+        assert_eq!(
+            joint_rotations(&model, &malformed, &Pose::rest())
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        let (_, mut short_rest) = thumb_fixture();
+        short_rest.bone_frames.pop();
+        assert_eq!(
+            pose_deltas(&model, &short_rest, &Pose::drape(), 1.0)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        let (_, mut vertical_arm) = thumb_fixture();
+        // upperarm01.L (index 1): local +Y pointing straight down (-Z) has no unique abduction plane.
+        vertical_arm.bone_frames[1].m =
+            ftx_core::Mat3::from_rows([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]);
+        assert_eq!(
+            joint_rotations(&model, &vertical_arm, &Pose::a_pose(35.0))
+                .unwrap_err()
+                .code,
+            RefusalCode::DegenerateGeometry
+        );
+        // Already at 0 deg abduction (straight down): zero angle is a no-op, not degenerate.
+        assert!(
+            joint_rotations(
+                &model,
+                &vertical_arm,
+                &Pose {
+                    arm_abduction_deg: None,
+                    arm_pose: Some(ArmPose {
+                        left_abduction_deg: 0.0,
+                        right_abduction_deg: 35.0,
+                    }),
+                    legs: Legs::Standing,
+                    leg_fraction: 1.0,
+                    straight_arms: false,
+                },
+            )
+            .is_ok()
+        );
+        // Zero-length upperarm column refuses DegenerateGeometry instead of silently normalizing to zero.
+        let (_, mut zero_arm) = thumb_fixture();
+        zero_arm.bone_frames[1].m = ftx_core::Mat3::from_rows([[0.0; 3]; 3]);
+        assert_eq!(
+            joint_rotations(&model, &zero_arm, &Pose::drape())
+                .unwrap_err()
+                .code,
+            RefusalCode::DegenerateGeometry
+        );
+        // trimmed_skin refuses mismatched vertex counts, zero influences, and non-finite weights.
+        let mut wrong_verts = model.data().template_vertices.clone();
+        wrong_verts.push(Vec3::ZERO);
+        assert_eq!(
+            trimmed_skin(&model, &wrong_verts, &["wrist.L"])
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        let mut nan_data = model.data().clone();
+        nan_data.vertex_bone_weights[0] = f64::NAN;
+        let nan_model = AnnyModel::from_data(nan_data).unwrap();
+        assert_eq!(
+            trimmed_skin(
+                &nan_model,
+                &nan_model.data().template_vertices,
+                &["wrist.L"]
+            )
+            .unwrap_err()
+            .code,
             RefusalCode::NonFinite
         );
     }
