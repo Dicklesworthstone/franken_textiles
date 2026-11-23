@@ -259,6 +259,18 @@ pub struct FoldSettings {
     /// Structural time-integration scheme (omitted when legacy `ImplicitEuler`).
     #[serde(default, skip_serializing_if = "ftx_drape::TimeIntegrator::is_default")]
     pub integrator: ftx_drape::TimeIntegrator,
+    /// Hinge bending formulation (omitted when legacy `Quadratic`).
+    #[serde(default, skip_serializing_if = "ftx_drape::BendingModel::is_default")]
+    pub bending_model: ftx_drape::BendingModel,
+    /// Membrane compression-softening formulation (omitted when legacy `AxisAligned`).
+    #[serde(
+        default,
+        skip_serializing_if = "ftx_drape::CompressionModel::is_default"
+    )]
+    pub compression_model: ftx_drape::CompressionModel,
+    /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping (omitted when disabled).
+    #[serde(default, skip_serializing_if = "ftx_drape::DampingOptions::is_default")]
+    pub damping: ftx_drape::DampingOptions,
 }
 
 impl Default for FoldSettings {
@@ -281,6 +293,9 @@ impl Default for FoldSettings {
             time_subdivision: None,
             newton_strategy: ftx_drape::NewtonStrategy::ProjectedNewton,
             integrator: ftx_drape::TimeIntegrator::ImplicitEuler,
+            bending_model: ftx_drape::BendingModel::Quadratic,
+            compression_model: ftx_drape::CompressionModel::AxisAligned,
+            damping: ftx_drape::DampingOptions::default(),
         }
     }
 }
@@ -403,6 +418,9 @@ fn fold_on_source(
         time_subdivision,
         newton_strategy,
         integrator,
+        bending_model,
+        compression_model,
+        damping,
     } = options;
     let m = |r: ftx_core::Refusal| r.to_string();
     let mut pose = Pose::drape();
@@ -432,6 +450,9 @@ fn fold_on_source(
         time_subdivision,
         newton_strategy,
         integrator,
+        bending_model,
+        compression_model,
+        damping,
         ..defaults
     };
     opts.self_contact = Some(ftx_drape::contact::ContactParams {
@@ -976,10 +997,13 @@ mod tests {
         use ftx_core::Vec3;
         use ftx_drape::{NewtonStrategy, PartFrame, TimeIntegrator, scene::PartFrames};
 
-        // Default FoldSettings omits newton_strategy, integrator, and explicit schedule overrides.
+        // Default FoldSettings omits newton_strategy, integrator, physics realism overrides, and explicit schedule overrides.
         let def_val = serde_json::to_value(FoldSettings::default()).unwrap();
         assert!(def_val.get("newton_strategy").is_none());
         assert!(def_val.get("integrator").is_none());
+        assert!(def_val.get("bending_model").is_none());
+        assert!(def_val.get("compression_model").is_none());
+        assert!(def_val.get("damping").is_none());
         assert!(def_val.get("step_s").is_none());
         assert!(def_val.get("sew_steps").is_none());
         assert!(def_val.get("drape_steps").is_none());

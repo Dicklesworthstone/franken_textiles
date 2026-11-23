@@ -306,6 +306,15 @@ fn attach(
     if !opts.integrator.is_default() {
         comparison["shared_settings"]["integrator"] = json!(opts.integrator);
     }
+    if !opts.bending_model.is_default() {
+        comparison["shared_settings"]["bending_model"] = json!(opts.bending_model);
+    }
+    if !opts.compression_model.is_default() {
+        comparison["shared_settings"]["compression_model"] = json!(opts.compression_model);
+    }
+    if !opts.damping.is_default() {
+        comparison["shared_settings"]["damping"] = json!(opts.damping);
+    }
     for f in &flags {
         flag(&mut primary.report, f)?;
     }

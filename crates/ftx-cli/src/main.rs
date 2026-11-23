@@ -68,6 +68,7 @@ const USAGE: &str = "usage:
             [--thumb-pose JSON] [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
+            [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -77,6 +78,7 @@ const USAGE: &str = "usage:
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
+            [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
@@ -212,6 +214,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 || (name == "check-contact" && argv.first().is_some_and(|s| s == "viewer"))
                 || name == "static-equilibrium"
                 || name == "time-subdivision"
+                || name == "air-drag"
                 || measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
@@ -940,6 +943,62 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
             "--rho-inf requires --integrator generalized-alpha",
         ));
     }
+    if let Some(bm) = args.options.get("bending-model") {
+        opts.bending_model = match bm.as_str() {
+            "quadratic" => ftx_drape::BendingModel::Quadratic,
+            "discrete-shells" => ftx_drape::BendingModel::DiscreteShells,
+            _ => {
+                return Err(bad_input(
+                    "--bending-model must be quadratic or discrete-shells",
+                ));
+            }
+        };
+    }
+    if let Some(cm) = args.options.get("compression-model") {
+        opts.compression_model = match cm.as_str() {
+            "axis-aligned" => ftx_drape::CompressionModel::AxisAligned,
+            "principal" => ftx_drape::CompressionModel::Principal,
+            _ => {
+                return Err(bad_input(
+                    "--compression-model must be axis-aligned or principal",
+                ));
+            }
+        };
+    }
+    if args.options.contains_key("air-drag") {
+        let mut drag = ftx_drape::AirDrag::standard();
+        if let Some(v) = args.options.get("air-cn") {
+            drag.c_normal = v
+                .parse()
+                .map_err(|_| bad_input("--air-cn must be a finite nonnegative drag coefficient"))?;
+        }
+        if let Some(v) = args.options.get("air-ct") {
+            drag.c_tangent = v
+                .parse()
+                .map_err(|_| bad_input("--air-ct must be a finite nonnegative drag coefficient"))?;
+        }
+        if let Some(v) = args.options.get("air-rho") {
+            drag.rho_air_kg_m3 = v.parse().map_err(|_| {
+                bad_input("--air-rho must be a finite nonnegative air density in kg/m³")
+            })?;
+        }
+        opts.damping.air_drag = Some(drag);
+    } else if let Some(name) = ["air-cn", "air-ct", "air-rho"]
+        .into_iter()
+        .find(|key| args.options.contains_key(*key))
+    {
+        return Err(bad_input(format!("--{name} requires --air-drag")));
+    }
+    if let Some(v) = args.options.get("rayleigh-membrane-s") {
+        opts.damping.rayleigh_membrane_s = v.parse().map_err(|_| {
+            bad_input("--rayleigh-membrane-s must be a finite nonnegative duration in seconds")
+        })?;
+    }
+    if let Some(v) = args.options.get("rayleigh-bending-s") {
+        opts.damping.rayleigh_bending_s = v.parse().map_err(|_| {
+            bad_input("--rayleigh-bending-s must be a finite nonnegative duration in seconds")
+        })?;
+    }
     opts.validate()?;
     Ok(opts)
 }
@@ -1086,6 +1145,14 @@ fn cmd_drape_bound(
             "newton-strategy",
             "integrator",
             "rho-inf",
+            "bending-model",
+            "compression-model",
+            "air-drag",
+            "air-cn",
+            "air-ct",
+            "air-rho",
+            "rayleigh-membrane-s",
+            "rayleigh-bending-s",
             "model",
             "time-step-s",
             "newton-tol-m-s",
@@ -2530,6 +2597,79 @@ mod tests {
             "{}",
             no_sim_err.message
         );
+    }
+
+    #[test]
+    fn physics_realism_cli_options_parse_and_refuse_fail_closed() {
+        let def = drape_options(&parse(&["drape".into()]).unwrap()).unwrap();
+        assert!(def.bending_model.is_default());
+        assert!(def.compression_model.is_default());
+        assert!(def.damping.is_default());
+
+        let rich = drape_options(
+            &parse(
+                &[
+                    "drape",
+                    "--bending-model",
+                    "discrete-shells",
+                    "--compression-model",
+                    "principal",
+                    "--air-drag",
+                    "--air-cn",
+                    "1.4",
+                    "--air-ct",
+                    "0.08",
+                    "--air-rho",
+                    "1.2",
+                    "--rayleigh-membrane-s",
+                    "0.002",
+                    "--rayleigh-bending-s",
+                    "0.004",
+                ]
+                .map(String::from),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rich.bending_model, ftx_drape::BendingModel::DiscreteShells);
+        assert_eq!(
+            rich.compression_model,
+            ftx_drape::CompressionModel::Principal
+        );
+        let drag = rich.damping.air_drag.unwrap();
+        assert_eq!(drag.c_normal, 1.4);
+        assert_eq!(drag.c_tangent, 0.08);
+        assert_eq!(drag.rho_air_kg_m3, 1.2);
+        assert_eq!(rich.damping.rayleigh_membrane_s, 0.002);
+        assert_eq!(rich.damping.rayleigh_bending_s, 0.004);
+
+        for bad in [
+            vec!["--bending-model", "bogus"],
+            vec!["--compression-model", "bogus"],
+            vec!["--air-cn", "1.2"],
+            vec!["--air-drag", "--air-cn", "-0.1"],
+            vec!["--air-drag", "--air-rho", "NaN"],
+            vec!["--rayleigh-membrane-s", "-0.001"],
+            vec!["--rayleigh-bending-s", "NaN"],
+        ] {
+            let mut argv = vec!["drape", "absent-pattern.json"];
+            argv.extend(bad.iter().copied());
+            let args = parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+            let err = cmd_drape(&args).unwrap_err();
+            assert_ne!(err.code, RefusalCode::Io, "{}", err.message);
+
+            let mut round_argv = vec!["round", "absent-ws", "--sim"];
+            round_argv.extend(bad.iter().copied());
+            let round_args =
+                parse(&round_argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+            let round_err = round::cmd_round(&round_args).unwrap_err();
+            assert_ne!(round_err.code, RefusalCode::Io, "{}", round_err.message);
+            assert!(
+                !round_err.message.contains("unknown option"),
+                "round must recognize physics realism options: {}",
+                round_err.message
+            );
+        }
     }
 
     #[test]

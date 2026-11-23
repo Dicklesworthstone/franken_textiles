@@ -14,8 +14,11 @@ use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
 use serde::{Deserialize, Serialize};
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
+use crate::damping::{DampingOptions, DampingStep, VelocityMap};
 use crate::eigen::{project_psd, project_psd_translation_free};
-use crate::elements::{ElasticSegment, Hinge, Membrane, MembraneElement};
+use crate::elements::{
+    BendingModel, CompressionModel, ElasticSegment, Hinge, Local, Membrane, MembraneElement,
+};
 use crate::integrator::{GeneralizedAlphaParams, TimeIntegrator};
 use crate::sparse::advanced::{
     Precond, SteihaugConfig, eisenstat_walker, ilu0_spd_shifted, steihaug_cg,
@@ -53,6 +56,10 @@ pub struct ClothModel {
     pub compression: Vec<[f64; 2]>,
     /// Bending stiffness B (N·m, flexural rigidity per unit width).
     pub bending: f64,
+    /// Hinge bending formulation (default: legacy [`BendingModel::Quadratic`]).
+    pub bending_model: BendingModel,
+    /// Membrane compression-softening formulation (default: legacy [`CompressionModel::AxisAligned`]).
+    pub compression_model: CompressionModel,
     /// Tension-only elastic segments (a casing's elastic), between vertices that share an element so the
     /// Hessian pattern does not change.
     pub elastics: Vec<ElasticSegment>,
@@ -215,6 +222,8 @@ impl ClothModel {
             attached_mass: None,
             membrane,
             bending,
+            bending_model: BendingModel::Quadratic,
+            compression_model: CompressionModel::AxisAligned,
             elastics: Vec::new(),
             element_materials: None,
             element_responses: None,
@@ -274,6 +283,60 @@ impl ClothModel {
             return 0.0;
         }
         self.hinge_bending.as_ref().map_or(self.bending, |b| b[h])
+    }
+
+    /// Sets each hinge's rest dihedral angle `θ₀` (rad, strictly inside `(−π, π)`) for pressed
+    /// pleats, ironed creases, or folded lapels under [`BendingModel::DiscreteShells`].
+    ///
+    /// # Errors
+    /// [`RefusalCode::OutOfRange`] on length mismatch or an angle outside `(−π, π)`.
+    pub fn set_hinge_rest_angles(&mut self, angles: &[f64]) -> Result<(), Refusal> {
+        if angles.len() != self.hinges.len() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "{} hinge rest angles for {} hinges",
+                    angles.len(),
+                    self.hinges.len()
+                ),
+            ));
+        }
+        for (i, &theta) in angles.iter().enumerate() {
+            if !(theta.is_finite() && theta.abs() < std::f64::consts::PI) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("hinge {i} rest angle {theta} rad must be finite and in (-pi, pi)"),
+                ));
+            }
+        }
+        for (hinge, &theta) in self.hinges.iter_mut().zip(angles) {
+            hinge.rest_angle = theta;
+        }
+        Ok(())
+    }
+
+    /// Membrane energy of element `e` under [`Self::compression_model`].
+    #[must_use]
+    pub fn membrane_energy(&self, e: usize, x: &[Vec3]) -> f64 {
+        self.membranes[e].energy_with_model(x, &self.material(e), self.compression_model)
+    }
+
+    /// Membrane energy, gradient and Hessian of element `e` under [`Self::compression_model`].
+    #[must_use]
+    pub fn membrane_local(&self, e: usize, x: &[Vec3]) -> Local<9, 81> {
+        self.membranes[e].local_with_model(x, &self.material(e), self.compression_model)
+    }
+
+    /// Hinge energy of hinge `h` under [`Self::bending_model`].
+    #[must_use]
+    pub fn hinge_energy(&self, h: usize, x: &[Vec3]) -> f64 {
+        self.hinges[h].energy_with_model(x, self.hinge_rigidity(h), self.bending_model)
+    }
+
+    /// Hinge energy, gradient and Hessian of hinge `h` under [`Self::bending_model`].
+    #[must_use]
+    pub fn hinge_local(&self, h: usize, x: &[Vec3]) -> Local<12, 144> {
+        self.hinges[h].local_with_model(x, self.hinge_rigidity(h), self.bending_model)
     }
 
     /// Whether element coefficients differ, rather than merely their source identities.
@@ -406,17 +469,14 @@ impl ClothModel {
                 .enumerate()
                 .map(|(i, e)| {
                     self.membrane_response(i).map_or_else(
-                        || e.energy(x, &self.material(i)),
+                        || self.membrane_energy(i, x),
                         |law| e.response_energy(x, law, &self.material(i)),
                     )
                 })
                 .sum()
         });
-        let mut b: f64 = self
-            .hinges
-            .iter()
-            .enumerate()
-            .map(|(i, h)| h.energy(x, self.hinge_rigidity(i)))
+        let mut b: f64 = (0..self.hinges.len())
+            .map(|i| self.hinge_energy(i, x))
             .sum();
         if let Some(field) = &self.panel_bending {
             b += panels.unwrap_or_else(|| field.patches.iter().map(|p| p.energy(x)).sum::<f64>());
@@ -433,6 +493,8 @@ impl ClothModel {
             && self.membrane == original.membrane
             && self.compression == original.compression
             && self.bending == original.bending
+            && self.bending_model == original.bending_model
+            && self.compression_model == original.compression_model
             && self.elastics == original.elastics
             && self.element_materials == original.element_materials
             && self.element_responses == original.element_responses
@@ -658,6 +720,8 @@ pub struct Solver {
     pub newton_strategy: NewtonStrategy,
     /// Structural time-integration scheme (default: [`TimeIntegrator::ImplicitEuler`]).
     pub integrator: TimeIntegrator,
+    /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping (default: disabled).
+    pub damping: DampingOptions,
     /// Nodal accelerations (m/s²) retained by [`TimeIntegrator::GeneralizedAlpha`].
     a: Vec<Vec3>,
     /// Whether `a` has been initialized consistently with `M a₀ = M g − ∇Ψ(x₀)`.
@@ -693,12 +757,14 @@ enum StepContext<'a> {
     ImplicitEuler {
         xt: &'a [Vec3],
         h: f64,
+        damping: Option<&'a DampingStep<'a>>,
     },
     GeneralizedAlpha {
         x0: &'a [Vec3],
         xt: &'a [Vec3],
         h: f64,
         params: GeneralizedAlphaParams,
+        damping: Option<&'a DampingStep<'a>>,
     },
 }
 
@@ -706,7 +772,11 @@ impl<'a> StepContext<'a> {
     fn from_inertia(inertia: Option<(&'a [Vec3], f64)>) -> Self {
         match inertia {
             None => Self::Static,
-            Some((xt, h)) => Self::ImplicitEuler { xt, h },
+            Some((xt, h)) => Self::ImplicitEuler {
+                xt,
+                h,
+                damping: None,
+            },
         }
     }
 
@@ -718,6 +788,13 @@ impl<'a> StepContext<'a> {
         match self {
             Self::Static => None,
             Self::ImplicitEuler { h, .. } | Self::GeneralizedAlpha { h, .. } => Some(h),
+        }
+    }
+
+    fn damping(self) -> Option<&'a DampingStep<'a>> {
+        match self {
+            Self::Static => None,
+            Self::ImplicitEuler { damping, .. } | Self::GeneralizedAlpha { damping, .. } => damping,
         }
     }
 
@@ -799,6 +876,7 @@ impl Solver {
             pcg_iters: 0,
             newton_strategy: NewtonStrategy::ProjectedNewton,
             integrator: TimeIntegrator::ImplicitEuler,
+            damping: DampingOptions::default(),
             free,
             nfree,
             symbolic: None,
@@ -1055,7 +1133,7 @@ impl Solver {
                 .and_then(|field| field.local(i, &self.x, false))
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
-                        || e.local(&self.x, &self.model.material(i)),
+                        || self.model.membrane_local(i, &self.x),
                         |law| e.response_local(&self.x, law, &self.model.material(i)),
                     )
                 });
@@ -1071,7 +1149,7 @@ impl Solver {
             add_local(&mut r, &e.v, &l.grad);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
-            let l = h.local(&self.x, self.model.hinge_rigidity(i));
+            let l = self.model.hinge_local(i, &self.x);
             add_local(&mut r, &h.v, &l.grad);
         }
         for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
@@ -1126,11 +1204,11 @@ impl Solver {
             }
         };
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let l = e.local(&self.x, &self.model.material(i));
+            let l = self.model.membrane_local(i, &self.x);
             accum(&e.v, &l.hess);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
-            let l = h.local(&self.x, self.model.hinge_rigidity(i));
+            let l = self.model.hinge_local(i, &self.x);
             accum(&h.v, &l.hess);
         }
         for e in &self.model.elastics {
@@ -1163,6 +1241,7 @@ impl Solver {
     }
 
     pub(crate) fn check_integrator_history(&self) -> Result<(), Refusal> {
+        self.damping.validate()?;
         if self.integrator != TimeIntegrator::ImplicitEuler
             && (self.relaxation.is_some()
                 || self.plasticity.is_some()
@@ -1171,6 +1250,16 @@ impl Solver {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "Generalized-alpha integration is not admitted for backward-Euler material-history fields; use TimeIntegrator::ImplicitEuler",
+            ));
+        }
+        if self.model.compression_model == CompressionModel::Principal
+            && (self.model.element_responses.is_some()
+                || self.relaxation.is_some()
+                || self.membrane_plasticity.is_some())
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "CompressionModel::Principal is not admitted alongside calibrated nonlinear or history membrane laws, which operate on axis-aligned material-frame strains",
             ));
         }
         Ok(())
@@ -1226,6 +1315,9 @@ impl Solver {
 
     pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
         !self.model.is_heterogeneous()
+            && self.model.bending_model.is_default()
+            && self.model.compression_model.is_default()
+            && self.damping.is_default()
             && self.model.element_materials.is_none()
             && self.model.element_responses.is_none()
             && self.model.hinge_bending.is_none()
@@ -1245,9 +1337,17 @@ impl Solver {
     /// The potential for the active step context (static, implicit Euler, or Generalized-α).
     fn potential_ctx(&self, x: &[Vec3], ctx: StepContext<'_>) -> Result<f64, Refusal> {
         match ctx {
-            StepContext::Static => self.potential_legacy(x, None),
-            StepContext::ImplicitEuler { xt, h } => self.potential_legacy(x, Some((xt, h))),
-            StepContext::GeneralizedAlpha { x0, xt, h, params } => {
+            StepContext::Static => self.potential_legacy(x, None, None),
+            StepContext::ImplicitEuler { xt, h, damping } => {
+                self.potential_legacy(x, Some((xt, h)), damping)
+            }
+            StepContext::GeneralizedAlpha {
+                x0,
+                xt,
+                h,
+                params,
+                damping,
+            } => {
                 self.model.check_membrane_domains(x)?;
                 self.model.check_panel_bending_domains(x)?;
                 let x_eval: Vec<Vec3> = x
@@ -1280,6 +1380,9 @@ impl Solver {
                 if let Some(c) = &self.contact {
                     e += c.terms(x, false, true).energy;
                 }
+                if let Some(d) = damping {
+                    e += d.energy(&self.model, x);
+                }
                 let cm = params.mass_coeff(h);
                 for (i, m) in self.model.mass.iter().enumerate() {
                     e += 0.5 * cm * m * (x[i] - xt[i]).norm2();
@@ -1300,6 +1403,7 @@ impl Solver {
         &self,
         x: &[Vec3],
         inertia: Option<(&[Vec3], f64)>,
+        damping: Option<&DampingStep<'_>>,
     ) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
         self.model.check_panel_bending_domains(x)?;
@@ -1331,6 +1435,9 @@ impl Solver {
         }
         if let Some(c) = &self.contact {
             e += c.terms(x, false, inertia.is_some()).energy;
+        }
+        if let Some(d) = damping {
+            e += d.energy(&self.model, x);
         }
         if e.is_finite() {
             Ok(e)
@@ -1375,7 +1482,6 @@ impl Solver {
             StepContext::GeneralizedAlpha { params, .. } => params.elastic_weight(),
             _ => 1.0,
         };
-        let scale_hess = |v: f64| if hess_scale != 1.0 { v * hess_scale } else { v };
         let mut g = vec![0.0; self.nfree];
         // The contact blocks (evaluated at endpoint `x`) come first so their sparsity positions
         // are known before element blocks are pushed; they are still scattered last.
@@ -1416,6 +1522,7 @@ impl Solver {
                        grad: &[f64],
                        hess: &mut [f64],
                        psd: bool,
+                       scale: f64,
                        sink: &mut Sink,
                        g: &mut [f64]| {
             let n = 3 * dofs.len();
@@ -1429,7 +1536,8 @@ impl Solver {
                 g[fa] += grad[a];
                 for b in 0..n {
                     if let Some(fb) = self.free[3 * dofs[b / 3] + b % 3] {
-                        sink.push(fa, fb, scale_hess(hess[a * n + b]));
+                        let val = hess[a * n + b];
+                        sink.push(fa, fb, if scale != 1.0 { val * scale } else { val });
                     }
                 }
             }
@@ -1441,7 +1549,7 @@ impl Solver {
                 .and_then(|field| field.local(i, x_el, dynamic))
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
-                        || e.local(x_el, &self.model.material(i)),
+                        || self.model.membrane_local(i, x_el),
                         |law| e.response_local(x_el, law, &self.model.material(i)),
                     )
                 });
@@ -1459,11 +1567,27 @@ impl Solver {
                 }
                 l.psd &= extra.psd;
             }
-            scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
+            scatter(
+                &e.v,
+                &l.grad,
+                &mut l.hess,
+                l.psd,
+                hess_scale,
+                &mut sink,
+                &mut g,
+            );
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
-            let mut l = h.local(x_el, self.model.hinge_rigidity(i));
-            scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
+            let mut l = self.model.hinge_local(i, x_el);
+            scatter(
+                &h.v,
+                &l.grad,
+                &mut l.hess,
+                l.psd,
+                hess_scale,
+                &mut sink,
+                &mut g,
+            );
         }
         for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
             let mut l = self
@@ -1471,11 +1595,42 @@ impl Solver {
                 .as_ref()
                 .and_then(|field| field.local(i, x_el, dynamic))
                 .unwrap_or_else(|| p.local(x_el));
-            scatter(&p.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
+            scatter(
+                &p.v,
+                &l.grad,
+                &mut l.hess,
+                l.psd,
+                hess_scale,
+                &mut sink,
+                &mut g,
+            );
         }
         for e in &self.model.elastics {
             let mut l = e.local(x_el);
-            scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
+            scatter(
+                &e.v,
+                &l.grad,
+                &mut l.hess,
+                l.psd,
+                hess_scale,
+                &mut sink,
+                &mut g,
+            );
+        }
+        if let Some(damping) = ctx.damping() {
+            for (i, e) in self.model.membranes.iter().enumerate() {
+                if let Some(mut l) = damping.air_drag_local(i, e.v, x) {
+                    scatter(&e.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
+                }
+                if let Some(mut l) = damping.rayleigh_membrane_local(&self.model, i, x) {
+                    scatter(&e.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
+                }
+            }
+            for (i, h) in self.model.hinges.iter().enumerate() {
+                if let Some(mut l) = damping.rayleigh_bending_local(&self.model, i, x) {
+                    scatter(&h.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
+                }
+            }
         }
         for (i, &m) in self.model.mass.iter().enumerate() {
             for k in 0..3 {
@@ -1483,7 +1638,7 @@ impl Solver {
                     continue;
                 };
                 match ctx {
-                    StepContext::ImplicitEuler { xt, h } => {
+                    StepContext::ImplicitEuler { xt, h, .. } => {
                         g[f] += m * (x[i][k] - xt[i][k]) / (h * h);
                         sink.push(f, f, m / (h * h));
                     }
@@ -2368,6 +2523,7 @@ impl Solver {
         body_start: Option<&[Vec3]>,
         guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
+        self.check_integrator_history()?;
         self.model.check_panel_bending_domains(&self.x)?;
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
@@ -2380,6 +2536,16 @@ impl Solver {
             return self.step_inner_generalized_alpha(h, rho_inf, body_start, guess);
         }
         let x0 = self.x.clone();
+        let damping_step = DampingStep::build(
+            &self.model,
+            self.damping,
+            &x0,
+            h,
+            VelocityMap::ImplicitEuler {
+                x0: &x0,
+                inv_h: 1.0 / h,
+            },
+        )?;
         let xt: Vec<Vec3> = x0
             .iter()
             .zip(&self.v)
@@ -2423,7 +2589,12 @@ impl Solver {
                 }
             }
         }
-        let mut rep = match self.minimize(Some((&xt, h))) {
+        let ctx = StepContext::ImplicitEuler {
+            xt: &xt,
+            h,
+            damping: damping_step.as_ref(),
+        };
+        let mut rep = match self.minimize_ctx(ctx) {
             Ok(rep) => rep,
             Err(e) => {
                 self.x = x0;
@@ -2442,7 +2613,7 @@ impl Solver {
             } else {
                 c.update_lag(&x0, &self.x, h);
             }
-            let again = match self.minimize(Some((&xt, h))) {
+            let again = match self.minimize_ctx(ctx) {
                 Ok(rep) => rep,
                 Err(e) => {
                     self.x = x0;
@@ -2503,9 +2674,29 @@ impl Solver {
         let a0 = if self.accel_initialized {
             self.a.clone()
         } else {
-            // Consistent initial acceleration M a₀ = M g − ∇Ψ(x₀) on free DOFs so Generalized-α
-            // preserves full 2nd-order accuracy from step 1 without mutating state before accept.
-            let (g0, _) = self.assemble_ctx(&x0, StepContext::Static, false, false);
+            // Consistent initial acceleration M a₀ = M g − ∇Ψ(x₀) + F_drag(x₀, v₀) on free DOFs so
+            // Generalized-α preserves full 2nd-order accuracy from step 1 without mutating state before accept.
+            let (mut g0, _) = self.assemble_ctx(&x0, StepContext::Static, false, false);
+            if let Some(drag) = self.damping.air_drag {
+                for e in &self.model.membranes {
+                    let cross = (x0[e.v[1]] - x0[e.v[0]]).cross(x0[e.v[2]] - x0[e.v[0]]);
+                    let norm = cross.norm();
+                    if !(norm.is_finite() && norm > 0.0) {
+                        continue;
+                    }
+                    let vc = (v0[e.v[0]] + v0[e.v[1]] + v0[e.v[2]]) * (1.0 / 3.0);
+                    let f_res =
+                        drag.triangle_resistance_force(0.5 * norm, cross * (1.0 / norm), vc)
+                            * (1.0 / 3.0);
+                    for &vi in &e.v {
+                        for k in 0..3 {
+                            if let Some(f) = self.free[3 * vi + k] {
+                                g0[f] += f_res[k];
+                            }
+                        }
+                    }
+                }
+            }
             let mut init = vec![Vec3::ZERO; x0.len()];
             for (i, &m) in self.model.mass.iter().enumerate() {
                 if m > 0.0 {
@@ -2567,11 +2758,36 @@ impl Solver {
                 }
             }
         }
+        let damping_step = if self.damping.is_default() {
+            None
+        } else {
+            let c_v = params.elastic_weight() * params.gamma / (params.beta * h);
+            let v_coeff =
+                params.elastic_weight() * (1.0 - params.gamma / params.beta) + params.alpha_f;
+            let a_coeff = params.elastic_weight() * h * (1.0 - params.gamma / (2.0 * params.beta));
+            let v_base: Vec<Vec3> = v0
+                .iter()
+                .zip(&a0)
+                .map(|(&vi, &ai)| vi * v_coeff + ai * a_coeff)
+                .collect();
+            DampingStep::build(
+                &self.model,
+                self.damping,
+                &x0,
+                h,
+                VelocityMap::GeneralizedAlpha {
+                    x0: &x0,
+                    v_base,
+                    c_v,
+                },
+            )?
+        };
         let ctx = StepContext::GeneralizedAlpha {
             x0: &x0,
             xt: &xt,
             h,
             params,
+            damping: damping_step.as_ref(),
         };
         let mut rep = match self.minimize_ctx(ctx) {
             Ok(rep) => rep,
@@ -2738,6 +2954,7 @@ impl Solver {
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
+        self.check_integrator_history()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -2869,7 +3086,7 @@ impl Solver {
                 .and_then(|field| field.local(i, x, incremental))
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
-                        || e.local(x, &self.model.material(i)),
+                        || self.model.membrane_local(i, x),
                         |law| e.response_local(x, law, &self.model.material(i)),
                     )
                 });
@@ -2887,7 +3104,7 @@ impl Solver {
             }
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
-            let l = h.local(x, self.model.hinge_rigidity(i));
+            let l = self.model.hinge_local(i, x);
             for (a, &vi) in h.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }

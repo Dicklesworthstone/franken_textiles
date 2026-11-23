@@ -2,6 +2,8 @@
 use crate::{
     cloth::NewtonStrategy,
     contact::ContactParams,
+    damping::DampingOptions,
+    elements::{BendingModel, CompressionModel},
     integrator::TimeIntegrator,
     run::{DrapeOptions, StaticEquilibriumOptions},
 };
@@ -62,6 +64,12 @@ struct Options {
     newton_strategy: NewtonStrategy,
     #[serde(default, skip_serializing_if = "TimeIntegrator::is_default")]
     integrator: TimeIntegrator,
+    #[serde(default, skip_serializing_if = "BendingModel::is_default")]
+    bending_model: BendingModel,
+    #[serde(default, skip_serializing_if = "CompressionModel::is_default")]
+    compression_model: CompressionModel,
+    #[serde(default, skip_serializing_if = "DampingOptions::is_default")]
+    damping: DampingOptions,
 }
 
 impl Serialize for DrapeOptions {
@@ -180,6 +188,39 @@ mod tests {
         assert!(bad_opts.validate().is_err());
 
         declared["integrator"]["extra"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
+    }
+
+    #[test]
+    fn bending_compression_and_damping_options_are_opt_in_and_round_trip() {
+        let ordinary = serde_json::to_value(DrapeOptions::default()).unwrap();
+        assert!(ordinary.get("bending_model").is_none());
+        assert!(ordinary.get("compression_model").is_none());
+        assert!(ordinary.get("damping").is_none());
+
+        let mut declared = ordinary;
+        declared["bending_model"] = serde_json::json!("discrete_shells");
+        declared["compression_model"] = serde_json::json!("principal");
+        declared["damping"] = serde_json::json!({
+            "air_drag": {
+                "rho_air_kg_m3": 1.225,
+                "c_normal": 1.2,
+                "c_tangent": 0.05,
+                "eps_v_m_s": 0.001
+            },
+            "rayleigh_membrane_s": 0.002,
+            "rayleigh_bending_s": 0.003
+        });
+        let options: DrapeOptions = serde_json::from_value(declared.clone()).unwrap();
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), declared);
+
+        let mut bad = declared.clone();
+        bad["damping"]["rayleigh_membrane_s"] = serde_json::json!(-0.1);
+        let bad_opts: DrapeOptions = serde_json::from_value(bad).unwrap();
+        assert!(bad_opts.validate().is_err());
+
+        declared["damping"]["unknown_field"] = serde_json::json!(1);
         assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
     }
 

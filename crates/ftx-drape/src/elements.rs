@@ -15,6 +15,52 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_response::{CompiledMembrane, Response};
+use serde::{Deserialize, Serialize};
+
+use crate::ad::{JVec, Jet};
+
+/// Hinge bending formulation for [`crate::cloth::ClothModel`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BendingModel {
+    /// Legacy Bergou quadratic isometric hinge `½·B·w·|Σᵢ Kᵢ xᵢ|²` (bit-identical default).
+    #[default]
+    Quadratic,
+    /// Finite-angle Discrete Shells dihedral hinge `½·B·w_d·(θ − θ₀)²` with smooth `atan2`
+    /// curvature, zero in-plane stretch pollution, non-vanishing hairpin fold torque up to `π`,
+    /// and per-hinge rest-angle crease/pleat support.
+    DiscreteShells,
+}
+
+impl BendingModel {
+    /// Whether this is the legacy default [`BendingModel::Quadratic`].
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::Quadratic)
+    }
+}
+
+/// How membrane compression softening acts on the 2D Green strain tensor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompressionModel {
+    /// Legacy axis-aligned softening on warp `E₁₁` and weft `E₂₂` only (shear `γ₁₂` unsoftened;
+    /// bit-identical default).
+    #[default]
+    AxisAligned,
+    /// Principal-strain tension-field softening: applies the `C²` `tanh` compression blend to
+    /// the eigenvalues of the 2×2 Green strain tensor `E` via the singularity-free spectral
+    /// formula `Φ(E) = a I + b (E − m I)`, eliminating 45° bias and pure-shear membrane locking.
+    Principal,
+}
+
+impl CompressionModel {
+    /// Whether this is the legacy default [`CompressionModel::AxisAligned`].
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::AxisAligned)
+    }
+}
 
 /// Orthotropic membrane material (resultants in N/m, so thickness is folded in).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,6 +226,25 @@ impl MembraneElement {
         let (eff, _, _) = soften(e, m);
         let s = mat3(&m.q, eff);
         0.5 * self.area * (eff[0] * s[0] + eff[1] * s[1] + eff[2] * s[2])
+    }
+
+    /// Energy under the chosen [`CompressionModel`]. [`CompressionModel::AxisAligned`] is
+    /// bit-identical to [`Self::energy`].
+    #[must_use]
+    pub fn energy_with_model(&self, x: &[Vec3], m: &Membrane, model: CompressionModel) -> f64 {
+        match model {
+            CompressionModel::AxisAligned => self.energy(x, m),
+            CompressionModel::Principal => {
+                let r = principal_ratio(m);
+                if r >= 1.0 {
+                    return self.energy(x, m);
+                }
+                let e = self.strain(x);
+                let eff = soften_principal_value(e, r, m.transition);
+                let s = mat3(&m.q, eff);
+                0.5 * self.area * (eff[0] * s[0] + eff[1] * s[1] + eff[2] * s[2])
+            }
+        }
     }
 
     /// Energy of a characterized nonlinear law, with the existing gather/compression transform.
@@ -401,6 +466,357 @@ impl MembraneElement {
             psd,
         }
     }
+
+    /// Energy, gradient and exact Hessian under the chosen [`CompressionModel`].
+    /// [`CompressionModel::AxisAligned`] is bit-identical to [`Self::local`].
+    #[must_use]
+    pub fn local_with_model(
+        &self,
+        x: &[Vec3],
+        m: &Membrane,
+        model: CompressionModel,
+    ) -> Local<9, 81> {
+        match model {
+            CompressionModel::AxisAligned => self.local(x, m),
+            CompressionModel::Principal => {
+                let r = principal_ratio(m);
+                if r >= 1.0 {
+                    return self.local(x, m);
+                }
+                let (f1, f2) = self.frame(x);
+                let e = [
+                    0.5 * (f1.dot(f1) - 1.0),
+                    0.5 * (f2.dot(f2) - 1.0),
+                    f1.dot(f2),
+                ];
+                let phi = soften_principal_jets(e, r, m.transition);
+                let eff = [phi[0].v, phi[1].v, phi[2].v];
+                let sigma = mat3(&m.q, eff);
+                // Raw Green-strain Jacobian B_raw (3 × 9): rows ∂e_p / ∂x.
+                let mut b_raw = [[0.0; 9]; 3];
+                for a in 0..3 {
+                    let (ga0, ga1) = (self.g[a][0], self.g[a][1]);
+                    for k in 0..3 {
+                        b_raw[0][3 * a + k] = ga0 * f1[k];
+                        b_raw[1][3 * a + k] = ga1 * f2[k];
+                        b_raw[2][3 * a + k] = ga0 * f2[k] + ga1 * f1[k];
+                    }
+                }
+                // Effective-strain Jacobian B = (∂Φ/∂e) B_raw.
+                let mut b = [[0.0; 9]; 3];
+                for row in 0..3 {
+                    let j = phi[row].g;
+                    for col in 0..9 {
+                        b[row][col] =
+                            j[0] * b_raw[0][col] + j[1] * b_raw[1][col] + j[2] * b_raw[2][col];
+                    }
+                }
+                let mut grad = [0.0; 9];
+                for (i, gi) in grad.iter_mut().enumerate() {
+                    *gi =
+                        self.area * (sigma[0] * b[0][i] + sigma[1] * b[1][i] + sigma[2] * b[2][i]);
+                }
+                // Material part: A · Bᵀ Q B.
+                let mut qb = [[0.0; 9]; 3];
+                for row in 0..3 {
+                    for col in 0..9 {
+                        qb[row][col] = m.q[row][0] * b[0][col]
+                            + m.q[row][1] * b[1][col]
+                            + m.q[row][2] * b[2][col];
+                    }
+                }
+                let mut hess = [0.0; 81];
+                for i in 0..9 {
+                    for j in 0..9 {
+                        hess[i * 9 + j] = self.area
+                            * (b[0][i] * qb[0][j] + b[1][i] * qb[1][j] + b[2][i] * qb[2][j]);
+                    }
+                }
+                // Geometric part: A · Σ_p (Σ_r σ_r ∂Φ_r/∂e_p) ∂²e_p/∂x².
+                let mut s_raw = [0.0; 3];
+                for p in 0..3 {
+                    s_raw[p] =
+                        sigma[0] * phi[0].g[p] + sigma[1] * phi[1].g[p] + sigma[2] * phi[2].g[p];
+                }
+                for a in 0..3 {
+                    for c in 0..3 {
+                        let (ga, gc) = (self.g[a], self.g[c]);
+                        let s = s_raw[0] * ga[0] * gc[0]
+                            + s_raw[1] * ga[1] * gc[1]
+                            + s_raw[2] * (ga[0] * gc[1] + ga[1] * gc[0]);
+                        for k in 0..3 {
+                            hess[(3 * a + k) * 9 + 3 * c + k] += self.area * s;
+                        }
+                    }
+                }
+                // Softening-curvature part: A · B_rawᵀ (Σ_r σ_r ∂²Φ_r/∂e²) B_raw.
+                let mut c_mat = [[0.0; 3]; 3];
+                for p in 0..3 {
+                    for q in 0..3 {
+                        c_mat[p][q] = sigma[0] * phi[0].h[p][q]
+                            + sigma[1] * phi[1].h[p][q]
+                            + sigma[2] * phi[2].h[p][q];
+                    }
+                }
+                let mut cb = [[0.0; 9]; 3];
+                for p in 0..3 {
+                    for j in 0..9 {
+                        cb[p][j] = c_mat[p][0] * b_raw[0][j]
+                            + c_mat[p][1] * b_raw[1][j]
+                            + c_mat[p][2] * b_raw[2][j];
+                    }
+                }
+                for i in 0..9 {
+                    for j in 0..9 {
+                        hess[i * 9 + j] += self.area
+                            * (b_raw[0][i] * cb[0][j]
+                                + b_raw[1][i] * cb[1][j]
+                                + b_raw[2][i] * cb[2][j]);
+                    }
+                }
+                Local {
+                    energy: 0.5
+                        * self.area
+                        * (eff[0] * sigma[0] + eff[1] * sigma[1] + eff[2] * sigma[2]),
+                    grad,
+                    hess,
+                    psd: false,
+                }
+            }
+        }
+    }
+
+    /// Reference Green strain-rate Kelvin–Voigt viscous contribution
+    /// `½ · c · A · (E(x) − e0)ᵀ Q (E(x) − e0)`, strictly SE(3)-invariant.
+    pub(crate) fn strain_rate_energy(
+        &self,
+        x: &[Vec3],
+        e0: [f64; 3],
+        q: &[[f64; 3]; 3],
+        c: f64,
+    ) -> f64 {
+        let e = self.strain(x);
+        let de = [e[0] - e0[0], e[1] - e0[1], e[2] - e0[2]];
+        let s = mat3(q, de);
+        0.5 * c * self.area * (de[0] * s[0] + de[1] * s[1] + de[2] * s[2])
+    }
+
+    /// Energy, gradient and exact Hessian of the SE(3)-invariant membrane Kelvin–Voigt
+    /// strain-rate potential `½ · c · A · (E(x) − e0)ᵀ Q (E(x) − e0)`.
+    pub(crate) fn strain_rate_local(
+        &self,
+        x: &[Vec3],
+        e0: [f64; 3],
+        q: &[[f64; 3]; 3],
+        c: f64,
+    ) -> Local<9, 81> {
+        let (f1, f2) = self.frame(x);
+        let e = [
+            0.5 * (f1.dot(f1) - 1.0),
+            0.5 * (f2.dot(f2) - 1.0),
+            f1.dot(f2),
+        ];
+        let de = [e[0] - e0[0], e[1] - e0[1], e[2] - e0[2]];
+        let sigma = mat3(q, de);
+        let scale = c * self.area;
+        let mut b = [[0.0; 9]; 3];
+        for a in 0..3 {
+            let (ga0, ga1) = (self.g[a][0], self.g[a][1]);
+            for k in 0..3 {
+                b[0][3 * a + k] = ga0 * f1[k];
+                b[1][3 * a + k] = ga1 * f2[k];
+                b[2][3 * a + k] = ga0 * f2[k] + ga1 * f1[k];
+            }
+        }
+        let mut grad = [0.0; 9];
+        for (i, gi) in grad.iter_mut().enumerate() {
+            *gi = scale * (sigma[0] * b[0][i] + sigma[1] * b[1][i] + sigma[2] * b[2][i]);
+        }
+        let mut qb = [[0.0; 9]; 3];
+        for row in 0..3 {
+            for col in 0..9 {
+                qb[row][col] =
+                    q[row][0] * b[0][col] + q[row][1] * b[1][col] + q[row][2] * b[2][col];
+            }
+        }
+        let mut hess = [0.0; 81];
+        for i in 0..9 {
+            for j in 0..9 {
+                hess[i * 9 + j] =
+                    scale * (b[0][i] * qb[0][j] + b[1][i] * qb[1][j] + b[2][i] * qb[2][j]);
+            }
+        }
+        for a in 0..3 {
+            for col in 0..3 {
+                let (ga, gc) = (self.g[a], self.g[col]);
+                let s = sigma[0] * ga[0] * gc[0]
+                    + sigma[1] * ga[1] * gc[1]
+                    + sigma[2] * (ga[0] * gc[1] + ga[1] * gc[0]);
+                for k in 0..3 {
+                    hess[(3 * a + k) * 9 + 3 * col + k] += scale * s;
+                }
+            }
+        }
+        let psd = c >= 0.0
+            && sigma[0] >= 0.0
+            && sigma[1] >= 0.0
+            && sigma[0] * sigma[1] >= sigma[2] * sigma[2];
+        Local {
+            energy: 0.5 * scale * (de[0] * sigma[0] + de[1] * sigma[1] + de[2] * sigma[2]),
+            grad,
+            hess,
+            psd,
+        }
+    }
+}
+
+/// Scalar isotropic principal-strain softening ratio `r = (c0 * c1)^(1/4) ∈ (0, 1]` (equals
+/// `c.sqrt()` whenever warp and weft compression factors coincide).
+fn principal_ratio(m: &Membrane) -> f64 {
+    (m.compression[0] * m.compression[1]).sqrt().sqrt()
+}
+
+/// Scalar `C²` softening `φ(λ)` and its derivatives `(φ, φ', φ'', φ''', φ⁴, φ⁵)`.
+fn phi_derivs(lambda: f64, r: f64, delta: f64) -> [f64; 6] {
+    if lambda >= 0.0 || r >= 1.0 {
+        return [lambda, 1.0, 0.0, 0.0, 0.0, 0.0];
+    }
+    let t = ftx_core::det::tanh(lambda / delta);
+    let t2 = t * t;
+    let s2 = 1.0 - t2;
+    let omr = 1.0 - r;
+    let inv_d = 1.0 / delta;
+    let inv_d2 = inv_d * inv_d;
+    let inv_d3 = inv_d2 * inv_d;
+    let inv_d4 = inv_d2 * inv_d2;
+    [
+        r * lambda + omr * delta * t,
+        r + omr * s2,
+        -omr * 2.0 * s2 * t * inv_d,
+        -omr * 2.0 * s2 * (1.0 - 3.0 * t2) * inv_d2,
+        omr * 8.0 * t * s2 * (2.0 - 3.0 * t2) * inv_d3,
+        omr * 8.0 * s2 * (2.0 - 15.0 * t2 + 15.0 * t2 * t2) * inv_d4,
+    ]
+}
+
+fn soften_principal_value(e: [f64; 3], r: f64, delta: f64) -> [f64; 3] {
+    let m = 0.5 * (e[0] + e[1]);
+    let d = 0.5 * (e[0] - e[1]);
+    let g = 0.5 * e[2];
+    let s2 = d * d + g * g;
+    let s = s2.sqrt();
+    let l1 = m + s;
+    let l2 = m - s;
+    if l2 >= 0.0 {
+        return e;
+    }
+    let (a, b) = if s > 1e-4 * delta {
+        let p1 = phi_derivs(l1, r, delta)[0];
+        let p2 = phi_derivs(l2, r, delta)[0];
+        (0.5 * (p1 + p2), (p1 - p2) / (2.0 * s))
+    } else if l1 < 0.0 {
+        let p = phi_derivs(m, r, delta);
+        (
+            p[0] + 0.5 * p[2] * s2 + (1.0 / 24.0) * p[4] * s2 * s2,
+            p[1] + (1.0 / 6.0) * p[3] * s2 + (1.0 / 120.0) * p[5] * s2 * s2,
+        )
+    } else if s > 1e-12 * delta {
+        let p1 = phi_derivs(l1, r, delta)[0];
+        let p2 = phi_derivs(l2, r, delta)[0];
+        (0.5 * (p1 + p2), (p1 - p2) / (2.0 * s))
+    } else {
+        (m, 1.0)
+    };
+    [a + b * d, a - b * d, b * e[2]]
+}
+
+fn jet_bivariate<const N: usize>(
+    m: Jet<N>,
+    u: Jet<N>,
+    f: f64,
+    grad: [f64; 2],
+    hess: [f64; 3],
+) -> Jet<N> {
+    let [fm, fu] = grad;
+    let [fmm, fmu, fuu] = hess;
+    let mut out = Jet::constant(f);
+    for i in 0..N {
+        out.g[i] = fm * m.g[i] + fu * u.g[i];
+        for j in 0..N {
+            out.h[i][j] = fm * m.h[i][j]
+                + fu * u.h[i][j]
+                + fmm * m.g[i] * m.g[j]
+                + fuu * u.g[i] * u.g[j]
+                + fmu * (m.g[i] * u.g[j] + u.g[i] * m.g[j]);
+        }
+    }
+    out
+}
+
+/// Exact singularity-free spectral transform `Φ(E) = A(m, s²) I + B(m, s²)(E − m I)` and its
+/// first/second derivatives with respect to Voigt strain `(E₁₁, E₂₂, γ₁₂)`.
+fn soften_principal_jets(e: [f64; 3], r: f64, delta: f64) -> [Jet<3>; 3] {
+    let e0 = Jet::<3>::var(e[0], 0);
+    let e1 = Jet::<3>::var(e[1], 1);
+    let e2 = Jet::<3>::var(e[2], 2);
+    let m = (e0 + e1) * 0.5;
+    let d = (e0 - e1) * 0.5;
+    let g = e2 * 0.5;
+    let u = d * d + g * g;
+    let s2 = u.v;
+    let s = s2.sqrt();
+    let l1 = m.v + s;
+    let l2 = m.v - s;
+    if l2 >= 0.0 {
+        return [e0, e1, e2];
+    }
+    let (a_jet, b_jet) = if s > 5e-3 * delta || (l1 >= 0.0 && s > 1e-6 * delta) {
+        let p1 = phi_derivs(l1, r, delta);
+        let p2 = phi_derivs(l2, r, delta);
+        let inv_2s = 0.5 / s;
+        let inv_2u = 0.5 / s2;
+        let a_v = 0.5 * (p1[0] + p2[0]);
+        let a_m = 0.5 * (p1[1] + p2[1]);
+        let b_v = (p1[0] - p2[0]) * inv_2s;
+        let b_m = (p1[1] - p2[1]) * inv_2s;
+        let a_u = 0.5 * b_m;
+        let a_mm = 0.5 * (p1[2] + p2[2]);
+        let b_mm = (p1[2] - p2[2]) * inv_2s;
+        let a_mu = 0.5 * b_mm;
+        let a_uu = (a_mm - b_m) * (0.25 / s2);
+        let b_u = (a_m - b_v) * inv_2u;
+        let b_mu = (a_mm - b_m) * inv_2u;
+        let b_uu = (a_mu - 3.0 * b_u) * inv_2u;
+        (
+            jet_bivariate(m, u, a_v, [a_m, a_u], [a_mm, a_mu, a_uu]),
+            jet_bivariate(m, u, b_v, [b_m, b_u], [b_mm, b_mu, b_uu]),
+        )
+    } else if l1 < 0.0 {
+        // Both eigenvalues strictly negative and close (`s <= 5e-3 * delta`): exact analytic
+        // Taylor expansion in `u = s²` around `m` avoids `0/0` division completely.
+        let p = phi_derivs(m.v, r, delta);
+        let a_v = p[0] + 0.5 * p[2] * s2 + (1.0 / 24.0) * p[4] * s2 * s2;
+        let a_m = p[1] + 0.5 * p[3] * s2;
+        let a_u = 0.5 * p[2] + (1.0 / 12.0) * p[4] * s2;
+        let a_mm = p[2] + 0.5 * p[4] * s2;
+        let a_mu = 0.5 * p[3] + (1.0 / 12.0) * p[5] * s2;
+        let a_uu = (1.0 / 12.0) * p[4];
+
+        let b_v = p[1] + (1.0 / 6.0) * p[3] * s2 + (1.0 / 120.0) * p[5] * s2 * s2;
+        let b_m = p[2] + (1.0 / 6.0) * p[4] * s2;
+        let b_u = (1.0 / 6.0) * p[3] + (1.0 / 60.0) * p[5] * s2;
+        let b_mm = p[3] + (1.0 / 6.0) * p[5] * s2;
+        let b_mu = (1.0 / 6.0) * p[4];
+        let b_uu = (1.0 / 60.0) * p[5];
+        (
+            jet_bivariate(m, u, a_v, [a_m, a_u], [a_mm, a_mu, a_uu]),
+            jet_bivariate(m, u, b_v, [b_m, b_u], [b_mm, b_mu, b_uu]),
+        )
+    } else {
+        // Straddling zero with `|m| <= s <= 1e-6 * delta`: `φ(λ) - λ = O(1e-18 * delta)`.
+        return [e0, e1, e2];
+    };
+    [a_jet + b_jet * d, a_jet - b_jet * d, b_jet * e2]
 }
 
 fn mat3(q: &[[f64; 3]; 3], e: [f64; 3]) -> [f64; 3] {
@@ -447,6 +863,15 @@ pub struct Hinge {
     pub areas: [f64; 2],
     /// `3a / (A₀ + A₁)²` (1/m²).
     pub weight: f64,
+    /// Common rest length of the shared hinge edge (m); equals `|e|` on an isometric edge and
+    /// `2(A₀+A₁)/(altitude₀+altitude₁)` on an eased seam.
+    pub edge_length: f64,
+    /// Rest dihedral angle `θ₀` (rad, default `0.0` flat) used by [`BendingModel::DiscreteShells`]
+    /// for pressed pleats, ironed creases, or folded lapels.
+    pub rest_angle: f64,
+    // Rest-chart normal orientation signs (`+1` or `-1`) for the two adjacent triangles so
+    // `dihedral_angle == 0` in any flat configuration regardless of vertex swap or winding.
+    pub(crate) orient: [f64; 2],
 }
 
 fn cot(a: Vec2, b: Vec2) -> f64 {
@@ -472,6 +897,8 @@ impl Hinge {
         let [c, d, opposite] = second;
         let (edge0, edge1) = (b - a, d - c);
         let (edge0_sq, edge1_sq) = (edge0.norm2(), edge1.norm2());
+        let cross0 = edge0.cross(first[2] - a);
+        let cross1 = edge1.cross(opposite - c);
         // An isometric weld admits the original rigid map into the first chart. Keep its
         // arithmetic on that domain, including the identity for neighbors in the same chart.
         let second = if edge0_sq == edge1_sq && (a, b) != (c, d) {
@@ -494,7 +921,7 @@ impl Hinge {
         };
         let (mut start0, mut end0, a0) = geometry(first);
         let (mut start1, mut end1, a1) = geometry(second);
-        if edge0_sq != edge1_sq {
+        let edge_length = if edge0_sq != edge1_sq {
             // Each cotangent stencil equals its cut edge length times the cross-edge derivative.
             // Compare the derivatives at a common length, or a flat, tangentially eased seam bends.
             // Keeping the authored area gives L = 2(A₀+A₁)/(altitude₀+altitude₁).
@@ -504,13 +931,26 @@ impl Hinge {
             end0 *= common / l0;
             start1 *= common / l1;
             end1 *= common / l1;
-        }
+            common
+        } else {
+            edge0_sq.sqrt()
+        };
         let k = [end0 + end1, start0 + start1, -start0 - end0, -start1 - end1];
-        (a0 > 0.0 && a1 > 0.0 && k.iter().all(|c| c.is_finite())).then(|| Self {
+        let s0 = if cross0 >= 0.0 { 1.0 } else { -1.0 };
+        let s1 = if cross1 <= 0.0 { 1.0 } else { -1.0 };
+        (a0 > 0.0
+            && a1 > 0.0
+            && edge_length.is_finite()
+            && edge_length > 0.0
+            && k.iter().all(|c| c.is_finite()))
+        .then(|| Self {
             v,
             k,
             areas: [a0, a1],
             weight: 1.0 / (a0 + a1),
+            edge_length,
+            rest_angle: 0.0,
+            orient: [s0, s1],
         })
     }
 
@@ -518,6 +958,79 @@ impl Hinge {
     pub fn set_area(&mut self, area: f64) {
         let s = self.areas[0] + self.areas[1];
         self.weight = 3.0 * area / (s * s);
+    }
+
+    /// Returns a copy of this hinge with rest dihedral angle `theta0` (rad) for pressed pleats or
+    /// ironed creases under [`BendingModel::DiscreteShells`].
+    #[must_use]
+    pub const fn with_rest_angle(mut self, theta0: f64) -> Self {
+        self.rest_angle = theta0;
+        self
+    }
+
+    /// Dimensionless Discrete Shells geometric weight `w_d = w · |e_common|² = 3 a |e|² / (A₀ + A₁)²`.
+    /// On both equilateral and right-triangle meshes rolled to radius `R`, `Σ ½ B w_d θ² → ½ B A / R²`.
+    #[must_use]
+    pub fn dihedral_weight(&self) -> f64 {
+        self.weight * self.edge_length * self.edge_length
+    }
+
+    /// Signed dihedral angle `θ ∈ (−π, π]` (rad) between the two adjacent triangles: `0` when
+    /// flat, positive for a valley fold toward the public (`+z` rest) side, negative for a
+    /// mountain fold. Returns `NaN` if the shared edge or either triangle is degenerate.
+    #[must_use]
+    pub fn dihedral_angle(&self, x: &[Vec3]) -> f64 {
+        let p0 = x[self.v[0]];
+        let p1 = x[self.v[1]];
+        let p2 = x[self.v[2]];
+        let p3 = x[self.v[3]];
+        let e = p1 - p0;
+        let e_len = e.norm();
+        if !(e_len.is_finite() && e_len > 0.0) {
+            return f64::NAN;
+        }
+        let e_hat = e * (self.orient[0] / e_len);
+        let n0 = e.cross(p2 - p0) * self.orient[0];
+        let n1 = (p3 - p0).cross(e) * self.orient[1];
+        let cos_raw = n0.dot(n1);
+        let sin_raw = n1.cross(n0).dot(e_hat);
+        let r2 = cos_raw * cos_raw + sin_raw * sin_raw;
+        if !(r2.is_finite() && r2 > 0.0) {
+            return f64::NAN;
+        }
+        ftx_core::det::atan2(sin_raw, cos_raw)
+    }
+
+    /// Exact value, gradient (12) and Hessian (12 × 12) of the signed dihedral angle `θ(x)` via
+    /// deterministic `atan2` forward-mode autodiff (`Jet<12>`).
+    #[must_use]
+    pub fn dihedral_angle_jet(&self, x: &[Vec3]) -> Jet<12> {
+        let p0 = JVec::<Jet<12>>::point(x[self.v[0]], 0, false);
+        let p1 = JVec::<Jet<12>>::point(x[self.v[1]], 1, false);
+        let p2 = JVec::<Jet<12>>::point(x[self.v[2]], 2, false);
+        let p3 = JVec::<Jet<12>>::point(x[self.v[3]], 3, false);
+        let e = p1.sub(&p0);
+        let e_len2 = e.dot(&e);
+        if !(e_len2.v.is_finite() && e_len2.v > 0.0) {
+            return Jet {
+                v: f64::NAN,
+                g: [f64::NAN; 12],
+                h: [[f64::NAN; 12]; 12],
+            };
+        }
+        let inv_e_len = Jet::constant(self.orient[0]) / e_len2.sqrt();
+        let e_hat = JVec([e.0[0] * inv_e_len, e.0[1] * inv_e_len, e.0[2] * inv_e_len]);
+        let d2 = p2.sub(&p0);
+        let d3 = p3.sub(&p0);
+        let n0_raw = e.cross(&d2);
+        let n1_raw = d3.cross(&e);
+        let s0 = self.orient[0];
+        let s1 = self.orient[1];
+        let n0 = JVec([n0_raw.0[0] * s0, n0_raw.0[1] * s0, n0_raw.0[2] * s0]);
+        let n1 = JVec([n1_raw.0[0] * s1, n1_raw.0[1] * s1, n1_raw.0[2] * s1]);
+        let cos_raw = n0.dot(&n1);
+        let sin_raw = n1.cross(&n0).dot(&e_hat);
+        Jet::atan2(sin_raw, cos_raw)
     }
 
     fn curvature_vector(&self, x: &[Vec3]) -> Vec3 {
@@ -531,6 +1044,26 @@ impl Hinge {
     #[must_use]
     pub fn energy(&self, x: &[Vec3], b: f64) -> f64 {
         0.5 * b * self.weight * self.curvature_vector(x).norm2()
+    }
+
+    /// Finite-angle Discrete Shells bending energy `½·B·w_d·(θ − θ₀)²` for bending stiffness `b` (N·m).
+    #[must_use]
+    pub fn dihedral_energy(&self, x: &[Vec3], b: f64) -> f64 {
+        if b == 0.0 {
+            return 0.0;
+        }
+        let d = self.dihedral_angle(x) - self.rest_angle;
+        0.5 * b * self.dihedral_weight() * d * d
+    }
+
+    /// Energy under the chosen [`BendingModel`]. [`BendingModel::Quadratic`] is bit-identical to
+    /// [`Self::energy`].
+    #[must_use]
+    pub fn energy_with_model(&self, x: &[Vec3], b: f64, model: BendingModel) -> f64 {
+        match model {
+            BendingModel::Quadratic => self.energy(x, b),
+            BendingModel::DiscreteShells => self.dihedral_energy(x, b),
+        }
     }
 
     /// Energy, gradient (12) and Hessian (12 × 12, constant).
@@ -556,6 +1089,55 @@ impl Hinge {
             hess,
             // B·w·(k kᵀ ⊗ I₃): a Gram matrix
             psd: c >= 0.0,
+        }
+    }
+
+    /// Finite-angle Discrete Shells energy, gradient (12) and exact Hessian (12 × 12) for
+    /// `½·B·w_d·(θ − θ₀)²`.
+    #[must_use]
+    pub fn dihedral_local(&self, x: &[Vec3], b: f64) -> Local<12, 144> {
+        if b == 0.0 {
+            return Local {
+                energy: 0.0,
+                grad: [0.0; 12],
+                hess: [0.0; 144],
+                psd: true,
+            };
+        }
+        self.dihedral_quadratic_local(x, self.rest_angle, b * self.dihedral_weight())
+    }
+
+    /// Shared helper for `½ · coeff · (θ(x) − target)²` (used by both [`Self::dihedral_local`]
+    /// and SE(3)-invariant Rayleigh bending damping).
+    pub(crate) fn dihedral_quadratic_local(
+        &self,
+        x: &[Vec3],
+        target: f64,
+        coeff: f64,
+    ) -> Local<12, 144> {
+        let theta = self.dihedral_angle_jet(x);
+        let d = theta - Jet::constant(target);
+        let e = d * d * (0.5 * coeff);
+        let mut hess = [0.0; 144];
+        for i in 0..12 {
+            for j in 0..12 {
+                hess[i * 12 + j] = e.h[i][j];
+            }
+        }
+        Local {
+            energy: e.v,
+            grad: e.g,
+            hess,
+            psd: false,
+        }
+    }
+
+    /// Energy, gradient and Hessian under the chosen [`BendingModel`].
+    #[must_use]
+    pub fn local_with_model(&self, x: &[Vec3], b: f64, model: BendingModel) -> Local<12, 144> {
+        match model {
+            BendingModel::Quadratic => self.local(x, b),
+            BendingModel::DiscreteShells => self.dihedral_local(x, b),
         }
     }
 }
@@ -896,5 +1478,183 @@ mod tests {
         let want = 15.0 / 0.02 * (0.002 + 0.5 * ELASTIC_ONSET);
         assert!((t - want).abs() < 1e-12, "{t} vs {want}");
         assert!(seg.local(&at(0.022)).psd);
+    }
+
+    #[test]
+    fn discrete_shells_dihedral_derivatives_inplane_invariance_and_hairpin_torque() {
+        let rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.01, 0.0),
+            Vec2::new(0.004, 0.008),
+            Vec2::new(0.006, -0.009),
+        ];
+        let hinge = Hinge::new([0, 1, 2, 3], rest).unwrap();
+        let b = 2.5e-5;
+
+        // Non-uniform in-plane stretch stores ZERO Discrete Shells energy & gradient.
+        let stretched = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.013, 0.001, 0.0),
+            Vec3::new(0.005, 0.011, 0.0),
+            Vec3::new(0.007, -0.007, 0.0),
+        ];
+        let l_flat = hinge.dihedral_local(&stretched, b);
+        assert!(l_flat.energy.abs() < 1e-30, "{}", l_flat.energy);
+        assert!(
+            l_flat.grad.iter().all(|g| g.abs() < 1e-20),
+            "{:?}",
+            l_flat.grad
+        );
+
+        // Central FD check across small, 90°, sharp (150° & 175°), negative, and creased rest angles.
+        let sym_rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.01, 0.0),
+            Vec2::new(0.005, 0.01),
+            Vec2::new(0.005, -0.01),
+        ];
+        for theta0 in [0.0, 0.7] {
+            let h_sym = Hinge::new([0, 1, 2, 3], sym_rest)
+                .unwrap()
+                .with_rest_angle(theta0);
+            for deg in [0.0_f64, 35.0, 90.0, -60.0, 150.0, 175.0] {
+                let rad = deg.to_radians();
+                let (s, c) = ftx_core::det::sin_cos(rad);
+                let x = [
+                    Vec3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.01, 0.0, 0.0),
+                    Vec3::new(0.005, 0.01, 0.0),
+                    Vec3::new(0.005, -0.01 * c, 0.01 * s),
+                ];
+                let measured = h_sym.dihedral_angle(&x);
+                assert!(
+                    (measured - rad).abs() < 1e-12,
+                    "deg={deg} measured={measured} want={rad}"
+                );
+                check(
+                    &x,
+                    &[0, 1, 2, 3],
+                    1e-7,
+                    |p| h_sym.dihedral_energy(p, b),
+                    |p| h_sym.dihedral_local(p, b),
+                );
+            }
+        }
+
+        // Swapping opposite vertices preserves signed angle convention (valley toward +z > 0).
+        let swapped = Hinge::new([0, 1, 3, 2], [rest[0], rest[1], rest[3], rest[2]]).unwrap();
+        let (s, c) = ftx_core::det::sin_cos(40.0_f64.to_radians());
+        let fold_up = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.01, 0.0, 0.0),
+            Vec3::new(0.004, 0.008, 0.0),
+            Vec3::new(0.006, -0.009 * c, 0.009 * s),
+        ];
+        assert!((hinge.dihedral_angle(&fold_up) - swapped.dihedral_angle(&fold_up)).abs() < 1e-12);
+
+        // Hairpin fold torque check: Discrete Shells torque grows monotonically from 90° to 170°,
+        // whereas legacy quadratic Hinge torque collapses toward zero as sin(θ) -> 0.
+        let h_sym = Hinge::new([0, 1, 2, 3], sym_rest).unwrap();
+        let torque_at = |deg: f64, model: BendingModel| -> f64 {
+            let rad = deg.to_radians();
+            let (s, c) = ftx_core::det::sin_cos(rad);
+            let x = [
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.01, 0.0, 0.0),
+                Vec3::new(0.005, 0.01, 0.0),
+                Vec3::new(0.005, -0.01 * c, 0.01 * s),
+            ];
+            let l = h_sym.local_with_model(&x, b, model);
+            // Tangent velocity of vertex 3 per unit dθ is (0, 0.01 * sin θ, 0.01 * cos θ).
+            l.grad[10] * (0.01 * s) + l.grad[11] * (0.01 * c)
+        };
+        let t_ds_90 = torque_at(90.0, BendingModel::DiscreteShells);
+        let t_ds_170 = torque_at(170.0, BendingModel::DiscreteShells);
+        assert!(t_ds_170 > 1.8 * t_ds_90, "ds 170°={t_ds_170} 90°={t_ds_90}");
+        let t_q_90 = torque_at(90.0, BendingModel::Quadratic);
+        let t_q_170 = torque_at(170.0, BendingModel::Quadratic);
+        assert!(t_q_170 < 0.2 * t_q_90, "quad 170°={t_q_170} 90°={t_q_90}");
+    }
+
+    #[test]
+    fn principal_strain_softening_derivatives_and_45deg_bias_isotropy() {
+        let mat = Membrane::orthotropic(800.0, 400.0, 0.2, 60.0, 0.04);
+        let rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.012, 0.001),
+            Vec2::new(0.003, 0.010),
+        ];
+        let e = MembraneElement::new([0, 1, 2], rest).unwrap();
+        let cases: &[([f64; 3], bool, f64)] = &[
+            // Uniaxial compression along warp (λ₁ near 0 blend => fine FD step)
+            ([0.92, 1.0, 0.0], true, 1e-7),
+            // 45° bias compression + shear
+            ([0.95, 0.95, -0.06], true, 1e-6),
+            // Pure shear (tension + compression on 45° diagonals)
+            ([1.0, 1.0, 0.08], true, 1e-6),
+            // Deep isotropic compression
+            ([0.94, 0.94, 0.0], false, 1e-7),
+            // Exact repeated eigenvalue inside the nonlinear tanh blend (`s == 0`, `m ≈ -8e-4`)
+            ([0.9992, 0.9992, 0.0], false, 1e-8),
+            // Near-isotropic inside Taylor patch (`s < 5e-3 * delta`) inside the nonlinear blend
+            ([0.9992, 0.9992 + 1e-6, 1e-6], false, 1e-8),
+            // Near-isotropic just outside Taylor patch (`s > 5e-3 * delta`) inside the nonlinear blend
+            ([0.9992, 0.9992 + 2e-5, 0.0], false, 1e-8),
+            // Tension everywhere
+            ([1.08, 1.04, 0.03], true, 1e-6),
+        ];
+        for &(def, tilt_z, h) in cases {
+            let [sx, sy, sh] = def;
+            let x: Vec<Vec3> = rest
+                .iter()
+                .map(|p| {
+                    let z = if tilt_z { 0.05 * p.x - 0.03 * p.y } else { 0.0 };
+                    Vec3::new(sx * p.x + sh * p.y, sy * p.y, z)
+                })
+                .collect();
+            check(
+                &x,
+                &[0, 1, 2],
+                h,
+                |p| e.energy_with_model(p, &mat, CompressionModel::Principal),
+                |p| e.local_with_model(p, &mat, CompressionModel::Principal),
+            );
+        }
+
+        // Exact rotational isotropy check: for an isotropic membrane (E, nu, G = E/(2(1+nu))),
+        // 10% uniaxial compression along 0° and along 45° must have identical energy under Principal,
+        // whereas AxisAligned locks along 45° bias.
+        let nu = 0.25;
+        let ym = 600.0;
+        let iso = Membrane::orthotropic(ym, ym, nu, ym / (2.0 * (1.0 + nu)), 0.02);
+        let sq = MembraneElement::new(
+            [0, 1, 2],
+            [Vec2::ZERO, Vec2::new(0.01, 0.0), Vec2::new(0.0, 0.01)],
+        )
+        .unwrap();
+        let lam = 0.9;
+        let x_0: Vec<Vec3> = [Vec2::ZERO, Vec2::new(0.01, 0.0), Vec2::new(0.0, 0.01)]
+            .iter()
+            .map(|p| Vec3::new(lam * p.x, p.y, 0.0))
+            .collect();
+        // Compress along 45° unit vector u = (1,1)/√2 by `lam`, unchanged along v = (-1,1)/√2.
+        let c45 = 0.5 * (lam + 1.0);
+        let s45 = 0.5 * (lam - 1.0);
+        let x_45: Vec<Vec3> = [Vec2::ZERO, Vec2::new(0.01, 0.0), Vec2::new(0.0, 0.01)]
+            .iter()
+            .map(|p| Vec3::new(c45 * p.x + s45 * p.y, s45 * p.x + c45 * p.y, 0.0))
+            .collect();
+        let ep_0 = sq.energy_with_model(&x_0, &iso, CompressionModel::Principal);
+        let ep_45 = sq.energy_with_model(&x_45, &iso, CompressionModel::Principal);
+        assert!(
+            (ep_0 - ep_45).abs() < 1e-13 * ep_0.max(1e-12),
+            "principal bias isotropy failed: 0°={ep_0} 45°={ep_45}"
+        );
+        let ea_0 = sq.energy_with_model(&x_0, &iso, CompressionModel::AxisAligned);
+        let ea_45 = sq.energy_with_model(&x_45, &iso, CompressionModel::AxisAligned);
+        assert!(
+            ea_45 > 5.0 * ea_0,
+            "expected axis-aligned bias locking contrast: 0°={ea_0} 45°={ea_45}"
+        );
     }
 }

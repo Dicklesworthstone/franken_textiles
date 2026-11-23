@@ -521,6 +521,31 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 }
                 out.push('.');
             }
+            if let Some(bm) = sim["numerical"]["bending_model"].as_str() {
+                let _ = write!(out, " Bending model: {}.", xml_escape(bm));
+            }
+            if let Some(cm) = sim["numerical"]["compression_model"].as_str() {
+                let _ = write!(out, " Compression model: {}.", xml_escape(cm));
+            }
+            if let Some(damp) = sim["numerical"]["damping"].as_object() {
+                let mut parts = Vec::new();
+                if damp.get("air_drag").is_some_and(Value::is_object) {
+                    parts.push("air drag".to_string());
+                }
+                if let Some(rm) = damp.get("rayleigh_membrane_s").and_then(Value::as_f64)
+                    && rm > 0.0
+                {
+                    parts.push(format!("Rayleigh membrane {rm:.3e} s"));
+                }
+                if let Some(rb) = damp.get("rayleigh_bending_s").and_then(Value::as_f64)
+                    && rb > 0.0
+                {
+                    parts.push(format!("Rayleigh bending {rb:.3e} s"));
+                }
+                if !parts.is_empty() {
+                    let _ = write!(out, " Damping: {}.", xml_escape(&parts.join(", ")));
+                }
+            }
             if let Some(settle) = sim["numerical"]["settling"].as_object()
                 && let (Some(steps), Some(max_steps)) = (
                     settle.get("steps").and_then(Value::as_u64),

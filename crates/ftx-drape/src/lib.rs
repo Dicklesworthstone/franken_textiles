@@ -23,6 +23,7 @@ pub mod cloth;
 pub mod collider;
 pub mod contact;
 pub mod cylinder;
+pub mod damping;
 pub mod distance;
 pub mod drafting;
 pub mod eigen;
@@ -55,7 +56,8 @@ pub use cloth::{
     ClothModel, NewtonStrategy, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube,
 };
 pub use contact::{Body, Contact, ContactParams, Intersection};
-pub use elements::{Hinge, Membrane, MembraneElement};
+pub use damping::{AirDrag, DampingOptions};
+pub use elements::{BendingModel, CompressionModel, Hinge, Membrane, MembraneElement};
 pub use garment::{GarmentMesh, GatherRelief, SeamRecord, build_garment};
 pub use integrator::TimeIntegrator;
 pub use nearest::{Nearest, NearestTree};

@@ -15,6 +15,8 @@ use crate::animation::{
 };
 use crate::cloth::NewtonStrategy;
 use crate::contact::{Contact, ContactParams};
+use crate::damping::DampingOptions;
+use crate::elements::{BendingModel, CompressionModel};
 use crate::garment::{GarmentMesh, build_garment, simulation_scope};
 use crate::integrator::TimeIntegrator;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
@@ -146,6 +148,12 @@ pub struct DrapeOptions {
     pub newton_strategy: NewtonStrategy,
     /// Structural time-integration scheme (default: [`TimeIntegrator::ImplicitEuler`]).
     pub integrator: TimeIntegrator,
+    /// Hinge bending formulation (default: legacy [`BendingModel::Quadratic`]).
+    pub bending_model: BendingModel,
+    /// Membrane compression-softening formulation (default: legacy [`CompressionModel::AxisAligned`]).
+    pub compression_model: CompressionModel,
+    /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping (default: disabled).
+    pub damping: DampingOptions,
 }
 
 impl Default for DrapeOptions {
@@ -178,6 +186,9 @@ impl Default for DrapeOptions {
             pcg_iters: 20,
             newton_strategy: NewtonStrategy::ProjectedNewton,
             integrator: TimeIntegrator::ImplicitEuler,
+            bending_model: BendingModel::Quadratic,
+            compression_model: CompressionModel::AxisAligned,
+            damping: DampingOptions::default(),
         }
     }
 }
@@ -191,6 +202,7 @@ impl DrapeOptions {
     pub fn validate(&self) -> Result<(), Refusal> {
         self.newton_strategy.validate()?;
         self.integrator.validate()?;
+        self.damping.validate()?;
         if let Some(policy) = &self.static_equilibrium {
             policy.validate()?;
         }
@@ -552,6 +564,9 @@ pub fn drape_observed(
     scene.solver.pcg_iters = opts.pcg_iters;
     scene.solver.newton_strategy = opts.newton_strategy;
     scene.solver.integrator = opts.integrator;
+    scene.solver.model.bending_model = opts.bending_model;
+    scene.solver.model.compression_model = opts.compression_model;
+    scene.solver.damping = opts.damping;
     scene.solver.check_integrator_history()?;
     if opts.max_settle_steps > 0 {
         scene.solver.check_settling_history()?;
@@ -990,6 +1005,15 @@ fn add_numerical_report(
     }
     if !opts.integrator.is_default() {
         report["numerical"]["integrator"] = json!(opts.integrator);
+    }
+    if !opts.bending_model.is_default() {
+        report["numerical"]["bending_model"] = json!(opts.bending_model);
+    }
+    if !opts.compression_model.is_default() {
+        report["numerical"]["compression_model"] = json!(opts.compression_model);
+    }
+    if !opts.damping.is_default() {
+        report["numerical"]["damping"] = json!(opts.damping);
     }
     if let Some(policy) = opts.time_subdivision {
         let intervals: Vec<_> = sew
