@@ -51,6 +51,9 @@ pub fn percentile(values: &[f64], p: f64) -> f64 {
     if n == 0 || p.is_nan() {
         return f64::NAN;
     }
+    if n == 1 {
+        return values[0];
+    }
     let mut v = values.to_vec();
     v.sort_by(f64::total_cmp);
     let q = p / 100.0;
@@ -148,8 +151,10 @@ pub fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     if x > xp[n - 1] {
         return fp[n - 1];
     }
-    // Last j with xp[j] <= x (x >= xp[0] here, so j exists).
-    let j = xp.partition_point(|&v| v <= x) - 1;
+    // Last j with xp[j] <= x (x >= xp[0] here for non-NaN xp; fail closed if xp[0] is NaN).
+    let Some(j) = xp.partition_point(|&v| v <= x).checked_sub(1) else {
+        return f64::NAN;
+    };
     if j == n - 1 || xp[j] == x {
         return fp[j];
     }
@@ -332,6 +337,9 @@ pub fn percentile_f32(values: &[f32], p: f64) -> f32 {
     if n == 0 || p.is_nan() {
         return f32::NAN;
     }
+    if n == 1 {
+        return values[0];
+    }
     let mut v = values.to_vec();
     v.sort_by(f32::total_cmp);
     let q = p / 100.0;
@@ -490,7 +498,11 @@ mod tests {
         assert!(arange(0.0, 10.0, f64::NAN).is_empty());
         assert_eq!(arange(0.0, 0.3, 0.1), vec![0.0, 0.1, 0.2]);
         assert!(percentile(&[42.0], f64::NAN).is_nan());
+        assert_eq!(percentile(&[42.0], f64::INFINITY), 42.0);
+        assert_eq!(percentile(&[42.0], f64::NEG_INFINITY), 42.0);
         assert!(percentile_f32(&[42.0], f64::NAN).is_nan());
+        assert_eq!(percentile_f32(&[42.0], f64::INFINITY), 42.0);
+        assert_eq!(percentile_f32(&[42.0], f64::NEG_INFINITY), 42.0);
     }
 
     #[test]
@@ -504,6 +516,7 @@ mod tests {
         assert_eq!(interp(0.25, &[0.0, 1.0], &[0.0, 8.0]), 2.0);
         assert_eq!(interp(0.0, &[0.0, 0.0], &[3.0, 4.0]), 4.0);
         assert!(interp(f64::NAN, &[0.0, 1.0], &[3.0, 4.0]).is_nan());
+        assert!(interp(0.5, &[f64::NAN, 1.0], &[3.0, 4.0]).is_nan());
     }
 
     #[test]
