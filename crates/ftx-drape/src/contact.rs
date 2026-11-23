@@ -1097,9 +1097,27 @@ pub(crate) struct FrozenPolicy {
 
 impl FrozenPolicy {
     pub(crate) fn matches(&self, contact: &Contact) -> bool {
-        self.params == contact.params
+        let params_match = |a: ContactParams, b: ContactParams| -> bool {
+            if let Some(policy) = self.adaptive_barrier {
+                a.dhat == b.dhat
+                    && a.thickness == b.thickness
+                    && a.mu == b.mu
+                    && a.eps_v == b.eps_v
+                    && b.kappa.is_finite()
+                    && b.kappa >= policy.kappa_min
+                    && b.kappa <= policy.kappa_max
+            } else {
+                a == b
+            }
+        };
+        let self_params_match = match (self.self_params, contact.self_params) {
+            (None, None) => true,
+            (Some(a), Some(b)) => params_match(a, b),
+            _ => false,
+        };
+        params_match(self.params, contact.params)
             && self.cloth == contact.cloth
-            && self.self_params == contact.self_params
+            && self_params_match
             && self.adaptive_barrier == contact.adaptive_barrier
             && self.stick_slip == contact.stick_slip
             && self.self_stick_slip == contact.self_stick_slip
@@ -3873,6 +3891,7 @@ mod tests {
         assert!(!adaptive.escalate_barrier_if_crushed(&x_moderate));
         assert_eq!(adaptive.params.kappa, k0);
 
+        let frozen = adaptive.frozen_policy();
         assert!(adaptive.escalate_barrier_if_crushed(&x_crushed));
         assert!(
             adaptive.params.kappa >= k0 * policy.growth_factor
@@ -3880,5 +3899,11 @@ mod tests {
             "escalated kappa {} out of expected range from k0={k0}",
             adaptive.params.kappa
         );
+        // Under an active adaptive barrier policy, adapting kappa within policy bounds remains
+        // policy-compatible for frozen liquid-mass bindings while non-kappa changes still fail.
+        assert!(frozen.matches(&adaptive));
+        let mut altered_mu = adaptive.clone();
+        altered_mu.params.mu = 0.5;
+        assert!(!frozen.matches(&altered_mu));
     }
 }
