@@ -287,6 +287,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           <label>μ<sub>s</sub> <input id="drapeStickSlipMus" type="number" min="0" step="0.05" value="0.5" disabled></label>
           <label>μ<sub>k</sub> <input id="drapeStickSlipMuk" type="number" min="0" step="0.05" value="0.3" disabled></label>
           <label>v<sub>t</sub> (m/s) <input id="drapeStickSlipV" type="number" min="0" step="0.005" value="0.02" disabled></label></p>
+        <p class="row"><label><input type="checkbox" id="drapeSelfStickSlip"> Cloth–cloth stick-slip friction (requires self-contact)</label>
+          <label>Self μ<sub>s</sub> <input id="drapeSelfStickSlipMus" type="number" min="0" step="0.05" value="0.45" disabled></label>
+          <label>Self μ<sub>k</sub> <input id="drapeSelfStickSlipMuk" type="number" min="0" step="0.05" value="0.25" disabled></label>
+          <label>Self v<sub>t</sub> (m/s) <input id="drapeSelfStickSlipV" type="number" min="0" step="0.005" value="0.02" disabled></label></p>
         <p class="row"><label><input type="checkbox" id="drapeAdaptiveMesh"> Curvature/gather-adaptive mesh &amp; CVT</label>
           <label>Min spacing (mm) <input id="drapeMeshMinMm" type="number" min="1.5" max="12" step="0.5" value="6" disabled></label>
           <label>CVT passes <input id="drapeMeshCvt" type="number" min="0" max="32" step="1" value="6" disabled></label></p>
@@ -637,6 +641,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = !$("staticEquilibrium").checked;
     $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
     for (const id of ["drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV"]) $(id).disabled = !$("drapeStickSlip").checked;
+    for (const id of ["drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV"]) $(id).disabled = !$("drapeSelfStickSlip").checked;
     for (const id of ["drapeMeshMinMm", "drapeMeshCvt"]) $(id).disabled = !$("drapeAdaptiveMesh").checked;
     for (const id of ["drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult"]) $(id).disabled = !$("drapeConstruction").checked;
     for (const id of ["drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]) $(id).disabled = !$("drapeStartRepulsion").checked;
@@ -939,15 +944,20 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         kappa_min: b.kappa_min, kappa_max: b.kappa_max,
       };
     }
-    if (settings.stick_slip !== undefined) {
-      const s = settings.stick_slip;
-      const sKeys = ["mu_s", "mu_k", "transition_v_m_s"];
-      if (!s || typeof s !== "object" || Array.isArray(s) || Object.keys(s).length !== 3 ||
-          Object.keys(s).some(k => !sKeys.includes(k)) || sKeys.some(k => typeof s[k] !== "number" || !Number.isFinite(s[k])) ||
-          s.mu_k < 0 || s.mu_s < s.mu_k || s.transition_v_m_s <= 0) {
-        throw Error("Stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s.");
+    for (const key of ["stick_slip", "self_stick_slip"]) {
+      if (settings[key] !== undefined) {
+        const s = settings[key];
+        const sKeys = ["mu_s", "mu_k", "transition_v_m_s"];
+        if (!s || typeof s !== "object" || Array.isArray(s) || Object.keys(s).length !== 3 ||
+            Object.keys(s).some(k => !sKeys.includes(k)) || sKeys.some(k => typeof s[k] !== "number" || !Number.isFinite(s[k])) ||
+            s.mu_k < 0 || s.mu_s < s.mu_k || s.transition_v_m_s <= 0) {
+          throw Error("Stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s.");
+        }
+        if (key === "self_stick_slip" && settings.self_contact_mm === 0) {
+          throw Error("Cloth-cloth self stick-slip friction requires self-contact to be enabled.");
+        }
+        out[key] = { mu_s: s.mu_s, mu_k: s.mu_k, transition_v_m_s: s.transition_v_m_s };
       }
-      out.stick_slip = { mu_s: s.mu_s, mu_k: s.mu_k, transition_v_m_s: s.transition_v_m_s };
     }
     if (settings.mesh !== undefined) {
       const m = settings.mesh;
@@ -1051,6 +1061,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         transition_v_m_s: reqRealismNum("drapeStickSlipV", "stick-slip transition speed"),
       };
     }
+    if ($("drapeSelfStickSlip").checked) {
+      if (!$("selfContact").checked) throw Error("Cloth-cloth self stick-slip friction requires self-contact to be enabled.");
+      raw.self_stick_slip = {
+        mu_s: reqRealismNum("drapeSelfStickSlipMus", "self static friction μs"),
+        mu_k: reqRealismNum("drapeSelfStickSlipMuk", "self kinetic friction μk"),
+        transition_v_m_s: reqRealismNum("drapeSelfStickSlipV", "self stick-slip transition speed"),
+      };
+    }
     if ($("drapeAdaptiveMesh").checked) {
       raw.mesh = {
         min_spacing_mm: reqRealismNum("drapeMeshMinMm", "adaptive mesh minimum spacing (mm)"),
@@ -1088,6 +1106,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("drapeStickSlipMus").value = String(r.stick_slip?.mu_s ?? 0.5);
     $("drapeStickSlipMuk").value = String(r.stick_slip?.mu_k ?? 0.3);
     $("drapeStickSlipV").value = String(r.stick_slip?.transition_v_m_s ?? 0.02);
+    $("drapeSelfStickSlip").checked = r.self_stick_slip !== undefined;
+    $("drapeSelfStickSlipMus").value = String(r.self_stick_slip?.mu_s ?? 0.45);
+    $("drapeSelfStickSlipMuk").value = String(r.self_stick_slip?.mu_k ?? 0.25);
+    $("drapeSelfStickSlipV").value = String(r.self_stick_slip?.transition_v_m_s ?? 0.02);
     $("drapeAdaptiveMesh").checked = r.mesh !== undefined;
     $("drapeMeshMinMm").value = String(r.mesh?.min_spacing_mm ?? 6);
     $("drapeMeshCvt").value = String(r.mesh?.cvt_iterations ?? 6);
@@ -1600,7 +1622,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton", "drapeBendingModel", "drapeCompressionModel", "drapeAirDrag", "drapeRayleighMembraneS", "drapeRayleighBendingS", "drapeAdaptiveBarrier", "drapeStickSlip", "drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV", "drapeAdaptiveMesh", "drapeMeshMinMm", "drapeMeshCvt", "drapeConstruction", "drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult", "drapeStartRepulsion", "drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton", "drapeBendingModel", "drapeCompressionModel", "drapeAirDrag", "drapeRayleighMembraneS", "drapeRayleighBendingS", "drapeAdaptiveBarrier", "drapeStickSlip", "drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV", "drapeSelfStickSlip", "drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV", "drapeAdaptiveMesh", "drapeMeshMinMm", "drapeMeshCvt", "drapeConstruction", "drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult", "drapeStartRepulsion", "drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("applyRealismPreset").addEventListener("click", () => {
@@ -1802,6 +1824,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       ...(realism.damping !== undefined ? { damping: realism.damping } : {}),
       ...(realism.adaptive_barrier !== undefined ? { adaptiveBarrier: realism.adaptive_barrier } : {}),
       ...(realism.stick_slip !== undefined ? { stickSlip: realism.stick_slip } : {}),
+      ...(realism.self_stick_slip !== undefined ? { selfStickSlip: realism.self_stick_slip } : {}),
       ...(realism.mesh !== undefined ? { mesh: realism.mesh } : {}),
       ...(realism.construction !== undefined ? { construction: realism.construction } : {}),
       ...(realism.start_self_repulsion !== undefined ? { startSelfRepulsion: realism.start_self_repulsion } : {}) });

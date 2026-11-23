@@ -1426,9 +1426,25 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
+  e.drapeBendingModel.value='quadratic';e.drapeCompressionModel.value='axis_aligned';
+  e.drapeRayleighMembraneS.value='0';e.drapeRayleighBendingS.value='0';
+  e.drapeStickSlipMus.value='0.5';e.drapeStickSlipMuk.value='0.3';e.drapeStickSlipV.value='0.02';
+  e.drapeSelfStickSlipMus.value='0.45';e.drapeSelfStickSlipMuk.value='0.25';e.drapeSelfStickSlipV.value='0.02';
+  e.drapeMeshMinMm.value='6';e.drapeMeshCvt.value='6';
+  e.drapeHemWidthMm.value='20';e.drapeHemMassMult.value='2.5';e.drapeHemBendMult.value='5';
+  e.drapeSeamWidthMm.value='10';e.drapeSeamMassMult.value='2';e.drapeSeamBendMult.value='3';
+  e.drapeRepulsionMm.value='4';e.drapeRepulsionStiffness.value='0.5';e.drapeRepulsionPeriod.value='5';
   e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
   e.guidedScenarioNewtonStrategy.value='projected';e.guidedScenarioIntegrator.value='implicit_euler';e.guidedScenarioRhoInf.value='0';
   e.guidedScenarioStaticTolMm.value='0.001';e.guidedScenarioStaticMaxNewton.value='300';
+  e.guidedScenarioBendingModel.value='quadratic';e.guidedScenarioCompressionModel.value='axis_aligned';
+  e.guidedScenarioRayleighMembraneS.value='0';e.guidedScenarioRayleighBendingS.value='0';
+  e.guidedScenarioStickSlipMus.value='0.5';e.guidedScenarioStickSlipMuk.value='0.3';e.guidedScenarioStickSlipV.value='0.02';
+  e.guidedScenarioSelfStickSlipMus.value='0.45';e.guidedScenarioSelfStickSlipMuk.value='0.25';e.guidedScenarioSelfStickSlipV.value='0.02';
+  e.guidedScenarioMeshMinMm.value='6';e.guidedScenarioMeshCvt.value='6';
+  e.guidedScenarioHemWidthMm.value='20';e.guidedScenarioHemMassMult.value='2.5';e.guidedScenarioHemBendMult.value='5';
+  e.guidedScenarioSeamWidthMm.value='10';e.guidedScenarioSeamMassMult.value='2';e.guidedScenarioSeamBendMult.value='3';
+  e.guidedScenarioRepulsionMm.value='4';e.guidedScenarioRepulsionStiffness.value='0.5';e.guidedScenarioRepulsionPeriod.value='5';
   e.viscoMode.value='file';e.viscoE0.value='200';e.viscoEInf.value='500';e.viscoAlpha.value='0.35';e.viscoTauS.value='1';
   e.viscoFLoHz.value='0.01';e.viscoFHiHz.value='100';e.viscoNTerms.value='14';e.viscoRelTol.value='0.02';
   e.viscoReplayDt.value='0.05';e.viscoReplayStrains.value='0.02, 0.04, 0.04, 0.0';
@@ -5684,6 +5700,14 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
+  e.drapeBendingModel.value='quadratic';e.drapeCompressionModel.value='axis_aligned';
+  e.drapeRayleighMembraneS.value='0';e.drapeRayleighBendingS.value='0';
+  e.drapeStickSlipMus.value='0.5';e.drapeStickSlipMuk.value='0.3';e.drapeStickSlipV.value='0.02';
+  if(e.drapeSelfStickSlipMus){e.drapeSelfStickSlipMus.value='0.45';e.drapeSelfStickSlipMuk.value='0.25';e.drapeSelfStickSlipV.value='0.02';}
+  e.drapeMeshMinMm.value='6';e.drapeMeshCvt.value='6';
+  e.drapeHemWidthMm.value='20';e.drapeHemMassMult.value='2.5';e.drapeHemBendMult.value='5';
+  e.drapeSeamWidthMm.value='10';e.drapeSeamMassMult.value='2';e.drapeSeamBendMult.value='3';
+  e.drapeRepulsionMm.value='4';e.drapeRepulsionStiffness.value='0.5';e.drapeRepulsionPeriod.value='5';
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
       const a=previous?.(...args),b=fn(...args);return Promise.all([a,b]);};};
@@ -25098,4 +25122,170 @@ test('guided finite-donor and ambient-exchange criteria preserve five nonnegativ
     q.e[prefix+'Limit'].value='0.5';q.e[prefix+'Limit'].handlers.input();
     assert.equal(old.dead,true);
   }
+});
+
+test('opt-in FTX-27 physics realism options wire fail-closed across Material Workbench, Guided Scenarios, both workers, and bidirectional handoffs', async () => {
+  const realismPayload = {
+    bending_model: 'discrete_shells',
+    compression_model: 'principal',
+    damping: { air_drag: { rho_air_kg_m3: 1.225, c_normal: 1.2, c_tangent: 0.05, eps_v_m_s: 1e-3 }, rayleigh_membrane_s: 1e-4, rayleigh_bending_s: 2e-4 },
+    adaptive_barrier: { target_gap_fraction: 0.5, min_gap_fraction: 0.05, growth_factor: 2.0, membrane_floor_scale: 1e-5, kappa_min: 1e-3, kappa_max: 1e5 },
+    stick_slip: { mu_s: 0.5, mu_k: 0.3, transition_v_m_s: 0.02 },
+    self_stick_slip: { mu_s: 0.45, mu_k: 0.25, transition_v_m_s: 0.02 },
+    mesh: { min_spacing_mm: 6, cvt_iterations: 6 },
+    construction: { hem_width_mm: 20, hem_mass_multiplier: 2.5, hem_bending_multiplier: 5, seam_width_mm: 10, seam_mass_multiplier: 2, seam_bending_multiplier: 3 },
+    start_self_repulsion: { min_separation_m: 0.004, stiffness: 0.5, period: 5 },
+  };
+
+  // 1. Material Workbench fold: omitted by default, opt-in dispatches all 9 realism keys, invalidates on edit, refuses self_stick_slip without selfContact.
+  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  p.e.selfContact.checked = true;
+  await p.e.fold.onclick();
+  const defMsg = p.current().messages.at(-1);
+  for (const k of ['bendingModel','compressionModel','damping','adaptiveBarrier','stickSlip','selfStickSlip','mesh','construction','startSelfRepulsion']) {
+    assert.equal(defMsg[k], undefined, `default material fold must omit ${k}`);
+  }
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+
+  p.e.drapeBendingModel.value = 'discrete_shells'; p.e.drapeBendingModel.handlers.change();
+  const fSec = section(p, 'fold');
+  assert.equal(fSec.hidden, true, 'changing drapeBendingModel must invalidate prior fold');
+  p.e.drapeCompressionModel.value = 'principal';
+  p.e.drapeAirDrag.checked = true;
+  p.e.drapeRayleighMembraneS.value = '0.0001';
+  p.e.drapeRayleighBendingS.value = '0.0002';
+  p.e.drapeAdaptiveBarrier.checked = true;
+  p.e.drapeStickSlip.checked = true;
+  p.e.drapeSelfStickSlip.checked = true;
+  p.e.drapeAdaptiveMesh.checked = true;
+  p.e.drapeConstruction.checked = true;
+  p.e.drapeStartRepulsion.checked = true;
+
+  // Fail-closed: self_stick_slip with selfContact unchecked must refuse before dispatch.
+  p.e.selfContact.checked = false;
+  const beforeRefusal = p.current().messages.length;
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.length, beforeRefusal);
+  assert.match(p.e.error.textContent, /self-contact/i);
+  p.e.selfContact.checked = true;
+
+  await p.e.fold.onclick();
+  const fullMsg = p.current().messages.at(-1);
+  assert.equal(fullMsg.bendingModel, 'discrete_shells');
+  assert.equal(fullMsg.compressionModel, 'principal');
+  assert.deepEqual(plain(fullMsg.damping), realismPayload.damping);
+  assert.deepEqual(plain(fullMsg.adaptiveBarrier), realismPayload.adaptive_barrier);
+  assert.deepEqual(plain(fullMsg.stickSlip), realismPayload.stick_slip);
+  assert.deepEqual(plain(fullMsg.selfStickSlip), realismPayload.self_stick_slip);
+  assert.deepEqual(plain(fullMsg.mesh), realismPayload.mesh);
+  assert.deepEqual(plain(fullMsg.construction), realismPayload.construction);
+  assert.deepEqual(plain(fullMsg.startSelfRepulsion), realismPayload.start_self_repulsion);
+  const fullRep = { settled: true, body: { legs: 'standing', leg_fraction: 1 }, numerical: { ...realismPayload } };
+  p.emit(fullRep, [{ name: 'sim_report.json', text: JSON.stringify(fullRep), mime: 'application/json' }]);
+  const fSummary = JSON.parse(fSec.children[1].textContent);
+  assert.equal(fSummary.bending_model, 'discrete_shells');
+  assert.equal(fSummary.compression_model, 'principal');
+  assert.deepEqual(fSummary.self_stick_slip, realismPayload.self_stick_slip);
+
+  // 2. Material Workbench outbound handoff to Pattern Workbench carries all 9 realism fields cleanly.
+  p.e.openPatternWorkbench.onclick();
+  const pwPopup = p.popups.at(-1);
+  const pwToken = new URL(pwPopup.url).searchParams.get('materialImport');
+  await p.windowEvents.message({ origin: 'https://unit.invalid', source: pwPopup.target, data: { type: 'ftx-material-pattern-ready', token: pwToken } });
+  const pwTransfer = pwPopup.messages.at(-1).data;
+  for (const [k, v] of Object.entries(realismPayload)) {
+    assert.deepEqual(plain(pwTransfer.evaluatedInputs.drapeSettings[k]), v, `outbound handoff must carry ${k}`);
+  }
+
+  // 3. Inbound round handoff from Pattern Workbench restores all 9 realism fields and refuses tampered values.
+  const roundToken = 'a'.repeat(32);
+  const inbound = await pageModule({ roundToken });
+  const roundFiles = {
+    pattern: new Blob([JSON.stringify({ pieces: [{ id: 'front' }] })]),
+    measurements: new Blob(['{}']),
+    fit: new Blob(['{}']),
+  };
+  await inbound.windowEvents.message({
+    origin: 'https://unit.invalid', source: inbound.opener,
+    data: {
+      type: 'ftx-round-sources', token: roundToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, ...realismPayload },
+    },
+  });
+  assert.equal(inbound.e.drapeBendingModel.value, 'discrete_shells');
+  assert.equal(inbound.e.drapeCompressionModel.value, 'principal');
+  assert.equal(inbound.e.drapeAirDrag.checked, true);
+  assert.equal(inbound.e.drapeAdaptiveBarrier.checked, true);
+  assert.equal(inbound.e.drapeStickSlip.checked, true);
+  assert.equal(inbound.e.drapeSelfStickSlip.checked, true);
+  assert.equal(inbound.e.drapeAdaptiveMesh.checked, true);
+  assert.equal(inbound.e.drapeConstruction.checked, true);
+  assert.equal(inbound.e.drapeStartRepulsion.checked, true);
+
+  const badToken = 'b'.repeat(32);
+  const badIn = await pageModule({ roundToken: badToken });
+  await badIn.windowEvents.message({
+    origin: 'https://unit.invalid', source: badIn.opener,
+    data: {
+      type: 'ftx-round-sources', token: badToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 0, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, self_stick_slip: realismPayload.self_stick_slip },
+    },
+  });
+  assert.match(badIn.e.roundImportText.textContent, /refused/i);
+
+  // 4. Guided scenario authoring wires all 9 realism fields into ftx-drape-scenario/1 and omits them by default.
+  const { p: gs } = await guidedScenarioSetup();
+  await gs.e.scenario.onclick();
+  const defScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
+  for (const key of Object.keys(realismPayload)) {
+    assert.equal(Object.hasOwn(defScen.options, key), false, `default guided scenario must omit ${key}`);
+  }
+  gs.emit(scenarioReport());
+  gs.e.guidedScenarioSelfContact.checked = true;
+  gs.e.guidedScenarioBendingModel.value = 'discrete_shells'; gs.e.guidedScenarioBendingModel.handlers.change();
+  gs.e.guidedScenarioCompressionModel.value = 'principal';
+  gs.e.guidedScenarioAirDrag.checked = true;
+  gs.e.guidedScenarioRayleighMembraneS.value = '0.0001';
+  gs.e.guidedScenarioRayleighBendingS.value = '0.0002';
+  gs.e.guidedScenarioAdaptiveBarrier.checked = true;
+  gs.e.guidedScenarioStickSlip.checked = true;
+  gs.e.guidedScenarioSelfStickSlip.checked = true;
+  gs.e.guidedScenarioAdaptiveMesh.checked = true;
+  gs.e.guidedScenarioConstruction.checked = true;
+  gs.e.guidedScenarioStartRepulsion.checked = true;
+  await gs.e.scenario.onclick();
+  const fullScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
+  for (const [k, v] of Object.entries(realismPayload)) {
+    assert.deepEqual(plain(fullScen.options[k]), v, `guided scenario options must include ${k}`);
+  }
+
+  // 5. materials-worker routes realism overrides through fold_up_configured and refuses bad payloads.
+  const mCalls = [];
+  const mw = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { free() {} },
+    fold_up: () => { mCalls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      mCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
+    },
+  } });
+  const baseFold = { type: 'fold', request: 1, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}', selfContactMm: 2, twoStart: false, armDeg: 35 };
+  assert.equal((await mw.send(baseFold)).type, 'result');
+  assert.equal(mCalls.at(-1).path, 'legacy');
+  assert.equal((await mw.send({
+    ...baseFold, request: 2, bytes: new Uint8Array([1]).buffer,
+    bendingModel: 'discrete_shells', compressionModel: 'principal',
+    damping: realismPayload.damping, adaptiveBarrier: realismPayload.adaptive_barrier,
+    stickSlip: realismPayload.stick_slip, selfStickSlip: realismPayload.self_stick_slip,
+    mesh: realismPayload.mesh, construction: realismPayload.construction,
+    startSelfRepulsion: realismPayload.start_self_repulsion,
+  })).type, 'result');
+  assert.equal(mCalls.at(-1).path, 'configured');
+  for (const [k, v] of Object.entries(realismPayload)) {
+    assert.deepEqual(plain(mCalls.at(-1).settings[k]), v, `materials-worker must forward ${k}`);
+  }
+  assert.equal((await mw.send({ ...baseFold, request: 3, bytes: new Uint8Array([1]).buffer, selfContactMm: 0, selfStickSlip: realismPayload.self_stick_slip })).type, 'error');
+  assert.equal((await mw.send({ ...baseFold, request: 4, bytes: new Uint8Array([1]).buffer, bendingModel: 'invalid' })).type, 'error');
 });

@@ -295,6 +295,15 @@ function controls() {
   for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = !$("customDrapeSchedule").checked;
   for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = !$("staticEquilibrium").checked;
   $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
+  for (const [toggle, ids] of [
+    ["drapeStickSlip", ["drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV"]],
+    ["drapeSelfStickSlip", ["drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV"]],
+    ["drapeAdaptiveMesh", ["drapeMeshMinMm", "drapeMeshCvt"]],
+    ["drapeConstruction", ["drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult"]],
+    ["drapeStartRepulsion", ["drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]],
+  ]) {
+    for (const id of ids) $(id).disabled = !$(toggle).checked;
+  }
   const guided = guidedStudyMode();
   const authoredFit = fitMode() === "guided", fitKind = $("guidedFitKind").value || "vertical";
   $("guidedFit").hidden = !authoredFit; $("fitFileField").hidden = authoredFit;
@@ -344,6 +353,15 @@ function controls() {
   $("guidedScenarioRhoInf").disabled = !guidedScenarioMode() || $("guidedScenarioIntegrator").value !== "generalized_alpha";
   for (const id of ["guidedScenarioStaticTolMm", "guidedScenarioStaticMaxNewton"]) {
     $(id).disabled = !guidedScenarioMode() || !$("guidedScenarioStaticEquilibrium").checked;
+  }
+  for (const [toggle, ids] of [
+    ["guidedScenarioStickSlip", ["guidedScenarioStickSlipMus", "guidedScenarioStickSlipMuk", "guidedScenarioStickSlipV"]],
+    ["guidedScenarioSelfStickSlip", ["guidedScenarioSelfStickSlipMus", "guidedScenarioSelfStickSlipMuk", "guidedScenarioSelfStickSlipV"]],
+    ["guidedScenarioAdaptiveMesh", ["guidedScenarioMeshMinMm", "guidedScenarioMeshCvt"]],
+    ["guidedScenarioConstruction", ["guidedScenarioHemWidthMm", "guidedScenarioHemMassMult", "guidedScenarioHemBendMult", "guidedScenarioSeamWidthMm", "guidedScenarioSeamMassMult", "guidedScenarioSeamBendMult"]],
+    ["guidedScenarioStartRepulsion", ["guidedScenarioRepulsionMm", "guidedScenarioRepulsionStiffness", "guidedScenarioRepulsionPeriod"]],
+  ]) {
+    for (const id of ids) $(id).disabled = !guidedScenarioMode() || !$(toggle).checked;
   }
   $("guidedScenarioMatrix").hidden = !guidedMatrixMode();
   $("guidedScenarioCasePolicy").hidden = !guidedMatrixMode();
@@ -5116,7 +5134,17 @@ function show(op, msg, request) {
         ...(r.body?.thumb_pose ? { thumb_pose: r.body.thumb_pose } : {}),
         ...(r.body?.authored_hand_surface_pairs_tested !== undefined ? { authored_hand_surface_pairs_tested: r.body.authored_hand_surface_pairs_tested } : {}),
         ...(r.numerical?.newton_strategy ? { newton_strategy: r.numerical.newton_strategy } : {}),
-        ...(r.numerical?.integrator ? { integrator: r.numerical.integrator } : {}), settling: r.numerical?.settling,
+        ...(r.numerical?.integrator ? { integrator: r.numerical.integrator } : {}),
+        ...(r.numerical?.bending_model && r.numerical.bending_model !== "quadratic" ? { bending_model: r.numerical.bending_model } : {}),
+        ...(r.numerical?.compression_model && r.numerical.compression_model !== "axis_aligned" ? { compression_model: r.numerical.compression_model } : {}),
+        ...(r.numerical?.damping ? { damping: r.numerical.damping } : {}),
+        ...(r.numerical?.adaptive_barrier ? { adaptive_barrier: r.numerical.adaptive_barrier } : {}),
+        ...(r.numerical?.stick_slip ? { stick_slip: r.numerical.stick_slip } : {}),
+        ...(r.numerical?.self_stick_slip ? { self_stick_slip: r.numerical.self_stick_slip } : {}),
+        ...(r.numerical?.mesh ? { mesh: r.numerical.mesh } : {}),
+        ...(r.numerical?.construction ? { construction: r.numerical.construction } : {}),
+        ...(r.numerical?.start_self_repulsion ? { start_self_repulsion: r.numerical.start_self_repulsion } : {}),
+        settling: r.numerical?.settling,
         ...(r.static_equilibrium ? { static_equilibrium: {
           status: r.static_equilibrium.status,
           ...(r.static_equilibrium.result ? {
@@ -5728,6 +5756,265 @@ function setStaticEquilibrium(value) {
   $("staticTolMm").value = String(eq !== undefined ? eq.correction_tolerance_m * 1e3 : 0.001);
   $("staticMaxNewton").value = String(eq?.max_newton_iterations ?? 300);
   for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = eq === undefined;
+}
+const DEFAULT_AIR_DRAG = Object.freeze({ rho_air_kg_m3: 1.225, c_normal: 1.2, c_tangent: 0.05, eps_v_m_s: 1e-3 });
+const DEFAULT_ADAPTIVE_BARRIER = Object.freeze({
+  target_gap_fraction: 0.5, min_gap_fraction: 0.05, growth_factor: 2.0,
+  membrane_floor_scale: 1e-5, kappa_min: 1e-3, kappa_max: 1e5,
+});
+const REALISM_SUFFIXES = [
+  "BendingModel", "CompressionModel", "AirDrag", "RayleighMembraneS", "RayleighBendingS",
+  "AdaptiveBarrier", "StickSlip", "StickSlipMus", "StickSlipMuk", "StickSlipV",
+  "SelfStickSlip", "SelfStickSlipMus", "SelfStickSlipMuk", "SelfStickSlipV",
+  "AdaptiveMesh", "MeshMinMm", "MeshCvt",
+  "Construction", "HemWidthMm", "HemMassMult", "HemBendMult", "SeamWidthMm", "SeamMassMult", "SeamBendMult",
+  "StartRepulsion", "RepulsionMm", "RepulsionStiffness", "RepulsionPeriod",
+];
+const REALISM_NUM_SUFFIXES = [
+  "RayleighMembraneS", "RayleighBendingS",
+  "StickSlipMus", "StickSlipMuk", "StickSlipV",
+  "SelfStickSlipMus", "SelfStickSlipMuk", "SelfStickSlipV",
+  "MeshMinMm", "MeshCvt",
+  "HemWidthMm", "HemMassMult", "HemBendMult", "SeamWidthMm", "SeamMassMult", "SeamBendMult",
+  "RepulsionMm", "RepulsionStiffness", "RepulsionPeriod",
+];
+function checkedRealismOptions(settings, maxSpacing = 12) {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return {};
+  const out = {};
+  if (settings.bending_model !== undefined) {
+    if (settings.bending_model === "discrete_shells") out.bending_model = "discrete_shells";
+    else if (settings.bending_model !== "quadratic") throw Error("Bending model must be quadratic or discrete_shells.");
+  }
+  if (settings.compression_model !== undefined) {
+    if (settings.compression_model === "principal") out.compression_model = "principal";
+    else if (settings.compression_model !== "axis_aligned") throw Error("Compression model must be axis_aligned or principal.");
+  }
+  if (settings.damping !== undefined) {
+    const d = settings.damping;
+    const allowed = ["air_drag", "rayleigh_membrane_s", "rayleigh_bending_s"];
+    if (!d || typeof d !== "object" || Array.isArray(d) || Object.keys(d).some(k => !allowed.includes(k))) {
+      throw Error("Damping options must contain only air_drag, rayleigh_membrane_s, or rayleigh_bending_s.");
+    }
+    const damp = {};
+    if (d.air_drag !== undefined) {
+      const a = d.air_drag;
+      const aKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+      if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).length !== 4 ||
+          Object.keys(a).some(k => !aKeys.includes(k)) ||
+          aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
+          a.rho_air_kg_m3 < 0 || a.c_normal < 0 || a.c_tangent < 0 || a.eps_v_m_s <= 0) {
+        throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
+      }
+      damp.air_drag = { rho_air_kg_m3: a.rho_air_kg_m3, c_normal: a.c_normal, c_tangent: a.c_tangent, eps_v_m_s: a.eps_v_m_s };
+    }
+    for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
+      if (d[key] !== undefined) {
+        if (typeof d[key] !== "number" || !Number.isFinite(d[key]) || d[key] < 0) {
+          throw Error(`${key} must be a finite nonnegative duration in seconds.`);
+        }
+        if (d[key] > 0) damp[key] = d[key];
+      }
+    }
+    if (Object.keys(damp).length > 0) out.damping = damp;
+  }
+  if (settings.adaptive_barrier !== undefined) {
+    const b = settings.adaptive_barrier;
+    const bKeys = ["target_gap_fraction", "min_gap_fraction", "growth_factor", "membrane_floor_scale", "kappa_min", "kappa_max"];
+    if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).length !== 6 ||
+        Object.keys(b).some(k => !bKeys.includes(k)) || bKeys.some(k => typeof b[k] !== "number" || !Number.isFinite(b[k])) ||
+        !(b.target_gap_fraction > 0 && b.target_gap_fraction < 1) ||
+        !(b.min_gap_fraction > 0 && b.min_gap_fraction <= b.target_gap_fraction) ||
+        !(b.growth_factor >= 1 && b.growth_factor <= 16) ||
+        !(b.membrane_floor_scale >= 0 && b.membrane_floor_scale <= 1) ||
+        b.kappa_min <= 0 || b.kappa_max < b.kappa_min) {
+      throw Error("Adaptive barrier policy parameters are out of range.");
+    }
+    out.adaptive_barrier = {
+      target_gap_fraction: b.target_gap_fraction, min_gap_fraction: b.min_gap_fraction,
+      growth_factor: b.growth_factor, membrane_floor_scale: b.membrane_floor_scale,
+      kappa_min: b.kappa_min, kappa_max: b.kappa_max,
+    };
+  }
+  for (const key of ["stick_slip", "self_stick_slip"]) {
+    if (settings[key] !== undefined) {
+      const s = settings[key];
+      const sKeys = ["mu_s", "mu_k", "transition_v_m_s"];
+      if (!s || typeof s !== "object" || Array.isArray(s) || Object.keys(s).length !== 3 ||
+          Object.keys(s).some(k => !sKeys.includes(k)) || sKeys.some(k => typeof s[k] !== "number" || !Number.isFinite(s[k])) ||
+          s.mu_k < 0 || s.mu_s < s.mu_k || s.transition_v_m_s <= 0) {
+        throw Error("Stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s.");
+      }
+      if (key === "self_stick_slip" && settings.self_contact_mm === 0) {
+        throw Error("Cloth-cloth self stick-slip friction requires self-contact to be enabled.");
+      }
+      out[key] = { mu_s: s.mu_s, mu_k: s.mu_k, transition_v_m_s: s.transition_v_m_s };
+    }
+  }
+  if (settings.mesh !== undefined) {
+    const m = settings.mesh;
+    const mKeys = ["min_spacing_mm", "cvt_iterations", "max_turning_angle_rad", "gather_refinement"];
+    if (!m || typeof m !== "object" || Array.isArray(m) || Object.keys(m).some(k => !mKeys.includes(k))) {
+      throw Error("Adaptive mesh options contain an unknown field.");
+    }
+    const mesh = {};
+    if (m.min_spacing_mm !== undefined) {
+      if (typeof m.min_spacing_mm !== "number" || !Number.isFinite(m.min_spacing_mm) || m.min_spacing_mm <= 0 ||
+          m.min_spacing_mm > maxSpacing || maxSpacing / m.min_spacing_mm > 8) {
+        throw Error(`Adaptive mesh min_spacing_mm must be positive, at most ${maxSpacing} mm, and at most an 8x refinement.`);
+      }
+      mesh.min_spacing_mm = m.min_spacing_mm;
+    }
+    if (m.cvt_iterations !== undefined) {
+      if (!Number.isSafeInteger(m.cvt_iterations) || m.cvt_iterations < 0 || m.cvt_iterations > 32) {
+        throw Error("Adaptive mesh cvt_iterations must be a whole number in 0–32.");
+      }
+      if (m.cvt_iterations > 0) mesh.cvt_iterations = m.cvt_iterations;
+    }
+    if (m.max_turning_angle_rad !== undefined) {
+      if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) || m.max_turning_angle_rad < 0.05 || m.max_turning_angle_rad > Math.PI) {
+        throw Error("Adaptive mesh max_turning_angle_rad must be in [0.05, π].");
+      }
+      if (mesh.min_spacing_mm === undefined && m.max_turning_angle_rad !== 0.12) {
+        throw Error("Adaptive mesh max_turning_angle_rad requires min_spacing_mm.");
+      }
+      if (m.max_turning_angle_rad !== 0.12) mesh.max_turning_angle_rad = m.max_turning_angle_rad;
+    }
+    if (m.gather_refinement !== undefined) {
+      if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) || m.gather_refinement < 1 || m.gather_refinement > 8) {
+        throw Error("Adaptive mesh gather_refinement must be in [1, 8].");
+      }
+      if (mesh.min_spacing_mm === undefined && m.gather_refinement !== 2) {
+        throw Error("Adaptive mesh gather_refinement requires min_spacing_mm.");
+      }
+      if (m.gather_refinement !== 2) mesh.gather_refinement = m.gather_refinement;
+    }
+    if (Object.keys(mesh).length > 0) out.mesh = mesh;
+  }
+  if (settings.construction !== undefined) {
+    const c = settings.construction;
+    const cKeys = ["hem_width_mm", "hem_mass_multiplier", "hem_bending_multiplier", "seam_width_mm", "seam_mass_multiplier", "seam_bending_multiplier"];
+    if (!c || typeof c !== "object" || Array.isArray(c) || Object.keys(c).length !== 6 ||
+        Object.keys(c).some(k => !cKeys.includes(k)) || cKeys.some(k => typeof c[k] !== "number" || !Number.isFinite(c[k])) ||
+        c.hem_width_mm < 0 || c.hem_width_mm > 200 || c.seam_width_mm < 0 || c.seam_width_mm > 100 ||
+        c.hem_mass_multiplier < 1 || c.hem_mass_multiplier > 10 || c.seam_mass_multiplier < 1 || c.seam_mass_multiplier > 10 ||
+        c.hem_bending_multiplier < 1 || c.hem_bending_multiplier > 32 || c.seam_bending_multiplier < 1 || c.seam_bending_multiplier > 32 ||
+        ((c.hem_mass_multiplier > 1 || c.hem_bending_multiplier > 1) && c.hem_width_mm <= 0) ||
+        (c.hem_width_mm > 0 && c.hem_mass_multiplier === 1 && c.hem_bending_multiplier === 1) ||
+        (c.seam_mass_multiplier > 1 && c.seam_width_mm <= 0) ||
+        (c.seam_width_mm > 0 && c.seam_mass_multiplier === 1 && c.seam_bending_multiplier === 1)) {
+      throw Error("Construction mechanics widths or multipliers are out of range.");
+    }
+    if (c.hem_mass_multiplier > 1 || c.hem_bending_multiplier > 1 || c.seam_mass_multiplier > 1 || c.seam_bending_multiplier > 1) {
+      out.construction = {
+        hem_width_mm: c.hem_width_mm, hem_mass_multiplier: c.hem_mass_multiplier, hem_bending_multiplier: c.hem_bending_multiplier,
+        seam_width_mm: c.seam_width_mm, seam_mass_multiplier: c.seam_mass_multiplier, seam_bending_multiplier: c.seam_bending_multiplier,
+      };
+    }
+  }
+  if (settings.start_self_repulsion !== undefined) {
+    const r = settings.start_self_repulsion;
+    const rKeys = ["min_separation_m", "stiffness", "period"];
+    if (!r || typeof r !== "object" || Array.isArray(r) || Object.keys(r).length !== 3 ||
+        Object.keys(r).some(k => !rKeys.includes(k)) ||
+        typeof r.min_separation_m !== "number" || !Number.isFinite(r.min_separation_m) || r.min_separation_m <= 0 || r.min_separation_m > 0.1 ||
+        typeof r.stiffness !== "number" || !Number.isFinite(r.stiffness) || r.stiffness <= 0 || r.stiffness > 1 ||
+        !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
+      throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
+    }
+    out.start_self_repulsion = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+  }
+  return out;
+}
+function reqRealismNum(id, label) {
+  const raw = $(id).value.trim();
+  if (!raw) throw Error(`Supply ${label}.`);
+  return Number(raw);
+}
+function readRealismControls(prefix, maxSpacing = 12) {
+  const raw = {};
+  const bm = $(prefix + "BendingModel").value;
+  if (bm !== "quadratic") raw.bending_model = bm;
+  const cm = $(prefix + "CompressionModel").value;
+  if (cm !== "axis_aligned") raw.compression_model = cm;
+  const rm = reqRealismNum(prefix + "RayleighMembraneS", "Rayleigh membrane damping (s)");
+  const rb = reqRealismNum(prefix + "RayleighBendingS", "Rayleigh bending damping (s)");
+  if ($(prefix + "AirDrag").checked || rm !== 0 || rb !== 0) {
+    raw.damping = {
+      ...($(prefix + "AirDrag").checked ? { air_drag: { ...DEFAULT_AIR_DRAG } } : {}),
+      ...(rm !== 0 ? { rayleigh_membrane_s: rm } : {}),
+      ...(rb !== 0 ? { rayleigh_bending_s: rb } : {}),
+    };
+  }
+  if ($(prefix + "AdaptiveBarrier").checked) raw.adaptive_barrier = { ...DEFAULT_ADAPTIVE_BARRIER };
+  if ($(prefix + "StickSlip").checked) {
+    raw.stick_slip = {
+      mu_s: reqRealismNum(prefix + "StickSlipMus", "static friction μs"),
+      mu_k: reqRealismNum(prefix + "StickSlipMuk", "kinetic friction μk"),
+      transition_v_m_s: reqRealismNum(prefix + "StickSlipV", "stick-slip transition speed"),
+    };
+  }
+  if ($(prefix + "SelfStickSlip").checked) {
+    raw.self_stick_slip = {
+      mu_s: reqRealismNum(prefix + "SelfStickSlipMus", "self static friction μs"),
+      mu_k: reqRealismNum(prefix + "SelfStickSlipMuk", "self kinetic friction μk"),
+      transition_v_m_s: reqRealismNum(prefix + "SelfStickSlipV", "self stick-slip transition speed"),
+    };
+  }
+  if ($(prefix + "AdaptiveMesh").checked) {
+    raw.mesh = {
+      min_spacing_mm: reqRealismNum(prefix + "MeshMinMm", "adaptive mesh minimum spacing (mm)"),
+      cvt_iterations: reqRealismNum(prefix + "MeshCvt", "adaptive mesh CVT iterations"),
+    };
+  }
+  if ($(prefix + "Construction").checked) {
+    raw.construction = {
+      hem_width_mm: reqRealismNum(prefix + "HemWidthMm", "hem band width (mm)"),
+      hem_mass_multiplier: reqRealismNum(prefix + "HemMassMult", "hem mass multiplier"),
+      hem_bending_multiplier: reqRealismNum(prefix + "HemBendMult", "hem bending multiplier"),
+      seam_width_mm: reqRealismNum(prefix + "SeamWidthMm", "seam allowance width (mm)"),
+      seam_mass_multiplier: reqRealismNum(prefix + "SeamMassMult", "seam mass multiplier"),
+      seam_bending_multiplier: reqRealismNum(prefix + "SeamBendMult", "seam bending multiplier"),
+    };
+  }
+  if ($(prefix + "StartRepulsion").checked) {
+    raw.start_self_repulsion = {
+      min_separation_m: reqRealismNum(prefix + "RepulsionMm", "start self-repulsion clearance (mm)") * 1e-3,
+      stiffness: reqRealismNum(prefix + "RepulsionStiffness", "start self-repulsion stiffness"),
+      period: reqRealismNum(prefix + "RepulsionPeriod", "start self-repulsion period"),
+    };
+  }
+  return checkedRealismOptions(raw, maxSpacing);
+}
+function setRealismOptions(settings) {
+  const r = checkedRealismOptions(settings);
+  $("drapeBendingModel").value = r.bending_model ?? "quadratic";
+  $("drapeCompressionModel").value = r.compression_model ?? "axis_aligned";
+  $("drapeAirDrag").checked = r.damping?.air_drag !== undefined;
+  $("drapeRayleighMembraneS").value = String(r.damping?.rayleigh_membrane_s ?? 0);
+  $("drapeRayleighBendingS").value = String(r.damping?.rayleigh_bending_s ?? 0);
+  $("drapeAdaptiveBarrier").checked = r.adaptive_barrier !== undefined;
+  $("drapeStickSlip").checked = r.stick_slip !== undefined;
+  $("drapeStickSlipMus").value = String(r.stick_slip?.mu_s ?? 0.5);
+  $("drapeStickSlipMuk").value = String(r.stick_slip?.mu_k ?? 0.3);
+  $("drapeStickSlipV").value = String(r.stick_slip?.transition_v_m_s ?? 0.02);
+  $("drapeSelfStickSlip").checked = r.self_stick_slip !== undefined;
+  $("drapeSelfStickSlipMus").value = String(r.self_stick_slip?.mu_s ?? 0.45);
+  $("drapeSelfStickSlipMuk").value = String(r.self_stick_slip?.mu_k ?? 0.25);
+  $("drapeSelfStickSlipV").value = String(r.self_stick_slip?.transition_v_m_s ?? 0.02);
+  $("drapeAdaptiveMesh").checked = r.mesh !== undefined;
+  $("drapeMeshMinMm").value = String(r.mesh?.min_spacing_mm ?? 6);
+  $("drapeMeshCvt").value = String(r.mesh?.cvt_iterations ?? 6);
+  $("drapeConstruction").checked = r.construction !== undefined;
+  $("drapeHemWidthMm").value = String(r.construction?.hem_width_mm ?? 20);
+  $("drapeHemMassMult").value = String(r.construction?.hem_mass_multiplier ?? 2.5);
+  $("drapeHemBendMult").value = String(r.construction?.hem_bending_multiplier ?? 5);
+  $("drapeSeamWidthMm").value = String(r.construction?.seam_width_mm ?? 10);
+  $("drapeSeamMassMult").value = String(r.construction?.seam_mass_multiplier ?? 2);
+  $("drapeSeamBendMult").value = String(r.construction?.seam_bending_multiplier ?? 3);
+  $("drapeStartRepulsion").checked = r.start_self_repulsion !== undefined;
+  $("drapeRepulsionMm").value = String(r.start_self_repulsion ? r.start_self_repulsion.min_separation_m * 1e3 : 4);
+  $("drapeRepulsionStiffness").value = String(r.start_self_repulsion?.stiffness ?? 0.5);
+  $("drapeRepulsionPeriod").value = String(r.start_self_repulsion?.period ?? 5);
 }
 function checkedThumbPose(value) {
   if (value === undefined) return undefined;
@@ -6917,6 +7204,11 @@ async function guidedScenarioInput(includeCasePolicy = false) {
       max_newton_iterations: number("guidedScenarioStaticMaxNewton", "maximum static Newton iterations"),
     };
   }
+  const scenarioRealism = readRealismControls("guidedScenario", input.options.spacing);
+  if (scenarioRealism.self_stick_slip !== undefined && !input.options.self_contact) {
+    throw Error("Cloth-cloth self stick-slip friction requires self-contact to be enabled.");
+  }
+  Object.assign(input.options, scenarioRealism);
   if (motionMode === "form") Object.assign(input, guidedMotionInput());
   if (compression) input.motionCompressionTarget = $("guidedMotionCompressionTarget").value || "transient_surface";
   if (motionMode === "file") input.maxMotionTrials = number("guidedScenarioMotionTrials", "case motion-attempt allowance");
@@ -7020,6 +7312,15 @@ function showGuidedScenarioDrafts() {
       (value.options.newton_strategy ? `Newton solver ${value.options.newton_strategy.kind}; ` : "") +
       (value.options.integrator ? `integrator ${value.options.integrator.kind}${value.options.integrator.rho_inf !== undefined ? ` (ρ∞=${value.options.integrator.rho_inf})` : ""}; ` : "") +
       (value.options.static_equilibrium ? `static equilibrium (${value.options.static_equilibrium.correction_tolerance_m * 1e3} mm, ${value.options.static_equilibrium.max_newton_iterations} iters); ` : "") +
+      (value.options.bending_model && value.options.bending_model !== "quadratic" ? `bending ${value.options.bending_model}; ` : "") +
+      (value.options.compression_model && value.options.compression_model !== "axis_aligned" ? `compression ${value.options.compression_model}; ` : "") +
+      (value.options.damping ? "damping; " : "") +
+      (value.options.adaptive_barrier ? "adaptive barrier; " : "") +
+      (value.options.stick_slip ? `stick-slip (μs=${value.options.stick_slip.mu_s}, μk=${value.options.stick_slip.mu_k}); ` : "") +
+      (value.options.self_stick_slip ? `self stick-slip (μs=${value.options.self_stick_slip.mu_s}, μk=${value.options.self_stick_slip.mu_k}); ` : "") +
+      (value.options.mesh ? `adaptive mesh; ` : "") +
+      (value.options.construction ? "hem/seam construction; " : "") +
+      (value.options.start_self_repulsion ? `start self-repulsion (${value.options.start_self_repulsion.min_separation_m * 1e3} mm); ` : "") +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       (value.motion?.source_pose_sampling ? `source body poses at most ${value.motion.source_pose_sampling.max_step_s} s apart, ` +
@@ -7389,6 +7690,19 @@ async function execute(op, studio = null) {
         if (schedule !== undefined) msg.schedule = schedule;
         const staticEq = drapeStaticEquilibrium();
         if (staticEq !== undefined) msg.staticEquilibrium = staticEq;
+        const realism = readRealismControls("drape", 12);
+        if (realism.self_stick_slip !== undefined && !$("selfContact").checked) {
+          throw Error("Cloth-cloth self stick-slip friction requires self-contact to be enabled.");
+        }
+        if (realism.bending_model !== undefined) msg.bendingModel = realism.bending_model;
+        if (realism.compression_model !== undefined) msg.compressionModel = realism.compression_model;
+        if (realism.damping !== undefined) msg.damping = realism.damping;
+        if (realism.adaptive_barrier !== undefined) msg.adaptiveBarrier = realism.adaptive_barrier;
+        if (realism.stick_slip !== undefined) msg.stickSlip = realism.stick_slip;
+        if (realism.self_stick_slip !== undefined) msg.selfStickSlip = realism.self_stick_slip;
+        if (realism.mesh !== undefined) msg.mesh = realism.mesh;
+        if (realism.construction !== undefined) msg.construction = realism.construction;
+        if (realism.start_self_repulsion !== undefined) msg.startSelfRepulsion = realism.start_self_repulsion;
         msg.armDeg = drapeArmAngle();
         if (has("bodyFitFile")) {
           if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before draping.");
@@ -7443,7 +7757,16 @@ async function execute(op, studio = null) {
           ...(msg.newtonStrategy !== undefined ? { newton_strategy: msg.newtonStrategy } : {}),
           ...(msg.integrator !== undefined ? { integrator: msg.integrator } : {}),
           ...(msg.schedule !== undefined ? msg.schedule : {}),
-          ...(msg.staticEquilibrium !== undefined ? { static_equilibrium: msg.staticEquilibrium } : {}) } } : {}) };
+          ...(msg.staticEquilibrium !== undefined ? { static_equilibrium: msg.staticEquilibrium } : {}),
+          ...(msg.bendingModel !== undefined ? { bending_model: msg.bendingModel } : {}),
+          ...(msg.compressionModel !== undefined ? { compression_model: msg.compressionModel } : {}),
+          ...(msg.damping !== undefined ? { damping: msg.damping } : {}),
+          ...(msg.adaptiveBarrier !== undefined ? { adaptive_barrier: msg.adaptiveBarrier } : {}),
+          ...(msg.stickSlip !== undefined ? { stick_slip: msg.stickSlip } : {}),
+          ...(msg.selfStickSlip !== undefined ? { self_stick_slip: msg.selfStickSlip } : {}),
+          ...(msg.mesh !== undefined ? { mesh: msg.mesh } : {}),
+          ...(msg.construction !== undefined ? { construction: msg.construction } : {}),
+          ...(msg.startSelfRepulsion !== undefined ? { start_self_repulsion: msg.startSelfRepulsion } : {}) } } : {}) };
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
     if (pending?.id !== id) return;
@@ -7774,6 +8097,12 @@ for (const id of ["guidedScenarioStaticEquilibrium", "guidedScenarioStaticTolMm"
   };
   $(id).addEventListener("change", changed);
   if (id !== "guidedScenarioStaticEquilibrium") $(id).addEventListener("input", changed);
+}
+for (const suffix of REALISM_SUFFIXES) {
+  const id = "guidedScenario" + suffix;
+  const changed = () => changedGuidedScenarioDraft();
+  $(id).addEventListener("change", changed);
+  if (REALISM_NUM_SUFFIXES.includes(suffix)) $(id).addEventListener("input", changed);
 }
 $("addScenarioCase").onclick = () => freezeGuidedScenarioCase();
 $("clearScenarioCases").onclick = () => { guidedScenarioDrafts.length = 0; changedGuidedScenarioDrafts(); };
@@ -8565,6 +8894,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
   customDrapeSchedule:["fold","heat","vaporSurface","coverage"], drapeStepS:["fold","heat","vaporSurface","coverage"], drapeSewSteps:["fold","heat","vaporSurface","coverage"], drapeDrapeSteps:["fold","heat","vaporSurface","coverage"], drapeNewtonTol:["fold","heat","vaporSurface","coverage"],
   staticEquilibrium:["fold","heat","vaporSurface","coverage"], staticTolMm:["fold","heat","vaporSurface","coverage"], staticMaxNewton:["fold","heat","vaporSurface","coverage"],
+  ...Object.fromEntries(REALISM_SUFFIXES.map(suffix => ["drape" + suffix, ["fold", "heat", "vaporSurface", "coverage"]])),
   stockRequest:["stock","stockIdentities","stockPrice"], stockPricing:["stockPrice"], cutJobRequest:["cutJob"], sewOptions:["sew"], sewOptimize:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"], microclimateRequest:["microclimate"], viscoRequest:["lowerVisco"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], cylinderExperimentRequest:["cylinderExperiment"], vaporSurfaceConditions:["vaporSurface"],
@@ -8591,7 +8921,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
     if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps",
       "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol",
-      "staticEquilibrium", "staticTolMm", "staticMaxNewton"].includes(id)) {
+      "staticEquilibrium", "staticTolMm", "staticMaxNewton", ...REALISM_SUFFIXES.map(suffix => "drape" + suffix)].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
       if (id === "body") showReceivedBody();
     }
@@ -8605,7 +8935,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     return scenarioCasesLoading;
   });
 }
-for (const id of ["drapeLegFraction", "drapeThumbPose", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticTolMm", "staticMaxNewton"]) {
+for (const id of ["drapeLegFraction", "drapeThumbPose", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticTolMm", "staticMaxNewton", ...REALISM_NUM_SUFFIXES.map(suffix => "drape" + suffix)]) {
   $(id).addEventListener("input", () => {
     ++roundRead; roundToken = null; window.opener = null;
     invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
@@ -8743,6 +9073,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       checkedDrapeSchedule(settings);
       checkedStaticEquilibrium(settings?.static_equilibrium);
       checkedThumbPose(settings?.thumb_pose);
+      checkedRealismOptions(settings);
       const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
       if (hasArm && (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180)) {
         throw Error("Received drape arm angle must be from 0 to 180 degrees.");
@@ -8796,6 +9127,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         setDrapeSchedule(settings);
         setStaticEquilibrium(settings.static_equilibrium);
         setThumbPose(settings.thumb_pose);
+        setRealismOptions(settings);
       }
       $("supplementalConsent").checked = false;
       $("bodyFitConsent").checked = false; showReceivedBody();

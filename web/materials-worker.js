@@ -659,6 +659,164 @@ self.onmessage = async ({ data: msg }) => {
             max_newton_iterations: value.max_newton_iterations,
           };
         }
+        if (msg.bendingModel !== undefined) {
+          if (msg.bendingModel === "quadratic") {
+            // Legacy default; omit from FoldSettings JSON.
+          } else if (msg.bendingModel === "discrete_shells") {
+            settings.bending_model = "discrete_shells";
+          } else {
+            throw Error("Bending model must be quadratic or discrete_shells.");
+          }
+        }
+        if (msg.compressionModel !== undefined) {
+          if (msg.compressionModel === "axis_aligned") {
+            // Legacy default; omit from FoldSettings JSON.
+          } else if (msg.compressionModel === "principal") {
+            settings.compression_model = "principal";
+          } else {
+            throw Error("Compression model must be axis_aligned or principal.");
+          }
+        }
+        if (msg.damping !== undefined) {
+          const value = msg.damping;
+          const allowed = ["air_drag", "rayleigh_membrane_s", "rayleigh_bending_s"];
+          if (!value || typeof value !== "object" || Array.isArray(value) ||
+              Object.keys(value).some(key => !allowed.includes(key))) {
+            throw Error("Damping options must contain only air_drag, rayleigh_membrane_s, or rayleigh_bending_s.");
+          }
+          const out = {};
+          if (value.air_drag !== undefined) {
+            const d = value.air_drag;
+            const dKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+            if (!d || typeof d !== "object" || Array.isArray(d) ||
+                Object.keys(d).length !== 4 || Object.keys(d).some(k => !dKeys.includes(k)) ||
+                typeof d.rho_air_kg_m3 !== "number" || !Number.isFinite(d.rho_air_kg_m3) || d.rho_air_kg_m3 < 0 ||
+                typeof d.c_normal !== "number" || !Number.isFinite(d.c_normal) || d.c_normal < 0 ||
+                typeof d.c_tangent !== "number" || !Number.isFinite(d.c_tangent) || d.c_tangent < 0 ||
+                typeof d.eps_v_m_s !== "number" || !Number.isFinite(d.eps_v_m_s) || d.eps_v_m_s <= 0) {
+              throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
+            }
+            out.air_drag = { rho_air_kg_m3: d.rho_air_kg_m3, c_normal: d.c_normal, c_tangent: d.c_tangent, eps_v_m_s: d.eps_v_m_s };
+          }
+          for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
+            if (value[key] !== undefined) {
+              if (typeof value[key] !== "number" || !Number.isFinite(value[key]) || value[key] < 0) {
+                throw Error(`${key} must be a finite nonnegative duration in seconds.`);
+              }
+              if (value[key] > 0) out[key] = value[key];
+            }
+          }
+          if (Object.keys(out).length > 0) settings.damping = out;
+        }
+        if (msg.adaptiveBarrier !== undefined) {
+          const b = msg.adaptiveBarrier;
+          const bKeys = ["target_gap_fraction", "min_gap_fraction", "growth_factor", "membrane_floor_scale", "kappa_min", "kappa_max"];
+          if (!b || typeof b !== "object" || Array.isArray(b) ||
+              Object.keys(b).length !== 6 || Object.keys(b).some(k => !bKeys.includes(k)) ||
+              bKeys.some(k => typeof b[k] !== "number" || !Number.isFinite(b[k])) ||
+              !(b.target_gap_fraction > 0 && b.target_gap_fraction < 1) ||
+              !(b.min_gap_fraction > 0 && b.min_gap_fraction <= b.target_gap_fraction) ||
+              !(b.growth_factor >= 1 && b.growth_factor <= 16) ||
+              !(b.membrane_floor_scale >= 0 && b.membrane_floor_scale <= 1) ||
+              b.kappa_min <= 0 || b.kappa_max < b.kappa_min) {
+            throw Error("Adaptive barrier policy parameters are out of range.");
+          }
+          settings.adaptive_barrier = {
+            target_gap_fraction: b.target_gap_fraction, min_gap_fraction: b.min_gap_fraction,
+            growth_factor: b.growth_factor, membrane_floor_scale: b.membrane_floor_scale,
+            kappa_min: b.kappa_min, kappa_max: b.kappa_max,
+          };
+        }
+        for (const [msgKey, wireKey] of [["stickSlip", "stick_slip"], ["selfStickSlip", "self_stick_slip"]]) {
+          if (msg[msgKey] !== undefined) {
+            const s = msg[msgKey];
+            const sKeys = ["mu_s", "mu_k", "transition_v_m_s"];
+            if (!s || typeof s !== "object" || Array.isArray(s) ||
+                Object.keys(s).length !== 3 || Object.keys(s).some(k => !sKeys.includes(k)) ||
+                sKeys.some(k => typeof s[k] !== "number" || !Number.isFinite(s[k])) ||
+                s.mu_k < 0 || s.mu_s < s.mu_k || s.transition_v_m_s <= 0) {
+              throw Error("Stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s.");
+            }
+            if (wireKey === "self_stick_slip" && !(settings.self_contact_mm > 0)) {
+              throw Error("Cloth-cloth self stick-slip friction requires self-contact to be enabled.");
+            }
+            settings[wireKey] = { mu_s: s.mu_s, mu_k: s.mu_k, transition_v_m_s: s.transition_v_m_s };
+          }
+        }
+        if (msg.mesh !== undefined) {
+          const m = msg.mesh;
+          const mKeys = ["min_spacing_mm", "cvt_iterations", "max_turning_angle_rad", "gather_refinement"];
+          if (!m || typeof m !== "object" || Array.isArray(m) ||
+              Object.keys(m).some(k => !mKeys.includes(k))) {
+            throw Error("Mesh options contain an unknown field.");
+          }
+          const out = {};
+          if (m.min_spacing_mm !== undefined) {
+            if (typeof m.min_spacing_mm !== "number" || !Number.isFinite(m.min_spacing_mm) || m.min_spacing_mm <= 0 || m.min_spacing_mm > 12 || 12 / m.min_spacing_mm > 8) {
+              throw Error("Adaptive mesh min_spacing_mm must be in [1.5, 12] mm.");
+            }
+            out.min_spacing_mm = m.min_spacing_mm;
+          }
+          if (m.cvt_iterations !== undefined) {
+            if (!Number.isSafeInteger(m.cvt_iterations) || m.cvt_iterations < 0 || m.cvt_iterations > 32) {
+              throw Error("Mesh cvt_iterations must be a whole number in 0–32.");
+            }
+            if (m.cvt_iterations > 0) out.cvt_iterations = m.cvt_iterations;
+          }
+          if (m.max_turning_angle_rad !== undefined) {
+            if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) || m.max_turning_angle_rad < 0.05 || m.max_turning_angle_rad > Math.PI) {
+              throw Error("Mesh max_turning_angle_rad must be in [0.05, π].");
+            }
+            if (out.min_spacing_mm === undefined && m.max_turning_angle_rad !== 0.12) {
+              throw Error("Mesh max_turning_angle_rad requires min_spacing_mm.");
+            }
+            if (m.max_turning_angle_rad !== 0.12) out.max_turning_angle_rad = m.max_turning_angle_rad;
+          }
+          if (m.gather_refinement !== undefined) {
+            if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) || m.gather_refinement < 1 || m.gather_refinement > 8) {
+              throw Error("Mesh gather_refinement must be in [1, 8].");
+            }
+            if (out.min_spacing_mm === undefined && m.gather_refinement !== 2) {
+              throw Error("Mesh gather_refinement requires min_spacing_mm.");
+            }
+            if (m.gather_refinement !== 2) out.gather_refinement = m.gather_refinement;
+          }
+          if (Object.keys(out).length > 0) settings.mesh = out;
+        }
+        if (msg.construction !== undefined) {
+          const c = msg.construction;
+          const cKeys = ["hem_width_mm", "hem_mass_multiplier", "hem_bending_multiplier", "seam_width_mm", "seam_mass_multiplier", "seam_bending_multiplier"];
+          if (!c || typeof c !== "object" || Array.isArray(c) ||
+              Object.keys(c).length !== 6 || Object.keys(c).some(k => !cKeys.includes(k)) ||
+              cKeys.some(k => typeof c[k] !== "number" || !Number.isFinite(c[k])) ||
+              c.hem_width_mm < 0 || c.hem_width_mm > 200 || c.seam_width_mm < 0 || c.seam_width_mm > 100 ||
+              c.hem_mass_multiplier < 1 || c.hem_mass_multiplier > 10 || c.seam_mass_multiplier < 1 || c.seam_mass_multiplier > 10 ||
+              c.hem_bending_multiplier < 1 || c.hem_bending_multiplier > 32 || c.seam_bending_multiplier < 1 || c.seam_bending_multiplier > 32 ||
+              ((c.hem_mass_multiplier > 1 || c.hem_bending_multiplier > 1) && c.hem_width_mm <= 0) ||
+              (c.hem_width_mm > 0 && c.hem_mass_multiplier === 1 && c.hem_bending_multiplier === 1) ||
+              (c.seam_mass_multiplier > 1 && c.seam_width_mm <= 0) ||
+              (c.seam_width_mm > 0 && c.seam_mass_multiplier === 1 && c.seam_bending_multiplier === 1)) {
+            throw Error("Construction mechanics widths or multipliers are out of range.");
+          }
+          if (c.hem_mass_multiplier > 1 || c.hem_bending_multiplier > 1 || c.seam_mass_multiplier > 1 || c.seam_bending_multiplier > 1) {
+            settings.construction = {
+              hem_width_mm: c.hem_width_mm, hem_mass_multiplier: c.hem_mass_multiplier, hem_bending_multiplier: c.hem_bending_multiplier,
+              seam_width_mm: c.seam_width_mm, seam_mass_multiplier: c.seam_mass_multiplier, seam_bending_multiplier: c.seam_bending_multiplier,
+            };
+          }
+        }
+        if (msg.startSelfRepulsion !== undefined) {
+          const r = msg.startSelfRepulsion;
+          const rKeys = ["min_separation_m", "stiffness", "period"];
+          if (!r || typeof r !== "object" || Array.isArray(r) ||
+              Object.keys(r).length !== 3 || Object.keys(r).some(k => !rKeys.includes(k)) ||
+              typeof r.min_separation_m !== "number" || !Number.isFinite(r.min_separation_m) || r.min_separation_m <= 0 || r.min_separation_m > 0.1 ||
+              typeof r.stiffness !== "number" || !Number.isFinite(r.stiffness) || r.stiffness <= 0 || r.stiffness > 1 ||
+              !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
+            throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
+          }
+          settings.start_self_repulsion = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+        }
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
           settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
           handCollider !== "wrist" || settings.thumb_pose !== undefined ||
@@ -666,7 +824,12 @@ self.onmessage = async ({ data: msg }) => {
           settings.newton_strategy !== undefined || settings.integrator !== undefined ||
           settings.step_s !== undefined || settings.sew_steps !== undefined ||
           settings.drape_steps !== undefined || settings.newton_tol_m_s !== undefined ||
-          settings.static_equilibrium !== undefined;
+          settings.static_equilibrium !== undefined ||
+          settings.bending_model !== undefined || settings.compression_model !== undefined ||
+          settings.damping !== undefined || settings.adaptive_barrier !== undefined ||
+          settings.stick_slip !== undefined || settings.self_stick_slip !== undefined ||
+          settings.mesh !== undefined || settings.construction !== undefined ||
+          settings.start_self_repulsion !== undefined;
         if (configured && typeof ftx.fold_up_configured !== "function") {
           throw Error("Rebuild web/pkg: missing configured pose and settling drape engine.");
         }

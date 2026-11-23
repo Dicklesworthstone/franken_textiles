@@ -379,6 +379,9 @@ onmessage = async (ev) => {
               s.mu_k < 0 || s.mu_s < s.mu_k || s.transition_v_m_s <= 0) {
             throw Error("Stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s.");
           }
+          if (wireKey === "self_stick_slip" && !(settings.self_contact_mm > 0)) {
+            throw Error("Cloth-cloth self stick-slip friction requires self-contact to be enabled.");
+          }
           settings[wireKey] = { mu_s: s.mu_s, mu_k: s.mu_k, transition_v_m_s: s.transition_v_m_s };
         }
       }

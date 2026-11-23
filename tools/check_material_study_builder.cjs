@@ -5050,3 +5050,43 @@ test("guided direct textile-water composition survives authored motion named cas
   const frozen=named;motion.keyframes[0].time_s=0.2;heat.boundaries[0].outside_c=99;
   build({water:f.water,supply:f.supply},2);assert.equal(named,frozen);
 });
+
+test("guided scenario options accept opt-in FTX-27 physics/meshing realism, omit defaults, and refuse invalid inputs fail-closed", async function() {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const base=scenarioState();
+  const defaultJson=JSON.parse(single(base));
+  for(const key of ['bending_model','compression_model','damping','adaptive_barrier','stick_slip','self_stick_slip','mesh','construction','start_self_repulsion']) {
+    assert.equal(Object.hasOwn(defaultJson.options,key),false,`default scenario options must omit ${key}`);
+  }
+  const realism={
+    self_contact:{dhat:0.001,thickness:0.002,kappa:100,mu:0.4,eps_v:0.001},
+    bending_model:'discrete_shells',
+    compression_model:'principal',
+    damping:{air_drag:{rho_air_kg_m3:1.225,c_normal:1.2,c_tangent:0.05,eps_v_m_s:1e-3},rayleigh_membrane_s:1e-4,rayleigh_bending_s:2e-4},
+    adaptive_barrier:{target_gap_fraction:0.5,min_gap_fraction:0.05,growth_factor:2.0,membrane_floor_scale:1e-5,kappa_min:1e-3,kappa_max:1e5},
+    stick_slip:{mu_s:0.6,mu_k:0.3,transition_v_m_s:0.02},
+    self_stick_slip:{mu_s:0.45,mu_k:0.25,transition_v_m_s:0.02},
+    mesh:{min_spacing_mm:6,cvt_iterations:4,max_turning_angle_rad:0.15,gather_refinement:2.5},
+    construction:{hem_width_mm:20,hem_mass_multiplier:2.5,hem_bending_multiplier:5,seam_width_mm:10,seam_mass_multiplier:2,seam_bending_multiplier:3},
+    start_self_repulsion:{min_separation_m:0.004,stiffness:0.5,period:5},
+  };
+  const full=single({...base,options:{...base.options,...realism}});
+  const parsed=JSON.parse(full);
+  for(const [k,v] of Object.entries(realism))assert.deepEqual(parsed.options[k],v);
+  const named=matrix({maxEvaluations:2,cases:[{key:'realism',scenario:full}]});
+  assert.deepEqual(JSON.parse(named).cases[0].scenario.options.bending_model,'discrete_shells');
+  assert.deepEqual(JSON.parse(named).cases[0].scenario.options.self_stick_slip,realism.self_stick_slip);
+
+  // Fail-closed validation checks matching DrapeOptions::validate().
+  assert.throws(()=>single({...base,options:{...base.options,bending_model:'shell'}}),/Bending model/);
+  assert.throws(()=>single({...base,options:{...base.options,compression_model:'iso'}}),/Compression model/);
+  assert.throws(()=>single({...base,options:{...base.options,damping:{air_drag:{rho_air_kg_m3:1.2,c_normal:1,c_tangent:0,eps_v_m_s:0}}}}),/Air drag/);
+  assert.throws(()=>single({...base,options:{...base.options,adaptive_barrier:{...realism.adaptive_barrier,min_gap_fraction:0.8}}}),/Adaptive barrier/);
+  assert.throws(()=>single({...base,options:{...base.options,stick_slip:{mu_s:0.2,mu_k:0.5,transition_v_m_s:0.02}}}),/Stick-slip/);
+  assert.throws(()=>single({...base,options:{...base.options,self_stick_slip:{mu_s:0.45,mu_k:0.25,transition_v_m_s:0.02}}}),/self_contact/);
+  assert.throws(()=>single({...base,options:{...base.options,mesh:{min_spacing_mm:base.options.spacing+1}}}),/min_spacing_mm/);
+  assert.throws(()=>single({...base,options:{...base.options,mesh:{max_turning_angle_rad:0.2}}}),/requires min_spacing_mm/);
+  assert.throws(()=>single({...base,options:{...base.options,construction:{...realism.construction,hem_width_mm:0}}}),/Construction mechanics/);
+  assert.throws(()=>single({...base,options:{...base.options,start_self_repulsion:{min_separation_m:0.004,stiffness:0.5,period:0}}}),/Start self-repulsion/);
+  assert.throws(()=>single({...base,options:{...base.options,mesh:{unknown:1}}}),/unsupported/i);
+});

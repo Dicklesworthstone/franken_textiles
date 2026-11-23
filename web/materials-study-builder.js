@@ -1247,7 +1247,9 @@ export function buildMaterialScenarioRequest(state) {
     sourceObject(state.fitSpec, "Fit contract"); fitSpec = state.fitSpec;
   } else if (!state.allowNoFit) throw Error("Choose a fit contract or explicitly allow a numerical-only study without one.");
   const fields = ["spacing", "sew_steps", "drape_steps", "step", "max_settle_steps"];
-  const options = object(state.options, [...fields, "self_contact", "time_subdivision", "newton_strategy", "integrator", "static_equilibrium"], fields, "Drape options");
+  const options = object(state.options, [...fields, "self_contact", "time_subdivision", "newton_strategy", "integrator", "static_equilibrium",
+    "bending_model", "compression_model", "damping", "adaptive_barrier", "stick_slip", "self_stick_slip", "mesh", "construction", "start_self_repulsion"],
+    fields, "Drape options");
   for (const key of ["spacing", "step"]) {
     if (typeof options[key] !== "number" || !Number.isFinite(options[key]) || options[key] <= 0) {
       throw Error("Drape " + key + " must be finite and positive.");
@@ -1334,6 +1336,113 @@ export function buildMaterialScenarioRequest(state) {
     for (const key of keys) {
       nonnegative(contact[key], "Self-contact " + key);
       if (!["thickness", "mu"].includes(key) && contact[key] === 0) throw Error("Self-contact " + key + " must be positive.");
+    }
+  }
+  if (own(options, "bending_model") && !["quadratic", "discrete_shells"].includes(options.bending_model)) {
+    throw Error("Bending model must be quadratic or discrete_shells.");
+  }
+  if (own(options, "compression_model") && !["axis_aligned", "principal"].includes(options.compression_model)) {
+    throw Error("Compression model must be axis_aligned or principal.");
+  }
+  if (own(options, "damping")) {
+    const d = object(options.damping, ["air_drag", "rayleigh_membrane_s", "rayleigh_bending_s"], [], "Damping options");
+    if (own(d, "air_drag") && d.air_drag !== null) {
+      const aKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+      const a = object(d.air_drag, aKeys, aKeys, "Air drag");
+      if (aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
+          a.rho_air_kg_m3 < 0 || a.c_normal < 0 || a.c_tangent < 0 || a.eps_v_m_s <= 0) {
+        throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
+      }
+    }
+    for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
+      if (own(d, key) && (typeof d[key] !== "number" || !Number.isFinite(d[key]) || d[key] < 0)) {
+        throw Error(`${key} must be a finite nonnegative duration in seconds.`);
+      }
+    }
+  }
+  if (own(options, "adaptive_barrier") && options.adaptive_barrier !== null) {
+    const bKeys = ["target_gap_fraction", "min_gap_fraction", "growth_factor", "membrane_floor_scale", "kappa_min", "kappa_max"];
+    const b = object(options.adaptive_barrier, bKeys, bKeys, "Adaptive barrier");
+    if (bKeys.some(k => typeof b[k] !== "number" || !Number.isFinite(b[k])) ||
+        !(b.target_gap_fraction > 0 && b.target_gap_fraction < 1) ||
+        !(b.min_gap_fraction > 0 && b.min_gap_fraction <= b.target_gap_fraction) ||
+        !(b.growth_factor >= 1 && b.growth_factor <= 16) ||
+        !(b.membrane_floor_scale >= 0 && b.membrane_floor_scale <= 1) ||
+        b.kappa_min <= 0 || b.kappa_max < b.kappa_min) {
+      throw Error("Adaptive barrier policy parameters are out of range.");
+    }
+  }
+  for (const key of ["stick_slip", "self_stick_slip"]) {
+    if (own(options, key) && options[key] !== null) {
+      const sKeys = ["mu_s", "mu_k", "transition_v_m_s"];
+      const s = object(options[key], sKeys, sKeys, key === "stick_slip" ? "Stick-slip friction" : "Self stick-slip friction");
+      if (sKeys.some(k => typeof s[k] !== "number" || !Number.isFinite(s[k])) ||
+          s.mu_k < 0 || s.mu_s < s.mu_k || s.transition_v_m_s <= 0) {
+        throw Error("Stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s.");
+      }
+      if (key === "self_stick_slip" && !(own(options, "self_contact") && options.self_contact !== null)) {
+        throw Error("Cloth-cloth self stick-slip friction requires self_contact to be enabled.");
+      }
+    }
+  }
+  if (own(options, "mesh")) {
+    const m = object(options.mesh, ["min_spacing_mm", "cvt_iterations", "max_turning_angle_rad", "gather_refinement"], [], "Adaptive mesh");
+    const hasMin = own(m, "min_spacing_mm") && m.min_spacing_mm !== null;
+    if (hasMin) {
+      if (typeof m.min_spacing_mm !== "number" || !Number.isFinite(m.min_spacing_mm) ||
+          m.min_spacing_mm <= 0 || m.min_spacing_mm > options.spacing || options.spacing / m.min_spacing_mm > 8) {
+        throw Error("Adaptive mesh min_spacing_mm must be positive, at most spacing, and at most an 8x refinement.");
+      }
+    }
+    if (own(m, "cvt_iterations") && (!Number.isSafeInteger(m.cvt_iterations) || m.cvt_iterations < 0 || m.cvt_iterations > 32)) {
+      throw Error("Adaptive mesh cvt_iterations must be a whole number in 0–32.");
+    }
+    if (own(m, "max_turning_angle_rad")) {
+      if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) ||
+          m.max_turning_angle_rad < 0.05 || m.max_turning_angle_rad > Math.PI) {
+        throw Error("Adaptive mesh max_turning_angle_rad must be in [0.05, π].");
+      }
+      if (!hasMin && m.max_turning_angle_rad !== 0.12) {
+        throw Error("Adaptive mesh max_turning_angle_rad requires min_spacing_mm.");
+      }
+    }
+    if (own(m, "gather_refinement")) {
+      if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) ||
+          m.gather_refinement < 1 || m.gather_refinement > 8) {
+        throw Error("Adaptive mesh gather_refinement must be in [1, 8].");
+      }
+      if (!hasMin && m.gather_refinement !== 2) {
+        throw Error("Adaptive mesh gather_refinement requires min_spacing_mm.");
+      }
+    }
+  }
+  if (own(options, "construction")) {
+    const cKeys = ["hem_width_mm", "hem_mass_multiplier", "hem_bending_multiplier", "seam_width_mm", "seam_mass_multiplier", "seam_bending_multiplier"];
+    const c = object(options.construction, cKeys, [], "Construction mechanics");
+    const hw = own(c, "hem_width_mm") ? c.hem_width_mm : 0;
+    const hm = own(c, "hem_mass_multiplier") ? c.hem_mass_multiplier : 1;
+    const hb = own(c, "hem_bending_multiplier") ? c.hem_bending_multiplier : 1;
+    const sw = own(c, "seam_width_mm") ? c.seam_width_mm : 0;
+    const sm = own(c, "seam_mass_multiplier") ? c.seam_mass_multiplier : 1;
+    const sb = own(c, "seam_bending_multiplier") ? c.seam_bending_multiplier : 1;
+    if ([hw, hm, hb, sw, sm, sb].some(v => typeof v !== "number" || !Number.isFinite(v)) ||
+        hw < 0 || hw > 200 || sw < 0 || sw > 100 ||
+        hm < 1 || hm > 10 || sm < 1 || sm > 10 ||
+        hb < 1 || hb > 32 || sb < 1 || sb > 32 ||
+        ((hm > 1 || hb > 1) && hw <= 0) ||
+        (hw > 0 && hm === 1 && hb === 1) ||
+        (sm > 1 && sw <= 0) ||
+        (sw > 0 && sm === 1 && sb === 1)) {
+      throw Error("Construction mechanics widths or multipliers are out of range.");
+    }
+  }
+  if (own(options, "start_self_repulsion") && options.start_self_repulsion !== null) {
+    const rKeys = ["min_separation_m", "stiffness", "period"];
+    const r = object(options.start_self_repulsion, rKeys, rKeys, "Start self-repulsion");
+    if (typeof r.min_separation_m !== "number" || !Number.isFinite(r.min_separation_m) || r.min_separation_m <= 0 || r.min_separation_m > 0.1 ||
+        typeof r.stiffness !== "number" || !Number.isFinite(r.stiffness) || r.stiffness <= 0 || r.stiffness > 1 ||
+        !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
+      throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
     }
   }
   if (!Number.isSafeInteger(state.maxMeshPoints) || state.maxMeshPoints < 3 || state.maxMeshPoints > 32768) {
