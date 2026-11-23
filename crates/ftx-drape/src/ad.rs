@@ -76,22 +76,33 @@ impl<const N: usize> Jet<N> {
     /// angles; returns non-finite derivatives when `x = y = 0`.
     #[must_use]
     pub fn atan2(y: Self, x: Self) -> Self {
-        let r2 = x.v * x.v + y.v * y.v;
-        if !(r2.is_finite() && r2 > 0.0) {
-            return Self {
-                v: f64::NAN,
-                g: [f64::NAN; N],
-                h: [[f64::NAN; N]; N],
-            };
+        let nan = Self {
+            v: f64::NAN,
+            g: [f64::NAN; N],
+            h: [[f64::NAN; N]; N],
+        };
+        if !(x.v.is_finite() && y.v.is_finite()) {
+            return nan;
         }
-        let inv_r2 = 1.0 / r2;
-        let inv_r4 = inv_r2 * inv_r2;
-        let fy = x.v * inv_r2;
-        let fx = -y.v * inv_r2;
-        let fxx = 2.0 * x.v * y.v * inv_r4;
+        let s = x.v.abs().max(y.v.abs());
+        if s == 0.0 {
+            return nan;
+        }
+        // Rescale by `s = max(|x|, |y|)` so `u² + w² ∈ [1, 2]` never overflows or underflows
+        // `1 / r⁴` into `0 * ∞ = NaN` on tiny (`|r| < 1e-77`) or huge (`|r| > 1e77`) inputs.
+        let u = x.v / s;
+        let w = y.v / s;
+        let inv_d = 1.0 / (u * u + w * w);
+        let inv_d2 = inv_d * inv_d;
+        let fy = (u * inv_d) / s;
+        let fx = -(w * inv_d) / s;
+        let fxx = ((2.0 * u * w * inv_d2) / s) / s;
         let fyy = -fxx;
-        let fxy = (y.v * y.v - x.v * x.v) * inv_r4;
-        let mut out = Self::constant(ftx_core::det::atan2(y.v, x.v));
+        let fxy = (((w * w - u * u) * inv_d2) / s) / s;
+        if !(fx.is_finite() && fy.is_finite() && fxx.is_finite() && fxy.is_finite()) {
+            return nan;
+        }
+        let mut out = Self::constant(ftx_core::det::atan2(w, u));
         for i in 0..N {
             out.g[i] = fy * y.g[i] + fx * x.g[i];
             for j in 0..N {
@@ -768,5 +779,30 @@ mod tests {
         }
         let deg = Jet::<2>::atan2(Jet::var(0.0, 1), Jet::var(0.0, 0));
         assert!(deg.v.is_nan() && deg.g[0].is_nan() && deg.h[0][0].is_nan());
+
+        // Rescaled derivatives remain exact and finite for tiny (1e-80) and huge (1e80, 1e160)
+        // inputs where naive `1 / r^4` overflows/underflows to `0 * inf = NaN`.
+        let tiny_flat = Jet::<2>::atan2(Jet::var(0.0, 1), Jet::var(1e-80, 0));
+        assert_eq!(tiny_flat.v, 0.0);
+        assert_eq!(tiny_flat.g[0], 0.0);
+        assert!((tiny_flat.g[1] - 1e80).abs() <= 1e-14 * 1e80);
+        assert_eq!(tiny_flat.h[0][0], 0.0);
+        assert_eq!(tiny_flat.h[1][1], 0.0);
+        assert!((tiny_flat.h[0][1] + 1e160).abs() <= 1e-14 * 1e160);
+        assert_eq!(tiny_flat.h[0][1], tiny_flat.h[1][0]);
+
+        let huge_flat = Jet::<2>::atan2(Jet::var(0.0, 1), Jet::var(1e80, 0));
+        assert_eq!(huge_flat.v, 0.0);
+        assert!((huge_flat.g[1] - 1e-80).abs() <= 1e-14 * 1e-80);
+        assert!((huge_flat.h[0][1] + 1e-160).abs() <= 1e-14 * 1e-160);
+
+        let huge_diag = Jet::<2>::atan2(Jet::var(1e160, 1), Jet::var(1e160, 0));
+        assert!((huge_diag.v - std::f64::consts::FRAC_PI_4).abs() < 1e-15);
+        assert!(huge_diag.g.iter().all(|v| v.is_finite()));
+        assert!(huge_diag.h.iter().flatten().all(|v| v.is_finite()));
+
+        // When even `1 / s^2` overflows (`s = 1e-200`), fail closed uniformly to NaN.
+        let sub = Jet::<2>::atan2(Jet::var(0.0, 1), Jet::var(1e-200, 0));
+        assert!(sub.v.is_nan() && sub.g[0].is_nan() && sub.h[0][1].is_nan());
     }
 }
