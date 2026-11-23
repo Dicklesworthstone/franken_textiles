@@ -91,8 +91,15 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   `build_garment_with_options` with curvature/gather-graded refinement and bounded CVT smoothing;
   `study::Session` charges `mesh_bound` at `min_spacing_mm` when active.
 - **Self-repelling start-state relaxation (`FTX-27g`)**: `SelfRepulsionOptions` /
-  `start_state_with_repulsion` / `relax_with_repulsion` with deterministic spatial-hash VT/EE
-  separation impulses preserved through backtrack checkpoint replay.
+  `start_state_with_repulsion` / `relax_with_repulsion` with deterministic VT/EE separation
+  impulses preserved through backtrack checkpoint replay. Existing BVH queries stream candidates
+  in fixed order without materializing a quadratic edge-pair list or an oversized-edge Cartesian
+  product. `max_candidate_checks` bounds the complete call (default 32 million, supported range
+  1–128 million, omitted from JSON at its default); all blocks of a start share the allowance,
+  while standalone checkpoint replay calls each retain their own allowance. Exhaustion returns
+  `BudgetExceeded`, non-finite separation geometry refuses, and no partial start is returned.
+  Body, seam and final exact contact admission remain authoritative; this is a bounded start
+  heuristic, not a general untangling guarantee or empirical layer-order qualification.
 - **Offline stills & 3D viewer shading (`FTX-27h`)**: deterministic 2×2 MSAA, grazing sheen, and
   16-sample AO in `render`, plus physical fabric sheen, 3-point shadow rig, legible toggle, wireframe
   overlay, and named camera views in `assets/fold_viewer_template.html`.
