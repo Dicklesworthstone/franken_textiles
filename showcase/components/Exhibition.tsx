@@ -261,36 +261,36 @@ export default function Exhibition({section}: {section?: string}) {
           <a className="thermal-callout" href="/wardrobe/waistcoat/">
             <CalloutStill name="waistcoat"/>
             <div>
-              <span className="mono">V&amp;A 256-1880 · 1780s reconstruction</span>
-              <h3>1780s waistcoat &amp; welt pockets</h3>
-              <p>Separate silk fronts, plain silk facings, linen linings, and slit welt pockets validated CONVERGED across 36 native seams with 1:1 mm SVG &amp; A4 exports.</p>
+              <span className="mono">From a museum piece · 1780s</span>
+              <h3>An 18th-century waistcoat</h3>
+              <p>A pattern rebuilt from a waistcoat in the Victoria and Albert Museum: silk fronts, linen linings and welt pockets. All 36 seams match, and it prints at full size.</p>
             </div>
-            <span className="thermal-callout-cta">Inspect cut &amp; welt steps <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">See the cut and the pockets <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/wardrobe/waistcoat/inside-out/">
             <CalloutStill name="inside-out"/>
             <div>
-              <span className="mono">3D layers · Invariant seam indices</span>
+              <span className="mono">Linings and facings in 3D</span>
               <h3>Turn a lined garment inside out</h3>
-              <p>Rotate shell, silk facing, linen lining, and pocket bags together, toggle the shell off to reveal the lining, and audit missing collar linings honestly.</p>
+              <p>Turn the waistcoat’s shell, facing, lining and pocket bags together, then take the shell away to see what sits underneath.</p>
             </div>
-            <span className="thermal-callout-cta">Open 3D layer view <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Open the layers <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/wardrobe/sundress/compare/">
             <CalloutStill name="sundress-compare"/>
             <div>
-              <span className="mono">Synchronized camera · 1:1 m world scale</span>
-              <h3>Compare two native dress drapes</h3>
-              <p>Place independently accepted native drapes of one fixed sundress side by side to measure hem drop and waist clearance — or inspect an explicit solver refusal.</p>
+              <span className="mono">One dress, two figures</span>
+              <h3>Compare two drapes of one dress</h3>
+              <p>Stand the same sundress on two figures side by side, at the same scale, and compare where the hem falls and how the waist sits. A figure it does not fit is shown as refused, not faked.</p>
             </div>
-            <span className="thermal-callout-cta">Compare native drapes <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Compare the two <Arrow diagonal/></span>
           </a>
         </div>
       </div></section>}
       {(show("studio") || studio) && <LabBench initialStation={studio} heading={Heading}/>}
       {show("materials") && <section className="material-gallery" id="materials"><div className="wrap">
         <div className="section-top"><div><p className="kicker">Material studies</p><Heading className="section-title"><a href="/sections/materials/">Cloth under load<span>.</span></a></Heading></div>
-          <p>Two experiments from the Rust solver. Move the grips and see what changes in the cloth.</p></div>
+          <p>Two experiments on a tube and a strip of cloth. Move the grips and see what changes.</p></div>
         <div className="material-pair">{(Object.keys(experiments) as Rig[]).map(kind=><article key={kind} data-reveal>
           <div className="material-cover"><InlineFilm id={"rig-"+kind} title={experiments[kind].title}/>
             <a className="card-open" aria-label={"Explore "+experiments[kind].title} href={`/experiments/${kind}/`}><span className="launch"><Arrow diagonal/></span></a></div>
@@ -300,29 +300,29 @@ export default function Exhibition({section}: {section?: string}) {
           <a className="thermal-callout" href="/experiments/thermal/">
             <CalloutStill name="thermal"/>
             <div>
-              <span className="mono">Live WASM · Measured neoprene &amp; leather</span>
+              <span className="mono">Heat through layers</span>
               <h3>Thermal sandwich</h3>
-              <p>Stack measured catalog sheets at an explicit contact resistance, adjust reservoir temperatures, inspect layer-by-layer °C drops, and test live solver refusals.</p>
+              <p>Stack sheets of measured neoprene and leather between a warm side and a cold side, and read the temperature at each layer.</p>
             </div>
-            <span className="thermal-callout-cta">Build a layer stack <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Build a stack <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/experiments/wash/">
             <CalloutStill name="wash"/>
             <div>
-              <span className="mono">Live WASM · Kanat &amp; Ozdil 2026 denim</span>
+              <span className="mono">Shrinkage in the wash</span>
               <h3>Wash, shrink &amp; recut</h3>
-              <p>Apply measured ISO 6330 warp/weft wash shrinkage along the grainline, compare shrunk vs pre-wash compensated outlines, and test unsupported-material refusals.</p>
+              <p>Apply the measured wash shrinkage of a denim to a pattern piece, lengthwise and crosswise, and get the larger outline to cut so that it fits once washed.</p>
             </div>
-            <span className="thermal-callout-cta">Compare wash shrinkage <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Compare the outlines <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/experiments/friction/">
             <CalloutStill name="friction"/>
             <div>
-              <span className="mono">Native contact · Live WASM calibration</span>
+              <span className="mono">Stick, then slip</span>
               <h3>Friction sled</h3>
-              <p>Step across recorded IPC normal reactions and the Coulomb stick-to-slip plateau between synthetic surface states while uncalibrated catalog textiles stay unavailable.</p>
+              <p>Pull a weighted swatch across a surface and watch it hold, then slide. The surfaces are synthetic examples; a fabric with no measured friction value cannot be chosen.</p>
             </div>
-            <span className="thermal-callout-cta">Inspect stick-to-slip <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Pull the sled <Arrow diagonal/></span>
           </a>
         </div>
       </div></section>}
@@ -341,36 +341,36 @@ export default function Exhibition({section}: {section?: string}) {
           <a className="thermal-callout" href="/studies/wrap-skirt/">
             <CalloutStill name="wrap-skirt"/>
             <div>
-              <span className="mono">Fixed pattern · Neutral vs seated slices</span>
-              <h3>Adjustable-overlap wrap skirt</h3>
-              <p>Keep one trued wrap-skirt cut fixed across three synthetic adult forms, compare two waist-tie settings, and inspect seated Anny thigh slices.</p>
+              <span className="mono">Does it still close when you sit?</span>
+              <h3>A wrap skirt with ties</h3>
+              <p>Keep one wrap-skirt pattern and try it on three figures, standing and seated, at two tie settings, to see how much the front still overlaps.</p>
             </div>
-            <span className="thermal-callout-cta">Check wrap overlap <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Check the overlap <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/studies/tiling/">
             <CalloutStill name="tiling"/>
             <div>
-              <span className="mono">Home printing · A4 tiled PDF</span>
-              <h3>Assemble an A4 pattern floor</h3>
-              <p>Inspect real tiled A4 pages, 5 mm bleed overlap, alignment diamonds, and the 100 mm scale bar before printing at full size.</p>
+              <span className="mono">Printing at home</span>
+              <h3>Assemble the printed pages</h3>
+              <p>Lay the real A4 pages of a pattern on a virtual floor and see how the overlaps, alignment marks and scale bar line up before you print.</p>
             </div>
-            <span className="thermal-callout-cta">Open tile floor <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Open the pages <Arrow diagonal/></span>
           </a>
           <a className="thermal-callout" href="/studies/sewing/">
             <CalloutStill name="sewing"/>
             <div>
-              <span className="mono">Native planner · 10 operations</span>
+              <span className="mono">Which seam first?</span>
               <h3>Jacket sewing order</h3>
-              <p>Step through all ten accepted operations of the Zouave bolero across flat pieces and the 3D jacket with prerequisites and stitch files.</p>
+              <p>Step through the ten sewing steps of the bolero in order, on the flat pieces and on the 3D jacket, with what has to be done before each.</p>
             </div>
-            <span className="thermal-callout-cta">Play sewing order <Arrow diagonal/></span>
+            <span className="thermal-callout-cta">Play the steps <Arrow diagonal/></span>
           </a>
         </div>
       </div></section>}
       {show("tracing") && <TraceReveal heading={Heading}/>}
       {show("films") && <section id="films" className="films"><div className="wrap film-grid">
         <div className="screening" ref={projection}><p className="kicker">Films · 4K 60 fps</p><Heading className="section-title"><a href="/sections/films/">Screening room<span>.</span></a></Heading>
-          <p className="screening-lead">Source-rendered captures from the native cloth solver, historical wardrobe studies, and live WASM workbenches.</p>
+          <p className="screening-lead">Every film on the site: garments going from cut pieces to sewn, cloth under test, and the workshop tools at work.</p>
           <InlineFilm key={screening.id} id={screening.id} title={screening.title} controls requested={filmChosen}/>
           <div className="screening-caption"><strong>{screening.title}</strong><a href={filmFile(screening.id)} download>Download MP4 ↓</a></div>
           <GarmentPatterns exhibit={screening.id}/></div>
@@ -397,12 +397,12 @@ export default function Exhibition({section}: {section?: string}) {
         </div>
       </div></section>}
       {show("tools") && <section id="workbenches" className="paper workbench-band"><div className="wrap workbench-library"><div className="section-top"><div><p className="kicker">Run FrankenTextiles in your browser</p><Heading className="section-title"><a href="/sections/tools/">The workbenches<span>.</span></a></Heading></div>
-        <p>Four local WebAssembly tools (4.4 MiB gzipped). Each opens with a working example and runs bit-identically to the native CLI with zero uploads.</p></div>
+        <p>Four tools that run in your browser. Each opens with a working example, and nothing you load into them is uploaded.</p></div>
         <div className="workbench-shelves">{[
-          ["index","Pattern drafting","Draft to measurements, run all five alterations, fold in 3D, and print every export.","drafting.webp"],
-          ["trace","Pattern tracing","Trace PNG, JPEG or WebP sheets in pure Rust, annotate seams, and run round-0 audits.","trace-review.webp"],
-          ["materials","Material studies","Inspect 449 sourced fabrics, import GarmentCode, test heat/strips, and plan cutting rolls.","material-rig.webp"],
-          ["photo","Photo measurements","Calibrate lenses with ChArUco, measure EXIF photos with bootstrap σ, and fit bodies.","photo-example-sleeve.jpg"],
+          ["index","Pattern drafting","Draft to measurements, alter the pieces, fold them up in 3D and print.","drafting.webp"],
+          ["trace","Pattern tracing","Turn a drawn or scanned pattern sheet into checked pieces.","trace-review.webp"],
+          ["materials","Fabric studies","Browse 449 fabrics with sourced measurements and see how they behave on a pattern.","material-rig.webp"],
+          ["photo","Photo measurements","Measure from a photograph with a sheet of paper in the frame.","photo-example-sleeve.jpg"],
         ].map(([page,title,description,image])=><a key={page} data-reveal href={workbench(page as "index"|"trace"|"materials"|"photo")}>
           <img src={`/workbench/atelier-assets/${image}`} alt="" loading="lazy"/>
           <div><h3>{title}</h3><p>{description}</p></div><Arrow diagonal/>

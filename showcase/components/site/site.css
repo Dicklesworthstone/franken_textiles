@@ -235,17 +235,17 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 @media(max-width:560px){.ft-file-grid{grid-template-columns:1fr}}
 
 /* ---------- claims ---------- */
-.ft-claims{background:var(--forest);color:#f3eee0;padding-block:clamp(48px,6vw,96px)}
-.ft-claims p.kicker,.ft-claims .section-title>span{color:#eac39a}
-.ft-claims .ft-section-top>p{color:#c9d2c8}
+.ft-claims{background:var(--dark);color:#f3eee0;padding-block:clamp(48px,6vw,96px)}
+.ft-claims p.kicker,.ft-claims .section-title>span{color:var(--peach)}
+.ft-claims .ft-section-top>p{color:#c9d0cd}
 .ft-claim-grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:clamp(14px,1.6vw,24px);counter-reset:claim}
-.ft-claim-grid>li{counter-increment:claim;display:flex;flex-direction:column;padding:22px clamp(16px,1.6vw,24px) 22px;border:1px solid #4a605b;border-radius:4px;background:#263e3b}
-.ft-claim-grid>li::before{content:"0" counter(claim);font:500 11px/1.5 var(--mono);letter-spacing:.16em;color:#eac39a}
+.ft-claim-grid>li{counter-increment:claim;display:flex;flex-direction:column;padding:22px clamp(16px,1.6vw,24px) 22px;border:1px solid #3b4a53;border-radius:4px;background:#1d2c35}
+.ft-claim-grid>li::before{content:"0" counter(claim);font:500 11px/1.5 var(--mono);letter-spacing:.16em;color:var(--peach)}
 .ft-claim-grid h3{margin:10px 0 8px;font-size:clamp(34px,3vw,46px)}
-.ft-claim-grid p{margin:0;font-size:15px;line-height:1.55;color:#dde3d8;min-height:3.1em}
-.ft-claim-grid .ft-claim-proof{display:grid;gap:4px;align-content:start;margin-top:18px;padding-top:14px;border-top:1px solid #4a605b;font-size:14px;color:#c3cdc3}
+.ft-claim-grid p{margin:0;font-size:15px;line-height:1.55;color:#d9dedb;min-height:3.1em}
+.ft-claim-grid .ft-claim-proof{display:grid;gap:4px;align-content:start;margin-top:18px;padding-top:14px;border-top:1px solid #3b4a53;font-size:14px;color:#bcc5c2}
 .ft-claim-grid>li[data-claim=fit] .ft-claim-proof{border-top-color:#d6cdb9}
-.ft-claim-proof .mono{color:#eac39a}
+.ft-claim-proof .mono{color:var(--peach)}
 .ft-claim-grid>li[data-claim=fit]{background:#f3eee0;color:var(--ink);border-color:#f3eee0}
 .ft-claim-grid>li[data-claim=fit] p{color:#3d4a4e}
 .ft-claim-grid>li[data-claim=fit]::before,.ft-claim-grid>li[data-claim=fit] .mono{color:var(--rust)}
@@ -388,7 +388,7 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 .ft-pillar:hover,.ft-next a:hover,.ft-shelf a:hover,.workbench-shelves>a:hover{box-shadow:var(--lift)}
 /* Each dark band on the home page has the same nap and is hemmed as well: a line of topstitching just inside
    its upper and lower edge. */
-.ft-fitting,.films,.material-gallery,.ft-claims{
+.ft-fitting,.films,.ft-claims,.dr-room,.hm-loop{
   --hem:repeating-linear-gradient(90deg,#f6dcbf52 0 9px,transparent 9px 15px);
   background-image:var(--hem),var(--hem),linear-gradient(180deg,#ffffff0a,#fff0 260px),var(--nap);
   background-size:100% 1px,100% 1px,auto,240px 240px;

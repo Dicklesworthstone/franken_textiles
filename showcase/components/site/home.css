@@ -35,7 +35,7 @@
 .hm-after{margin:clamp(30px,3.4vw,48px) 0 0}
 
 /* 3. The assistant loop: the one dark band */
-.hm-loop{background:var(--dark);color:#f3efe3;padding-block:clamp(60px,7.4vw,116px)}
+.hm-loop{background-color:var(--dark);color:#f3efe3;padding-block:clamp(60px,7.4vw,116px)}
 .hm-loop>.wrap{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(30px,5vw,84px);align-items:center}
 .hm-kicker{margin:0 0 16px;font:500 11px/1.4 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--lime)}
 .hm-loop h2{color:#fbf6ea}
