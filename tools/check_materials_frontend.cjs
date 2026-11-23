@@ -25316,4 +25316,108 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   }
   assert.equal((await mw.send({ ...baseFold, request: 3, bytes: new Uint8Array([1]).buffer, selfContactMm: 0, selfStickSlip: realismPayload.self_stick_slip })).type, 'error');
   assert.equal((await mw.send({ ...baseFold, request: 4, bytes: new Uint8Array([1]).buffer, bendingModel: 'invalid' })).type, 'error');
+
+  // 6. Handoff preserves mesh.cvt_iterations = 0 and CVT-only (no min_spacing_mm) losslessly, and refuses non-preset values instead of silently rewriting/dropping them.
+  const cvtZeroToken = 'd'.repeat(32);
+  const cvtZeroIn = await pageModule({ roundToken: cvtZeroToken });
+  await cvtZeroIn.windowEvents.message({
+    origin: 'https://unit.invalid', source: cvtZeroIn.opener,
+    data: {
+      type: 'ftx-round-sources', token: cvtZeroToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, mesh: { min_spacing_mm: 6 } },
+    },
+  });
+  assert.equal(cvtZeroIn.e.drapeAdaptiveMesh.checked, true);
+  assert.equal(cvtZeroIn.e.drapeMeshMinMm.value, '6');
+  assert.equal(cvtZeroIn.e.drapeMeshCvt.value, '0', 'handoff with min_spacing_mm only must restore cvt_iterations=0, not mutate to 6');
+
+  const cvtOnlyToken = 'e'.repeat(32);
+  const cvtOnlyIn = await pageModule({ roundToken: cvtOnlyToken });
+  await cvtOnlyIn.windowEvents.message({
+    origin: 'https://unit.invalid', source: cvtOnlyIn.opener,
+    data: {
+      type: 'ftx-round-sources', token: cvtOnlyToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, mesh: { cvt_iterations: 4 } },
+    },
+  });
+  assert.equal(cvtOnlyIn.e.drapeAdaptiveMesh.checked, true);
+  assert.equal(cvtOnlyIn.e.drapeMeshMinMm.value, '', 'CVT-only handoff must leave min_spacing_mm blank rather than inventing 6');
+  assert.equal(cvtOnlyIn.e.drapeMeshCvt.value, '4');
+
+  // Pattern Workbench (index.html) preserves both CVT=0 and CVT-only losslessly and renders self_stick_slip & authored_crease_hinges in foldSummary.
+  for (const [label, meshObj, expMin, expCvt] of [
+    ['cvt0', { min_spacing_mm: 6 }, '6', '0'],
+    ['cvtOnly', { cvt_iterations: 4 }, '', '4'],
+  ]) {
+    const tkn = (label === 'cvt0' ? '1' : '2').repeat(32);
+    const pw = draftingPage({ materialToken: tkn });
+    pw.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+    await pw.windowEvents.message({
+      origin: 'https://unit.invalid', source: pw.opener,
+      data: {
+        type: 'ftx-material-pattern', token: tkn, pattern: new Blob(['{"pieces":[{"id":"front"}]}']), source_sha256: 'c'.repeat(64),
+        evaluatedInputs: {
+          fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]), bodyFit: null,
+          drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, mesh: meshObj },
+        },
+      },
+    });
+    assert.equal(pw.e.drapeAdaptiveMesh.checked, true, label);
+    assert.equal(pw.e.drapeMeshMinMm.value, expMin, label);
+    assert.equal(pw.e.drapeMeshCvt.value, expCvt, label);
+  }
+  {
+    const pw = draftingPage();
+    await pw.body();
+    await pw.e.go.handlers.click();
+    pw.result();
+    pw.e.foldGo.handlers.click();
+    const foldReq = pw.last('fold').request;
+    const rep = {
+      settled: true, gating: [], flags: [], body: { fit: { tape: {} } },
+      numerical: {
+        stick_slip: realismPayload.stick_slip,
+        self_stick_slip: realismPayload.self_stick_slip,
+        authored_crease_hinges: 7,
+      },
+    };
+    pw.emit({
+      type: 'folded', request: foldReq, report: rep, reportText: JSON.stringify(rep), viewer: '<html/>',
+    });
+    assert.match(pw.e.foldSummary.innerHTML, /Self stick-slip friction: μs = 0\.45, μk = 0\.25/);
+    assert.match(pw.e.foldSummary.innerHTML, /Authored creases: 7 hinge\(s\)/);
+  }
+
+  // Non-preset air_drag, non-preset adaptive_barrier, and non-default mesh tuning must refuse on handoff instead of being silently overwritten/dropped.
+  for (const [idx, badRealism] of [
+    { damping: { air_drag: { rho_air_kg_m3: 1.225, c_normal: 2.0, c_tangent: 0.05, eps_v_m_s: 1e-3 } } },
+    { adaptive_barrier: { ...realismPayload.adaptive_barrier, growth_factor: 4.0 } },
+    { mesh: { min_spacing_mm: 6, max_turning_angle_rad: 0.2 } },
+    { mesh: { min_spacing_mm: 6, gather_refinement: 4 } },
+  ].entries()) {
+    const tkn = String(idx + 3).repeat(32);
+    const rej = await pageModule({ roundToken: tkn });
+    await rej.windowEvents.message({
+      origin: 'https://unit.invalid', source: rej.opener,
+      data: {
+        type: 'ftx-round-sources', token: tkn, files: roundFiles,
+        drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0, ...badRealism },
+      },
+    });
+    assert.match(rej.e.roundImportText.textContent, /refused/i, `non-preset handoff case ${idx} must refuse`);
+  }
+
+  // Guided scenario supports CVT-only (blank min_spacing_mm + cvt > 0) and refuses blank min_spacing_mm + cvt === 0.
+  gs.emit(scenarioReport());
+  gs.e.guidedScenarioMeshMinMm.value = '';
+  gs.e.guidedScenarioMeshCvt.value = '0';
+  const beforeEmptyMesh = gs.current().messages.length;
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeEmptyMesh);
+  assert.match(gs.e.error.textContent, /minimum spacing.*CVT/i);
+  gs.e.guidedScenarioMeshCvt.value = '4';
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeEmptyMesh + 1, gs.e.error.textContent);
+  const cvtScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
+  assert.deepEqual(cvtScen.options.mesh, { cvt_iterations: 4 });
 });

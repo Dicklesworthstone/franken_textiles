@@ -292,7 +292,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           <label>Self μ<sub>k</sub> <input id="drapeSelfStickSlipMuk" type="number" min="0" step="0.05" value="0.25" disabled></label>
           <label>Self v<sub>t</sub> (m/s) <input id="drapeSelfStickSlipV" type="number" min="0" step="0.005" value="0.02" disabled></label></p>
         <p class="row"><label><input type="checkbox" id="drapeAdaptiveMesh"> Curvature/gather-adaptive mesh &amp; CVT</label>
-          <label>Min spacing (mm) <input id="drapeMeshMinMm" type="number" min="1.5" max="12" step="0.5" value="6" disabled></label>
+          <label>Min spacing (mm) <input id="drapeMeshMinMm" type="number" min="1.5" max="12" step="any" value="6" placeholder="blank = uniform" disabled></label>
           <label>CVT passes <input id="drapeMeshCvt" type="number" min="0" max="32" step="1" value="6" disabled></label></p>
         <p class="row"><label><input type="checkbox" id="drapeConstruction"> Folded-hem &amp; seam-allowance mechanics</label>
           <label>Hem width (mm) <input id="drapeHemWidthMm" type="number" min="0" max="200" step="1" value="20" disabled></label>
@@ -911,10 +911,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).length !== 4 ||
             Object.keys(a).some(k => !aKeys.includes(k)) ||
             aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
-            a.rho_air_kg_m3 < 0 || a.c_normal < 0 || a.c_tangent < 0 || a.eps_v_m_s <= 0) {
-          throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
+            a.rho_air_kg_m3 !== DEFAULT_AIR_DRAG.rho_air_kg_m3 ||
+            a.c_normal !== DEFAULT_AIR_DRAG.c_normal ||
+            a.c_tangent !== DEFAULT_AIR_DRAG.c_tangent ||
+            a.eps_v_m_s !== DEFAULT_AIR_DRAG.eps_v_m_s) {
+          throw Error("Air drag must match the supported workbench preset (still air: ρ=1.225, Cn=1.2, Ct=0.05, eps_v=1e-3).");
         }
-        damp.air_drag = { rho_air_kg_m3: a.rho_air_kg_m3, c_normal: a.c_normal, c_tangent: a.c_tangent, eps_v_m_s: a.eps_v_m_s };
+        damp.air_drag = { ...DEFAULT_AIR_DRAG };
       }
       for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
         if (d[key] !== undefined) {
@@ -931,18 +934,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       const bKeys = ["target_gap_fraction", "min_gap_fraction", "growth_factor", "membrane_floor_scale", "kappa_min", "kappa_max"];
       if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).length !== 6 ||
           Object.keys(b).some(k => !bKeys.includes(k)) || bKeys.some(k => typeof b[k] !== "number" || !Number.isFinite(b[k])) ||
-          !(b.target_gap_fraction > 0 && b.target_gap_fraction < 1) ||
-          !(b.min_gap_fraction > 0 && b.min_gap_fraction <= b.target_gap_fraction) ||
-          !(b.growth_factor >= 1 && b.growth_factor <= 16) ||
-          !(b.membrane_floor_scale >= 0 && b.membrane_floor_scale <= 1) ||
-          b.kappa_min <= 0 || b.kappa_max < b.kappa_min) {
-        throw Error("Adaptive barrier policy parameters are out of range.");
+          bKeys.some(k => b[k] !== DEFAULT_ADAPTIVE_BARRIER[k])) {
+        throw Error("Adaptive barrier policy must match the supported workbench preset.");
       }
-      out.adaptive_barrier = {
-        target_gap_fraction: b.target_gap_fraction, min_gap_fraction: b.min_gap_fraction,
-        growth_factor: b.growth_factor, membrane_floor_scale: b.membrane_floor_scale,
-        kappa_min: b.kappa_min, kappa_max: b.kappa_max,
-      };
+      out.adaptive_barrier = { ...DEFAULT_ADAPTIVE_BARRIER };
     }
     for (const key of ["stick_slip", "self_stick_slip"]) {
       if (settings[key] !== undefined) {
@@ -979,22 +974,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         if (m.cvt_iterations > 0) mesh.cvt_iterations = m.cvt_iterations;
       }
       if (m.max_turning_angle_rad !== undefined) {
-        if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) || m.max_turning_angle_rad < 0.05 || m.max_turning_angle_rad > Math.PI) {
-          throw Error("Adaptive mesh max_turning_angle_rad must be in [0.05, π].");
+        if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) || m.max_turning_angle_rad !== 0.12) {
+          throw Error("Adaptive mesh custom max_turning_angle_rad is not supported by the workbench controls.");
         }
-        if (mesh.min_spacing_mm === undefined && m.max_turning_angle_rad !== 0.12) {
-          throw Error("Adaptive mesh max_turning_angle_rad requires min_spacing_mm.");
-        }
-        if (m.max_turning_angle_rad !== 0.12) mesh.max_turning_angle_rad = m.max_turning_angle_rad;
       }
       if (m.gather_refinement !== undefined) {
-        if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) || m.gather_refinement < 1 || m.gather_refinement > 8) {
-          throw Error("Adaptive mesh gather_refinement must be in [1, 8].");
+        if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) || m.gather_refinement !== 2) {
+          throw Error("Adaptive mesh custom gather_refinement is not supported by the workbench controls.");
         }
-        if (mesh.min_spacing_mm === undefined && m.gather_refinement !== 2) {
-          throw Error("Adaptive mesh gather_refinement requires min_spacing_mm.");
-        }
-        if (m.gather_refinement !== 2) mesh.gather_refinement = m.gather_refinement;
       }
       if (Object.keys(mesh).length > 0) out.mesh = mesh;
     }
@@ -1070,9 +1057,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       };
     }
     if ($("drapeAdaptiveMesh").checked) {
+      const minRaw = $("drapeMeshMinMm").value.trim();
+      const cvt = reqRealismNum("drapeMeshCvt", "adaptive mesh CVT iterations");
+      if (!minRaw && cvt === 0) {
+        throw Error("Supply adaptive mesh minimum spacing (mm) or positive CVT iterations.");
+      }
       raw.mesh = {
-        min_spacing_mm: reqRealismNum("drapeMeshMinMm", "adaptive mesh minimum spacing (mm)"),
-        cvt_iterations: reqRealismNum("drapeMeshCvt", "adaptive mesh CVT iterations"),
+        ...(minRaw ? { min_spacing_mm: Number(minRaw) } : {}),
+        cvt_iterations: cvt,
       };
     }
     if ($("drapeConstruction").checked) {
@@ -1111,8 +1103,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("drapeSelfStickSlipMuk").value = String(r.self_stick_slip?.mu_k ?? 0.25);
     $("drapeSelfStickSlipV").value = String(r.self_stick_slip?.transition_v_m_s ?? 0.02);
     $("drapeAdaptiveMesh").checked = r.mesh !== undefined;
-    $("drapeMeshMinMm").value = String(r.mesh?.min_spacing_mm ?? 6);
-    $("drapeMeshCvt").value = String(r.mesh?.cvt_iterations ?? 6);
+    $("drapeMeshMinMm").value = r.mesh !== undefined ? (r.mesh.min_spacing_mm !== undefined ? String(r.mesh.min_spacing_mm) : "") : "6";
+    $("drapeMeshCvt").value = String(r.mesh !== undefined ? (r.mesh.cvt_iterations ?? 0) : 6);
     $("drapeConstruction").checked = r.construction !== undefined;
     $("drapeHemWidthMm").value = String(r.construction?.hem_width_mm ?? 20);
     $("drapeHemMassMult").value = String(r.construction?.hem_mass_multiplier ?? 2.5);
@@ -1511,6 +1503,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         const ss = r.numerical.stick_slip;
         $("foldSummary").innerHTML += `<br>Stick-slip friction: μs = ${esc(ss.mu_s)}, μk = ${esc(ss.mu_k)}`;
       }
+      if (r.numerical?.self_stick_slip) {
+        const ss = r.numerical.self_stick_slip;
+        $("foldSummary").innerHTML += `<br>Self stick-slip friction: μs = ${esc(ss.mu_s)}, μk = ${esc(ss.mu_k)}`;
+      }
       if (r.numerical?.mesh) {
         const q = r.numerical.mesh.quality;
         $("foldSummary").innerHTML += `<br>Adaptive mesh: ${q ? `min angle ${esc(q.min_angle_deg?.toFixed(1))}°, ${esc(q.sliver_triangles)} slivers` : "enabled"}`;
@@ -1522,6 +1518,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (r.numerical?.start_self_repulsion) {
         const sr = r.numerical.start_self_repulsion;
         $("foldSummary").innerHTML += `<br>Self-repelling start relaxation: ${esc((sr.min_separation_m * 1e3).toFixed(1))} mm clearance`;
+      }
+      if (r.numerical?.authored_crease_hinges > 0) {
+        $("foldSummary").innerHTML += `<br>Authored creases: ${esc(r.numerical.authored_crease_hinges)} hinge(s)`;
       }
       if (r.numerical?.settling) {
         const tail = r.numerical.settling;

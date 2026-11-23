@@ -497,7 +497,7 @@ studies below use their separately selected body source.</p>
 <label>Self kinetic friction μ<sub>k</sub> <input id="drapeSelfStickSlipMuk" type="number" min="0" step="0.05" value="0.25" disabled></label>
 <label>Self transition speed (m/s) <input id="drapeSelfStickSlipV" type="number" min="0" step="any" value="0.02" disabled></label>
 <label><input id="drapeAdaptiveMesh" type="checkbox"> Curvature/gather-adaptive mesh &amp; CVT smoothing</label>
-<label>Minimum spacing (mm) <input id="drapeMeshMinMm" type="number" min="1.5" max="12" step="0.5" value="6" disabled></label>
+<label>Minimum spacing (mm) <input id="drapeMeshMinMm" type="number" min="1.5" max="12" step="any" value="6" placeholder="blank = uniform" disabled></label>
 <label>CVT Lloyd passes <input id="drapeMeshCvt" type="number" min="0" max="32" step="1" value="6" disabled></label>
 <label><input id="drapeConstruction" type="checkbox"> Hem &amp; seam-allowance stiffness/mass</label>
 <label>Hem width (mm) <input id="drapeHemWidthMm" type="number" min="0" max="200" step="1" value="20" disabled></label>
@@ -1333,7 +1333,7 @@ section-3 contract for their separate design-fit screening even when this scenar
 </div>
 <label><input id="guidedScenarioAdaptiveMesh" type="checkbox"> Curvature/gather-adaptive mesh &amp; CVT smoothing</label>
 <div class="study-fields">
-<label>Minimum spacing (mm) <input id="guidedScenarioMeshMinMm" type="number" min="1.5" step="0.5" value="6" disabled></label>
+<label>Minimum spacing (mm) <input id="guidedScenarioMeshMinMm" type="number" min="0" step="any" value="6" placeholder="blank = uniform" disabled></label>
 <label>CVT Lloyd passes <input id="guidedScenarioMeshCvt" type="number" min="0" max="32" step="1" value="6" disabled></label>
 </div>
 <label><input id="guidedScenarioConstruction" type="checkbox"> Hem &amp; seam-allowance stiffness/mass</label>

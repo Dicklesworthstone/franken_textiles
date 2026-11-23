@@ -5144,6 +5144,7 @@ function show(op, msg, request) {
         ...(r.numerical?.mesh ? { mesh: r.numerical.mesh } : {}),
         ...(r.numerical?.construction ? { construction: r.numerical.construction } : {}),
         ...(r.numerical?.start_self_repulsion ? { start_self_repulsion: r.numerical.start_self_repulsion } : {}),
+        ...(r.numerical?.authored_crease_hinges > 0 ? { authored_crease_hinges: r.numerical.authored_crease_hinges } : {}),
         settling: r.numerical?.settling,
         ...(r.static_equilibrium ? { static_equilibrium: {
           status: r.static_equilibrium.status,
@@ -5802,10 +5803,10 @@ function checkedRealismOptions(settings, maxSpacing = 12) {
       if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).length !== 4 ||
           Object.keys(a).some(k => !aKeys.includes(k)) ||
           aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
-          a.rho_air_kg_m3 < 0 || a.c_normal < 0 || a.c_tangent < 0 || a.eps_v_m_s <= 0) {
-        throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
+          aKeys.some(k => a[k] !== DEFAULT_AIR_DRAG[k])) {
+        throw Error("Air drag must match the supported workbench preset (still air: ρ=1.225, Cn=1.2, Ct=0.05, eps_v=1e-3).");
       }
-      damp.air_drag = { rho_air_kg_m3: a.rho_air_kg_m3, c_normal: a.c_normal, c_tangent: a.c_tangent, eps_v_m_s: a.eps_v_m_s };
+      damp.air_drag = { ...DEFAULT_AIR_DRAG };
     }
     for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
       if (d[key] !== undefined) {
@@ -5822,18 +5823,10 @@ function checkedRealismOptions(settings, maxSpacing = 12) {
     const bKeys = ["target_gap_fraction", "min_gap_fraction", "growth_factor", "membrane_floor_scale", "kappa_min", "kappa_max"];
     if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).length !== 6 ||
         Object.keys(b).some(k => !bKeys.includes(k)) || bKeys.some(k => typeof b[k] !== "number" || !Number.isFinite(b[k])) ||
-        !(b.target_gap_fraction > 0 && b.target_gap_fraction < 1) ||
-        !(b.min_gap_fraction > 0 && b.min_gap_fraction <= b.target_gap_fraction) ||
-        !(b.growth_factor >= 1 && b.growth_factor <= 16) ||
-        !(b.membrane_floor_scale >= 0 && b.membrane_floor_scale <= 1) ||
-        b.kappa_min <= 0 || b.kappa_max < b.kappa_min) {
-      throw Error("Adaptive barrier policy parameters are out of range.");
+        bKeys.some(k => b[k] !== DEFAULT_ADAPTIVE_BARRIER[k])) {
+      throw Error("Adaptive barrier policy must match the supported workbench preset.");
     }
-    out.adaptive_barrier = {
-      target_gap_fraction: b.target_gap_fraction, min_gap_fraction: b.min_gap_fraction,
-      growth_factor: b.growth_factor, membrane_floor_scale: b.membrane_floor_scale,
-      kappa_min: b.kappa_min, kappa_max: b.kappa_max,
-    };
+    out.adaptive_barrier = { ...DEFAULT_ADAPTIVE_BARRIER };
   }
   for (const key of ["stick_slip", "self_stick_slip"]) {
     if (settings[key] !== undefined) {
@@ -5871,22 +5864,14 @@ function checkedRealismOptions(settings, maxSpacing = 12) {
       if (m.cvt_iterations > 0) mesh.cvt_iterations = m.cvt_iterations;
     }
     if (m.max_turning_angle_rad !== undefined) {
-      if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) || m.max_turning_angle_rad < 0.05 || m.max_turning_angle_rad > Math.PI) {
-        throw Error("Adaptive mesh max_turning_angle_rad must be in [0.05, π].");
+      if (typeof m.max_turning_angle_rad !== "number" || !Number.isFinite(m.max_turning_angle_rad) || m.max_turning_angle_rad !== 0.12) {
+        throw Error("Adaptive mesh custom max_turning_angle_rad is not supported by the workbench controls.");
       }
-      if (mesh.min_spacing_mm === undefined && m.max_turning_angle_rad !== 0.12) {
-        throw Error("Adaptive mesh max_turning_angle_rad requires min_spacing_mm.");
-      }
-      if (m.max_turning_angle_rad !== 0.12) mesh.max_turning_angle_rad = m.max_turning_angle_rad;
     }
     if (m.gather_refinement !== undefined) {
-      if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) || m.gather_refinement < 1 || m.gather_refinement > 8) {
-        throw Error("Adaptive mesh gather_refinement must be in [1, 8].");
+      if (typeof m.gather_refinement !== "number" || !Number.isFinite(m.gather_refinement) || m.gather_refinement !== 2) {
+        throw Error("Adaptive mesh custom gather_refinement is not supported by the workbench controls.");
       }
-      if (mesh.min_spacing_mm === undefined && m.gather_refinement !== 2) {
-        throw Error("Adaptive mesh gather_refinement requires min_spacing_mm.");
-      }
-      if (m.gather_refinement !== 2) mesh.gather_refinement = m.gather_refinement;
     }
     if (Object.keys(mesh).length > 0) out.mesh = mesh;
   }
@@ -5961,9 +5946,14 @@ function readRealismControls(prefix, maxSpacing = 12) {
     };
   }
   if ($(prefix + "AdaptiveMesh").checked) {
+    const minRaw = $(prefix + "MeshMinMm").value.trim();
+    const cvt = reqRealismNum(prefix + "MeshCvt", "adaptive mesh CVT iterations");
+    if (!minRaw && cvt === 0) {
+      throw Error("Supply adaptive mesh minimum spacing (mm) or positive CVT iterations.");
+    }
     raw.mesh = {
-      min_spacing_mm: reqRealismNum(prefix + "MeshMinMm", "adaptive mesh minimum spacing (mm)"),
-      cvt_iterations: reqRealismNum(prefix + "MeshCvt", "adaptive mesh CVT iterations"),
+      ...(minRaw ? { min_spacing_mm: Number(minRaw) } : {}),
+      cvt_iterations: cvt,
     };
   }
   if ($(prefix + "Construction").checked) {
@@ -6002,8 +5992,8 @@ function setRealismOptions(settings) {
   $("drapeSelfStickSlipMuk").value = String(r.self_stick_slip?.mu_k ?? 0.25);
   $("drapeSelfStickSlipV").value = String(r.self_stick_slip?.transition_v_m_s ?? 0.02);
   $("drapeAdaptiveMesh").checked = r.mesh !== undefined;
-  $("drapeMeshMinMm").value = String(r.mesh?.min_spacing_mm ?? 6);
-  $("drapeMeshCvt").value = String(r.mesh?.cvt_iterations ?? 6);
+  $("drapeMeshMinMm").value = r.mesh !== undefined ? (r.mesh.min_spacing_mm !== undefined ? String(r.mesh.min_spacing_mm) : "") : "6";
+  $("drapeMeshCvt").value = String(r.mesh !== undefined ? (r.mesh.cvt_iterations ?? 0) : 6);
   $("drapeConstruction").checked = r.construction !== undefined;
   $("drapeHemWidthMm").value = String(r.construction?.hem_width_mm ?? 20);
   $("drapeHemMassMult").value = String(r.construction?.hem_mass_multiplier ?? 2.5);
