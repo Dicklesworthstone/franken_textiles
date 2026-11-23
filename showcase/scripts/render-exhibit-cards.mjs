@@ -11,28 +11,30 @@ import { resolve } from "node:path";
 import { chromium } from "playwright-core";
 import sharp from "sharp";
 
-// name, route, the element captured, the share of it kept (to leave out edge labels a 3:2 crop would cut
-// through), whether the crop sits at the centre or the foot of that share, and whether it is also a card.
-export const captures = [
-  ["waistcoat", "/wardrobe/waistcoat/", ".wc-svg", .86, "centre", true],
-  ["inside-out", "/wardrobe/waistcoat/inside-out/", ".io-canvas-host canvas", 1, "centre", true],
-  ["sundress-compare", "/wardrobe/sundress/compare/", ".sc-canvas-host canvas", 1, "centre", true],
-  ["thermal", "/experiments/thermal/", ".th-iso-svg", 1, "centre", true],
-  ["wash", "/experiments/wash/", ".ws-svg", 1, "centre", true],
-  ["friction", "/experiments/friction/", ".fs-svg", 1, "centre", true],
-  ["wrap-skirt", "/studies/wrap-skirt/", ".ws-svg", 1, "centre", true],
-  ["tiling", "/studies/tiling/", ".tf-svg", .78, "centre", true],
-  ["sewing", "/studies/sewing/", ".so-flat-svg", 1, "centre", true],
-  ["drape-room", "/sections/studies/", ".dr-canvas canvas", .8, "centre", false],
-  ["redraft", "/wardrobe/sundress/redraft/", ".sr-svg", 1, "centre", false],
-  ["embroidery", "/wardrobe/hussar/embroidery/", "main canvas", 1, "centre", false],
-  ["tracing", "/sections/tracing/", "main figure", 1, "centre", false],
+// name, route, the element captured, the share of it kept about its centre (to leave out edge labels a 3:2
+// crop would cut through), and whether it is also a card.
+const captures = [
+  ["waistcoat", "/wardrobe/waistcoat/", ".wc-svg", .86, true],
+  ["inside-out", "/wardrobe/waistcoat/inside-out/", ".io-canvas-host canvas", 1, true],
+  ["sundress-compare", "/wardrobe/sundress/compare/", ".sc-canvas-host canvas", 1, true],
+  ["thermal", "/experiments/thermal/", ".th-iso-svg", 1, true],
+  ["wash", "/experiments/wash/", ".ws-svg", 1, true],
+  ["friction", "/experiments/friction/", ".fs-svg", 1, true],
+  ["wrap-skirt", "/studies/wrap-skirt/", ".ws-svg", 1, true],
+  ["tiling", "/studies/tiling/", ".tf-svg", .78, true],
+  ["sewing", "/studies/sewing/", ".so-flat-svg", 1, true],
+  ["drape-room", "/sections/studies/", ".dr-canvas canvas", .8, false],
+  ["redraft", "/wardrobe/sundress/redraft/", ".sr-svg", 1, false],
+  ["embroidery", "/wardrobe/hussar/embroidery/", "main canvas", 1, false],
+  ["tracing", "/sections/tracing/", "main figure", 1, false],
 ];
-// Index entries that already have a film still or a review picture: name and source file.
-export const stills = [
+// Index entries that already have a film still or a review picture: name, source file and, where the
+// picture is not near 3:2, the 3:2 part of it to use (in source pixels).
+const stills = [
   ["skirt", "public/media/skirt-atelier.jpg"],
   ["trousers", "public/media/trouser-form.jpg"],
-  ["visual-fitting", "public/fittings/sleeve-contact-review.png"],
+  // The review sheet is 2000 x 777 with three panels; this is its two rendered sleeves and their captions.
+  ["visual-fitting", "public/fittings/sleeve-contact-review.png", { left: 200, top: 30, width: 1110, height: 740 }],
   ["wardrobe", "public/media/wardrobe-hussar.jpg"],
   ["studios", "public/media/lab-draft.webp"],
   ["materials", "public/media/rig-cylinder.jpg"],
@@ -41,7 +43,7 @@ export const stills = [
 ];
 // Two links under the drape room show a 4K film still at about 100 px wide. These are the same stills at
 // four times that width, so the page does not fetch and decode 3840 x 2160 for a thumbnail.
-export const strips = [
+const strips = [
   ["strip-trouser-posture", "public/media/trouser-posture.jpg"],
   ["strip-rig", "public/media/rig-strip.jpg"],
 ];
@@ -59,7 +61,10 @@ const save = async (folder, name, image, quality) => {
 const source = file => resolve(import.meta.dirname, "..", file);
 
 for (const [name, file] of strips) await save("cards", name, sharp(source(file)).resize(416), 80);
-for (const [name, file] of stills) await save("index", name, sharp(source(file)).resize(thumb.width, thumb.height, { fit: "cover" }), 80);
+for (const [name, file, part] of stills) {
+  const picture = part ? sharp(source(file)).extract(part) : sharp(source(file));
+  await save("index", name, picture.resize(thumb.width, thumb.height, { fit: "cover" }), 80);
+}
 
 const origin = process.env.FTX_STUDIO_URL || "http://127.0.0.1:3000";
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(),
@@ -67,7 +72,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXE
 try {
   const context = await browser.newContext({ userAgent: "OpenAI File Downloader, XaiImageApiFetch/1.0",
     viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, reducedMotion: "reduce" });
-  for (const [name, route, selector, share, anchor, isCard] of captures) {
+  for (const [name, route, selector, share, isCard] of captures) {
     const page = await context.newPage();
     page.setDefaultTimeout(120000);
     await page.goto(new URL(route, origin).href, { waitUntil: "load" });
@@ -79,13 +84,12 @@ try {
     await page.waitForTimeout(4000);
     await stage.scrollIntoViewIfNeeded();
     const shot = await stage.screenshot({ type: "png" });
-    // The largest 3:2 rectangle inside the kept share of the element.
+    // The largest 3:2 rectangle inside the kept share of the element, about its centre.
     const full = await sharp(shot).metadata();
-    const keptWidth = full.width * share, keptHeight = full.height * share;
-    const cropWidth = Math.floor(Math.min(keptWidth, keptHeight * card.width / card.height));
+    const cropWidth = Math.floor(Math.min(full.width * share, full.height * share * card.width / card.height));
     const cropHeight = Math.floor(cropWidth * card.height / card.width);
     const left = Math.floor((full.width - cropWidth) / 2);
-    const top = Math.floor(anchor === "foot" ? (full.height + keptHeight) / 2 - cropHeight : (full.height - cropHeight) / 2);
+    const top = Math.floor((full.height - cropHeight) / 2);
     const crop = await sharp(shot).extract({ left, top, width: cropWidth, height: cropHeight }).png().toBuffer();
     if (isCard) await save("cards", name, sharp(crop).resize(card.width, card.height), 82);
     await save("index", name, sharp(crop).resize(thumb.width, thumb.height), 80);
