@@ -927,6 +927,9 @@ fn apply_self_repulsion(
         }
         let (a_ids, b_ids) = (topo.edges[ea], topo.edges[eb]);
         let (a0, a1, b0, b1) = (p[a_ids[0]], p[a_ids[1]], p[b_ids[0]], p[b_ids[1]]);
+        if !(a0.is_finite() && a1.is_finite() && b0.is_finite() && b1.is_finite()) {
+            continue;
+        }
         let ((s, t), _) = edge_edge_closest(a0, a1, b0, b1);
         let qa = a0 * (1.0 - s) + a1 * s;
         let qb = b0 * (1.0 - t) + b1 * t;
