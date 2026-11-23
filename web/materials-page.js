@@ -6718,7 +6718,7 @@ function syncGuidedMotionWaterAmbientIntervals() {
     option.textContent = `Interval ${index + 1}: ${start}–${frame.time_s} s`;
     return option;
   }));
-  select.value = guidedMotionKeyframes[Number(previous)] ? previous : (guidedMotionKeyframes.length ? "0" : "");
+  select.value = previous !== "" && guidedMotionKeyframes[Number(previous)] ? previous : (guidedMotionKeyframes.length ? "0" : "");
   const parent = $("guidedMotionWaterAmbientIntervals");
   parent.replaceChildren(); guidedMotionWaterAmbientButtons.length = 0;
   for (let index = 0; index < guidedMotionKeyframes.length; index++) {
@@ -6755,7 +6755,8 @@ async function saveGuidedMotionWaterAmbientInterval() {
       ($("guidedMotionWaterAmbientMode").value || "none") !== "intervals") return;
   const revision = ++waterAmbientBindRead;
   try {
-    const index = Number($("guidedMotionWaterAmbientInterval").value);
+    const rawIndex = $("guidedMotionWaterAmbientInterval").value;
+    const index = rawIndex === "" ? NaN : Number(rawIndex);
     const bounds = motionIntervalBounds(index);
     if (!Number.isSafeInteger(index) || !bounds) throw Error("Choose a saved motion interval first.");
     const file = $("guidedMotionWaterAmbientIntervalFile").files?.[0];
@@ -6767,8 +6768,8 @@ async function saveGuidedMotionWaterAmbientInterval() {
         ($("guidedMotionWaterAmbientMode").value || "none") !== "intervals") return;
     if (new Blob([raw]).size > 16 * 1024 * 1024) throw Error("Interval ambient vapor exchange source exceeds 16 MiB.");
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw Error("Original interval ambient vapor exchange boundary must be a JSON object.");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.schema !== "ftx-textile-vapor-exchange/1") {
+      throw Error("Original interval ambient vapor exchange boundary must be an ftx-textile-vapor-exchange/1 JSON object.");
     }
     const latestBounds = motionIntervalBounds(index);
     if (!latestBounds || latestBounds.start_s !== bounds.start_s || latestBounds.end_s !== bounds.end_s) {

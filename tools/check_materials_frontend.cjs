@@ -24905,8 +24905,13 @@ test('guided direct water composes supply, finite donor and per-interval ambient
   assert.equal(p.current().messages.length,before);
   assert.match(p.e.error.textContent,/Bind an original ambient vapor exchange source for motion interval 1/);
 
-  // Bind both intervals
+  // Bind both intervals (first keyframe must default the selector to "0", not empty string; wrong schema must refuse at bind time)
   assert.equal(p.e.guidedMotionWaterAmbientInterval.children.length,2);
+  assert.equal(p.e.guidedMotionWaterAmbientInterval.value,'0');
+  p.select('guidedMotionWaterAmbientIntervalFile',supplyRaw);p.e.guidedMotionWaterAmbientIntervalFile.handlers.change();
+  await p.e.saveMotionWaterAmbientInterval.onclick();
+  assert.match(p.e.error.textContent,/ftx-textile-vapor-exchange\/1/);
+  assert.match(p.e.guidedMotionWaterAmbientIntervalsSummary.textContent,/0 of 2 saved motion intervals bound/);
   p.e.guidedMotionWaterAmbientInterval.value='0';p.e.guidedMotionWaterAmbientInterval.handlers.change();
   p.select('guidedMotionWaterAmbientIntervalFile',ambient0);p.e.guidedMotionWaterAmbientIntervalFile.handlers.change();
   await p.e.saveMotionWaterAmbientInterval.onclick();
