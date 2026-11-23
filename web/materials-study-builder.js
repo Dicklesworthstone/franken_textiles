@@ -67,11 +67,14 @@ const METRIC_CONSUMERS = {
   motion_wet_film_unmet_demand_mass_kg: "motion_wet_film", motion_wet_film_supplied_mass_kg: "motion_wet_film",
   motion_wet_film_body_reservoir_latent_energy_j: "motion_wet_film",
   textile_water_evaporated_mass_kg: "transient_surface", textile_water_remaining_mass_kg: "transient_surface",
-  textile_water_supplied_mass_kg: "transient_surface", textile_water_condensed_mass_kg: "transient_surface",
+  textile_water_supplied_mass_kg: "transient_surface", textile_water_requested_supply_mass_kg: "transient_surface",
+  textile_water_unmet_supply_mass_kg: "transient_surface", textile_water_remaining_supply_mass_kg: "transient_surface",
+  textile_water_condensed_mass_kg: "transient_surface",
   textile_water_drained_mass_kg: "transient_surface", textile_water_latent_energy_j: "transient_surface",
   textile_water_condensation_latent_energy_j: "transient_surface",
   textile_water_final_vapor_pressure_pa: "transient_surface", textile_water_min_sample_vapor_pressure_pa: "transient_surface",
   textile_water_max_sample_vapor_pressure_pa: "transient_surface", textile_water_remaining_vapor_mass_kg: "transient_surface",
+  textile_water_ambient_vapor_inflow_mass_kg: "transient_surface", textile_water_ambient_vapor_outflow_mass_kg: "transient_surface",
   textile_water_isothermal_heat_removed_j: "transient_surface",
   textile_water_final_inertial_mass_kg: "transient_surface", textile_water_max_sample_inertial_mass_kg: "transient_surface",
   transient_surface_inside_energy_j: "transient_surface", transient_surface_net_boundary_energy_j: "transient_surface",
@@ -486,16 +489,114 @@ export function buildMaterialVaporSurfaceConditions(boundary) {
   return JSON.stringify({ schema: "ftx-vapor-surface-conditions/1", boundaries: [boundary] });
 }
 
-function motionLiquidSources(sources) {
+function jsonTopLevelPropertySpan(raw, targetKey) {
+  let i = 0;
+  const len = raw.length;
+  const ws = () => { while (i < len && (raw[i] === " " || raw[i] === "\t" || raw[i] === "\r" || raw[i] === "\n")) i++; };
+  const readStr = () => {
+    const start = i;
+    if (raw[i] !== '"') throw Error("Expected JSON string in original qualification source.");
+    i++;
+    while (i < len) {
+      const ch = raw[i++];
+      if (ch === "\\") { i++; continue; }
+      if (ch === '"') return JSON.parse(raw.slice(start, i));
+    }
+    throw Error("Unterminated JSON string in original qualification source.");
+  };
+  const skipVal = () => {
+    ws();
+    const ch = raw[i];
+    if (ch === '"') { readStr(); return; }
+    if (ch === "{" || ch === "[") {
+      const open = ch, close = ch === "{" ? "}" : "]";
+      let depth = 1; i++;
+      while (i < len && depth > 0) {
+        const c = raw[i];
+        if (c === '"') readStr();
+        else if (c === open) { depth++; i++; }
+        else if (c === close) { depth--; i++; }
+        else i++;
+      }
+      return;
+    }
+    while (i < len && !",}] \t\r\n".includes(raw[i])) i++;
+  };
+  ws();
+  if (raw[i] !== "{") throw Error("Expected JSON object in original qualification source.");
+  i++; ws();
+  let span = null;
+  while (i < len && raw[i] !== "}") {
+    const key = readStr();
+    ws();
+    if (raw[i] !== ":") throw Error("Expected ':' in original qualification source.");
+    i++; ws();
+    const valStart = i;
+    skipVal();
+    const valEnd = i;
+    if (key === targetKey) {
+      if (span !== null) throw Error(`Duplicate "${targetKey}" property in original qualification source.`);
+      span = [valStart, valEnd];
+    }
+    ws();
+    if (raw[i] === ",") { i++; ws(); }
+  }
+  return span;
+}
+
+function spliceJsonObject(raw, entries, label) {
+  if (!entries.length) return raw;
+  const parsed = sourceObject(raw, label);
+  for (const [key] of entries) {
+    if (own(parsed, key)) {
+      throw Error(`${label} already declares "${key}"; remove the duplicate inline or separately composed source.`);
+    }
+  }
+  const end = raw.lastIndexOf("}");
+  if (end < 0) throw Error(`${label} must be a JSON object.`);
+  const prefix = Object.keys(parsed).length ? "," : "";
+  const inserted = entries.map(([key, valueRaw]) => `${JSON.stringify(key)}:${valueRaw}`).join(",");
+  const composed = raw.slice(0, end) + prefix + inserted + raw.slice(end);
+  JSON.parse(composed);
+  return composed;
+}
+
+function spliceNestedJsonObject(raw, parentKey, entries, label) {
+  if (!entries.length) return raw;
+  sourceObject(raw, label);
+  const span = jsonTopLevelPropertySpan(raw, parentKey);
+  if (!span) {
+    throw Error(`${label} must already declare "${parentKey}" before composing nested records into it.`);
+  }
+  const [start, end] = span;
+  const childRaw = raw.slice(start, end);
+  const composedChild = spliceJsonObject(childRaw, entries, `${label}.${parentKey}`);
+  const composed = raw.slice(0, start) + composedChild + raw.slice(end);
+  JSON.parse(composed);
+  return composed;
+}
+
+function motionLiquidSources(sources, keyframes) {
   const fields = ["surface_water", "surface_water_alternatives", "coupled_water_alternatives"];
-  object(sources, [...fields, "mechanical_coupling"], [], "Original textile-water policies");
+  const directAttachments = ["mechanical_coupling", "supply", "finite_reservoir", "ambient_exchange", "ambient_exchange_by_interval"];
+  object(sources, [...fields, ...directAttachments], [], "Original textile-water policies");
   const active = fields.filter(key => own(sources, key));
-  if (active.length !== 1 || (own(sources, "mechanical_coupling") && active[0] !== "surface_water")) {
-    throw Error("Choose one direct water policy, one uncoupled alternative collection or one paired collection; separate mechanics requires direct water.");
+  if (active.length !== 1 || (directAttachments.some(key => own(sources, key)) && active[0] !== "surface_water")) {
+    throw Error("Choose one direct water policy, one uncoupled alternative collection or one paired collection; separate mechanics, supply, finite donor and ambient exchange compose only with direct water.");
+  }
+  if (own(sources, "ambient_exchange") && own(sources, "ambient_exchange_by_interval")) {
+    throw Error("Choose either one constant ambient vapor boundary or per-interval ambient boundaries, not both.");
   }
   for (const [field, raw] of Object.entries(sources)) {
-    if (field === "surface_water" || field === "mechanical_coupling") {
+    if (["surface_water", "mechanical_coupling", "supply", "finite_reservoir", "ambient_exchange"].includes(field)) {
       sourceObject(raw, `Original ${field} policy`);
+    } else if (field === "ambient_exchange_by_interval") {
+      if (!Array.isArray(raw) || raw.length !== keyframes.length || !raw.length || raw.length > 16) {
+        throw Error("Per-interval ambient vapor exchange requires exactly one original boundary JSON string per saved motion interval.");
+      }
+      for (const item of raw) {
+        sourceObject(item, "Original interval ambient vapor exchange boundary");
+      }
     } else {
       const entries = parse(raw, `Original ${field} collection`);
       if (!Array.isArray(entries) || !entries.length || entries.length > 64 ||
@@ -514,6 +615,34 @@ function motionLiquidSources(sources) {
   }
   // Material locks, source evidence, physical domains and interval schedules remain native checks.
   // Parsed objects are never serialized back over the original qualification text.
+  if (active[0] !== "surface_water") return { [active[0]]: sources[active[0]] };
+  let waterRaw = sources.surface_water;
+  if (own(sources, "supply")) {
+    const supplyRaw = own(sources, "finite_reservoir")
+      ? spliceJsonObject(sources.supply, [["finite_reservoir", sources.finite_reservoir]], "Original liquid supply policy")
+      : sources.supply;
+    waterRaw = spliceJsonObject(waterRaw, [["supply", supplyRaw]], "Original direct water policy");
+  } else if (own(sources, "finite_reservoir")) {
+    waterRaw = spliceNestedJsonObject(waterRaw, "supply", [["finite_reservoir", sources.finite_reservoir]], "Original direct water policy");
+  }
+  if (own(sources, "ambient_exchange") || own(sources, "ambient_exchange_by_interval")) {
+    const waterObj = sourceObject(waterRaw, "Original direct water policy");
+    const vapor = waterObj.vapor_reservoir;
+    if (!vapor || typeof vapor !== "object" || Array.isArray(vapor)) {
+      throw Error('Direct water policy must already declare a "vapor_reservoir" object before composing ambient vapor exchange.');
+    }
+    if (own(vapor, "ambient_exchange") || own(vapor, "ambient_exchange_by_interval")) {
+      throw Error("Direct water policy's vapor_reservoir already declares ambient exchange; remove the duplicate inline or separately composed ambient source.");
+    }
+    const ambientEntry = own(sources, "ambient_exchange")
+      ? ["ambient_exchange", sources.ambient_exchange]
+      : ["ambient_exchange_by_interval", "[" + sources.ambient_exchange_by_interval.join(",") + "]"];
+    waterRaw = spliceNestedJsonObject(waterRaw, "vapor_reservoir", [ambientEntry], "Original direct water policy");
+  }
+  return {
+    surface_water: waterRaw,
+    ...(own(sources, "mechanical_coupling") ? { mechanical_coupling: sources.mechanical_coupling } : {}),
+  };
 }
 
 function motionArmPose(frame) {
@@ -897,8 +1026,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
     const sources = {};
     if (liquid !== undefined) {
       if (!own(state, "transient_surface")) throw Error("Original textile-water policies require authored independent-sheet heat.");
-      motionLiquidSources(liquid);
-      sources.transient_surface = { ...liquid };
+      sources.transient_surface = motionLiquidSources(liquid, state.keyframes);
     }
     for (const consumer of compressedConsumers) {
       sources[consumer] = { ...sources[consumer], prescribed_compression: compression };

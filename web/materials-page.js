@@ -72,6 +72,8 @@ const guidedMaterialStrainRegions = new Map(), guidedMaterialStrainRegionButtons
 const guidedContactRegions = new Map(), guidedContactRegionButtons = [];
 const guidedRegionalConstraints = new Map(), guidedRegionalConstraintButtons = [];
 const guidedMotionKeyframes = [], guidedMotionButtons = [];
+const guidedMotionWaterAmbientIntervals = new Map(), guidedMotionWaterAmbientButtons = [];
+let waterAmbientBindRead = 0;
 const guidedMotionHeatInitials = new Map(), guidedMotionHeatInitialButtons = [];
 const guidedMotionHeatProfiles = new Map(), guidedMotionHeatProfileButtons = [];
 const guidedMotionCoverageInitials = new Map(), guidedMotionCoverageInitialButtons = [];
@@ -156,6 +158,9 @@ const guidedTransportMetrics = [
   ["guidedTextileWaterEvaporated", "textile_water_evaporated_mass_kg"],
   ["guidedTextileWaterRemaining", "textile_water_remaining_mass_kg"],
   ["guidedTextileWaterSupplied", "textile_water_supplied_mass_kg"],
+  ["guidedTextileSupplyRequested", "textile_water_requested_supply_mass_kg"],
+  ["guidedTextileSupplyUnmet", "textile_water_unmet_supply_mass_kg"],
+  ["guidedTextileSupplyRemaining", "textile_water_remaining_supply_mass_kg"],
   ["guidedTextileWaterCondensed", "textile_water_condensed_mass_kg"],
   ["guidedTextileWaterDrained", "textile_water_drained_mass_kg"],
   ["guidedTextileWaterLatent", "textile_water_latent_energy_j"],
@@ -164,6 +169,8 @@ const guidedTransportMetrics = [
   ["guidedTextileVaporSampleMin", "textile_water_min_sample_vapor_pressure_pa"],
   ["guidedTextileVaporSampleMax", "textile_water_max_sample_vapor_pressure_pa"],
   ["guidedTextileVaporRemaining", "textile_water_remaining_vapor_mass_kg"],
+  ["guidedTextileAmbientInflow", "textile_water_ambient_vapor_inflow_mass_kg"],
+  ["guidedTextileAmbientOutflow", "textile_water_ambient_vapor_outflow_mass_kg"],
   ["guidedTextileVaporHeatRemoved", "textile_water_isothermal_heat_removed_j"],
   ["guidedTextileFinalMass", "textile_water_final_inertial_mass_kg"],
   ["guidedTextilePeakMass", "textile_water_max_sample_inertial_mass_kg"],
@@ -442,11 +449,36 @@ function controls() {
     $(file + "Field").hidden = liquidMode !== mode;
     $(file).disabled = !editLiquid || liquidMode !== mode;
   }
-  $("guidedMotionWaterMechanicalField").hidden = liquidMode !== "direct";
-  $("guidedMotionWaterMechanical").disabled = !editLiquid || liquidMode !== "direct";
-  const directMechanics = liquidMode === "direct" && $("guidedMotionWaterMechanical").checked;
+  const directLiquid = liquidMode === "direct";
+  $("guidedMotionWaterMechanicalField").hidden = !directLiquid;
+  $("guidedMotionWaterMechanical").disabled = !editLiquid || !directLiquid;
+  const directMechanics = directLiquid && $("guidedMotionWaterMechanical").checked;
   $("guidedMotionWaterMechanicsFileField").hidden = !directMechanics;
   $("guidedMotionWaterMechanicsFile").disabled = !editLiquid || !directMechanics;
+  $("guidedMotionWaterSupplyField").hidden = !directLiquid;
+  $("guidedMotionWaterSupply").disabled = !editLiquid || !directLiquid;
+  const directSupply = directLiquid && $("guidedMotionWaterSupply").checked;
+  $("guidedMotionWaterSupplyFileField").hidden = !directSupply;
+  $("guidedMotionWaterSupplyFile").disabled = !editLiquid || !directSupply;
+  $("guidedMotionWaterDonorField").hidden = !directLiquid;
+  $("guidedMotionWaterDonor").disabled = !editLiquid || !directLiquid;
+  const directDonor = directLiquid && $("guidedMotionWaterDonor").checked;
+  $("guidedMotionWaterDonorFileField").hidden = !directDonor;
+  $("guidedMotionWaterDonorFile").disabled = !editLiquid || !directDonor;
+  const ambientMode = $("guidedMotionWaterAmbientMode").value || "none";
+  $("guidedMotionWaterAmbientModeField").hidden = !directLiquid;
+  $("guidedMotionWaterAmbientMode").disabled = !editLiquid || !directLiquid;
+  const directAmbientConstant = directLiquid && ambientMode === "constant";
+  $("guidedMotionWaterAmbientFileField").hidden = !directAmbientConstant;
+  $("guidedMotionWaterAmbientFile").disabled = !editLiquid || !directAmbientConstant;
+  const directAmbientIntervals = directLiquid && ambientMode === "intervals";
+  $("guidedMotionWaterAmbientIntervalsBox").hidden = !directAmbientIntervals;
+  const editAmbientIntervals = editLiquid && directAmbientIntervals;
+  $("guidedMotionWaterAmbientInterval").disabled = !editAmbientIntervals || !guidedMotionKeyframes.length;
+  $("guidedMotionWaterAmbientIntervalFile").disabled = !editAmbientIntervals || !guidedMotionKeyframes.length;
+  $("saveMotionWaterAmbientInterval").disabled = !editAmbientIntervals || !guidedMotionKeyframes.length;
+  $("clearMotionWaterAmbientIntervals").disabled = !editAmbientIntervals || !guidedMotionWaterAmbientIntervals.size;
+  for (const button of guidedMotionWaterAmbientButtons) button.disabled = !editAmbientIntervals;
   const exposedFilms = guidedMotionCoverageActive() && $("guidedMotionExposedMode").value === "films";
   $("guidedMotionExposedMode").disabled = !guidedMotionCoverageActive(); $("guidedMotionExposedFilms").hidden = !exposedFilms;
   for (const suffix of ["Inside", "Outside", "InsideFilm", "OutsideFilm"]) $("guidedMotionExposed" + suffix).disabled = !exposedFilms;
@@ -1068,6 +1100,9 @@ function objectiveComparison(parent, r) {
     textile_water_evaporated_mass_kg: "Evaporated textile water",
     textile_water_remaining_mass_kg: "Remaining textile liquid",
     textile_water_supplied_mass_kg: "Supplied textile liquid",
+    textile_water_requested_supply_mass_kg: "Requested finite-donor liquid delivery",
+    textile_water_unmet_supply_mass_kg: "Unmet finite-donor liquid shortfall",
+    textile_water_remaining_supply_mass_kg: "Remaining finite-donor liquid inventory",
     textile_water_condensed_mass_kg: "Condensed textile water",
     textile_water_drained_mass_kg: "Drained textile water",
     textile_water_latent_energy_j: "Textile evaporation latent energy",
@@ -1076,6 +1111,8 @@ function objectiveComparison(parent, r) {
     textile_water_min_sample_vapor_pressure_pa: "Minimum sampled finite-reservoir vapor pressure",
     textile_water_max_sample_vapor_pressure_pa: "Maximum sampled finite-reservoir vapor pressure",
     textile_water_remaining_vapor_mass_kg: "Remaining finite-reservoir vapor",
+    textile_water_ambient_vapor_inflow_mass_kg: "Ambient vapor inflow to finite reservoir",
+    textile_water_ambient_vapor_outflow_mass_kg: "Ambient vapor outflow from finite reservoir",
     textile_water_isothermal_heat_removed_j: "Finite-reservoir isothermal heat removed",
     textile_water_final_inertial_mass_kg: "Final wet-cloth inertial mass",
     textile_water_max_sample_inertial_mass_kg: "Maximum sampled wet-cloth inertial mass"
@@ -1112,12 +1149,21 @@ function objectiveComparison(parent, r) {
       "Source uncertainty, physical garment validation and a globally optimal design are not established.";
     parent.append(textileWater);
   }
+  if (metrics.some(o => ["textile_water_requested_supply_mass_kg", "textile_water_unmet_supply_mass_kg",
+    "textile_water_remaining_supply_mass_kg"].includes(o.metric))) {
+    const donor = document.createElement("p");
+    donor.textContent = "Finite liquid-donor criteria require supply version 2 (`ftx-textile-liquid-supply/2`) with a shared constant-temperature donor in the same case. " +
+      "Remaining donor inventory is distinct from liquid retained on the textile. Requested and unmet delivery require the donor demand ledger and stay unavailable for unlimited feeds or older receipts without inventing zero shortfalls.";
+    parent.append(donor);
+  }
   if (metrics.some(o => ["textile_water_final_vapor_pressure_pa", "textile_water_min_sample_vapor_pressure_pa",
     "textile_water_max_sample_vapor_pressure_pa", "textile_water_remaining_vapor_mass_kg",
+    "textile_water_ambient_vapor_inflow_mass_kg", "textile_water_ambient_vapor_outflow_mass_kg",
     "textile_water_isothermal_heat_removed_j"].includes(o.metric))) {
     const reservoir = document.createElement("p");
     reservoir.textContent = "Finite-vapor criteria require an admitted textile-water /5 reservoir in the same case. " +
       "Pressure extrema include the initial reservoir and retained mechanical endpoints, without continuous-time or substep bounds. " +
+      "Ambient inflow and outflow require a separately qualified constant or per-interval ambient exchange boundary; closed reservoirs leave both unavailable without inventing zeros. " +
       "Isothermal heat removed is signed: positive removes heat from the reservoir; negative supplies heat to hold its declared temperature. " +
       "A missing reservoir leaves these readings unavailable.";
     parent.append(reservoir);
@@ -1525,11 +1571,16 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         ...(condensing ? [metric(water.condensation_latent_energy_j), metric(water.incoming_vapor_sensible_energy_j)] : []), metric(water.balance_error_j)]);
       if (finiteSupply) {
         const donor = water.supply_reservoir, source = water.request?.supply?.finite_reservoir;
+        const hasDemand = donor.requested_liquid_mass_kg !== undefined || donor.unmet_liquid_mass_kg !== undefined;
         const inventory = table(parent, `${key}: finite shared liquid supply`,
           ["Initial donor liquid (kg)", "Remaining donor liquid (kg)", "Delivered to textile (kg)",
+            ...(hasDemand ? ["Requested delivery (kg)", "Unmet delivery (kg)", "Demand residual (kg)"] : []),
             "Mass residual (kg)", "Donor temperature (°C)", "Elapsed time (s)", "Exhaustion events"]);
         cells(inventory, [metric(donor.initial_liquid_mass_kg), metric(donor.remaining_liquid_mass_kg),
-          metric(donor.supplied_liquid_mass_kg), metric(donor.mass_balance_error_kg),
+          metric(donor.supplied_liquid_mass_kg),
+          ...(hasDemand ? [metric(donor.requested_liquid_mass_kg), metric(donor.unmet_liquid_mass_kg),
+            metric(donor.demand_balance_error_kg)] : []),
+          metric(donor.mass_balance_error_kg),
           metric(donor.temperature_c), metric(donor.elapsed_seconds), metric(donor.exhaustion_events)]);
         const donorEnergy = table(parent, `${key}: finite liquid donor sensible energy`,
           ["Donor enthalpy change (J)", "Exported liquid enthalpy (J)", "Enthalpy residual (J)"]);
@@ -6234,6 +6285,7 @@ function describeScenarioInput(request, original) {
         ...(item?.comparison != null ? { comparison: item.comparison } : {}) })) : [] } } : {}) }, matrix };
 }
 function changedGuidedScenarioDraft() {
+  ++waterAmbientBindRead;
   if (guidedScenarioMode()) invalidate([guidedMatrixMode() ? "scenarioDraft" : "scenario"], true);
   else controls();
 }
@@ -6642,8 +6694,96 @@ function showGuidedMotionKeyframes() {
     `${guidedMotionKeyframes.length} of 16 keyframes saved, through ${guidedMotionKeyframes.at(-1).time_s} s. Only added endpoints run.` :
     "No motion keyframes saved. Declare an endpoint time and pose, then add it before running motion.";
 }
+function motionIntervalBounds(index) {
+  const frame = guidedMotionKeyframes[index];
+  if (!frame) return null;
+  return { start_s: index ? guidedMotionKeyframes[index - 1].time_s : 0, end_s: frame.time_s };
+}
+function syncGuidedMotionWaterAmbientIntervals() {
+  for (const [index, entry] of [...guidedMotionWaterAmbientIntervals.entries()]) {
+    const bounds = motionIntervalBounds(index);
+    if (!bounds || entry.start_s !== bounds.start_s || entry.end_s !== bounds.end_s) {
+      guidedMotionWaterAmbientIntervals.delete(index);
+    }
+  }
+  const select = $("guidedMotionWaterAmbientInterval"), previous = select.value;
+  select.replaceChildren(...guidedMotionKeyframes.map((frame, index) => {
+    const start = index ? guidedMotionKeyframes[index - 1].time_s : 0;
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `Interval ${index + 1}: ${start}–${frame.time_s} s`;
+    return option;
+  }));
+  select.value = guidedMotionKeyframes[Number(previous)] ? previous : (guidedMotionKeyframes.length ? "0" : "");
+  const parent = $("guidedMotionWaterAmbientIntervals");
+  parent.replaceChildren(); guidedMotionWaterAmbientButtons.length = 0;
+  for (let index = 0; index < guidedMotionKeyframes.length; index++) {
+    const entry = guidedMotionWaterAmbientIntervals.get(index);
+    if (!entry) continue;
+    const row = document.createElement("div"), label = document.createElement("span");
+    row.className = "study-choice";
+    label.textContent = `Interval ${index + 1} (${entry.start_s}–${entry.end_s} s): ${entry.label}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = `Remove ambient source for interval ${index + 1}`;
+    remove.onclick = () => {
+      if (guidedMotionWaterAmbientIntervals.get(index) !== entry) return;
+      ++waterAmbientBindRead;
+      guidedMotionWaterAmbientIntervals.delete(index);
+      syncGuidedMotionWaterAmbientIntervals();
+      if (guidedMotionMode() === "form" && $("guidedMotionHeat").checked &&
+          ($("guidedMotionWaterMode").value || "none") === "direct" &&
+          ($("guidedMotionWaterAmbientMode").value || "none") === "intervals") changedGuidedScenarioDraft();
+      else controls();
+    };
+    row.append(label, remove); guidedMotionWaterAmbientButtons.push(remove); parent.append(row);
+  }
+  const total = guidedMotionKeyframes.length, boundCount = guidedMotionWaterAmbientIntervals.size;
+  $("guidedMotionWaterAmbientIntervalsSummary").textContent = !total ?
+    "Save motion keyframes first, then bind one original ambient vapor exchange source per interval." :
+    boundCount === total ?
+      `All ${total} saved motion intervals have bound original ambient vapor exchange sources.` :
+      `${boundCount} of ${total} saved motion intervals bound. Bind every interval before running per-interval ambient exchange.`;
+}
+async function saveGuidedMotionWaterAmbientInterval() {
+  if (!source || !guidedScenarioMode() || guidedMotionMode() !== "form" || !$("guidedMotionHeat").checked ||
+      ($("guidedMotionWaterMode").value || "none") !== "direct" ||
+      ($("guidedMotionWaterAmbientMode").value || "none") !== "intervals") return;
+  const revision = ++waterAmbientBindRead;
+  try {
+    const index = Number($("guidedMotionWaterAmbientInterval").value);
+    const bounds = motionIntervalBounds(index);
+    if (!Number.isSafeInteger(index) || !bounds) throw Error("Choose a saved motion interval first.");
+    const file = $("guidedMotionWaterAmbientIntervalFile").files?.[0];
+    if (!file) throw Error("Choose an original ambient vapor exchange JSON file for this motion interval.");
+    if (file.size > 16 * 1024 * 1024) throw Error("Interval ambient vapor exchange source exceeds 16 MiB.");
+    const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer());
+    if (revision !== waterAmbientBindRead || !source || !guidedScenarioMode() || guidedMotionMode() !== "form" ||
+        !$("guidedMotionHeat").checked || ($("guidedMotionWaterMode").value || "none") !== "direct" ||
+        ($("guidedMotionWaterAmbientMode").value || "none") !== "intervals") return;
+    if (new Blob([raw]).size > 16 * 1024 * 1024) throw Error("Interval ambient vapor exchange source exceeds 16 MiB.");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw Error("Original interval ambient vapor exchange boundary must be a JSON object.");
+    }
+    const latestBounds = motionIntervalBounds(index);
+    if (!latestBounds || latestBounds.start_s !== bounds.start_s || latestBounds.end_s !== bounds.end_s) {
+      throw Error("Saved motion intervals changed while reading the ambient source; bind it again.");
+    }
+    const ref = typeof parsed.source?.reference === "string" && parsed.source.reference.trim() ?
+      parsed.source.reference.trim() : (file.name || "original source");
+    guidedMotionWaterAmbientIntervals.set(index, { ...bounds, label: ref, raw });
+    syncGuidedMotionWaterAmbientIntervals();
+    changedGuidedScenarioDraft();
+  } catch (e) {
+    if (revision !== waterAmbientBindRead) return;
+    error(String(e.message || e));
+  }
+}
 function changedGuidedMotionDraft() {
+  ++waterAmbientBindRead;
   showGuidedMotionKeyframes();
+  syncGuidedMotionWaterAmbientIntervals();
   changedGuidedScenarioDraft();
 }
 function saveGuidedMotionKeyframe(replacing = null) {
@@ -6789,6 +6929,21 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     const { requiredConsumers, allowMixedProtocols, ...comparison } = guidedComparisonInput(number);
     authoredComparison = JSON.stringify({ ...comparison, required_consumers: requiredConsumers, allow_mixed_protocols: allowMixedProtocols });
   }
+  const directAmbientMode = liquidMode === "direct" ? ($("guidedMotionWaterAmbientMode").value || "none") : "none";
+  if (liquidMode === "direct" && !["none", "constant", "intervals"].includes(directAmbientMode)) {
+    throw Error("Choose retained, constant or per-interval ambient vapor exchange composition.");
+  }
+  let ambientIntervalSources = null;
+  if (liquidMode === "direct" && directAmbientMode === "intervals") {
+    if (!guidedMotionKeyframes.length) throw Error("Save motion keyframes before binding per-interval ambient vapor exchange.");
+    ambientIntervalSources = guidedMotionKeyframes.map((frame, index) => {
+      const bounds = motionIntervalBounds(index), entry = guidedMotionWaterAmbientIntervals.get(index);
+      if (!entry || !bounds || entry.start_s !== bounds.start_s || entry.end_s !== bounds.end_s) {
+        throw Error(`Bind an original ambient vapor exchange source for motion interval ${index + 1} (${bounds?.start_s ?? 0}–${frame.time_s} s).`);
+      }
+      return entry.raw;
+    });
+  }
   const entries = [...(fitSource === "file" ? [["fitSpec", "fit", "the original section-3 fit contract"]] : []),
     ...(surface ? [["surface", "heatConditions", "the selected section-3 sheet heat conditions"]] : []),
     ...(motionMode === "file" ? [["motion", "guidedMotionFile", "the original prescribed-motion request"]] : []),
@@ -6796,10 +6951,22 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     ...guidedMotionLiquidSources.filter(([mode]) => liquidMode === mode).map(([, key, id, label]) => [key, id, label]),
     ...(liquidMode === "direct" && $("guidedMotionWaterMechanical").checked ?
       [["mechanical_coupling", "guidedMotionWaterMechanicsFile", "the independent mechanical liquid qualification"]] : []),
+    ...(liquidMode === "direct" && $("guidedMotionWaterSupply").checked ?
+      [["supply", "guidedMotionWaterSupplyFile", "the original liquid delivery policy"]] : []),
+    ...(liquidMode === "direct" && $("guidedMotionWaterDonor").checked ?
+      [["finite_reservoir", "guidedMotionWaterDonorFile", "the original finite liquid donor"]] : []),
+    ...(liquidMode === "direct" && directAmbientMode === "constant" ?
+      [["ambient_exchange", "guidedMotionWaterAmbientFile", "the original constant ambient vapor exchange boundary"]] : []),
     ...guidedTransportSources.filter(([key]) => transport[key] && (key !== "coverage" || coverageSource === "file")).map(([key, , file, label]) =>
       [key, key === "vaporSurface" && vaporSource === "workbench" ? "vaporSurfaceConditions" : file, label]),
     ...(includeCasePolicy && policy === "file" ? [["comparison", "guidedScenarioComparison", "the original case comparison policy"]] : [])];
   const budget = 16 * 1024 * 1024; let total = 0;
+  if (ambientIntervalSources) {
+    for (const raw of ambientIntervalSources) {
+      total += new Blob([raw]).size;
+      if (total > budget) throw Error("Guided scenario source files exceed 16 MiB combined; no source was read.");
+    }
+  }
   const retained = entries.map(([key, id, label]) => {
     const original = id === "fit" ? selectedFitSource() : Object.hasOwn(sheetConditionForms, id) ? sheetConditionsSource(id) : roundFiles.has(id) ? roundFiles.get(id) : $(id).files[0];
     if (!original) throw Error(`Choose ${label} first.`);
@@ -6809,16 +6976,19 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     if (total > budget) throw Error("Guided scenario source files exceed 16 MiB combined; no source was read.");
     return { key, original };
   });
-  let decodedBytes = 0;
+  let decodedBytes = ambientIntervalSources ? ambientIntervalSources.reduce((sum, raw) => sum + new Blob([raw]).size, 0) : 0;
   const sources = await Promise.all(retained.map(async ({ key, original }) => {
     const raw = typeof original === "string" ? original : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await original.arrayBuffer());
     decodedBytes += new Blob([raw]).size;
     if (decodedBytes > budget) throw Error("Guided scenario sources exceed 16 MiB combined.");
     return [key, raw];
   }));
-  const liquidFields = [...guidedMotionLiquidSources.map(([, key]) => key), "mechanical_coupling"];
+  const liquidFields = [...guidedMotionLiquidSources.map(([, key]) => key), "mechanical_coupling", "supply", "finite_reservoir", "ambient_exchange"];
   const { comparison, ...fragments } = Object.fromEntries(sources.filter(([key]) => !liquidFields.includes(key)));
-  if (liquidMode !== "none") input.motionLiquid = Object.fromEntries(sources.filter(([key]) => liquidFields.includes(key)));
+  if (liquidMode !== "none") {
+    input.motionLiquid = Object.fromEntries(sources.filter(([key]) => liquidFields.includes(key)));
+    if (ambientIntervalSources) input.motionLiquid.ambient_exchange_by_interval = ambientIntervalSources;
+  }
   const request = buildMaterialScenarioRequest({ ...input, ...fragments });
   const retainedMotion = motionMode === "file" ? JSON.parse(fragments.motion) : input.motion;
   const motionVaporHistory = retainedMotion?.vapor_coverage_history != null;
@@ -7477,10 +7647,31 @@ for (const [id, active] of [
   ...guidedMotionLiquidSources.map(([mode, , file]) => [file, () => $("guidedMotionWaterMode").value === mode]),
   ["guidedMotionWaterMechanical", () => $("guidedMotionWaterMode").value === "direct"],
   ["guidedMotionWaterMechanicsFile", () => $("guidedMotionWaterMode").value === "direct" && $("guidedMotionWaterMechanical").checked],
+  ["guidedMotionWaterSupply", () => $("guidedMotionWaterMode").value === "direct"],
+  ["guidedMotionWaterSupplyFile", () => $("guidedMotionWaterMode").value === "direct" && $("guidedMotionWaterSupply").checked],
+  ["guidedMotionWaterDonor", () => $("guidedMotionWaterMode").value === "direct"],
+  ["guidedMotionWaterDonorFile", () => $("guidedMotionWaterMode").value === "direct" && $("guidedMotionWaterDonor").checked],
+  ["guidedMotionWaterAmbientMode", () => $("guidedMotionWaterMode").value === "direct"],
+  ["guidedMotionWaterAmbientFile", () => $("guidedMotionWaterMode").value === "direct" && ($("guidedMotionWaterAmbientMode").value || "none") === "constant"],
 ]) $(id).addEventListener("change", () => {
+  ++waterAmbientBindRead;
   if (guidedMotionMode() === "form" && $("guidedMotionHeat").checked && active()) changedGuidedScenarioDraft();
   else controls();
 });
+for (const id of ["guidedMotionWaterAmbientInterval", "guidedMotionWaterAmbientIntervalFile"]) {
+  $(id).addEventListener("change", () => { ++waterAmbientBindRead; controls(); });
+}
+$("saveMotionWaterAmbientInterval").onclick = () => saveGuidedMotionWaterAmbientInterval();
+$("clearMotionWaterAmbientIntervals").onclick = () => {
+  ++waterAmbientBindRead;
+  if (!guidedMotionWaterAmbientIntervals.size) return;
+  guidedMotionWaterAmbientIntervals.clear();
+  syncGuidedMotionWaterAmbientIntervals();
+  if (guidedMotionMode() === "form" && $("guidedMotionHeat").checked &&
+      ($("guidedMotionWaterMode").value || "none") === "direct" &&
+      ($("guidedMotionWaterAmbientMode").value || "none") === "intervals") changedGuidedScenarioDraft();
+  else controls();
+};
 $("addMotionKeyframe").onclick = () => saveGuidedMotionKeyframe();
 $("clearMotionKeyframes").onclick = () => {
   if (guidedMotionMode() !== "form") return;
@@ -8044,13 +8235,19 @@ function resetGuidedScenarios() {
     for (const [suffix] of guidedMotionHeating) $(prefix + suffix).checked = false;
     for (const suffix of ["Initial", "Instance", "InstanceInitial", "Inside", "Outside", "InsideFilm", "OutsideFilm"]) $(prefix + suffix).value = "";
   }
+  ++waterAmbientBindRead;
   $("guidedMotionWaterMode").value = "none"; $("guidedMotionWaterMechanical").checked = false;
+  $("guidedMotionWaterSupply").checked = false; $("guidedMotionWaterDonor").checked = false;
+  $("guidedMotionWaterAmbientMode").value = "none";
+  guidedMotionWaterAmbientIntervals.clear();
   $("guidedMotionCompression").checked = false; $("guidedMotionCompressionFile").value = "";
   $("guidedMotionCompressionTarget").value = "transient_surface";
   roundFiles.delete("guidedMotionCompressionFile");
-  for (const id of [...guidedMotionLiquidSources.map(([, , file]) => file), "guidedMotionWaterMechanicsFile"]) {
+  for (const id of [...guidedMotionLiquidSources.map(([, , file]) => file), "guidedMotionWaterMechanicsFile",
+    "guidedMotionWaterSupplyFile", "guidedMotionWaterDonorFile", "guidedMotionWaterAmbientFile", "guidedMotionWaterAmbientIntervalFile"]) {
     $(id).value = ""; roundFiles.delete(id);
   }
+  syncGuidedMotionWaterAmbientIntervals();
   $("guidedMotionExposedMode").value = "";
   for (const suffix of ["Inside", "Outside", "InsideFilm", "OutsideFilm"]) $("guidedMotionExposed" + suffix).value = "";
   $("guidedMotionTime").value = ""; $("guidedMotionArm").value = "";

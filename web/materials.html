@@ -1600,9 +1600,35 @@ temperatures are never interpolated automatically. Switching arrangements retain
 Include a separately qualified mechanical liquid policy</label>
 <label id="guidedMotionWaterMechanicsFileField" hidden>Original mechanical liquid qualification JSON
 <input id="guidedMotionWaterMechanicsFile" type="file" accept=".json,application/json" disabled></label>
+<label id="guidedMotionWaterSupplyField" hidden><input id="guidedMotionWaterSupply" type="checkbox" disabled>
+Compose an independently supplied liquid delivery policy (<code>supply</code>)</label>
+<label id="guidedMotionWaterSupplyFileField" hidden>Original liquid delivery policy JSON
+<input id="guidedMotionWaterSupplyFile" type="file" accept=".json,application/json" disabled></label>
+<label id="guidedMotionWaterDonorField" hidden><input id="guidedMotionWaterDonor" type="checkbox" disabled>
+Compose an independently qualified finite liquid donor (<code>finite_reservoir</code>)</label>
+<label id="guidedMotionWaterDonorFileField" hidden>Original finite liquid donor JSON
+<input id="guidedMotionWaterDonorFile" type="file" accept=".json,application/json" disabled></label>
+<label id="guidedMotionWaterAmbientModeField" hidden>Ambient vapor exchange composition
+<select id="guidedMotionWaterAmbientMode" disabled>
+<option value="none">Retain vapor reservoir ambient exchange as loaded</option>
+<option value="constant">One constant ambient boundary (ambient_exchange)</option>
+<option value="intervals">Bind one ambient boundary per saved motion interval (ambient_exchange_by_interval)</option>
+</select></label>
+<label id="guidedMotionWaterAmbientFileField" hidden>Original constant ambient vapor exchange JSON
+<input id="guidedMotionWaterAmbientFile" type="file" accept=".json,application/json" disabled></label>
+<div id="guidedMotionWaterAmbientIntervalsBox" hidden>
+<label>Saved motion interval <select id="guidedMotionWaterAmbientInterval" disabled></select></label>
+<label>Original ambient vapor exchange JSON for selected interval
+<input id="guidedMotionWaterAmbientIntervalFile" type="file" accept=".json,application/json" disabled></label>
+<button id="saveMotionWaterAmbientInterval" type="button" disabled>Bind ambient source to selected interval</button>
+<button id="clearMotionWaterAmbientIntervals" type="button" disabled>Clear saved interval ambient sources</button>
+<p id="guidedMotionWaterAmbientIntervalsSummary" class="note" role="status">No interval ambient sources bound.</p>
+<div id="guidedMotionWaterAmbientIntervals"></div>
+</div>
 <p class="note">Load the original water policy or qualification collection independently of motion. Keep authoring poses,
-initial textile temperatures, heat boundaries, exterior exchange and deformation heat here. The liquid files retain their exact
-material locks, initial loading, vapor environment, phase schedules and independent source evidence.</p>
+initial textile temperatures, heat boundaries, exterior exchange and deformation heat here. For a direct policy you may also
+compose separate original <code>supply</code>, <code>finite_reservoir</code>, constant <code>ambient_exchange</code>, or per-interval
+<code>ambient_exchange_by_interval</code> records without altering any source bytes; alternative qualification collections are never rewritten.</p>
 <p class="note">A direct file contains the <code>surface_water</code> object; an uncoupled collection contains an array of those
 objects. Each paired entry contains <code>surface_water</code> and <code>mechanical_coupling</code>. Supply one schedule entry
 per saved motion interval in the original policies. Adding, removing or reordering endpoints does not rewrite these sources.
@@ -2086,10 +2112,38 @@ and every retained motion endpoint; it is not a continuous-time bound or a compl
 <label>Upper limit for maximum sampled mass (kg) <input id="guidedTextilePeakMassLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
 </div>
 </details>
-<details><summary>Finite shared vapor reservoir: pressure, remaining vapor and temperature control</summary>
-<p class="note">These five criteria require the selected <code>ftx-textile-surface-water/5</code> policy and its independently
-qualified finite vapor reservoir in this same case. Older water policies leave these readings unavailable. Pressure extrema
-include the initial reservoir and retained mechanical endpoints; they do not bound thermal substeps or continuous time.</p>
+<details><summary>Finite shared liquid donor: requested delivery, shortfall and remaining stock</summary>
+<p class="note">These three criteria require <code>ftx-textile-liquid-supply/2</code> with a shared finite donor in this same case.
+Remaining donor stock is separate from liquid retained on the textile. Requested and unmet delivery require the donor demand ledger;
+unlimited feeds and older donor receipts lacking demand fields leave them unavailable without inventing zero shortfalls.</p>
+<label><input id="guidedTextileSupplyRequestedGoal" type="checkbox"> Compare requested donor delivery (kg)</label>
+<div class="study-fields">
+<label>Requested-delivery direction <select id="guidedTextileSupplyRequestedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize requested delivery</option><option value="maximize">Maximize requested delivery</option></select></label>
+<label>Minimum requested delivery (kg) <input id="guidedTextileSupplyRequestedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum requested delivery (kg) <input id="guidedTextileSupplyRequestedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileSupplyUnmetGoal" type="checkbox"> Compare unmet donor delivery shortfall (kg)</label>
+<div class="study-fields">
+<label>Unmet-delivery direction <select id="guidedTextileSupplyUnmetDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize unmet delivery</option><option value="maximize">Maximize unmet delivery</option></select></label>
+<label>Minimum unmet delivery (kg) <input id="guidedTextileSupplyUnmetMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum unmet delivery (kg) <input id="guidedTextileSupplyUnmetLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileSupplyRemainingGoal" type="checkbox"> Compare remaining donor liquid inventory (kg)</label>
+<div class="study-fields">
+<label>Remaining-donor direction <select id="guidedTextileSupplyRemainingDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize remaining donor liquid</option><option value="maximize">Maximize remaining donor liquid</option></select></label>
+<label>Minimum remaining donor liquid (kg) <input id="guidedTextileSupplyRemainingMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum remaining donor liquid (kg) <input id="guidedTextileSupplyRemainingLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+</details>
+<details><summary>Finite shared vapor reservoir: pressure, remaining vapor, ambient exchange and temperature control</summary>
+<p class="note">These criteria require the selected <code>ftx-textile-surface-water/5</code> policy and its independently
+qualified finite vapor reservoir in this same case. Ambient inflow and outflow additionally require a qualified
+<code>ambient_exchange</code> or <code>ambient_exchange_by_interval</code> boundary; closed reservoirs and older policies leave
+them unavailable without inventing zeros. Pressure extrema include the initial reservoir and retained mechanical endpoints; they
+do not bound thermal substeps or continuous time.</p>
 <label><input id="guidedTextileVaporFinalPressureGoal" type="checkbox"> Compare final vapor pressure (Pa)</label>
 <div class="study-fields">
 <label>Final-pressure direction <select id="guidedTextileVaporFinalPressureDirection"><option value="">Choose a direction</option>
@@ -2117,6 +2171,20 @@ include the initial reservoir and retained mechanical endpoints; they do not bou
 <option value="minimize">Minimize vapor mass</option><option value="maximize">Maximize vapor mass</option></select></label>
 <label>Minimum remaining vapor (kg) <input id="guidedTextileVaporRemainingMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
 <label>Maximum remaining vapor (kg) <input id="guidedTextileVaporRemainingLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileAmbientInflowGoal" type="checkbox"> Compare cumulative ambient vapor inflow (kg)</label>
+<div class="study-fields">
+<label>Ambient-inflow direction <select id="guidedTextileAmbientInflowDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize ambient inflow</option><option value="maximize">Maximize ambient inflow</option></select></label>
+<label>Minimum ambient inflow (kg) <input id="guidedTextileAmbientInflowMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum ambient inflow (kg) <input id="guidedTextileAmbientInflowLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileAmbientOutflowGoal" type="checkbox"> Compare cumulative ambient vapor outflow (kg)</label>
+<div class="study-fields">
+<label>Ambient-outflow direction <select id="guidedTextileAmbientOutflowDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize ambient outflow</option><option value="maximize">Maximize ambient outflow</option></select></label>
+<label>Minimum ambient outflow (kg) <input id="guidedTextileAmbientOutflowMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum ambient outflow (kg) <input id="guidedTextileAmbientOutflowLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
 </div>
 <label><input id="guidedTextileVaporHeatRemovedGoal" type="checkbox"> Compare isothermal heat removed from the reservoir (J)</label>
 <div class="study-fields">
@@ -2498,7 +2566,11 @@ Each exact instance binding supplies <code>rate_kg_m2_s</code> and <code>tempera
 per mechanical keyframe interval, including explicit zero delivery. Rates use reference material area;
 incoming liquid contributes its own sensible heat. A dry patch may evaporate its incoming supply or rewet.
 The source-qualified loading cap is enforced without silently discarding excess water.
-Add <code>textile_water_supplied_mass_kg</code> to constrain or optimize delivered liquid alongside cooling;
+Add <code>textile_water_supplied_mass_kg</code> to constrain or optimize delivered liquid alongside cooling,
+<code>textile_water_requested_supply_mass_kg</code>, <code>textile_water_unmet_supply_mass_kg</code> and
+<code>textile_water_remaining_supply_mass_kg</code> for finite shared liquid donors (supply version 2), and
+<code>textile_water_ambient_vapor_inflow_mass_kg</code> or <code>textile_water_ambient_vapor_outflow_mass_kg</code>
+for finite vapor reservoirs with qualified ambient exchange;
 the complete incoming-water and energy histories must qualify before comparison.</p>
 <p class="note">Use <code>ftx-textile-surface-water/3</code> to admit condensation as well as evaporation.
 Retain the explicit liquid supply and add <code>condensation</code> with schema <code>ftx-textile-condensation/1</code>,

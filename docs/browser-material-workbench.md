@@ -905,7 +905,13 @@ independent-sheet heat/water history. In authored motion, enable **Track indepen
 through this movement** and choose a **Qualified liquid policy**. Load the original direct water
 policy, uncoupled qualification array, or paired water/mechanical qualification array separately
 from the movement endpoints. A direct water policy can optionally include a separate mechanical
-qualification file. The full original-motion file route remains available. The same single or named
+qualification file and compose separate original `supply`, `finite_reservoir`, constant
+`ambient_exchange`, or per-interval `ambient_exchange_by_interval` records without rewriting any
+untouched source bytes. Alternative qualification collections are never rewritten by composition.
+When binding per-interval ambient boundaries, every saved motion interval must have an explicitly
+bound original source; adding, replacing, or removing an endpoint invalidates any interval binding
+whose `[start, end]` bounds changed rather than silently shifting earlier bindings. The full
+original-motion file route remains available. The same single or named
 case must request motion, that transient
 surface, and its actual water policy. Body-film, steady-heat and standalone vapor policies cannot
 substitute for it. The ordinary dry transient-surface workflow remains independent.
@@ -977,11 +983,30 @@ This free-liquid model does not infer sorption, wicking, body-to-textile transfe
 properties, wearer cooling or empirical wet-garment performance. See
 [textile-surface-water.md](textile-surface-water.md) for the existing source and phase contracts.
 
+#### Compare a finite shared liquid donor
+
+The **Finite shared liquid donor** controls use an admitted `ftx-textile-liquid-supply/2` policy
+with a shared constant-temperature `finite_reservoir` in the same case:
+
+| Guided quantity | Unit | Native metric |
+|---|---|---|
+| Requested donor delivery | kg | `textile_water_requested_supply_mass_kg` |
+| Unmet donor delivery shortfall | kg | `textile_water_unmet_supply_mass_kg` |
+| Remaining donor liquid inventory | kg | `textile_water_remaining_supply_mass_kg` |
+
+Choose each objective's direction and optional nonnegative inclusive lower/upper limits. Remaining
+donor inventory is distinct from liquid retained on the textile (`textile_water_remaining_mass_kg`).
+Requested and unmet delivery require the donor demand ledger emitted with the finite supply receipt;
+unlimited feeds and older donor receipts that lack demand fields leave requested and unmet delivery
+unavailable without inventing zero shortfalls, while keeping remaining donor inventory readable when
+a finite donor receipt is present. All three criteria are nominal only and run through the existing
+`transient_surface` consumer.
+
 #### Compare a finite shared vapor reservoir
 
 The **Finite shared vapor reservoir** controls use the independently qualified reservoir in a
 selected `ftx-textile-surface-water/5` policy. Direct water, uncoupled material alternatives and
-paired water/mechanical alternatives use the same five native criteria:
+paired water/mechanical alternatives use the same seven native criteria:
 
 | Guided quantity | Unit | Native metric |
 |---|---|---|
@@ -989,9 +1014,14 @@ paired water/mechanical alternatives use the same five native criteria:
 | Minimum sampled vapor pressure | Pa | `textile_water_min_sample_vapor_pressure_pa` |
 | Maximum sampled vapor pressure | Pa | `textile_water_max_sample_vapor_pressure_pa` |
 | Remaining reservoir vapor | kg | `textile_water_remaining_vapor_mass_kg` |
+| Cumulative ambient vapor inflow | kg | `textile_water_ambient_vapor_inflow_mass_kg` |
+| Cumulative ambient vapor outflow | kg | `textile_water_ambient_vapor_outflow_mass_kg` |
 | Isothermal heat removed | J | `textile_water_isothermal_heat_removed_j` |
 
-Choose each objective's direction and optional inclusive lower/upper limits. The thermostat energy
+Choose each objective's direction and optional inclusive lower/upper limits. Ambient inflow and
+outflow are nonnegative and additionally require a separately qualified `ambient_exchange` or
+`ambient_exchange_by_interval` boundary; closed reservoirs and older water policies leave both
+unavailable without inventing zeros. The thermostat energy
 is signed: positive removes heat from the reservoir, negative supplies heat to hold its prescribed
 temperature. It is separate from textile latent energy and mechanical work. Pressure extrema include
 the initial reservoir and every retained mechanical sample endpoint; they do not bound unreported
