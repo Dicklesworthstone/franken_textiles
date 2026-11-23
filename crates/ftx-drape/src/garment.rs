@@ -3096,10 +3096,11 @@ mod tests {
         // smooth_interior_cvt must preserve the CDT-resolved split crease edges rather than
         // returning the unsplit raw constraint [5, 2].
         let sizing = SizingField::from_boundary(&pts[..nb], 12.0, 12.0);
+        let pinned_count = pts.len();
         let (_, cvt_creases) = smooth_interior_cvt(
             &mut pts,
             nb,
-            pts.len(),
+            pinned_count,
             &constraints,
             faces,
             resolved.clone(),
