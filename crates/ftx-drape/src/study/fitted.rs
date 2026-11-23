@@ -2,9 +2,10 @@
 use std::collections::BTreeMap;
 
 use ftx_body::{
-    Affine, AnnyModel, BodyFrames, BodyParams, HandCollider, Legs, NappyOccupancy, Pose, RestBody,
-    SkinMesh, SkinningMode, TAPE_FIELDS, Wearer, accepted_shape::AcceptedShape,
-    clothing_skin_with_hands, fit_tape, joint_rotations, partial_tape_readings, pose_deltas,
+    Affine, AnnyModel, BodyFrames, BodyParams, DEFAULT_POSE_AUDIT_PAIR_BUDGET, HandCollider, Legs,
+    NappyOccupancy, Pose, RestBody, SkinMesh, SkinningMode, TAPE_FIELDS, ThumbPose, Wearer,
+    accepted_shape::AcceptedShape, clothing_skin_with_hands, fit_tape, joint_rotations,
+    partial_tape_readings, pose_deltas, pose_deltas_with_thumbs, pose_rotation_vectors_with_thumbs,
     skin_mesh, tape_targets,
 };
 use ftx_core::{Mat3, Refusal, Vec3, det};
@@ -43,9 +44,12 @@ pub struct BodyRequest {
     /// Skinning operator (`"lbs"` default; `"dqs"` opt-in dual-quaternion linear blending).
     #[serde(default, skip_serializing_if = "skinning_is_lbs")]
     pub skinning: SkinningMode,
-    /// Hand collider cut (`"wrist"` default reference cap; `"palm"` or `"knuckle"` opt-in sleeve colliders).
+    /// Hand collider cut (`"wrist"` default reference cap; `"palm"`, `"knuckle"`, or `"full"` opt-in sleeve colliders).
     #[serde(default, skip_serializing_if = "hand_collider_is_wrist")]
     pub hand_collider: HandCollider,
+    /// Optional source-local left/right thumb-root rotation vectors in radians.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumb_pose: Option<ThumbPose>,
 }
 
 fn empty_measurements() -> Value {
@@ -84,6 +88,11 @@ impl BodyRequest {
                         "an explicit accepted_body_fit must be an intact report",
                     ));
                 }
+                if input.get("thumb_pose").is_some_and(Value::is_null) {
+                    return Err(invalid(
+                        "an explicit thumb_pose must be a valid left/right rotation object",
+                    ));
+                }
                 serde_json::from_value::<Self>(input.clone()).map_err(|e| invalid(e.to_string()))?
             }
             None | Some("fabric-measurements/1") => {
@@ -94,6 +103,7 @@ impl BodyRequest {
                     "leg_fraction",
                     "skinning",
                     "hand_collider",
+                    "thumb_pose",
                 ]
                 .iter()
                 .any(|k| input.get(k).is_some())
@@ -112,6 +122,7 @@ impl BodyRequest {
                     leg_fraction: 1.0,
                     skinning: SkinningMode::LinearBlend,
                     hand_collider: HandCollider::Wrist,
+                    thumb_pose: None,
                 }
             }
             _ => {
@@ -141,6 +152,9 @@ impl BodyRequest {
         }
         if !(0.0..=1.0).contains(&self.leg_fraction) {
             return Err(invalid("scenario leg fraction must be finite and in 0..=1"));
+        }
+        if let Some(thumbs) = &self.thumb_pose {
+            thumbs.validate()?;
         }
         let m = &self.measurements;
         if m.get("schema")
@@ -198,10 +212,11 @@ pub struct FittedBody {
     collision: SkinMesh,
     display: SkinMesh,
     arm_deg: f64,
-    // Motion begins at this exact selected pose, skinning operator and hand collider; public report edits cannot alter them.
+    // Motion begins at this exact selected pose, skinning operator, hand collider and thumb pose; public report edits cannot alter them.
     initial_pose: Pose,
     skinning: SkinningMode,
     hand_collider: HandCollider,
+    thumb_pose: Option<ThumbPose>,
     measurement_pose: Pose,
     params: BodyParams,
     // This geometric proxy never replaces the source shape or inherits edits to the public report.
@@ -315,6 +330,7 @@ impl FittedBody {
             leg_fraction: 1.0,
             skinning: SkinningMode::LinearBlend,
             hand_collider: HandCollider::Wrist,
+            thumb_pose: None,
         };
         Self::prepare(model, "", &request)
     }
@@ -347,12 +363,35 @@ impl FittedBody {
         let rest = model.rest(occupied_params)?;
         let rest_collision =
             clothing_skin_with_hands(model, &rest.vertices, request.hand_collider)?;
-        let posed = model.pose_with_skinning(
-            &rest,
-            &pose_deltas(model, &rest, &pose, 1.0)?,
-            request.skinning,
-        )?;
+        let deltas = match request.thumb_pose {
+            Some(thumbs) => pose_deltas_with_thumbs(model, &rest, &pose, 1.0, &thumbs)?,
+            None => pose_deltas(model, &rest, &pose, 1.0)?,
+        };
+        let posed = model.pose_with_skinning(&rest, &deltas, request.skinning)?;
         let collision = clothing_skin_with_hands(model, &posed.vertices, request.hand_collider)?;
+        let authored_hand_surface = request
+            .thumb_pose
+            .filter(|thumbs| *thumbs != ThumbPose::default())
+            .map(|_| {
+                if request.hand_collider == HandCollider::Full {
+                    crate::collider::audit_surface(
+                        &collision.vertices,
+                        &collision.triangles,
+                        DEFAULT_POSE_AUDIT_PAIR_BUDGET,
+                    )
+                } else {
+                    clothing_skin_with_hands(model, &posed.vertices, HandCollider::Full).and_then(
+                        |full_hands| {
+                            crate::collider::audit_surface(
+                                &full_hands.vertices,
+                                &full_hands.triangles,
+                                DEFAULT_POSE_AUDIT_PAIR_BUDGET,
+                            )
+                        },
+                    )
+                }
+            })
+            .transpose()?;
         let display = skin_mesh(&posed.vertices, &model.data().faces)?;
         let frames = BodyFrames::new(model, &posed)?;
         report["measurements_sha256"] = json!(hash(&request.measurements)?);
@@ -379,6 +418,12 @@ impl FittedBody {
         if !request.hand_collider.is_wrist() {
             report["pose"]["hand_collider"] = json!(request.hand_collider);
         }
+        if let Some(thumbs) = request.thumb_pose {
+            report["pose"]["thumb_pose"] = json!(thumbs);
+        }
+        if let Some(audit) = authored_hand_surface {
+            report["pose"]["authored_hand_surface_pairs_tested"] = json!(audit.pairs_tested);
+        }
         report["body_provenance"] = json!("MODEL_FIT");
         report["body_contact_proxy"] =
             collision.contact_proxy_basis_with_rest_and_skinning(&rest_collision, request.skinning);
@@ -393,6 +438,7 @@ impl FittedBody {
             initial_pose: pose,
             skinning: request.skinning,
             hand_collider: request.hand_collider,
+            thumb_pose: request.thumb_pose,
             measurement_pose,
             params,
             nappy_occupancy: occupancy,
@@ -528,8 +574,8 @@ impl FittedBody {
                 .collect();
             let rotations = if interval_steps.len() > 1 {
                 Some((
-                    source_rotvecs(model, &rest, &previous_pose)?,
-                    source_rotvecs(model, &rest, &pose)?,
+                    source_rotvecs(model, &rest, &previous_pose, self.thumb_pose)?,
+                    source_rotvecs(model, &rest, &pose, self.thumb_pose)?,
                 ))
             } else {
                 None
@@ -540,7 +586,10 @@ impl FittedBody {
                 let deltas = if exact {
                     // Keep the established arithmetic at every authored endpoint, including the
                     // absent-policy path, rather than reconstructing it from an interpolation.
-                    pose_deltas(model, &rest, &pose, 1.0)?
+                    match self.thumb_pose {
+                        Some(thumbs) => pose_deltas_with_thumbs(model, &rest, &pose, 1.0, &thumbs)?,
+                        None => pose_deltas(model, &rest, &pose, 1.0)?,
+                    }
                 } else {
                     let (from, to) = rotations.as_ref().expect("intermediate source poses");
                     from.iter()
@@ -608,7 +657,15 @@ impl FittedBody {
 
 // Existing supported pose controls each rotate a bone on a fixed rest-frame axis. Interpolate
 // their scalar rotations in local coordinates, then run the ordinary source FK/LBS evaluation.
-fn source_rotvecs(model: &AnnyModel, rest: &RestBody, pose: &Pose) -> Result<Vec<Vec3>, Refusal> {
+fn source_rotvecs(
+    model: &AnnyModel,
+    rest: &RestBody,
+    pose: &Pose,
+    thumb_pose: Option<ThumbPose>,
+) -> Result<Vec<Vec3>, Refusal> {
+    if let Some(thumbs) = thumb_pose {
+        return pose_rotation_vectors_with_thumbs(model, rest, pose, &thumbs);
+    }
     let mut rotations = vec![Vec3::ZERO; rest.bone_frames.len()];
     for joint in joint_rotations(model, rest, pose)? {
         rotations[joint.bone] = rest.bone_frames[joint.bone]
@@ -2204,5 +2261,150 @@ mod tests {
         // Legacy fabric-measurements/1 documents must reject hand_collider upfront.
         let legacy = json!({"schema": "fabric-measurements/1", "hand_collider": "palm"});
         assert!(BodyRequest::read(&legacy).is_err());
+    }
+
+    #[test]
+    fn opt_in_thumb_pose_validates_prepares_and_moves_without_changing_flat_fit_or_default() {
+        let valid_thumbs = ThumbPose {
+            left_rotation_vector_rad: [0.01, -0.005, 0.008],
+            right_rotation_vector_rad: [0.01, 0.005, -0.008],
+        };
+        let base = json!({"schema": "ftx-scenario-body/1", "measurements": {}});
+        let parsed_default = BodyRequest::read(&base).unwrap();
+        assert_eq!(parsed_default.thumb_pose, None);
+        assert!(
+            serde_json::to_value(&parsed_default)
+                .unwrap()
+                .get("thumb_pose")
+                .is_none()
+        );
+
+        let mut with_thumbs = base.clone();
+        with_thumbs["thumb_pose"] = json!(valid_thumbs);
+        let parsed = BodyRequest::read(&with_thumbs).unwrap();
+        assert_eq!(parsed.thumb_pose, Some(valid_thumbs));
+        assert_eq!(
+            serde_json::to_value(&parsed).unwrap()["thumb_pose"],
+            json!(valid_thumbs)
+        );
+
+        // Null, out-of-range, unknown-field and legacy-schema thumb_pose inputs must refuse.
+        for bad in [
+            json!({"schema": "ftx-scenario-body/1", "thumb_pose": null}),
+            json!({"schema": "ftx-scenario-body/1", "thumb_pose": {"left_rotation_vector_rad":[2.0,2.0,2.0],"right_rotation_vector_rad":[0.0,0.0,0.0]}}),
+            json!({"schema": "ftx-scenario-body/1", "thumb_pose": {"left_rotation_vector_rad":[0.0,0.0,0.0],"right_rotation_vector_rad":[0.0,0.0,0.0],"extra":1}}),
+            json!({"schema": "fabric-measurements/1", "thumb_pose": valid_thumbs}),
+        ] {
+            assert!(
+                BodyRequest::read(&bad).is_err(),
+                "expected refusal for {bad}"
+            );
+        }
+
+        // A model lacking thumb bones refuses a nonzero thumb pose fail-closed.
+        let base_model = model();
+        let hash = "a".repeat(64);
+        let mut req = request();
+        req.thumb_pose = Some(valid_thumbs);
+        assert!(FittedBody::prepare(&base_model, &hash, &req).is_err());
+
+        // With finger/thumb bones present and thumb-weighted vertices, prepare moves the thumb
+        // geometry, audits the full-hand surface, records thumb_pose, keeps flat_fit_body in its
+        // unposed reference frame, and preserves thumbs across motion endpoints and substeps.
+        let mut data = base_model.data().clone();
+        let wrist_r = base_model.bone_index("wrist.R").unwrap() as i64;
+        let wrist_l = base_model.bone_index("wrist.L").unwrap() as i64;
+        let mut thumb_r = None;
+        let mut thumb_l = None;
+        for (side, parent_wrist, sign) in [("R", wrist_r, 1.0), ("L", wrist_l, -1.0)] {
+            for finger in 1..=5 {
+                let first_idx = data.header.labels.bones.len() as i64;
+                if finger == 1 {
+                    if side == "R" {
+                        thumb_r = Some(first_idx as u32);
+                    } else {
+                        thumb_l = Some(first_idx as u32);
+                    }
+                }
+                let h1 = Vec3::new(sign * 0.32, (finger as f64 - 3.0) * 0.01, 0.90);
+                let t1 = h1 + Vec3::new(sign * 0.02, 0.0, -0.02);
+                let t2 = t1 + Vec3::new(sign * 0.02, 0.0, -0.02);
+                for (name, parent, head, tail) in [
+                    (format!("finger{finger}-1.{side}"), parent_wrist, h1, t1),
+                    (format!("finger{finger}-2.{side}"), first_idx, t1, t2),
+                ] {
+                    data.header.labels.bones.push(name);
+                    data.header.labels.bone_parents.push(parent);
+                    data.template_bone_heads.push(head);
+                    data.template_bone_tails.push(tail);
+                    data.bone_heads_blendshapes
+                        .push(Vec3::new(0.0, 0.0, 0.5 * head.z));
+                    data.bone_tails_blendshapes
+                        .push(Vec3::new(0.0, 0.0, 0.5 * tail.z));
+                    data.bone_rolls.push(Mat3::IDENTITY);
+                }
+            }
+        }
+        data.header.counts.bones = data.header.labels.bones.len();
+        // Bind one vertex per side to the thumb roots so thumb rotations visibly deform the mesh.
+        data.vertex_bone_indices[48] = thumb_r.unwrap();
+        data.vertex_bone_indices[56] = thumb_l.unwrap();
+        let finger_model = AnnyModel::from_data(data).unwrap();
+
+        let mut plain_req = request();
+        plain_req.hand_collider = HandCollider::Full;
+        let plain = FittedBody::prepare(&finger_model, &hash, &plain_req).unwrap();
+        assert!(plain.report["pose"].get("thumb_pose").is_none());
+
+        let mut thumb_req = plain_req.clone();
+        thumb_req.thumb_pose = Some(valid_thumbs);
+        let authored = FittedBody::prepare(&finger_model, &hash, &thumb_req).unwrap();
+        assert_eq!(
+            authored.report["shape_sha256"],
+            plain.report["shape_sha256"]
+        );
+        assert_ne!(authored.collision.vertices, plain.collision.vertices);
+        assert_eq!(authored.report["pose"]["thumb_pose"], json!(valid_thumbs));
+        assert!(
+            authored.report["pose"]["authored_hand_surface_pairs_tested"]
+                .as_u64()
+                .is_some()
+        );
+        // Reference flat-fit body stays in the unposed measurement pose.
+        assert_eq!(
+            authored
+                .flat_fit_body(&finger_model, &hash)
+                .unwrap()
+                .identity(),
+            plain
+                .flat_fit_body(&finger_model, &hash)
+                .unwrap()
+                .identity()
+        );
+
+        // Motion endpoints AND intermediate substeps preserve the authored thumb pose.
+        let motion: motion::Request = serde_json::from_value(json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [{"time_s": 0.02, "arm_abduction_deg": 37.0}],
+            "intermediate_source_poses": 1,
+            "max_step_s": 0.01, "max_trials": 16, "max_pairs": 10000, "max_sample_vertices": 10000
+        }))
+        .unwrap();
+        let plain_path = plain.motion_path(&finger_model, &hash, &motion).unwrap();
+        let path = authored.motion_path(&finger_model, &hash, &motion).unwrap();
+        assert_ne!(path.sha256(), plain_path.sha256());
+        let mut mid_req = thumb_req.clone();
+        mid_req.arm_abduction_deg = 36.0;
+        let mid = FittedBody::prepare(&finger_model, &hash, &mid_req).unwrap();
+        let mut end_req = thumb_req;
+        end_req.arm_abduction_deg = 37.0;
+        let end = FittedBody::prepare(&finger_model, &hash, &end_req).unwrap();
+        let expected = motion::Path::new(
+            &motion,
+            authored.body().collision,
+            vec![mid.collision.vertices, end.collision.vertices],
+        )
+        .unwrap();
+        assert_eq!(path.sha256(), expected.sha256());
     }
 }
