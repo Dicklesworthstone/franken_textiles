@@ -216,6 +216,11 @@ impl Contact {
         previous: Option<&Self>,
         x: &[Vec3],
     ) -> Result<Self, Refusal> {
+        if let Some(prev) = previous {
+            self.adaptive_barrier = prev.adaptive_barrier;
+            self.stick_slip = prev.stick_slip;
+            self.self_stick_slip = prev.self_stick_slip;
+        }
         if let Some(field) = previous.and_then(|c| c.surface_materials.as_ref()) {
             field.validate_topology(&self.cloth, x.len())?;
             self.params.thickness = field.max_half();
@@ -247,6 +252,11 @@ impl Contact {
         surfaces: &[SurfaceMaterial],
         self_friction: Option<&[Vec<f64>]>,
     ) -> Result<Self, Refusal> {
+        if self.stick_slip.is_some() || self.self_stick_slip.is_some() {
+            return Err(invalid(
+                "per-triangle surface materials cannot be combined with uniform stick-slip friction",
+            ));
+        }
         self.check_cloth(x)?;
         let field =
             MaterialField::build(&self.cloth, x.len(), triangle_ids, surfaces, self_friction)?;

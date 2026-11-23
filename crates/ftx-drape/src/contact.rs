@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use ftx_core::intersection::{indexed_triangle_pair, segment_triangle, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::ad::Jet;
@@ -74,6 +74,299 @@ impl ContactParams {
             ));
         }
         Ok(())
+    }
+}
+
+/// Opt-in Li et al. (2020) physically scaled IPC barrier stiffness policy (FTX-27e).
+///
+/// Scales the initial barrier stiffness `kappa` (N/m) from the cloth's mean vertex mass, gravity
+/// and membrane stiffness so both ultra-light fabrics (e.g. 40 g/m² silk) and heavy fabrics (e.g.
+/// 500 g/m² wool) settle at consistent mid-band contact clearance instead of hovering or
+/// compressing deep into the barrier. Between steps, when the minimum active gap drops below
+/// `min_gap_fraction * dhat`, `kappa` scales up by `growth_factor` within `[kappa_min, kappa_max]`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AdaptiveBarrierPolicy {
+    /// Target resting clearance as a fraction of `dhat`, in `(0, 1)` (default `0.5`).
+    pub target_gap_fraction: f64,
+    /// Minimum active gap fraction of `dhat` before between-step `kappa` escalation triggers, in
+    /// `(0, target_gap_fraction]` (default `0.05`).
+    pub min_gap_fraction: f64,
+    /// Multiplicative growth factor applied between steps when `min_gap < min_gap_fraction * dhat`,
+    /// in `[1.0, 16.0]` (default `2.0`).
+    pub growth_factor: f64,
+    /// Dimensionless fraction of characteristic membrane stiffness `E_t` providing a positive
+    /// stiffness floor during zero-gravity phases, in `[0.0, 1.0]` (default `1e-5`).
+    pub membrane_floor_scale: f64,
+    /// Lower bound on adapted barrier stiffness `kappa` (N/m, default `1e-3`).
+    pub kappa_min: f64,
+    /// Upper bound on adapted barrier stiffness `kappa` (N/m, default `1e5`).
+    pub kappa_max: f64,
+}
+
+impl Default for AdaptiveBarrierPolicy {
+    fn default() -> Self {
+        Self {
+            target_gap_fraction: 0.5,
+            min_gap_fraction: 0.05,
+            growth_factor: 2.0,
+            membrane_floor_scale: 1e-5,
+            kappa_min: 1e-3,
+            kappa_max: 1e5,
+        }
+    }
+}
+
+impl AdaptiveBarrierPolicy {
+    /// Validates every parameter of the adaptive barrier policy.
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] for non-finite values; [`RefusalCode::OutOfRange`] for invalid
+    /// fractions, growth factor, or stiffness bounds.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        for (name, value) in [
+            (
+                "adaptive barrier target gap fraction",
+                self.target_gap_fraction,
+            ),
+            (
+                "adaptive barrier minimum gap fraction",
+                self.min_gap_fraction,
+            ),
+            ("adaptive barrier growth factor", self.growth_factor),
+            (
+                "adaptive barrier membrane floor scale",
+                self.membrane_floor_scale,
+            ),
+            ("adaptive barrier minimum stiffness", self.kappa_min),
+            ("adaptive barrier maximum stiffness", self.kappa_max),
+        ] {
+            Refusal::finite(name, value)?;
+        }
+        if !(self.target_gap_fraction > 0.0 && self.target_gap_fraction < 1.0)
+            || !(self.min_gap_fraction > 0.0 && self.min_gap_fraction <= self.target_gap_fraction)
+            || !(1.0..=16.0).contains(&self.growth_factor)
+            || !(0.0..=1.0).contains(&self.membrane_floor_scale)
+            || self.kappa_min <= 0.0
+            || self.kappa_max < self.kappa_min
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "adaptive barrier requires 0 < min_gap_fraction <= target_gap_fraction < 1, \
+                 growth_factor in [1, 16], membrane_floor_scale in [0, 1], and 0 < kappa_min <= kappa_max",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Dimensionless barrier reaction factor `phi(alpha) = 2(1 - alpha) ln(1/alpha) + (1 - alpha)^2 / alpha`
+    /// for `alpha in (0, 1)`, such that `-db/dg(alpha * dhat) = kappa * dhat * phi(alpha)`.
+    /// Returns `NaN` outside `(0, 1)`.
+    #[must_use]
+    pub fn barrier_force_factor(alpha: f64) -> f64 {
+        if !alpha.is_finite() || !(alpha > 0.0 && alpha < 1.0) {
+            return f64::NAN;
+        }
+        let one_minus = 1.0 - alpha;
+        2.0 * one_minus * ftx_core::det::ln(1.0 / alpha) + (one_minus * one_minus) / alpha
+    }
+
+    /// Computes the physically scaled initial barrier stiffness `kappa` (N/m) for a cloth with the
+    /// given mean vertex mass (kg), characteristic membrane stiffness (N/m), reference gravity
+    /// (m/s²), and barrier activation distance `dhat_m` (m).
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] or [`RefusalCode::OutOfRange`] on invalid policy or inputs.
+    pub fn initial_kappa(
+        &self,
+        mean_vertex_mass_kg: f64,
+        membrane_stiffness_n_m: f64,
+        gravity_m_s2: f64,
+        dhat_m: f64,
+    ) -> Result<f64, Refusal> {
+        self.validate()?;
+        for (name, value) in [
+            ("mean vertex mass", mean_vertex_mass_kg),
+            ("membrane stiffness", membrane_stiffness_n_m),
+            ("gravity", gravity_m_s2),
+            ("barrier activation distance", dhat_m),
+        ] {
+            Refusal::finite(name, value)?;
+        }
+        if mean_vertex_mass_kg < 0.0
+            || membrane_stiffness_n_m < 0.0
+            || gravity_m_s2 < 0.0
+            || dhat_m <= 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "adaptive barrier inputs require non-negative mass, stiffness, gravity and positive dhat",
+            ));
+        }
+        let phi = Self::barrier_force_factor(self.target_gap_fraction);
+        let k_grav = (mean_vertex_mass_kg * gravity_m_s2) / (dhat_m * phi);
+        let k_mem = self.membrane_floor_scale * membrane_stiffness_n_m;
+        let raw = k_grav.max(k_mem);
+        Refusal::finite("adaptive initial barrier stiffness", raw)?;
+        Ok(raw.clamp(self.kappa_min, self.kappa_max))
+    }
+
+    /// Between-step stiffness update: if `min_gap` fell below `min_gap_fraction * dhat_m`, scales
+    /// `current_kappa` up by `growth_factor` within `[kappa_min, kappa_max]`.
+    #[must_use]
+    pub fn adapt_kappa(&self, current_kappa: f64, min_gap: Option<f64>, dhat_m: f64) -> f64 {
+        if !current_kappa.is_finite() || !dhat_m.is_finite() || dhat_m <= 0.0 {
+            return self.kappa_min;
+        }
+        let clamped = current_kappa.clamp(self.kappa_min, self.kappa_max);
+        match min_gap {
+            Some(g) if g.is_finite() && g > 0.0 && g < self.min_gap_fraction * dhat_m => {
+                (clamped * self.growth_factor).min(self.kappa_max)
+            }
+            _ => clamped,
+        }
+    }
+}
+
+/// Opt-in smooth static/kinetic stick-slip Coulomb friction (FTX-27e).
+///
+/// Extends IPC's smoothed Coulomb dissipation potential with a C²-continuous Stribeck transition
+/// from static friction `mu_s` (peak resisting traction at `eps_v`) down to kinetic friction
+/// `mu_k <= mu_s` over characteristic slip velocity `transition_v_m_s`. When `mu_s == mu_k`, this
+/// reduces identically to standard IPC Coulomb friction.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StickSlipFriction {
+    /// Static friction coefficient `mu_s >= mu_k >= 0` (dimensionless).
+    pub mu_s: f64,
+    /// Kinetic (sliding) friction coefficient `0 <= mu_k <= mu_s` (dimensionless).
+    pub mu_k: f64,
+    /// Characteristic slip velocity over which friction transitions from `mu_s` to `mu_k` (m/s, > 0).
+    pub transition_v_m_s: f64,
+}
+
+impl StickSlipFriction {
+    /// Constructs and validates a stick-slip friction law.
+    ///
+    /// # Errors
+    /// See [`StickSlipFriction::validate`].
+    pub fn new(mu_s: f64, mu_k: f64, transition_v_m_s: f64) -> Result<Self, Refusal> {
+        let law = Self {
+            mu_s,
+            mu_k,
+            transition_v_m_s,
+        };
+        law.validate()?;
+        Ok(law)
+    }
+
+    /// Validates static/kinetic friction parameters.
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] for non-finite values; [`RefusalCode::OutOfRange`] unless
+    /// `0 <= mu_k <= mu_s` and `transition_v_m_s > 0`.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        for (name, value) in [
+            ("static friction coefficient", self.mu_s),
+            ("kinetic friction coefficient", self.mu_k),
+            ("stick-slip transition speed", self.transition_v_m_s),
+        ] {
+            Refusal::finite(name, value)?;
+        }
+        if self.mu_k < 0.0 || self.mu_s < self.mu_k || self.transition_v_m_s <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "stick-slip friction requires 0 <= mu_k <= mu_s and positive transition_v_m_s",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Effective friction traction ratio `tau(v)` at tangential slip speed `slip_speed_m_s >= 0`
+    /// with stick regularization speed `eps_v > 0`. Returns `NaN` on non-finite or non-positive
+    /// scale inputs.
+    #[must_use]
+    pub fn effective_mu(&self, slip_speed_m_s: f64, eps_v: f64) -> f64 {
+        if !slip_speed_m_s.is_finite()
+            || !eps_v.is_finite()
+            || eps_v <= 0.0
+            || !self.mu_s.is_finite()
+            || !self.mu_k.is_finite()
+            || !self.transition_v_m_s.is_finite()
+            || self.transition_v_m_s <= 0.0
+        {
+            return f64::NAN;
+        }
+        let v = slip_speed_m_s.max(0.0);
+        if v < eps_v {
+            let r = v / eps_v;
+            self.mu_s * (-r * r + 2.0 * r)
+        } else {
+            let u = (v - eps_v) / self.transition_v_m_s;
+            let exp_neg_u = if u > 700.0 {
+                0.0
+            } else {
+                ftx_core::det::exp(-u)
+            };
+            self.mu_k + (self.mu_s - self.mu_k) * (1.0 + u) * exp_neg_u
+        }
+    }
+}
+
+/// Radial Stribeck stick-slip dissipation potential and derivatives (divided by normal load `lambda`).
+#[derive(Clone, Copy, Debug)]
+struct StickSlipRadial {
+    d_val: f64,
+    tau_over_y: f64,
+    #[cfg(test)]
+    radial_eig_exact: f64,
+    /// Exact `(radial_eig_psd - tau_over_y)` computed without cancellation near `y -> 0`.
+    radial_psd_minus_tau_over_y: f64,
+}
+
+/// Evaluates the radial Stribeck stick-slip potential at displacement norm `y >= 0`.
+///
+/// For `y < eps`: `tau(y) = mu_s * (-y^2/eps^2 + 2y/eps)`, strictly convex (`radial_eig >= 0`).
+/// For `y >= eps`: `tau(y) = mu_k + (mu_s - mu_k) * (1 + u) * exp(-u)` with `u = (y - eps) / w`,
+/// C¹-continuous with `tau(eps) = mu_s` and `tau'(eps) = 0`. In the Stribeck softening regime
+/// (`mu_s > mu_k`), `radial_eig_exact <= 0`; clamping to `0.0` gives the exact closed-form PSD
+/// projection of the 2x2 tangential Hessian.
+fn stick_slip_radial(y: f64, eps: f64, ss: StickSlipFriction, h: f64) -> StickSlipRadial {
+    if y < eps {
+        let d_val = ss.mu_s * (-y * y * y / (3.0 * eps * eps) + y * y / eps + eps / 3.0);
+        let tau_over_y = ss.mu_s * (-y / (eps * eps) + 2.0 / eps);
+        #[cfg(test)]
+        let radial_eig_exact = ss.mu_s * (-2.0 * y / (eps * eps) + 2.0 / eps);
+        StickSlipRadial {
+            d_val,
+            tau_over_y,
+            #[cfg(test)]
+            radial_eig_exact,
+            radial_psd_minus_tau_over_y: -ss.mu_s * y / (eps * eps),
+        }
+    } else {
+        let w = ss.transition_v_m_s * h;
+        let s = y - eps;
+        let u = s / w;
+        let dm = ss.mu_s - ss.mu_k;
+        let exp_neg_u = if u > 700.0 {
+            0.0
+        } else {
+            ftx_core::det::exp(-u)
+        };
+        let u_exp = if u > 700.0 { 0.0 } else { u * exp_neg_u };
+        let d_val = ss.mu_s * eps + ss.mu_k * s + dm * w * (2.0 - (2.0 * exp_neg_u + u_exp));
+        let tau = ss.mu_k + dm * (exp_neg_u + u_exp);
+        let tau_over_y = tau / y;
+        let radial_eig_exact = -dm * u_exp / w;
+        let radial_eig_psd = radial_eig_exact.max(0.0);
+        StickSlipRadial {
+            d_val,
+            tau_over_y,
+            #[cfg(test)]
+            radial_eig_exact,
+            radial_psd_minus_tau_over_y: radial_eig_psd - tau_over_y,
+        }
     }
 }
 
@@ -757,6 +1050,9 @@ pub struct Contact {
     /// Cloth triangles and edges.
     pub cloth: ClothTopology,
     self_params: Option<ContactParams>,
+    adaptive_barrier: Option<AdaptiveBarrierPolicy>,
+    stick_slip: Option<StickSlipFriction>,
+    self_stick_slip: Option<StickSlipFriction>,
     surface_materials: Option<materials::MaterialField>,
     /// Start creases: one-ring cloth pairs already inside the thickness when self-contact was
     /// enabled, with their own offset (half their start distance), sorted by pair.
@@ -773,6 +1069,9 @@ pub(crate) struct FrozenPolicy {
     params: ContactParams,
     cloth: ClothTopology,
     self_params: Option<ContactParams>,
+    adaptive_barrier: Option<AdaptiveBarrierPolicy>,
+    stick_slip: Option<StickSlipFriction>,
+    self_stick_slip: Option<StickSlipFriction>,
     surface_materials: Option<materials::MaterialField>,
     creases: Vec<(Pair, f64)>,
 }
@@ -782,6 +1081,9 @@ impl FrozenPolicy {
         self.params == contact.params
             && self.cloth == contact.cloth
             && self.self_params == contact.self_params
+            && self.adaptive_barrier == contact.adaptive_barrier
+            && self.stick_slip == contact.stick_slip
+            && self.self_stick_slip == contact.self_stick_slip
             && self.surface_materials == contact.surface_materials
             && self.creases == contact.creases
     }
@@ -888,6 +1190,9 @@ impl Contact {
             params: self.params,
             cloth: self.cloth.clone(),
             self_params: self.self_params,
+            adaptive_barrier: self.adaptive_barrier,
+            stick_slip: self.stick_slip,
+            self_stick_slip: self.self_stick_slip,
             surface_materials: self.surface_materials.clone(),
             creases: self.creases.clone(),
         }
@@ -1008,6 +1313,22 @@ impl Contact {
                 &serde_json::to_vec(v).expect("finite contact map identity"),
             )
         };
+        let policy_value = if self.adaptive_barrier.is_none()
+            && self.stick_slip.is_none()
+            && self.self_stick_slip.is_none()
+        {
+            json!([self.params, self.self_params, self.creases, policies])
+        } else {
+            json!([
+                self.params,
+                self.self_params,
+                self.creases,
+                policies,
+                self.adaptive_barrier,
+                self.stick_slip,
+                self.self_stick_slip
+            ])
+        };
         Ok((
             json!({"schema":"ftx-contact-reactions/1",
             "barrier_energy_j":barrier_energy_j,
@@ -1015,7 +1336,7 @@ impl Contact {
             "positions_m":x,"triangles":self.cloth.triangles,
             "cloth_state_sha256":digest(&json!([x,self.cloth.triangles,self.cloth.edges,self.cloth.edge_rest])),
             "body_state_sha256":digest(&json!([self.body.vertices,self.body.triangles])),
-            "active_policy_sha256":digest(&json!([self.params,self.self_params,self.creases,policies])),
+            "active_policy_sha256":digest(&policy_value),
             "body_force_on_cloth_n":if self.body.triangles.is_empty() {None} else {Some(body)},
             "self_force_on_cloth_n":self.self_params.map(|_| own),
             "pressure_pa":null,
@@ -1053,6 +1374,9 @@ impl Contact {
                 neighbours,
             },
             self_params: None,
+            adaptive_barrier: None,
+            stick_slip: None,
+            self_stick_slip: None,
             surface_materials: None,
             lag: Vec::new(),
             lag_x: Vec::new(),
@@ -1129,6 +1453,176 @@ impl Contact {
         self.self_params
     }
 
+    /// The active adaptive barrier policy, if enabled.
+    #[must_use]
+    pub fn adaptive_barrier(&self) -> Option<AdaptiveBarrierPolicy> {
+        self.adaptive_barrier
+    }
+
+    /// The active body stick-slip friction law, if enabled.
+    #[must_use]
+    pub fn stick_slip(&self) -> Option<StickSlipFriction> {
+        self.stick_slip
+    }
+
+    /// The active cloth–cloth stick-slip friction law, if enabled.
+    #[must_use]
+    pub fn self_stick_slip(&self) -> Option<StickSlipFriction> {
+        self.self_stick_slip
+    }
+
+    /// Configures opt-in Li et al. (2020) adaptive barrier stiffness scaling and sets the initial
+    /// barrier `kappa` (for body contact and, if already enabled, self-contact) from the cloth's
+    /// vertex mass, membrane stiffness, and reference gravity. Call after [`Contact::with_self_contact`]
+    /// so cloth–cloth `kappa` receives the same initial scaling. Returns the resulting body `kappa` (N/m).
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] or [`RefusalCode::OutOfRange`] on invalid policy or cloth scales.
+    pub fn set_adaptive_barrier(
+        &mut self,
+        policy: AdaptiveBarrierPolicy,
+        mean_vertex_mass_kg: f64,
+        membrane_stiffness_n_m: f64,
+        gravity_m_s2: f64,
+    ) -> Result<f64, Refusal> {
+        let k0 = policy.initial_kappa(
+            mean_vertex_mass_kg,
+            membrane_stiffness_n_m,
+            gravity_m_s2,
+            self.params.dhat,
+        )?;
+        let k0_self = self
+            .self_params
+            .map(|sp| {
+                policy.initial_kappa(
+                    mean_vertex_mass_kg,
+                    membrane_stiffness_n_m,
+                    gravity_m_s2,
+                    sp.dhat,
+                )
+            })
+            .transpose()?;
+        self.params.kappa = k0;
+        if let (Some(sp), Some(ks)) = (self.self_params.as_mut(), k0_self) {
+            sp.kappa = ks;
+        }
+        self.adaptive_barrier = Some(policy);
+        Ok(k0)
+    }
+
+    /// Builder form of [`Contact::set_adaptive_barrier`].
+    ///
+    /// # Errors
+    /// As [`Contact::set_adaptive_barrier`].
+    pub fn with_adaptive_barrier(
+        mut self,
+        policy: AdaptiveBarrierPolicy,
+        mean_vertex_mass_kg: f64,
+        membrane_stiffness_n_m: f64,
+        gravity_m_s2: f64,
+    ) -> Result<Self, Refusal> {
+        self.set_adaptive_barrier(
+            policy,
+            mean_vertex_mass_kg,
+            membrane_stiffness_n_m,
+            gravity_m_s2,
+        )?;
+        Ok(self)
+    }
+
+    /// Updates barrier `kappa` between time steps when adaptive barrier scaling is enabled and the
+    /// minimum active contact gap fell below `min_gap_fraction * dhat`. No-op when disabled.
+    /// Returns the active body barrier stiffness `kappa` (N/m).
+    pub fn adapt_barrier_stiffness(&mut self, x: &[Vec3]) -> f64 {
+        let Some(policy) = self.adaptive_barrier else {
+            return self.params.kappa;
+        };
+        let min_body = self.min_gap(x, self.params.dhat);
+        self.params.kappa = policy.adapt_kappa(self.params.kappa, min_body, self.params.dhat);
+        if let Some(sp) = self.self_params {
+            let min_self = self.min_self_gap(x, sp.dhat);
+            let next_self = policy.adapt_kappa(sp.kappa, min_self, sp.dhat);
+            if let Some(sp_mut) = self.self_params.as_mut() {
+                sp_mut.kappa = next_self;
+            }
+        }
+        self.params.kappa
+    }
+
+    /// Configures opt-in smooth static/kinetic stick-slip friction for cloth–body contact.
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] if per-triangle surface materials are bound (stick-slip is
+    /// a uniform interface law and will not silently override spatially assigned friction);
+    /// otherwise as [`StickSlipFriction::validate`].
+    pub fn set_stick_slip(&mut self, friction: StickSlipFriction) -> Result<(), Refusal> {
+        friction.validate()?;
+        if self.surface_materials.is_some() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "stick-slip friction is a uniform interface law and cannot override per-triangle surface materials",
+            ));
+        }
+        self.stick_slip = Some(friction);
+        Ok(())
+    }
+
+    /// Builder form of [`Contact::set_stick_slip`].
+    ///
+    /// # Errors
+    /// See [`Contact::set_stick_slip`].
+    pub fn with_stick_slip(mut self, friction: StickSlipFriction) -> Result<Self, Refusal> {
+        self.set_stick_slip(friction)?;
+        Ok(self)
+    }
+
+    /// Configures opt-in smooth static/kinetic stick-slip friction for cloth–cloth self-contact.
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] if self-contact is not enabled or per-triangle surface
+    /// materials are bound; otherwise as [`StickSlipFriction::validate`].
+    pub fn set_self_stick_slip(&mut self, friction: StickSlipFriction) -> Result<(), Refusal> {
+        friction.validate()?;
+        if self.self_params.is_none() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "cloth-cloth stick-slip friction requires self-contact to be enabled",
+            ));
+        }
+        if self.surface_materials.is_some() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "cloth-cloth stick-slip friction cannot override per-triangle surface materials",
+            ));
+        }
+        self.self_stick_slip = Some(friction);
+        Ok(())
+    }
+
+    /// Builder form of [`Contact::set_self_stick_slip`].
+    ///
+    /// # Errors
+    /// As [`Contact::set_self_stick_slip`].
+    pub fn with_self_stick_slip(mut self, friction: StickSlipFriction) -> Result<Self, Refusal> {
+        self.set_self_stick_slip(friction)?;
+        Ok(self)
+    }
+
+    pub(crate) fn restore_kappas(&mut self, body_kappa: f64, self_kappa: Option<f64>) {
+        self.params.kappa = body_kappa;
+        if let (Some(sp), Some(ks)) = (self.self_params.as_mut(), self_kappa) {
+            sp.kappa = ks;
+        }
+    }
+
+    fn pair_stick_slip(&self, pair: Pair) -> Option<StickSlipFriction> {
+        if pair.is_self_contact() {
+            self.self_stick_slip
+        } else {
+            self.stick_slip
+        }
+    }
+
     /// A pair's parameters: the body's, or the cloth–cloth ones with a start crease's own offset.
     fn pair_params(&self, pair: Pair) -> ContactParams {
         if !pair.is_self_contact() {
@@ -1154,7 +1648,10 @@ impl Contact {
     }
 
     pub(crate) fn has_friction(&self) -> bool {
-        self.params.mu > 0.0 || self.self_params.is_some_and(|p| p.mu > 0.0)
+        self.params.mu > 0.0
+            || self.stick_slip.is_some_and(|s| s.mu_s > 0.0)
+            || self.self_params.is_some_and(|p| p.mu > 0.0)
+            || (self.self_params.is_some() && self.self_stick_slip.is_some_and(|s| s.mu_s > 0.0))
     }
 
     /// Checks a self-contact-enabled state: finite, non-degenerate triangles, positive thickness
@@ -1549,7 +2046,8 @@ impl Contact {
         // from the start of the step.
         for pair in self.candidates(x, None, self.activation_range()) {
             let p = self.pair_params(pair);
-            if p.mu <= 0.0 {
+            let active_mu = self.pair_stick_slip(pair).map_or(p.mu, |s| s.mu_s);
+            if active_mu <= 0.0 {
                 continue;
             }
             let st = stencil(pair, x, &self.body, &self.cloth);
@@ -1605,26 +2103,51 @@ impl Contact {
         let y = (u[0] * u[0] + u[1] * u[1]).sqrt();
         let params = self.pair_params(f.pair);
         let eps = params.eps_v * self.lag_h;
-        let c = params.mu * f.lambda;
-        let (f0, f1_over_y, hess_coef) = if y < eps {
-            (
-                -y * y * y / (3.0 * eps * eps) + y * y / eps + eps / 3.0,
-                -y / (eps * eps) + 2.0 / eps,
-                -1.0 / (eps * eps * y.max(1e-300)),
-            )
-        } else {
-            (y, 1.0 / y, -1.0 / (y * y * y))
-        };
-        // ∂D/∂u = c·f₁(y)/y·u; ∂²D/∂u² = c·[(f₁/y)·I + hess_coef·u uᵀ] (PSD for y ≤ ε and beyond).
-        let gu = [c * f1_over_y * u[0], c * f1_over_y * u[1]];
-        let mut hu = [[c * f1_over_y, 0.0], [0.0, c * f1_over_y]];
-        if y > 0.0 {
-            for a in 0..2 {
-                for b in 0..2 {
-                    hu[a][b] += c * hess_coef * u[a] * u[b];
+        let (energy, gu, hu) = if let Some(ss) = self.pair_stick_slip(f.pair) {
+            let rad = stick_slip_radial(y, eps, ss, self.lag_h);
+            let gu = [
+                f.lambda * rad.tau_over_y * u[0],
+                f.lambda * rad.tau_over_y * u[1],
+            ];
+            let mut hu = [
+                [f.lambda * rad.tau_over_y, 0.0],
+                [0.0, f.lambda * rad.tau_over_y],
+            ];
+            if y > 0.0 {
+                // Use unit direction u / y rather than dividing by y^2 so subnormal |u| ~ 1e-160
+                // never overflows to inf * 0 = NaN.
+                let dir = [u[0] / y, u[1] / y];
+                let diff = f.lambda * rad.radial_psd_minus_tau_over_y;
+                for a in 0..2 {
+                    for b in 0..2 {
+                        hu[a][b] += diff * dir[a] * dir[b];
+                    }
                 }
             }
-        }
+            (f.lambda * rad.d_val, gu, hu)
+        } else {
+            let c = params.mu * f.lambda;
+            let (f0, f1_over_y, hess_coef) = if y < eps {
+                (
+                    -y * y * y / (3.0 * eps * eps) + y * y / eps + eps / 3.0,
+                    -y / (eps * eps) + 2.0 / eps,
+                    -1.0 / (eps * eps * y.max(1e-300)),
+                )
+            } else {
+                (y, 1.0 / y, -1.0 / (y * y * y))
+            };
+            // ∂D/∂u = c·f₁(y)/y·u; ∂²D/∂u² = c·[(f₁/y)·I + hess_coef·u uᵀ] (PSD for y ≤ ε and beyond).
+            let gu = [c * f1_over_y * u[0], c * f1_over_y * u[1]];
+            let mut hu = [[c * f1_over_y, 0.0], [0.0, c * f1_over_y]];
+            if y > 0.0 {
+                for a in 0..2 {
+                    for b in 0..2 {
+                        hu[a][b] += c * hess_coef * u[a] * u[b];
+                    }
+                }
+            }
+            (c * f0, gu, hu)
+        };
         // u = A·x_local with A (2 × 12) = Tᵀ [β₀I β₁I β₂I β₃I].
         let a: [[f64; 12]; 2] =
             std::array::from_fn(|r| std::array::from_fn(|j| f.beta[j / 3] * f.tangent[r][j % 3]));
@@ -1642,7 +2165,7 @@ impl Contact {
                 h[i * 12 + j] = s;
             }
         }
-        (c * f0, g, h)
+        (energy, g, h)
     }
 
     /// The largest fraction α ∈ [0, 1] of the step `p` that keeps every pair's gap positive (additive
@@ -2600,5 +3123,503 @@ mod tests {
                 assert!((0..4).map(|v| g[3 * v + axis]).sum::<f64>().abs() < 1e-12);
             }
         }
+    }
+
+    #[test]
+    fn stick_slip_potential_gradient_and_hessian_calculus() {
+        let ss = StickSlipFriction::new(0.6, 0.3, 0.02).unwrap();
+        let eps_v = 1e-3;
+        let h = 0.01;
+        let eps = eps_v * h;
+        let w = ss.transition_v_m_s * h;
+
+        // C⁰, C¹, C² continuity across the stick/slip boundary y = eps.
+        let delta = 1e-12;
+        let lo = stick_slip_radial(eps - delta, eps, ss, h);
+        let at = stick_slip_radial(eps, eps, ss, h);
+        let hi = stick_slip_radial(eps + delta, eps, ss, h);
+        assert!((lo.d_val - at.d_val).abs() < 1e-12 && (hi.d_val - at.d_val).abs() < 1e-12);
+        let tau_lo = lo.tau_over_y * (eps - delta);
+        let tau_at = at.tau_over_y * eps;
+        let tau_hi = hi.tau_over_y * (eps + delta);
+        assert!((tau_at - ss.mu_s).abs() < 1e-12);
+        assert!((tau_lo - tau_at).abs() < 1e-9 && (tau_hi - tau_at).abs() < 1e-9);
+        assert!(at.radial_eig_exact.abs() < 1e-15);
+        assert!(lo.radial_eig_exact.abs() < 1e-1 && hi.radial_eig_exact.abs() < 1e-3);
+
+        // Exact 2D FD gradient & exact Hessian vs analytic, plus strict PSD projection.
+        let eval_2d = |u: [f64; 2]| {
+            let y = (u[0] * u[0] + u[1] * u[1]).sqrt();
+            let rad = stick_slip_radial(y, eps, ss, h);
+            let g = [rad.tau_over_y * u[0], rad.tau_over_y * u[1]];
+            let mut h_exact = [[rad.tau_over_y, 0.0], [0.0, rad.tau_over_y]];
+            let mut h_psd = [[rad.tau_over_y, 0.0], [0.0, rad.tau_over_y]];
+            if y > 0.0 {
+                let dir = [u[0] / y, u[1] / y];
+                let d_exact = rad.radial_eig_exact - rad.tau_over_y;
+                let d_psd = rad.radial_psd_minus_tau_over_y;
+                for a in 0..2 {
+                    for b in 0..2 {
+                        h_exact[a][b] += d_exact * dir[a] * dir[b];
+                        h_psd[a][b] += d_psd * dir[a] * dir[b];
+                    }
+                }
+            }
+            (rad.d_val, g, h_exact, h_psd)
+        };
+        for &(ux, uy) in &[
+            (0.3 * eps, -0.25 * eps),
+            (0.8 * eps, 0.5 * eps),
+            (eps + 0.7 * w, 0.4 * w),
+            (eps + 6.0 * w, -3.0 * w),
+        ] {
+            let (_, g, h_exact, h_psd) = eval_2d([ux, uy]);
+            let step = 1e-9;
+            for k in 0..2 {
+                let mut up = [ux, uy];
+                let mut um = [ux, uy];
+                up[k] += step;
+                um[k] -= step;
+                let (dp, gp, _, _) = eval_2d(up);
+                let (dm, gm, _, _) = eval_2d(um);
+                let fd_g = (dp - dm) / (2.0 * step);
+                assert!(
+                    (fd_g - g[k]).abs() < 1e-6 * g[k].abs().max(1e-6),
+                    "grad[{k}] at ({ux}, {uy}): fd={fd_g} vs {}",
+                    g[k]
+                );
+                for j in 0..2 {
+                    let fd_h = (gp[j] - gm[j]) / (2.0 * step);
+                    assert!(
+                        (fd_h - h_exact[j][k]).abs() < 1e-5 * h_exact[j][k].abs().max(1.0),
+                        "hess[{j}][{k}] at ({ux}, {uy}): fd={fd_h} vs {}",
+                        h_exact[j][k]
+                    );
+                }
+            }
+            let trace = h_psd[0][0] + h_psd[1][1];
+            let det = h_psd[0][0] * h_psd[1][1] - h_psd[0][1] * h_psd[1][0];
+            assert!(trace >= 0.0 && det >= -1e-12 * trace * trace.max(1.0));
+        }
+
+        // Exact reduction to legacy Coulomb when mu_s == mu_k.
+        let plane = Body::new(
+            vec![
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(1.0, -1.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ],
+            vec![[0, 1, 2]],
+            0.1,
+        )
+        .unwrap();
+        let x0 = vec![
+            Vec3::new(-0.01, -0.01, 9e-4),
+            Vec3::new(0.01, -0.01, 9e-4),
+            Vec3::new(0.0, 0.01, 9e-4),
+        ];
+        let x1: Vec<Vec3> = x0
+            .iter()
+            .map(|p| *p + Vec3::new(5e-4, -2e-4, 0.0))
+            .collect();
+        let mut legacy = Contact::new(plane.clone(), params(), vec![[0, 1, 2]], |a, b| {
+            (x0[a] - x0[b]).norm()
+        });
+        let mut equal_ss = legacy
+            .clone()
+            .with_stick_slip(StickSlipFriction::new(params().mu, params().mu, 0.02).unwrap())
+            .unwrap();
+        legacy.update_lag(&x0, &x0, h);
+        equal_ss.update_lag(&x0, &x0, h);
+        for (fl, fs) in legacy.lag.iter().zip(&equal_ss.lag) {
+            let (el, gl, hl) = legacy.friction_local(fl, &x1);
+            let (es, gs, hs) = equal_ss.friction_local(fs, &x1);
+            assert!((el - es).abs() < 1e-15);
+            for i in 0..12 {
+                assert!((gl[i] - gs[i]).abs() < 1e-15);
+            }
+            for i in 0..144 {
+                assert!((hl[i] - hs[i]).abs() < 1e-12);
+            }
+        }
+        // Tiny subnormal-square slip (|u| = 1e-160 with one axis zero) must stay strictly finite.
+        let x_tiny: Vec<Vec3> = x0
+            .iter()
+            .map(|p| *p + Vec3::new(1e-160, 0.0, 0.0))
+            .collect();
+        for fs in &equal_ss.lag {
+            let (e0, g0, h0) = equal_ss.friction_local(fs, &x0);
+            let (et, gt, ht) = equal_ss.friction_local(fs, &x_tiny);
+            assert!(e0.is_finite() && et.is_finite());
+            assert!(g0.iter().chain(&gt).all(|v| v.is_finite()));
+            assert!(h0.iter().chain(ht.iter()).all(|v| v.is_finite()));
+        }
+    }
+
+    /// KAT: Inclined-plane stick-slip transition (FTX-27e).
+    /// A cloth patch with static friction `mu_s = 0.6` and kinetic friction `mu_k = 0.3`:
+    /// 1. At `tan(theta) = 0.45` (`mu_k < tan(theta) < mu_s`): sticks on the slope, whereas a
+    ///    single-`mu = mu_k` cloth slides downslope.
+    /// 2. At `tan(theta) = 0.75` (`tan(theta) > mu_s`): breaks free and accelerates past a
+    ///    constant-`mu = mu_s` cloth as dynamic friction decays smoothly toward `mu_k`.
+    #[test]
+    fn inclined_plane_stick_slip_kat() {
+        let plane = || {
+            Body::new(
+                vec![
+                    Vec3::new(-1.0, -1.0, 0.0),
+                    Vec3::new(1.0, -1.0, 0.0),
+                    Vec3::new(1.0, 1.0, 0.0),
+                    Vec3::new(-1.0, 1.0, 0.0),
+                ],
+                vec![[0, 1, 2], [0, 2, 3]],
+                0.2,
+            )
+            .unwrap()
+        };
+        let run_slope = |tan_theta: f64, mu: f64, ss: Option<StickSlipFriction>, steps: usize| {
+            let s = 0.04;
+            let rest = vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(s, 0.0),
+                Vec2::new(s, s),
+                Vec2::new(0.0, s),
+            ];
+            let tris = [[0, 1, 2], [0, 2, 3]];
+            let model = crate::ClothModel::new(
+                rest.clone(),
+                &tris,
+                crate::Membrane::orthotropic(2000.0, 2000.0, 0.0, 400.0, 1.0),
+                1e-4,
+                0.2,
+            )
+            .unwrap();
+            let mean_m = model.mass.iter().sum::<f64>() / model.mass.len() as f64;
+            let g_mag = 9.81;
+            let cos_t = 1.0 / (1.0 + tan_theta * tan_theta).sqrt();
+            let sin_t = tan_theta * cos_t;
+            let z0 = 0.001; // thickness 5e-4 + 0.5 * dhat 5e-4
+            let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, z0)).collect();
+            let mut contact_params = ContactParams {
+                dhat: 1e-3,
+                thickness: 5e-4,
+                kappa: 1.0,
+                mu,
+                eps_v: 1e-3,
+            };
+            let policy = AdaptiveBarrierPolicy::default();
+            contact_params.kappa = policy
+                .initial_kappa(mean_m, 2000.0, g_mag * cos_t, contact_params.dhat)
+                .unwrap();
+            let mut solver = crate::Solver::new(
+                model,
+                x0,
+                &[[false; 3]; 4],
+                Vec3::new(0.0, 0.0, -g_mag * cos_t),
+            )
+            .with_contact(plane(), contact_params)
+            .unwrap();
+            if let Some(law) = ss {
+                solver
+                    .contact
+                    .as_mut()
+                    .unwrap()
+                    .set_stick_slip(law)
+                    .unwrap();
+            }
+            solver.friction_rounds = 2;
+            solver.tol = 1e-6;
+            // Settle vertically onto the plane so normal load equals M * g * cos(theta).
+            for _ in 0..8 {
+                let rep = solver.step(0.01).unwrap();
+                assert!(rep.converged);
+            }
+            let x_settled = solver.x.iter().map(|p| p.x).sum::<f64>() / 4.0;
+            solver.v.fill(Vec3::ZERO);
+            solver.gravity = Vec3::new(g_mag * sin_t, 0.0, -g_mag * cos_t);
+            for _ in 0..steps {
+                let rep = solver.step(0.01).unwrap();
+                assert!(rep.converged);
+            }
+            let x_end = solver.x.iter().map(|p| p.x).sum::<f64>() / 4.0;
+            x_end - x_settled
+        };
+
+        let law = StickSlipFriction::new(0.6, 0.3, 0.02).unwrap();
+        // Sub-threshold slope (tan = 0.45 in (0.3, 0.6)): stick-slip holds, pure kinetic slides.
+        let slip_kinetic = run_slope(0.45, 0.3, None, 12);
+        let slip_held = run_slope(0.45, 0.3, Some(law), 12);
+        assert!(
+            slip_kinetic > 2e-3,
+            "pure kinetic friction must slide at tan=0.45 > mu_k=0.3, got {slip_kinetic}"
+        );
+        assert!(
+            slip_held < 1.5e-4 && slip_held < 0.05 * slip_kinetic,
+            "stick-slip must hold below mu_s=0.6: held={slip_held}, kinetic={slip_kinetic}"
+        );
+
+        // Super-threshold slope (tan = 0.75 > mu_s = 0.6): breaks free and outruns constant mu_s.
+        let slip_static_const = run_slope(0.75, 0.6, None, 16);
+        let slip_breakaway = run_slope(0.75, 0.6, Some(law), 16);
+        let slip_kinetic_const = run_slope(0.75, 0.3, None, 16);
+        assert!(
+            slip_breakaway > 1.3 * slip_static_const,
+            "stick-slip breakaway must accelerate past constant mu_s: breakaway={slip_breakaway}, static={slip_static_const}"
+        );
+        assert!(
+            slip_breakaway < slip_kinetic_const,
+            "stick-slip must remain bounded below pure mu_k: breakaway={slip_breakaway}, kinetic={slip_kinetic_const}"
+        );
+    }
+
+    /// KAT: Light (40 g/m² silk) vs heavy (500 g/m² wool) adaptive IPC barrier clearance (FTX-27e).
+    /// Legacy fixed `kappa = 100 N/m` leaves 40 g/m² silk hovering near `dhat`; `AdaptiveBarrierPolicy`
+    /// scales `kappa` physically with fabric mass so both silk and heavy wool settle in the same
+    /// mid-band clearance window, and escalates `kappa` under extreme overload compression.
+    #[test]
+    fn light_and_heavy_fabric_adaptive_barrier_clearance_kat() {
+        let plane = || {
+            Body::new(
+                vec![
+                    Vec3::new(-1.0, -1.0, 0.0),
+                    Vec3::new(1.0, -1.0, 0.0),
+                    Vec3::new(1.0, 1.0, 0.0),
+                    Vec3::new(-1.0, 1.0, 0.0),
+                ],
+                vec![[0, 1, 2], [0, 2, 3]],
+                0.2,
+            )
+            .unwrap()
+        };
+        let settle_sheet = |areal_kg_m2: f64,
+                            tensile_n_m: f64,
+                            adaptive: Option<AdaptiveBarrierPolicy>| {
+            let s = 0.04;
+            let rest = vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(s, 0.0),
+                Vec2::new(s, s),
+                Vec2::new(0.0, s),
+            ];
+            let tris = [[0, 1, 2], [0, 2, 3]];
+            let model = crate::ClothModel::new(
+                rest.clone(),
+                &tris,
+                crate::Membrane::orthotropic(tensile_n_m, tensile_n_m, 0.0, 0.2 * tensile_n_m, 1.0),
+                1e-4,
+                areal_kg_m2,
+            )
+            .unwrap();
+            let mean_m = model.mass.iter().sum::<f64>() / model.mass.len() as f64;
+            let dhat = 1e-3;
+            let thickness = 5e-4;
+            let x0: Vec<Vec3> = rest
+                .iter()
+                .map(|p| Vec3::new(p.x, p.y, thickness + 0.6 * dhat))
+                .collect();
+            let contact_params = ContactParams {
+                dhat,
+                thickness,
+                kappa: 100.0,
+                mu: 0.0,
+                eps_v: 1e-3,
+            };
+            let mut solver =
+                crate::Solver::new(model, x0, &[[false; 3]; 4], Vec3::new(0.0, 0.0, -9.81))
+                    .with_contact(plane(), contact_params)
+                    .unwrap();
+            if let Some(policy) = adaptive {
+                solver
+                    .contact
+                    .as_mut()
+                    .unwrap()
+                    .set_adaptive_barrier(policy, mean_m, tensile_n_m, 9.81)
+                    .unwrap();
+            }
+            solver.tol = 1e-7;
+            for _ in 0..20 {
+                let rep = solver.step(0.02).unwrap();
+                assert!(rep.converged);
+                if let Some(c) = solver.contact.as_mut() {
+                    c.adapt_barrier_stiffness(&solver.x);
+                }
+            }
+            let gap = solver
+                .contact
+                .as_ref()
+                .unwrap()
+                .min_gap(&solver.x, dhat)
+                .unwrap();
+            let kappa = solver.contact.as_ref().unwrap().params.kappa;
+            (solver, gap / dhat, kappa)
+        };
+
+        // Fixed kappa = 100 N/m causes 40 g/m² silk to hover right at the outer edge of dhat.
+        let (_, silk_fixed_frac, _) = settle_sheet(0.04, 400.0, None);
+        assert!(
+            silk_fixed_frac > 0.90,
+            "legacy fixed kappa=100 causes silk hover, got gap/dhat={silk_fixed_frac}"
+        );
+
+        // Adaptive scaling brings both 40 g/m² silk and 500 g/m² wool into the same mid-band window.
+        let policy = AdaptiveBarrierPolicy::default();
+        let (mut silk_solver, silk_frac, silk_kappa) = settle_sheet(0.04, 400.0, Some(policy));
+        let (_, wool_frac, wool_kappa) = settle_sheet(0.50, 4000.0, Some(policy));
+        assert!(
+            ((wool_kappa / silk_kappa) - (0.50 / 0.04)).abs() < 0.25,
+            "kappa must scale with areal density: wool={wool_kappa}, silk={silk_kappa}"
+        );
+        assert!(
+            (0.35..0.65).contains(&silk_frac) && (0.35..0.65).contains(&wool_frac),
+            "both fabrics must settle mid-band: silk={silk_frac}, wool={wool_frac}"
+        );
+        assert!(
+            (silk_frac - wool_frac).abs() < 0.08,
+            "light and heavy fabrics must achieve consistent clearance: silk={silk_frac}, wool={wool_frac}"
+        );
+
+        // Extreme downward overload compresses gap below min_gap_fraction and escalates kappa.
+        silk_solver.gravity = Vec3::new(0.0, 0.0, -9.81 * 50.0);
+        for _ in 0..6 {
+            let rep = silk_solver.step(0.01).unwrap();
+            assert!(rep.converged);
+        }
+        let squeezed = silk_solver
+            .contact
+            .as_ref()
+            .unwrap()
+            .min_gap(&silk_solver.x, 1e-3)
+            .unwrap();
+        assert!(
+            squeezed < policy.min_gap_fraction * 1e-3,
+            "overload must compress below trigger: squeezed={squeezed}"
+        );
+        let escalated = silk_solver
+            .contact
+            .as_mut()
+            .unwrap()
+            .adapt_barrier_stiffness(&silk_solver.x);
+        assert!((escalated - silk_kappa * policy.growth_factor).abs() < 1e-12);
+        for _ in 0..8 {
+            let rep = silk_solver.step(0.01).unwrap();
+            assert!(rep.converged);
+        }
+        let recovered = silk_solver
+            .contact
+            .as_ref()
+            .unwrap()
+            .min_gap(&silk_solver.x, 1e-3)
+            .unwrap();
+        assert!(
+            recovered > squeezed,
+            "escalated kappa must restore clearance: before={squeezed}, after={recovered}"
+        );
+    }
+
+    #[test]
+    fn adaptive_barrier_and_stick_slip_validation_and_serde() {
+        let policy = AdaptiveBarrierPolicy::default();
+        policy.validate().unwrap();
+        let json_p = serde_json::to_value(policy).unwrap();
+        assert_eq!(
+            serde_json::from_value::<AdaptiveBarrierPolicy>(json_p).unwrap(),
+            policy
+        );
+        assert!(
+            serde_json::from_value::<AdaptiveBarrierPolicy>(json!({"unknown_key": 1.0})).is_err()
+        );
+        for bad in [
+            AdaptiveBarrierPolicy {
+                target_gap_fraction: 0.0,
+                ..policy
+            },
+            AdaptiveBarrierPolicy {
+                target_gap_fraction: 1.0,
+                ..policy
+            },
+            AdaptiveBarrierPolicy {
+                min_gap_fraction: 0.6,
+                ..policy
+            },
+            AdaptiveBarrierPolicy {
+                growth_factor: 0.5,
+                ..policy
+            },
+            AdaptiveBarrierPolicy {
+                kappa_min: 10.0,
+                kappa_max: 5.0,
+                ..policy
+            },
+            AdaptiveBarrierPolicy {
+                membrane_floor_scale: f64::NAN,
+                ..policy
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+
+        let ss = StickSlipFriction::new(0.5, 0.3, 0.02).unwrap();
+        let json_s = serde_json::to_value(ss).unwrap();
+        assert_eq!(
+            serde_json::from_value::<StickSlipFriction>(json_s).unwrap(),
+            ss
+        );
+        assert!(
+            serde_json::from_value::<StickSlipFriction>(json!({
+                "mu_s": 0.5, "mu_k": 0.3, "transition_v_m_s": 0.02, "extra": 1
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            StickSlipFriction::new(0.2, 0.4, 0.02).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            StickSlipFriction::new(0.4, -0.1, 0.02).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            StickSlipFriction::new(0.4, 0.2, 0.0).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            StickSlipFriction::new(f64::NAN, 0.2, 0.02)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        // Domain guards for pure evaluators return NaN outside valid domain.
+        assert!(AdaptiveBarrierPolicy::barrier_force_factor(0.0).is_nan());
+        assert!(AdaptiveBarrierPolicy::barrier_force_factor(1.0).is_nan());
+        assert!(AdaptiveBarrierPolicy::barrier_force_factor(f64::NAN).is_nan());
+        assert!(ss.effective_mu(f64::NAN, 1e-3).is_nan());
+        assert!(ss.effective_mu(0.01, 0.0).is_nan());
+
+        // Self stick-slip refuses if self-contact is not enabled.
+        let x = layers(0.002);
+        assert_eq!(
+            self_layers(&x).with_self_stick_slip(ss).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        // Surface materials and uniform stick-slip refuse mutual override in either order.
+        let mats = [SurfaceMaterial {
+            half_thickness_m: 1e-4,
+            friction_body: 0.3,
+        }];
+        let with_mat = self_layers(&x)
+            .with_surface_materials(&x, &[0, 0], &mats, None)
+            .unwrap();
+        assert_eq!(
+            with_mat.with_stick_slip(ss).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        let with_ss = self_layers(&x).with_stick_slip(ss).unwrap();
+        assert_eq!(
+            with_ss
+                .with_surface_materials(&x, &[0, 0], &mats, None)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
     }
 }

@@ -1635,6 +1635,7 @@ pub(crate) fn run_phase_with_subdivision(
                 candidate.reset_acceleration();
             }
             if let Some(contact) = candidate.contact.as_mut() {
+                contact.adapt_barrier_stiffness(&candidate.x);
                 ramp_thickness(contact, &candidate.x, scene.target_thickness);
             }
             let (partition, observations) = candidate.step_subdivided_with(
@@ -1700,15 +1701,25 @@ pub(crate) fn run_phase_with_subdivision(
             frame(k, &scene.positions());
             continue;
         }
-        let thickness = scene.solver.contact.as_ref().map(|c| c.params.thickness);
+        let saved = scene.solver.contact.as_ref().map(|c| {
+            (
+                c.params.thickness,
+                c.params.kappa,
+                c.self_contact_params().map(|p| p.kappa),
+            )
+        });
         if let Some(contact) = scene.solver.contact.as_mut() {
+            contact.adapt_barrier_stiffness(&scene.solver.x);
             ramp_thickness(contact, &scene.solver.x, scene.target_thickness);
         }
         let r: SolveReport = match scene.solver.step(h) {
             Ok(r) => r,
             Err(e) => {
-                if let (Some(c), Some(thickness)) = (&mut scene.solver.contact, thickness) {
+                if let (Some(c), Some((thickness, body_kappa, self_kappa))) =
+                    (&mut scene.solver.contact, saved)
+                {
                     c.params.thickness = thickness;
+                    c.restore_kappas(body_kappa, self_kappa);
                 }
                 return Err(e);
             }
