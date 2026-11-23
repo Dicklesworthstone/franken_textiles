@@ -2386,25 +2386,30 @@ mod tests {
         let motion: motion::Request = serde_json::from_value(json!({
             "schema": "ftx-drape-motion/1",
             "keyframes": [{"time_s": 0.02, "arm_abduction_deg": 37.0}],
-            "intermediate_source_poses": 1,
+            "source_pose_sampling": {"max_step_s": 0.01, "max_segments": 2},
             "max_step_s": 0.01, "max_trials": 16, "max_pairs": 10000, "max_sample_vertices": 10000
         }))
         .unwrap();
         let plain_path = plain.motion_path(&finger_model, &hash, &motion).unwrap();
         let path = authored.motion_path(&finger_model, &hash, &motion).unwrap();
+        assert_eq!(path.source_vertices().len(), 2);
         assert_ne!(path.sha256(), plain_path.sha256());
+        assert_ne!(path.source_vertices()[0], plain_path.source_vertices()[0]);
         let mut mid_req = thumb_req.clone();
         mid_req.arm_abduction_deg = 36.0;
         let mid = FittedBody::prepare(&finger_model, &hash, &mid_req).unwrap();
+        for (actual, expected) in path.source_vertices()[0]
+            .iter()
+            .zip(&mid.collision.vertices)
+        {
+            assert!(
+                (*actual - *expected).norm() < 1e-14,
+                "{actual:?} != {expected:?}"
+            );
+        }
         let mut end_req = thumb_req;
         end_req.arm_abduction_deg = 37.0;
         let end = FittedBody::prepare(&finger_model, &hash, &end_req).unwrap();
-        let expected = motion::Path::new(
-            &motion,
-            authored.body().collision,
-            vec![mid.collision.vertices, end.collision.vertices],
-        )
-        .unwrap();
-        assert_eq!(path.sha256(), expected.sha256());
+        assert_eq!(path.source_vertices()[1], end.collision.vertices);
     }
 }
