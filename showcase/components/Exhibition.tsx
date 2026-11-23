@@ -332,7 +332,7 @@ export default function Exhibition({section}: {section?: string}) {
             <button key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>{k}</button>)}</div></div>
         <div className="cards">{studies.filter(s => filter === "All studies" || s.group === filter).map(s =>
           <article key={s.id} className="card">
-            <div className="thumb"><InlineFilm id={s.id} title={s.title}/><span className="thumb-id mono">Fig. {s.figure}</span>
+            <div className="thumb"><InlineFilm id={s.card} title={s.title}/><span className="thumb-id mono">Fig. {s.figure}</span>
               <button className="card-open" aria-label={"Explore "+s.title} onClick={()=>setItem({study:s,film:false})}><span className="launch"><Arrow diagonal/></span></button></div>
             <button className="card-text" onClick={()=>setItem({study:s,film:false})}><span className="mono">{s.detail}</span><h3>{s.title}</h3><p>{s.description}</p></button>
             <GarmentPatterns exhibit={s.garment}/>
