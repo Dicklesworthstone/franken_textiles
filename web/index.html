@@ -73,6 +73,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   <header class="wb-hero">
     <div class="wb-intro"><h1>Pattern Workbench</h1>
       <p>Draft a garment to measurements, walk its seams and print the pieces at full scale.</p>
+      <p id="fullHandExample" hidden>The 355 mm bolero starts from a synthetic 92 cm body. Load the pinned Anny model to test the full-hand drape.</p>
       <a class="wb-jump" href="#garment">Choose a garment <span aria-hidden="true">↓</span></a></div>
     <figure><img src="atelier-assets/drafting.webp" width="900" height="550" alt="Copper linen, paper pattern pieces and tailor’s shears on the cutting table"><figcaption>The cutting table</figcaption></figure>
   </header>
@@ -340,16 +341,26 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
 (() => {
   const PKG = new URL("pkg/", location.href).href;          // wasm-bindgen output (tools/build_web.sh)
   const $ = (id) => document.getElementById(id);
+  const patternQuery = new URL(location.href).searchParams;
+  let startExample = !patternQuery.has("blank") && patternQuery.get("sample") !== "blank" && ![...patternQuery.keys()].some(key => /(?:Import|Return)$/.test(key));
+  const fullHandExample = startExample && patternQuery.get("sample") === "full-hand-bolero";
   const store = {
-    get(k, d) { try { const v = localStorage.getItem("fab-wb-" + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
-    set(k, v) { try { localStorage.setItem("fab-wb-" + k, JSON.stringify(v)); } catch (e) { /* private window */ } },
+    get(k, d) {
+      if (fullHandExample) return d;
+      try {
+        const value = localStorage.getItem("fab-wb-" + k);
+        return value === null ? d : JSON.parse(value);
+      } catch (e) { return d; }
+    },
+    set(k, v) {
+      if (fullHandExample) return;
+      try { localStorage.setItem("fab-wb-" + k, JSON.stringify(v)); } catch (e) { /* private window */ }
+    },
   };
   let info = {}, program = store.get("program", "zouave_bolero"), fields = [], urls = [], ready = false;
   let foldable = false, bodyLoaded = false, folding = false, dead = false;
   let bodyCheckable = false, bodyChecking = false, bodyCheckRequest = 0, bodyCheckUrls = [];
   let bodyFitText = null, bodyFitReady = true, bodyFitRead = 0;
-  const patternQuery = new URL(location.href).searchParams;
-  let startExample = !patternQuery.has("blank") && patternQuery.get("sample") !== "blank" && ![...patternQuery.keys()].some(key => /(?:Import|Return)$/.test(key));
   let automaticRound = false;
   let bodyFitToken = patternQuery.get("bodyFitImport"), bodyImportRead = 0, requestBodyImport = null;
   let receivedBodyModel = null, manualBodyModel = null, receivedBodyFit = null, bodyImportProblem = null;
@@ -1074,6 +1085,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       info = msg.info; ready = true;
       if (!(program in info) && program !== "audit") program = "zouave_bolero";
       renderPrograms(); onProgram();
+      if (fullHandExample) {
+        $("style").value = JSON.stringify({ sleeve_extra: 35, cuff_ease: 59 }, null, 1);
+        $("drapeHands").value = "full";
+        setThumbPose({
+          left_rotation_vector_rad: [0.11641167, -0.010614, -0.12960467],
+          right_rotation_vector_rad: [0.11641167, 0.010614, 0.12960467],
+        });
+        setTimeSubdivision({ max_halvings: 8, max_trials: 4096 });
+        $("fullHandExample").hidden = false;
+      }
       $("go").disabled = false; $("go").textContent = "Draft and check";
       status(`Ready (${msg.version}; ${msg.dxf}).`);
       requestBodyImport?.();requestMaterialImport?.();

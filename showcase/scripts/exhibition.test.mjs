@@ -183,6 +183,53 @@ test("each gallery garment has a downloadable full-size sewing PDF", async () =>
   } finally {await page.close();}
 });
 
+test("the full-hand bolero links to the matching editable draft and keeps strain at the endpoint", async () => {
+  const page = await browser.newPage({ ...opts, reducedMotion: "reduce" });
+  const walkthrough = new URL("/how-it-works/#full-hand-bolero", site).href;
+  try {
+    await page.goto(walkthrough);
+    await page.getByRole("link", { name: "Replay the cut in 3D" }).click();
+    await page.locator("#stage canvas").waitFor();
+    assert.match(await page.locator("#phase").innerText(), /Flat pattern/);
+    const strain = page.getByRole("radio", { name: "strain at the end" });
+    const seams = page.getByRole("radio", { name: "seam colours" });
+    const frame = page.getByRole("slider", { name: "frame" });
+    await strain.check();
+    assert.match(await page.locator("#phase").innerText(), /Draped/);
+    assert.equal(await frame.inputValue(), await frame.getAttribute("max"));
+    assert.equal(await page.locator("#play").innerText(), "Play");
+    await frame.press("Home");
+    assert.ok(await seams.isChecked());
+    await strain.check();
+    await page.locator("#play").click();
+    assert.ok(await seams.isChecked());
+
+    await page.goto(walkthrough);
+    await page.evaluate(() => {
+      localStorage.setItem("fab-wb-program", JSON.stringify("fez"));
+      localStorage.setItem("fab-wb-stature", JSON.stringify("116"));
+      localStorage.setItem("fab-wb-bodyMode", JSON.stringify("tape"));
+    });
+    await page.getByRole("link", { name: "Open this draft in Pattern Workbench" }).click();
+    await page.locator("#draftOverview").waitFor({ timeout: 60000 });
+    assert.equal(await page.locator("#resStatus").innerText(), "CONVERGED");
+    assert.equal(await page.locator("#stature").inputValue(), "92");
+    assert.equal(await page.locator("#drapeHands").inputValue(), "full");
+    assert.ok(await page.locator("#splitTimeSteps").isChecked());
+    assert.deepEqual(JSON.parse(await page.locator("#drapeThumbPose").inputValue()), {
+      left_rotation_vector_rad: [0.11641167, -0.010614, -0.12960467],
+      right_rotation_vector_rad: [0.11641167, 0.010614, 0.12960467],
+    });
+    const sleeve = page.getByRole("row", { name: /Sleeve length over arm length/ });
+    const cuff = page.getByRole("row", { name: /Sleeve hem passes the hand/ });
+    assert.equal(await sleeve.locator("td").nth(2).innerText(), "355");
+    assert.equal(await cuff.locator("td").nth(2).innerText(), "201.7");
+    assert.ok(await page.locator("#draftPdf").isVisible());
+    assert.deepEqual(await page.evaluate(() => ["program", "stature", "bodyMode"]
+      .map(key => JSON.parse(localStorage.getItem("fab-wb-" + key)))), ["fez", "116", "tape"]);
+  } finally { await page.close(); }
+});
+
 test("visible preview plays, preserves a deliberate pause, and leaves the screen quiet", async () => {
   const p = await browser.newPage({ ...opts, reducedMotion:"no-preference" });
   try {

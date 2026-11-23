@@ -102,6 +102,7 @@ export default function HowItWorks() {
         <p>The simulation used default cloth properties. A sewn sample is still needed to assess fit.</p>
         <div className="ft-hero-actions">
           <a className="primary" href="/fittings/bolero-full-hand-replay.html">Replay the cut in 3D</a>
+          <a className="ft-text-link" href="/workbench/?sample=full-hand-bolero">Open this draft in Pattern Workbench</a>
           <a className="ft-text-link" href="/fittings/bolero-full-hand-A4.pdf" download>Download this full-scale A4 pattern</a>
         </div>
       </div>

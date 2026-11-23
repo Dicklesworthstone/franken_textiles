@@ -1025,7 +1025,9 @@ A port replaces this file with a portable scene record holding the same content 
 jsdelivr even when the HTML is opened locally. An offline Chromium run of its generated page
 requests both CDN modules and never creates a canvas. Rust embeds the same pinned Three.js
 0.160.0 and OrbitControls modules, plus their MIT notice, as data-URL imports in each generated
-page. The payload, axes, playback and controls remain as specified; HTML bytes and sizes change.
+page. HTML bytes and sizes change. In the native viewer, the camera frames the board and dressed form
+separately for contact replays. Choosing endpoint strain pauses and selects the final frame.
+Moving away from that frame restores seam colours. The positions and strain values come from the recorded solve.
 The upstream modules and hashes are recorded in `ftx-drape/CONTRACT.md`. Offline rendering and
 controls must pass through `tools/check_web.cjs --viewer HTML` without HTTP(S) requests.
 

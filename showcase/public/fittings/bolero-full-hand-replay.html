@@ -109,7 +109,11 @@ try {
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(D.triangles).buffer), 1));
   const colours = Object.fromEntries(Object.entries(D.colours).map(([k, s]) => [k, new THREE.BufferAttribute(bytes(s), 3, true)]));
-  geo.setAttribute("color", colours.seam_rgb || Object.values(colours)[0]);
+  const seamColour = colours.seam_rgb || Object.values(colours)[0];
+  const seamChoice = document.querySelector('input[value="seam_rgb"]');
+  const strainChoice = document.querySelector('input[value="strain_rgb"]');
+  strainChoice.disabled = !colours.strain_rgb;
+  geo.setAttribute("color", seamColour);
   const cloth = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85 }));
 
   const scene = new THREE.Scene();
@@ -206,6 +210,10 @@ try {
   let frame = 0;
   function setFrame(f) {
     frame = Math.max(0, Math.min(F - 1, Math.round(f)));
+    if (frame < F - 1 && strainChoice.checked) {
+      seamChoice.checked = true;
+      geo.setAttribute("color", seamColour);
+    }
     const o = frame * V * 3;
     const physical = solved && frame >= contact.first_physical;
     const start = physical ? (frame - contact.first_physical) * V * 3 : 0;
@@ -226,18 +234,26 @@ try {
     $("count").textContent = `${frame + 1} / ${F}`;
   }
   $("frame").max = F - 1;
-  $("frame").addEventListener("input", (e) => { playing = false; $("play").textContent = "Play"; setFrame(+e.target.value); });
   // reduced motion: open paused on the board, the visitor presses Play
   let playing = !matchMedia("(prefers-reduced-motion: reduce)").matches, clock = 0, hold = 0, last = performance.now();
+  function pause() {
+    playing = false;
+    clock = hold = 0;
+    $("play").textContent = "Play";
+  }
+  $("frame").addEventListener("input", (e) => { pause(); setFrame(+e.target.value); });
   $("play").textContent = playing ? "Pause" : "Play";
   $("play").addEventListener("click", () => {
     playing = !playing;
     $("play").textContent = playing ? "Pause" : "Play";
     if (playing && frame >= F - 1) { setFrame(0); clock = 0; }
   });
-  document.querySelectorAll("input[name=colour]").forEach((el) => el.addEventListener("change", () => {
-    geo.setAttribute("color", colours[el.value] || colours.seam_rgb);
-  }));
+  seamChoice.addEventListener("change", () => geo.setAttribute("color", seamColour));
+  strainChoice.addEventListener("change", () => {
+    pause();
+    setFrame(F - 1);
+    geo.setAttribute("color", colours.strain_rgb);
+  });
   $("showBody").addEventListener("change", () => setFrame(frame));
   setFrame(0);
 
@@ -258,7 +274,7 @@ try {
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
-  window.__fold = { frames: F, setFrame, pause: () => { playing = false; $("play").textContent = "Play"; } };   // for tests
+  window.__fold = { frames: F, setFrame, pause };   // for tests
   document.body.dataset.ready = "1";
 } catch (e) {
   $("error").textContent = "Could not show the fold-up: " + e.message;
