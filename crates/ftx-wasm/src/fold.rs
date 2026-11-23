@@ -3,8 +3,9 @@
 //! fit report), with the body model read from bytes the page was given and the fold-up viewer page as text.
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, HandCollider, Legs, Pose, SkinningMode, TAPE_FIELDS, TapeFit,
-    Wearer, clothing_skin_with_hands, fit_tape, pose_deltas, skin_mesh, tape_targets,
+    AnnyData, AnnyModel, BodyFrames, DEFAULT_POSE_AUDIT_PAIR_BUDGET, HandCollider, Legs, Pose,
+    SkinningMode, TAPE_FIELDS, TapeFit, ThumbPose, Wearer, clothing_skin_with_hands, fit_tape,
+    pose_deltas, pose_deltas_with_thumbs, skin_mesh, tape_targets,
 };
 use ftx_drape::{
     run::{DrapeBody, DrapeOptions, StaticEquilibriumOptions, drape, viewer},
@@ -229,6 +230,9 @@ pub struct FoldSettings {
     /// Hand collider cut (`"wrist"` default reference cap; `"palm"`, `"knuckle"`, or `"full"` opt-in sleeve colliders).
     #[serde(default, skip_serializing_if = "hand_collider_is_wrist")]
     pub hand_collider: HandCollider,
+    /// Optional source-local left/right thumb-root rotation vectors in radians.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumb_pose: Option<ThumbPose>,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
     /// Optional nominal step duration in seconds (omitted when using the default `1/24 s`).
@@ -267,6 +271,7 @@ impl Default for FoldSettings {
             leg_fraction: 1.0,
             skinning: SkinningMode::LinearBlend,
             hand_collider: HandCollider::Wrist,
+            thumb_pose: None,
             max_settle_steps: 0,
             step_s: None,
             sew_steps: None,
@@ -388,6 +393,7 @@ fn fold_on_source(
         leg_fraction,
         skinning,
         hand_collider,
+        thumb_pose,
         max_settle_steps,
         step_s,
         sew_steps,
@@ -404,6 +410,9 @@ fn fold_on_source(
     pose.legs = legs;
     pose.leg_fraction = leg_fraction;
     pose.validate().map_err(m)?;
+    if let Some(thumbs) = thumb_pose {
+        thumbs.validate().map_err(m)?;
+    }
     let pat = Pattern::new(pattern.clone());
     ftx_drape::garment::simulation_scope(&pat).map_err(m)?;
     if source.is_none() && !measurements["wearer"]["age_months"].is_number() {
@@ -478,6 +487,9 @@ fn fold_on_source(
     if !skinning.is_lbs() {
         description["skinning"] = json!(skinning);
     }
+    if let Some(thumbs) = thumb_pose {
+        description["thumb_pose"] = json!(thumbs);
+    }
     if source.is_none() && (arm_abduction_deg != Pose::A_POSE_DEG || !hand_collider.is_wrist()) {
         description["pose"] = json!(pose_line(arm_abduction_deg));
     }
@@ -491,14 +503,40 @@ fn fold_on_source(
         description["nappy_occupancy"] = occupied.description;
     }
     let rest_skin = clothing_skin_with_hands(model, &rest.vertices, hand_collider).map_err(m)?;
+    let deltas = match thumb_pose {
+        Some(thumbs) => pose_deltas_with_thumbs(model, &rest, &pose, 1.0, &thumbs).map_err(m)?,
+        None => pose_deltas(model, &rest, &pose, 1.0).map_err(m)?,
+    };
     let posed = model
-        .pose_with_skinning(
-            &rest,
-            &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?,
-            skinning,
-        )
+        .pose_with_skinning(&rest, &deltas, skinning)
         .map_err(m)?;
     let skin = clothing_skin_with_hands(model, &posed.vertices, hand_collider).map_err(m)?;
+    let authored_hand_surface = thumb_pose
+        .filter(|thumbs| *thumbs != ThumbPose::default())
+        .map(|_| {
+            if hand_collider == HandCollider::Full {
+                ftx_drape::collider::audit_surface(
+                    &skin.vertices,
+                    &skin.triangles,
+                    DEFAULT_POSE_AUDIT_PAIR_BUDGET,
+                )
+            } else {
+                clothing_skin_with_hands(model, &posed.vertices, HandCollider::Full).and_then(
+                    |full_hands| {
+                        ftx_drape::collider::audit_surface(
+                            &full_hands.vertices,
+                            &full_hands.triangles,
+                            DEFAULT_POSE_AUDIT_PAIR_BUDGET,
+                        )
+                    },
+                )
+            }
+        })
+        .transpose()
+        .map_err(m)?;
+    if let Some(audit) = authored_hand_surface {
+        description["authored_hand_surface_pairs_tested"] = json!(audit.pairs_tested);
+    }
     let full = skin_mesh(&posed.vertices, &model.data().faces).map_err(m)?;
     let frames = BodyFrames::new(model, &posed).map_err(m)?;
     let body = DrapeBody {
@@ -679,6 +717,41 @@ mod tests {
         let mut invalid = default;
         invalid["hand_collider"] = json!("mitten");
         assert!(serde_json::from_value::<FoldSettings>(invalid).is_err());
+    }
+
+    #[test]
+    fn configured_fold_retains_opt_in_thumb_pose_and_validates_bounds() {
+        let default = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(default.get("thumb_pose").is_none());
+        let parsed_default: FoldSettings = serde_json::from_value(default.clone()).unwrap();
+        assert_eq!(parsed_default.thumb_pose, None);
+
+        let thumbs = ThumbPose {
+            left_rotation_vector_rad: [0.15, 0.0, -0.2],
+            right_rotation_vector_rad: [0.15, 0.0, 0.2],
+        };
+        let mut configured = default.clone();
+        configured["thumb_pose"] = json!(thumbs);
+        let parsed: FoldSettings = serde_json::from_value(configured.clone()).unwrap();
+        assert_eq!(parsed.thumb_pose, Some(thumbs));
+        parsed.thumb_pose.unwrap().validate().unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), configured);
+
+        let mut unknown = default.clone();
+        unknown["thumb_pose"] = json!({
+            "left_rotation_vector_rad": [0.0, 0.0, 0.0],
+            "right_rotation_vector_rad": [0.0, 0.0, 0.0],
+            "extra": 1
+        });
+        assert!(serde_json::from_value::<FoldSettings>(unknown).is_err());
+
+        let mut out_of_range = default;
+        out_of_range["thumb_pose"] = json!({
+            "left_rotation_vector_rad": [2.0, 2.0, 2.0],
+            "right_rotation_vector_rad": [0.0, 0.0, 0.0]
+        });
+        let parsed_bad: FoldSettings = serde_json::from_value(out_of_range).unwrap();
+        assert!(parsed_bad.thumb_pose.unwrap().validate().is_err());
     }
 
     #[test]
