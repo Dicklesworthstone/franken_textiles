@@ -120,10 +120,22 @@ export default function HowItWorks() {
       <div className="ft-block-head"><p className="kicker">A refused start</p><h2>When the sleeves cross.</h2>
         <p>One bolero cut on the same synthetic 54 cm chest, with both arms raised to 90°.</p></div>
       <div className="ft-prose">
-        <a className="ft-visual-frame" href="/fittings/bolero-raised-start.png"><img src="/fittings/bolero-raised-start.png" width="2000" height="683"
-          loading="lazy" alt="Two back views of the bolero, with a yellow contact mark at the right shoulder of the refused start. The flat back-panel outlines coincide."/></a>
-        <p>Six pairs of cloth triangles crossed before sewing began. Picking a marked pixel on the back led to the right armhole in the flat pattern. Moving the five cut pieces 30 mm along their starting axes let the sleeves clear the jacket. Their cutting lines stayed in the same place.</p>
-        <p>The revised drape passed its contact checks. With the arms raised, the bolero still rode up 28 mm and the chest fabric stretched by 1.6% on average. The separate flat-pattern check remained open in both rounds.</p>
+        <div className="ft-fitting-wide">
+          <figure>
+            <img src="/fittings/raised-start-refused.webp" width="1200" height="600" loading="lazy"
+              alt="The bolero from behind with both arms raised, as placed before sewing. A yellow patch at the right armhole marks where the sleeve crosses the back."/>
+            <figcaption><strong>First start · refused</strong>The pieces as placed before sewing. Yellow: the
+              right sleeve crossing the back at the armhole.</figcaption>
+          </figure>
+          <figure>
+            <img src="/fittings/raised-start-revised.webp" width="1200" height="600" loading="lazy"
+              alt="The bolero from behind with both arms raised after sewing and hanging, with folds below the collar where the raised arms pull the back up."/>
+            <figcaption><strong>Pieces started 25 mm further · sewn</strong>The same cut, started further
+              along each piece&rsquo;s axis, sewn and hung with the arms up.</figcaption>
+          </figure>
+        </div>
+        <p>Before sewing began, the right sleeve crossed the back panel, so the solver refused to start. Picking a marked pixel on the back led to the right armhole in the flat pattern. Starting the five cut pieces 25 mm further along their axes let the sleeves clear the jacket. Their cutting lines stayed in the same place.</p>
+        <p>The revised drape passed its contact checks with no warnings. With the arms raised, the back and front hems rode up 24 to 31 mm. The separate flat-pattern check remained open in both rounds.</p>
         <div className="ft-hero-actions"><a className="ft-text-link" href="/patterns/bolero.pdf" download>Print this bolero at actual size</a>
           <a className="ft-text-link" href="/exhibits/poses/bolero-start.json" download>Download the revised placements</a>
           <a className="ft-text-link" href="/sections/studies/?chest=54&arm=90&surface=cloth#drape-room">Turn the raised-arm bolero</a></div>

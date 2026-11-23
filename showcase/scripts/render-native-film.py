@@ -157,14 +157,20 @@ void main() {
 """
 
 class Surface:
-    def __init__(self, ctx, program, positions, faces, uv, colours, depth_shader=None):
+    """A mesh on the GPU. `detail`, when given, is two numbers per vertex for the studio shader (each
+    vertex's distance on the flat pattern to the nearest seam and to the nearest cut edge); a program
+    without that input (the trouser comparison films' shader) is used without it."""
+    def __init__(self, ctx, program, positions, faces, uv, colours, depth_shader=None, detail=None):
         self.faces = faces.astype(np.int32)
-        self.vertices = np.column_stack((positions, np.zeros_like(positions), uv, colours)).astype("f")
+        columns = [positions, np.zeros_like(positions), uv, colours] + ([detail] if detail is not None else [])
+        self.vertices = np.column_stack(columns).astype("f")
         self.buffer = ctx.buffer(reserve=self.vertices.nbytes, dynamic=True)
         self.indices = ctx.buffer(self.faces.tobytes())
-        self.vao = ctx.vertex_array(program, [(self.buffer, "3f 3f 2f 3f", "position", "normal", "uv", "colour")],
-                                    self.indices)
-        self.depth = (ctx.vertex_array(depth_shader, [(self.buffer, "3f 32x", "position")], self.indices)
+        layout = ("3f 3f 2f 3f 2f", "position", "normal", "uv", "colour", "detail") if detail is not None \
+            else ("3f 3f 2f 3f", "position", "normal", "uv", "colour")
+        self.vao = ctx.vertex_array(program, [(self.buffer, *layout)], self.indices)
+        stride = (12 if detail is not None else 10) * 4 - 12
+        self.depth = (ctx.vertex_array(depth_shader, [(self.buffer, f"3f {stride}x", "position")], self.indices)
                       if depth_shader is not None else None)
         self.update(positions)
 
@@ -179,7 +185,40 @@ class Surface:
         self.buffer.write(self.vertices.tobytes())
 
     def colour(self, colours):
-        self.vertices[:, 8:] = colours
+        self.vertices[:, 8:11] = colours
+
+
+def construction_detail(flat, sewn, faces, panels):
+    """Each vertex's distance on the flat pattern (m) to the nearest sewn seam and to the nearest cut edge
+    of its own piece, capped at 8 cm. The studio shader draws the seams and finished edges from these.
+
+    A seam is found in the sewn state: the solver welds a seam's two sides to one position and the mesh
+    keeps both, so a rim edge whose two ends each have another rim vertex on them is sewn. Every other
+    rim edge is a cut edge (a hem, a neckline, a front edge)."""
+    edges = np.sort(np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]), axis=1)
+    unique, uses = np.unique(edges, axis=0, return_counts=True)
+    rim = unique[uses == 1]
+    on_rim = np.unique(rim)
+    keys = np.round(sewn[on_rim] / 0.0005).astype(np.int64)
+    _, inverse, shared = np.unique(keys, axis=0, return_inverse=True, return_counts=True)
+    joined = np.zeros(len(sewn), bool)
+    joined[on_rim[shared[inverse.ravel()] > 1]] = True
+    both = joined[rim].all(axis=1)
+    seam, cut = rim[both], rim[~both]
+    out = np.full((len(flat), 2), 0.08, "f")
+    ranges = list(panels.values()) if isinstance(panels, dict) else [(0, len(flat))]
+    for start, end in ranges:
+        points = flat[start:end]
+        for column, segments in ((0, seam), (1, cut)):
+            own = segments[((segments >= start) & (segments < end)).all(axis=1)]
+            best = np.full(len(points), 0.08)
+            for k in range(0, len(own), 256):
+                a = flat[own[k:k+256, 0]]
+                d = flat[own[k:k+256, 1]] - a
+                t = np.clip(((points[:, None] - a[None]) * d[None]).sum(-1) / np.maximum((d * d).sum(-1), 1e-18)[None], 0, 1)
+                best = np.minimum(best, np.linalg.norm(points[:, None] - (a[None] + t[..., None] * d[None]), axis=-1).min(axis=1))
+            out[start:end, column] = best
+    return out
 
 
 def view(points, i, resting=False, crown=False):
@@ -355,6 +394,7 @@ in vec3 position;
 in vec3 normal;
 in vec2 uv;
 in vec3 colour;
+in vec2 detail;
 uniform mat3 axes;
 uniform vec3 centre;
 uniform vec2 half_extent;
@@ -366,6 +406,7 @@ out vec3 view_n;
 out vec2 surface_uv;
 out vec3 base;
 out vec3 shadow_uv;
+out vec2 construction;
 void main() {
     vec3 local = axes * (position - centre);
     gl_Position = vec4(local.xy / half_extent, -local.z / (8.0 * half_extent.x), 1.0);
@@ -373,6 +414,7 @@ void main() {
     view_n = axes * normal;
     surface_uv = uv;
     base = colour;
+    construction = detail;
     vec3 lit = light_axes * (position - light_centre) / light_extent;
     shadow_uv = vec3(lit.xy, -lit.z) * 0.5 + 0.5;
 }
@@ -388,11 +430,14 @@ uniform bool ground;
 uniform float ground_shadow;
 uniform bool cloth;
 uniform vec3 key;
+// How much of the sewing detail shows: none on the flat cut pieces, all once they are sewn.
+uniform float sewing;
 in vec3 n;
 in vec3 view_n;
 in vec2 surface_uv;
 in vec3 base;
 in vec3 shadow_uv;
+in vec2 construction;
 layout(location = 0) out vec4 pixel;
 layout(location = 1) out vec4 surface;
 """ + STUDIO + """
@@ -443,6 +488,19 @@ void main() {
     if (fabric_mix > 0.0) {
         vec3 swatch = pow(texture(cloth_image, surface_uv / fabric_pitch).rgb, vec3(2.2));
         colour = fabric_mix >= 1.0 ? swatch : mix(base, base * swatch, fabric_mix);
+    }
+    if (cloth && sewing > 0.0) {
+        // A sewn seam is a shallow ditch with a row of topstitching 5 mm beside it; a cut edge is turned
+        // under, thicker and a little shaded, and stitched down 12 mm in. Distances are on the flat pattern,
+        // in metres; the line widths follow the pixel footprint so they stay crisp at any zoom.
+        float seamWidth = max(fwidth(construction.x), 0.00012);
+        float ditch = 1.0 - smoothstep(0.0, 0.0013 + seamWidth, construction.x);
+        float topstitch = 1.0 - smoothstep(0.00032, 0.00032 + seamWidth, abs(construction.x - 0.005));
+        float edgeWidth = max(fwidth(construction.y), 0.00012);
+        float turned = 1.0 - smoothstep(0.0, 0.0022 + edgeWidth, construction.y);
+        float hemstitch = 1.0 - smoothstep(0.00032, 0.00032 + edgeWidth, abs(construction.y - 0.012));
+        colour *= 1.0 - sewing * (0.36 * ditch + 0.24 * turned);
+        colour = mix(colour, colour * 1.32 + 0.012, sewing * 0.5 * max(topstitch, hemstitch));
     }
     vec3 lit = colour * light;
     if (cloth) {
@@ -600,7 +658,8 @@ def render(args):
     finish["surface_image"].value = 3
     finish["depth_image"].value = 4
     # the cut pieces are shown in their own cloth from the first frame
-    cloth = Surface(ctx, shading, recorded[0], faces, recorded[0][:, [0, 2]], cloth_colours, depth)
+    cloth = Surface(ctx, shading, recorded[0], faces, recorded[0][:, [0, 2]], cloth_colours, depth,
+                    detail=construction_detail(recorded[0], recorded[-1], faces, panels))
     marks = ctx.program(vertex_shader=MARK_VERTEX, fragment_shader=STUDIO_MARK_FRAGMENT)
     mark_buffer = ctx.buffer(reserve=max(1, len(faces))*6*12, dynamic=True)
     marks_vao = ctx.vertex_array(marks, [(mark_buffer, "3f", "position")])
@@ -763,6 +822,8 @@ def render(args):
                         model.vao.render()
                 shading["fabric_mix"].value = cloth_mix
                 shading["cloth"].value = True
+                # The stitching appears as the seams close: none while the pieces lie flat.
+                shading["sewing"].value = 0.0 if staging else float(SOURCE["ease"]((i - 61) / 14))
                 cloth.vao.render()
                 if i <= 12:
                     mark(points[boundary], (.19, .16, .14), width=2)
