@@ -266,6 +266,16 @@ CHROMIUM_EXECUTABLE=/path/to/chrome node scripts/render-hussar.mjs http://localh
 sh scripts/render-wardrobe-reel.sh /path/to/new-reel
 ```
 
+The stills on the home page's lab cards and beside each entry of the header's index are captured from
+the served site, one exhibit stage at a time, at each exhibit's defaults:
+
+```sh
+FTX_STUDIO_URL=http://localhost:3000 CHROMIUM_EXECUTABLE=/path/to/chrome node scripts/render-exhibit-cards.mjs /path/to/new-stills
+```
+
+Look at the files, then copy `cards/` and `index/` into `public/media/`. An exhibit added to
+`components/site/links.ts` needs a `thumb` there and a line in the script's `captures` or `stills`.
+
 The [ranked exhibit ideas](../.beads/showcase-ideas.jsonl) include acceptance checks and dependencies.
 The next garment studies are a wrap skirt with adjustable overlap, a period waistcoat with working
 pocket details, and a second checked sundress draft that corrects insufficient ease.
