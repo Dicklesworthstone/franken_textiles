@@ -246,8 +246,19 @@ impl Instance {
                 ctrl[0] - q
             };
             let n = d.norm();
-            if n > 1e-9 {
-                return Ok(d / n);
+            if n.is_finite() {
+                if n > 1e-9 {
+                    return Ok(d / n);
+                }
+            } else {
+                let s = d.x.abs().max(d.y.abs());
+                if s.is_finite() && s > 0.0 {
+                    let u = Vec2::new(d.x / s, d.y / s);
+                    let un = u.norm();
+                    if un.is_finite() && un > 0.0 {
+                        return Ok(u / un);
+                    }
+                }
             }
         }
         Ok(Vec2::new(1.0, 0.0))
@@ -332,7 +343,8 @@ pub fn piece_instances(piece: &Piece, piece_index: usize) -> Result<Vec<Instance
                     .ok_or_else(|| PyError::Key(v.to_string()))
             };
             let (pa, pb) = (get(&a)?, get(&b)?);
-            if !pa.is_finite() || !pb.is_finite() || (pb - pa).norm() <= 0.0 {
+            let fold_len = (pb - pa).norm();
+            if !pa.is_finite() || !pb.is_finite() || !fold_len.is_finite() || fold_len <= 0.0 {
                 return Err(PyError::Value(format!(
                     "{pid}: fold edge {} must have finite, distinct endpoints",
                     py::repr_str(fold)
@@ -360,7 +372,15 @@ pub fn piece_instances(piece: &Piece, piece_index: usize) -> Result<Vec<Instance
             let mut nv = piece.vertices.clone();
             for (v, p) in piece.vertices.iter() {
                 if !on_line(v) {
-                    nv.insert(&format!("{v}.L"), reflect_across(p, pa, pb));
+                    let reflected = reflect_across(p, pa, pb);
+                    if !reflected.is_finite() {
+                        return Err(PyError::Value(format!(
+                            "{pid}: reflected vertex {} across fold edge {} is not finite",
+                            py::repr_str(v),
+                            py::repr_str(fold)
+                        )));
+                    }
+                    nv.insert(&format!("{v}.L"), reflected);
                 }
             }
             Instance {
@@ -501,5 +521,55 @@ mod physical_side_tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("distinct endpoints"), "{err}");
+
+        let overflow_fold: Piece = serde_json::from_value(json!({
+            "id": "fold_overflow",
+            "cut": {"qty": 1, "on_fold": "left"},
+            "vertices": {"a": [0, -1e200], "b": [50, -1e200], "c": [50, 1e200], "d": [0, 1e200]},
+            "edges": [
+                {"id": "bottom", "from": "a", "to": "b"},
+                {"id": "right", "from": "b", "to": "c"},
+                {"id": "top", "from": "c", "to": "d"},
+                {"id": "left", "from": "d", "to": "a"}
+            ]
+        }))
+        .unwrap();
+        let err = piece_instances(&overflow_fold, 0).unwrap_err().to_string();
+        assert!(err.contains("distinct endpoints"), "{err}");
+
+        let overflow_reflect: Piece = serde_json::from_value(json!({
+            "id": "reflect_overflow",
+            "cut": {"qty": 1, "on_fold": "left"},
+            "vertices": {"a": [0, 0], "b": [1e308, 1e308], "c": [1e308, 10], "d": [0, 10]},
+            "edges": [
+                {"id": "bottom", "from": "a", "to": "b"},
+                {"id": "right", "from": "b", "to": "c"},
+                {"id": "top", "from": "c", "to": "d"},
+                {"id": "left", "from": "d", "to": "a"}
+            ]
+        }))
+        .unwrap();
+        let err = piece_instances(&overflow_reflect, 0)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not finite"), "{err}");
+
+        let huge_chord: Piece = serde_json::from_value(json!({
+            "id": "huge_chord",
+            "cut": {"qty": 1},
+            "vertices": {"a": [0, 0], "b": [3e200, 4e200], "c": [0, 4e200]},
+            "edges": [
+                {"id": "diag", "from": "a", "to": "b"},
+                {"id": "top", "from": "b", "to": "c"},
+                {"id": "left", "from": "c", "to": "a"}
+            ]
+        }))
+        .unwrap();
+        let inst = &piece_instances(&huge_chord, 0).unwrap()[0];
+        let t = inst.edge_tangent("diag", End::Start).unwrap();
+        assert!(
+            (t.x - 0.6).abs() < 1e-12 && (t.y - 0.8).abs() < 1e-12,
+            "{t:?}"
+        );
     }
 }

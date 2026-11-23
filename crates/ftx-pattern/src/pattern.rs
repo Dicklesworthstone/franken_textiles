@@ -192,8 +192,10 @@ pub fn piece_definition_errors(p: &Value) -> Result<Vec<String>, String> {
                         Some(Vec2::new(arr.first()?.as_f64()?, arr.get(1)?.as_f64()?))
                             .filter(|q| q.is_finite())
                     };
-                    let ok =
-                        matches!((pt(a), pt(b)), (Some(pa), Some(pb)) if (pb - pa).norm() > 0.0);
+                    let ok = matches!((pt(a), pt(b)), (Some(pa), Some(pb)) if {
+                        let len = (pb - pa).norm();
+                        len.is_finite() && len > 0.0
+                    });
                     if !ok {
                         errs.push(format!(
                             "{pid}: fold edge {fname} must have finite, distinct endpoints"
@@ -454,7 +456,7 @@ impl Pattern {
         }
         for inst in &self.instances {
             match inst.area() {
-                Ok(a) if a > 0.0 => {}
+                Ok(a) if a.is_finite() && a > 0.0 => {}
                 Ok(a) => errs.push(format!(
                     "{}: edge loop is clockwise or degenerate (area {} mm²); loops must be CCW",
                     inst.id,
@@ -547,6 +549,12 @@ impl Pattern {
             pts.extend_from_slice(if k == 0 { &q[..] } else { &q[1..] });
         }
         let total = lens.iter().fold(0.0, |a, l| a + l);
+        if !total.is_finite() {
+            return Err(PyError::Value(format!(
+                "seam side {} has non-finite length",
+                py::repr_str(r)
+            )));
+        }
         let junctions = if total == 0.0 {
             Vec::new()
         } else {
@@ -685,6 +693,13 @@ impl Pattern {
                 )));
             }
             let n = (steps as usize).max(1);
+            if fa.len().saturating_add(n) > 1_000_000 {
+                return Err(PyError::Value(format!(
+                    "seam {}: spacing {} produces too many samples",
+                    seam.id_text(),
+                    spacing
+                )));
+            }
             let us = np::linspace(u0, u1, n + 1);
             for &u in &us[1..] {
                 fa.push(u);
@@ -758,5 +773,59 @@ mod tests {
         let err = pat.seam_pairs(seam, 1e-300).unwrap_err().to_string();
         assert!(err.contains("too many samples"), "{err}");
         assert!(pat.seam_pairs(seam, 5.0).is_ok());
+    }
+
+    #[test]
+    fn structure_errors_reject_overflowing_area_and_fold_length_and_side_polyline() {
+        let huge = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [{
+                "id": "big",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [1e200, 0], "c": [1e200, 1e200], "d": [0, 1e200]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ]
+            }]
+        }));
+        let errs = huge.structure_errors();
+        assert!(
+            errs.iter().any(|e| e.contains("clockwise or degenerate")),
+            "infinite-area piece must fail structure_errors, got {errs:?}"
+        );
+        let side_err = huge.side_polyline("big/bottom").unwrap_err().to_string();
+        assert!(
+            side_err.contains("non-finite length"),
+            "overflowing side_polyline must fail closed: {side_err}"
+        );
+
+        let huge_fold = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [{
+                "id": "fold_huge",
+                "cut": {"qty": 1, "on_fold": "left"},
+                "vertices": {"a": [0, -1e200], "b": [50, -1e200], "c": [50, 1e200], "d": [0, 1e200]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ]
+            }]
+        }));
+        assert!(huge_fold.instances.is_empty());
+        assert!(
+            huge_fold
+                .build_errors
+                .iter()
+                .any(|e| e.contains("finite, distinct endpoints")),
+            "overflowing fold edge must fail build_errors: {:?}",
+            huge_fold.build_errors
+        );
     }
 }
