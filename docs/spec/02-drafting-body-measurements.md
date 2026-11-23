@@ -503,6 +503,17 @@ hypot(σ_tape/tape, σP/P)`; `k_default` = K_SECTION k (1.0 for unknown levels).
 k_child_sigma (round4), k_default, k_ratio = round4(k_child/k_default), k_ratio_sigma = round4(σk/k_default), use:
 "pass --k-ratio/--k-ratio-sigma to girth-from-section for this child's other levels"}`.
 
+**Native exception `section-positive-precision`:** when the prescribed display rounding would
+erase a positive section length, coefficient or uncertainty, retain its unrounded positive value.
+This applies to the girth, ellipse perimeter, k and component sigmas, and to calibrated k/ratio
+values and their sigmas. Otherwise the rounded section sigma can become zero and prevent the
+ordinary measurement record from being constructed, or a returned calibration can silently lose
+its uncertainty when reused. The exception also keeps the ellipse perimeter and its sigma usable
+by `calibrate_k`; their ordinary nonzero rounding remains unchanged. An actually zero uncertainty
+remains zero and does not qualify as a positive-sigma measurement. No minimum uncertainty or
+new physical precision is inferred. Independent circle derivatives, tape/section propagation,
+calibration reuse and source-document fusion controls are in `ftx-measure/tests/section.rs`.
+
 ### A.6 Normalization and fusion
 
 #### A.6.1 Normalizing one record

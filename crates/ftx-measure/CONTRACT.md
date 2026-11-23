@@ -124,6 +124,13 @@ chest/waist/hip shape factors to the Ramanujan ellipse perimeter, propagating wi
 and shape-factor uncertainty separately. Clothing offsets and calibrated k ratios are
 explicit. `calibrate_k` estimates a coefficient from a tape girth; it is not another girth
 observation. Published D.5 values and prior-section round trips are covered by direct tests.
+The native `section-positive-precision` exception retains a positive section length, coefficient
+or uncertainty when its prescribed decimal rounding would produce zero. This includes component
+sigmas and returned calibration ratios, so record construction and coefficient reuse preserve
+admitted evidence. Ordinary nonzero rounding is unchanged, including the rounded perimeter and
+sigma consumed by calibration. True zero uncertainty stays zero and cannot become a measurement
+record; no minimum sigma is invented. Independent circle derivatives, tape/section propagation,
+calibration reuse and photo-document fusion are covered in `tests/section.rs`.
 `section_measurement` constructs the ordinary PHOTO_ESTIMATED document for numeric and photo
 callers. `photo_section` accepts exact width/depth measurement texts and strict options, recomputes
 fusion from original records, and requires every used dimension source to be PHOTO_ESTIMATED with

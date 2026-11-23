@@ -82,6 +82,17 @@ fn nonnegative(name: &str, value: f64) -> Result<f64, Refusal> {
     }
 }
 
+// Section reports feed record construction and calibration reuse. Display precision must not
+// turn admitted positive quantities into invalid zero lengths or falsely exact coefficients.
+fn rounded_positive(value: f64, digits: usize) -> f64 {
+    let rounded = py::round(value, digits);
+    if rounded == 0.0 && value > 0.0 {
+        value
+    } else {
+        rounded
+    }
+}
+
 fn perimeter(w: f64, d: f64) -> Result<f64, Refusal> {
     positive("unclothed width", w)?;
     positive("unclothed depth", d)?;
@@ -145,9 +156,9 @@ pub fn girth_from_section(
             .push_str("; clothing offset subtracted (2–5 mm per side for thin clothes, UNCERTAIN)");
     }
     Ok(
-        json!({"level":o.level, "girth_mm":py::round(girth, 1), "sigma_mm":py::round(sigma, 1),
-        "ellipse_perimeter_mm":py::round(p, 1), "k":py::round(k, 4), "k_sigma":py::round(sk, 4),
-        "sigma_terms_mm":{"width":py::round(terms[0].abs(), 2), "depth":py::round(terms[1].abs(), 2), "k":py::round(terms[2].abs(), 2)},
+        json!({"level":o.level, "girth_mm":rounded_positive(girth, 1), "sigma_mm":rounded_positive(sigma, 1),
+        "ellipse_perimeter_mm":rounded_positive(p, 1), "k":rounded_positive(k, 4), "k_sigma":rounded_positive(sk, 4),
+        "sigma_terms_mm":{"width":rounded_positive(terms[0].abs(), 2), "depth":rounded_positive(terms[1].abs(), 2), "k":rounded_positive(terms[2].abs(), 2)},
         "width_mm":width, "depth_mm":depth, "clothing_mm_per_side":o.clothing_mm,"notes":notes}),
     )
 }
@@ -184,8 +195,8 @@ pub fn calibrate_k(
     )?;
     let default = factor(o.level).map_or(1.0, |(k, _, _)| k);
     Ok(
-        json!({"level":o.level,"k_child":py::round(k, 4), "k_child_sigma":py::round(sigma, 4),
-        "k_default":default,"k_ratio":py::round(k / default, 4), "k_ratio_sigma":py::round(sigma / default, 4),
+        json!({"level":o.level,"k_child":rounded_positive(k, 4), "k_child_sigma":rounded_positive(sigma, 4),
+        "k_default":default,"k_ratio":rounded_positive(k / default, 4), "k_ratio_sigma":rounded_positive(sigma / default, 4),
         "use":"pass --k-ratio/--k-ratio-sigma to girth-from-section for this child's other levels"}),
     )
 }
