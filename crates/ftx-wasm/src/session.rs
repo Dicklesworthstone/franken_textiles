@@ -21,7 +21,10 @@ use ftx_drape::motion::{MotionOptions, advance_body};
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
 use ftx_drape::scene::{PartFrames, Scene};
 use ftx_drape::stepping::SubdivisionOptions;
-use ftx_drape::{BendingModel, CompressionModel, PartFrame};
+use ftx_drape::{
+    AdaptiveBarrierPolicy, BendingModel, CompressionModel, ConstructionMechanicsOptions,
+    DampingOptions, MeshOptions, PartFrame, SelfRepulsionOptions, StickSlipFriction,
+};
 use ftx_pattern::Pattern;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -374,6 +377,20 @@ pub struct SessionSettings {
     pub bending_model: BendingModel,
     /// Membrane compression-softening formulation.
     pub compression_model: CompressionModel,
+    /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping.
+    pub damping: DampingOptions,
+    /// Opt-in Li et al. (2020) adaptive IPC barrier stiffness scaling.
+    pub adaptive_barrier: Option<AdaptiveBarrierPolicy>,
+    /// Opt-in smooth static/kinetic stick-slip friction for cloth–body contact.
+    pub stick_slip: Option<StickSlipFriction>,
+    /// Opt-in smooth static/kinetic stick-slip friction for cloth–cloth self-contact.
+    pub self_stick_slip: Option<StickSlipFriction>,
+    /// Opt-in curvature/gather-adaptive meshing and bounded interior Lloyd CVT smoothing.
+    pub mesh: MeshOptions,
+    /// Opt-in folded-hem and sewn seam-allowance mass and bending multipliers.
+    pub construction: ConstructionMechanicsOptions,
+    /// Opt-in spatial-hash cloth–cloth self-repulsion during start-state relaxation.
+    pub start_self_repulsion: Option<SelfRepulsionOptions>,
     /// Longest body-motion substep of a move (s).
     pub motion_step_s: f64,
 }
@@ -390,6 +407,13 @@ impl Default for SessionSettings {
             self_contact_mm: 0.0,
             bending_model: drape.bending_model,
             compression_model: drape.compression_model,
+            damping: drape.damping,
+            adaptive_barrier: drape.adaptive_barrier,
+            stick_slip: drape.stick_slip,
+            self_stick_slip: drape.self_stick_slip,
+            mesh: drape.mesh,
+            construction: drape.construction,
+            start_self_repulsion: drape.start_self_repulsion,
             motion_step_s: MotionOptions::default().max_step_s,
         }
     }
@@ -432,6 +456,13 @@ impl Session {
             self_contact_mm,
             bending_model,
             compression_model,
+            damping,
+            adaptive_barrier,
+            stick_slip,
+            self_stick_slip,
+            mesh,
+            construction,
+            start_self_repulsion,
             motion_step_s,
         } = settings;
         if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
@@ -458,6 +489,13 @@ impl Session {
             time_subdivision: time_subdivision.then(SubdivisionOptions::default),
             bending_model,
             compression_model,
+            damping,
+            adaptive_barrier,
+            stick_slip,
+            self_stick_slip,
+            mesh,
+            construction,
+            start_self_repulsion,
             ..defaults
         };
         if self_contact_mm > 0.0 {
@@ -827,5 +865,71 @@ mod tests {
             .iter()
             .all(|p| (f64::from(p[0]) - 0.015).hypot(f64::from(p[1])) > inradius);
         assert!(outside);
+    }
+
+    #[test]
+    fn session_settings_accepts_opt_in_realism_options_while_preserving_defaults() {
+        let def: SessionSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(def.bending_model, BendingModel::Quadratic);
+        assert_eq!(def.compression_model, CompressionModel::AxisAligned);
+        assert!(def.damping.is_default());
+        assert!(def.adaptive_barrier.is_none());
+        assert!(def.stick_slip.is_none());
+        assert!(def.self_stick_slip.is_none());
+        assert!(def.mesh.is_default());
+        assert!(def.construction.is_default());
+        assert!(def.start_self_repulsion.is_none());
+
+        let settings: SessionSettings = serde_json::from_value(json!({
+            "spacing_mm": 12.0,
+            "sew_steps": 4,
+            "drape_steps": 4,
+            "self_contact_mm": 2.0,
+            "bending_model": "discrete_shells",
+            "compression_model": "principal",
+            "damping": {
+                "air_drag": { "rho_air_kg_m3": 1.225, "c_normal": 1.2, "c_tangent": 0.05, "eps_v_m_s": 1e-3 },
+                "rayleigh_membrane_s": 1e-4,
+                "rayleigh_bending_s": 2e-4
+            },
+            "adaptive_barrier": {
+                "target_gap_fraction": 0.5,
+                "min_gap_fraction": 0.05,
+                "growth_factor": 2.0,
+                "membrane_floor_scale": 1e-5,
+                "kappa_min": 1e-3,
+                "kappa_max": 1e5
+            },
+            "stick_slip": { "mu_s": 0.5, "mu_k": 0.3, "transition_v_m_s": 0.02 },
+            "self_stick_slip": { "mu_s": 0.45, "mu_k": 0.25, "transition_v_m_s": 0.02 },
+            "mesh": { "min_spacing_mm": 8.0, "cvt_iterations": 2 },
+            "construction": {
+                "hem_width_mm": 15.0,
+                "hem_mass_multiplier": 2.0,
+                "hem_bending_multiplier": 4.0,
+                "seam_width_mm": 8.0,
+                "seam_mass_multiplier": 1.5,
+                "seam_bending_multiplier": 2.5
+            },
+            "start_self_repulsion": { "min_separation_m": 0.004, "stiffness": 0.5, "period": 5 }
+        }))
+        .unwrap();
+        let (header, data) = baked(0.015);
+        let body = PosableBody::parse(&header, &data).unwrap();
+        let mut live = Session::start(body, &band(), &json!({}), settings, |_| {}).unwrap();
+        let samples = live.advance(40.0, 35.0, 0.15).unwrap();
+        assert!(!samples.is_empty());
+        assert_eq!(live.arms(), [40.0, 35.0]);
+
+        // Fail-closed: self_stick_slip without self_contact_mm > 0 must be refused.
+        let bad: SessionSettings = serde_json::from_value(json!({
+            "sew_steps": 4,
+            "drape_steps": 4,
+            "self_contact_mm": 0.0,
+            "self_stick_slip": { "mu_s": 0.5, "mu_k": 0.3, "transition_v_m_s": 0.02 }
+        }))
+        .unwrap();
+        let body2 = PosableBody::parse(&header, &data).unwrap();
+        assert!(Session::start(body2, &band(), &json!({}), bad, |_| {}).is_err());
     }
 }
