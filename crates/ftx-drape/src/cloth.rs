@@ -1326,6 +1326,7 @@ impl Solver {
     pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
         !self.model.is_heterogeneous()
             && self.model.bending_model.is_default()
+            && self.model.hinges.iter().all(|h| h.rest_angle == 0.0)
             && self.model.compression_model.is_default()
             && self.damping.is_default()
             && self.model.element_materials.is_none()
@@ -2994,6 +2995,9 @@ impl Solver {
         let mut calm = 0;
         for _ in 0..max_steps {
             let r = self.step(rep.h)?;
+            if let Some(c) = self.contact.as_mut() {
+                c.adapt_barrier_stiffness(&self.x);
+            }
             rep.steps += 1;
             rep.time += rep.h;
             rep.newton_iterations += r.iterations;
@@ -3673,6 +3677,80 @@ mod self_contact_tests {
         assert!(report.settled);
         assert_eq!(report.steps, 3);
         assert_eq!(report.max_speed, 0.0);
+
+        // Adaptive barrier scaling must also adapt kappa across `Solver::settle` steps while
+        // leaving legacy fixed kappa untouched.
+        let body = crate::contact::Body::new(
+            vec![
+                Vec3::new(-0.2, -0.2, 0.0),
+                Vec3::new(0.2, -0.2, 0.0),
+                Vec3::new(0.0, 0.2, 0.0),
+            ],
+            vec![[0, 1, 2]],
+            0.1,
+        )
+        .unwrap();
+        let rest = vec![
+            Vec2::new(-0.01, -0.01),
+            Vec2::new(0.01, -0.01),
+            Vec2::new(0.0, 0.01),
+        ];
+        let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0003)).collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(1000.0, 1000.0, 0.0, 200.0, 1.0),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let cparams = ContactParams {
+            dhat: 1e-3,
+            thickness: 1e-4,
+            kappa: 10.0,
+            mu: 0.0,
+            eps_v: 1e-3,
+        };
+        let mut legacy = Solver::new(
+            model.clone(),
+            x0.clone(),
+            &[[true, true, false]; 3],
+            Vec3::new(0.0, 0.0, -9.81),
+        )
+        .with_contact(body.clone(), cparams)
+        .unwrap();
+        let mut adaptive = Solver::new(
+            model,
+            x0,
+            &[[true, true, false]; 3],
+            Vec3::new(0.0, 0.0, -9.81),
+        )
+        .with_contact(body, cparams)
+        .unwrap();
+        let policy = crate::contact::AdaptiveBarrierPolicy {
+            target_gap_fraction: 0.5,
+            min_gap_fraction: 0.35,
+            growth_factor: 2.0,
+            membrane_floor_scale: 0.0,
+            kappa_min: 1e-3,
+            kappa_max: 1e5,
+        };
+        adaptive
+            .contact
+            .as_mut()
+            .unwrap()
+            .set_adaptive_barrier(policy, 1e-3, 1000.0, 9.81)
+            .unwrap();
+        let legacy_k0 = legacy.contact.as_ref().unwrap().params.kappa;
+        let adaptive_k0 = adaptive.contact.as_ref().unwrap().params.kappa;
+        legacy.settle(0.005, 0.01, 1e-6, 1, 3).unwrap();
+        adaptive.settle(0.005, 0.01, 1e-6, 1, 3).unwrap();
+        assert_eq!(legacy.contact.as_ref().unwrap().params.kappa, legacy_k0);
+        assert!(
+            adaptive.contact.as_ref().unwrap().params.kappa > adaptive_k0,
+            "Solver::settle must adapt barrier kappa across compressed settling steps ({adaptive_k0} -> {})",
+            adaptive.contact.as_ref().unwrap().params.kappa
+        );
     }
 
     #[test]

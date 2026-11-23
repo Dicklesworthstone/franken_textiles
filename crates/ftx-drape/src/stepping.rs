@@ -172,6 +172,13 @@ impl Solver {
                     }
                     state = candidate;
                     observations.push(observe(&state));
+                    // Adapt barrier stiffness only between internal bisected substeps so an
+                    // unsubdivided interval never double-adapts with `scene::run_phase_with_subdivision`.
+                    if !pending.is_empty()
+                        && let Some(contact) = state.contact.as_mut()
+                    {
+                        contact.adapt_barrier_stiffness(&state.x);
+                    }
                     result.accepted.push(AcceptedSubstep {
                         end_s: duration_s * (end as f64 / ticks as f64),
                         step_s,

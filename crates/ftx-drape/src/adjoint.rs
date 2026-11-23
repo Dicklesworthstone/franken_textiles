@@ -276,6 +276,7 @@ impl Solver {
             ));
         }
         self.check_liquid_mass()?;
+        self.check_constitutive_models()?;
         self.model.check_membrane_domains(&self.x)?;
         self.model.check_panel_bending_domains(&self.x)?;
         let rhs = self.pack_free(dj_dx);
@@ -399,6 +400,7 @@ impl Solver {
                 "explicit objective and reaction derivatives must be finite",
             ));
         }
+        self.check_constitutive_models()?;
         if !self.is_homogeneous_elastic_for_adjoint() {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -844,6 +846,25 @@ mod tests {
             frictionless
                 .constitutive_gradient(&dl_dx, [0.0; 4], 0.0)
                 .is_ok()
+        );
+
+        // Authored crease rest angles under default Quadratic bending must refuse fail-closed on
+        // both equilibrium_adjoint and constitutive_gradient before assembling a mismatched tangent.
+        let mut creased = frictionless.clone();
+        let mut angles = vec![0.0; creased.model.hinges.len()];
+        angles[0] = 0.4;
+        creased.model.set_hinge_rest_angles(&angles).unwrap();
+        assert!(!creased.is_homogeneous_elastic_for_adjoint());
+        assert_eq!(
+            creased.equilibrium_adjoint(&dl_dx).unwrap_err().code,
+            ftx_core::RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            creased
+                .constitutive_gradient(&dl_dx, [0.0; 4], 0.0)
+                .unwrap_err()
+                .code,
+            ftx_core::RefusalCode::InvalidDocument
         );
 
         // Mismatched compression table length must refuse cleanly rather than panic.

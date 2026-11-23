@@ -257,3 +257,97 @@ fn contact_friction_and_factor_caches_replay_and_rollback_with_the_physical_part
     );
     assert_eq!(format!("{failed:?}"), before);
 }
+
+#[test]
+fn subdivided_steps_adapt_barrier_between_internal_substeps_and_roll_back_on_refusal() {
+    use ftx_drape::AdaptiveBarrierPolicy;
+
+    let mut s = solver(0);
+    for x in &mut s.x {
+        x.z = 0.00038;
+    }
+    let body = Body::new(
+        vec![
+            Vec3::new(-1., -1., 0.),
+            Vec3::new(1., -1., 0.),
+            Vec3::new(0., 1., 0.),
+        ],
+        vec![[0, 1, 2]],
+        0.1,
+    )
+    .unwrap();
+    let params = ContactParams {
+        dhat: 0.001,
+        thickness: 0.0002,
+        kappa: 100.,
+        mu: 0.4,
+        eps_v: 0.001,
+    };
+    s = s.with_contact(body, params).unwrap();
+    let policy = AdaptiveBarrierPolicy {
+        target_gap_fraction: 0.5,
+        min_gap_fraction: 0.35,
+        growth_factor: 2.0,
+        membrane_floor_scale: 0.0,
+        kappa_min: 1e-3,
+        kappa_max: 1e5,
+    };
+    s.contact
+        .as_mut()
+        .unwrap()
+        .set_adaptive_barrier(policy, 1e-3, 1000.0, 9.81)
+        .unwrap();
+    s.friction_rounds = 0;
+    let k0 = s.contact.as_ref().unwrap().params.kappa;
+
+    // An unsubdivided interval must not adapt kappa at its trailing endpoint (avoiding double
+    // adaptation with callers like `run_phase_with_subdivision`).
+    let mut single = s.clone();
+    let single_rep = single
+        .step_subdivided(
+            0.00001,
+            SubdivisionOptions {
+                max_halvings: 0,
+                max_trials: 1,
+            },
+        )
+        .unwrap();
+    assert_eq!(single_rep.accepted.len(), 1);
+    assert_eq!(single.contact.as_ref().unwrap().params.kappa, k0);
+
+    // Same bisection setup as `actual_failed_newton_steps_subdivide_and_replay_without_advancing_failed_history`:
+    // capping Newton iterations at 3 forces bisection on `0.04 s` while the cloth sits compressed
+    // below `min_gap_fraction * dhat`.
+    let mut sub = s.clone();
+    sub.max_newton = 3;
+    let sub_policy = SubdivisionOptions {
+        max_halvings: 16,
+        ..SubdivisionOptions::default()
+    };
+    let rep = sub.step_subdivided(0.04, sub_policy).unwrap();
+    assert!(
+        rep.accepted.len() >= 2,
+        "expected bisection to exercise inter-substep barrier adaptation, got {:?}",
+        rep
+    );
+    assert!(
+        sub.contact.as_ref().unwrap().params.kappa > k0,
+        "internal subdivided substeps must adapt kappa ({k0} -> {})",
+        sub.contact.as_ref().unwrap().params.kappa
+    );
+
+    // Exhausting trials mid-interval must roll back kappa and state transactionally.
+    let mut failed = s;
+    failed.max_newton = 3;
+    let err = failed
+        .step_subdivided(
+            0.04,
+            SubdivisionOptions {
+                max_trials: rep.trials - 1,
+                ..sub_policy
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.code, RefusalCode::BudgetExceeded);
+    assert_eq!(failed.contact.as_ref().unwrap().params.kappa, k0);
+}
