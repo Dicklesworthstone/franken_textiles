@@ -25138,7 +25138,10 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   };
 
   // 1. Material Workbench fold: omitted by default, opt-in dispatches all 9 realism keys, invalidates on edit, refuses self_stick_slip without selfContact.
-  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  const p = await pageModule(); await p.load();
+  await p.e.bind.onclick();
+  p.emit({ pattern: { pieces: [{ id: 'front' }, { id: 'lining' }] }, pattern_json: '{"pieces":[{"id":"front"},{"id":"lining"}]}', pieces: [], pattern_sha256: 'c'.repeat(64) }, [{ name: 'pattern.json', text: '{}', mime: 'application/json' }]);
+  p.select('measurements'); p.select('fit');
   p.e.body.files = [new Blob([new Uint8Array([1])])];
   p.e.selfContact.checked = true;
   await p.e.fold.onclick();
@@ -25182,14 +25185,20 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   assert.deepEqual(plain(fullMsg.construction), realismPayload.construction);
   assert.deepEqual(plain(fullMsg.startSelfRepulsion), realismPayload.start_self_repulsion);
   const fullRep = { settled: true, body: { legs: 'standing', leg_fraction: 1 }, numerical: { ...realismPayload } };
-  p.emit(fullRep, [{ name: 'sim_report.json', text: JSON.stringify(fullRep), mime: 'application/json' }]);
+  p.current().emit({
+    type: 'result', request: fullMsg.request, result: fullRep, reportText: JSON.stringify(fullRep),
+    files: [{ name: 'sim_report.json', text: JSON.stringify(fullRep), mime: 'application/json' }],
+    evaluatedInputs: { pattern: fullMsg.pattern, fit: fullMsg.fit, measurements: fullMsg.measurements },
+  });
   const fSummary = JSON.parse(fSec.children[1].textContent);
   assert.equal(fSummary.bending_model, 'discrete_shells');
   assert.equal(fSummary.compression_model, 'principal');
   assert.deepEqual(fSummary.self_stick_slip, realismPayload.self_stick_slip);
 
-  // 2. Material Workbench outbound handoff to Pattern Workbench carries all 9 realism fields cleanly.
-  p.e.openPatternWorkbench.onclick();
+  // 2. Material Workbench outbound handoff to Pattern Workbench carries all 9 realism fields cleanly and restores them in index.html.
+  const continueBtn = descendants(fSec).find(n => n.tag === 'button' && n.textContent.includes('Continue checked garment in Pattern Workbench'));
+  assert.ok(continueBtn, 'fold section must offer Continue checked garment in Pattern Workbench');
+  continueBtn.onclick();
   const pwPopup = p.popups.at(-1);
   const pwToken = new URL(pwPopup.url).searchParams.get('materialImport');
   await p.windowEvents.message({ origin: 'https://unit.invalid', source: pwPopup.target, data: { type: 'ftx-material-pattern-ready', token: pwToken } });
@@ -25197,6 +25206,18 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   for (const [k, v] of Object.entries(realismPayload)) {
     assert.deepEqual(plain(pwTransfer.evaluatedInputs.drapeSettings[k]), v, `outbound handoff must carry ${k}`);
   }
+  const rev = draftingPage({ materialToken: pwToken });
+  rev.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await rev.windowEvents.message({ origin: 'https://unit.invalid', source: rev.opener, data: pwTransfer });
+  assert.equal(rev.e.drapeBendingModel.value, 'discrete_shells');
+  assert.equal(rev.e.drapeCompressionModel.value, 'principal');
+  assert.equal(rev.e.drapeAirDrag.checked, true);
+  assert.equal(rev.e.drapeAdaptiveBarrier.checked, true);
+  assert.equal(rev.e.drapeStickSlip.checked, true);
+  assert.equal(rev.e.drapeSelfStickSlip.checked, true);
+  assert.equal(rev.e.drapeAdaptiveMesh.checked, true);
+  assert.equal(rev.e.drapeConstruction.checked, true);
+  assert.equal(rev.e.drapeStartRepulsion.checked, true);
 
   // 3. Inbound round handoff from Pattern Workbench restores all 9 realism fields and refuses tampered values.
   const roundToken = 'a'.repeat(32);
@@ -25254,7 +25275,14 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   gs.e.guidedScenarioAdaptiveMesh.checked = true;
   gs.e.guidedScenarioConstruction.checked = true;
   gs.e.guidedScenarioStartRepulsion.checked = true;
+  // Fail-closed: guidedScenarioSpacing is 100 mm in helper while MeshMinMm is 6 mm (> 8x refinement).
+  const beforeRatioRefusal = gs.current().messages.length;
   await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeRatioRefusal);
+  assert.match(gs.e.error.textContent, /8x refinement/);
+  gs.e.guidedScenarioSpacing.value = '12';
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeRatioRefusal + 1, gs.e.error.textContent);
   const fullScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
   for (const [k, v] of Object.entries(realismPayload)) {
     assert.deepEqual(plain(fullScen.options[k]), v, `guided scenario options must include ${k}`);
