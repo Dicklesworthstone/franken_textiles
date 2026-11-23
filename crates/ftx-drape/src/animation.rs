@@ -29,6 +29,9 @@ pub fn board_layout(mesh: &GarmentMesh) -> Vec<Vec3> {
     let mut boxes = Vec::new();
     let mut x = 0.0;
     for &(lo, hi) in &mesh.inst_range {
+        if lo >= hi {
+            continue;
+        }
         let p = &mesh.verts2d[lo..hi];
         let (xmin, xmax) = p
             .iter()
@@ -39,7 +42,7 @@ pub fn board_layout(mesh: &GarmentMesh) -> Vec<Vec3> {
         boxes.push((lo, hi, x - xmin, ymin));
         x += (xmax - xmin) + 40.0;
     }
-    let total = x - 40.0;
+    let total = if boxes.is_empty() { 0.0 } else { x - 40.0 };
     for (lo, hi, xoff, ymin) in boxes {
         for i in lo..hi {
             let q = mesh.verts2d[i];
@@ -113,6 +116,9 @@ fn horn(a: &[Vec3], b: &[Vec3]) -> (Quat, Vec3) {
 fn rotate(q: Quat, v: Vec3) -> Vec3 {
     let [w, x, y, z] = q;
     let n = (w * w + x * x + y * y + z * z).sqrt();
+    if !n.is_finite() || n == 0.0 {
+        return v;
+    }
     let (w, x, y, z) = (w / n, x / n, y / n, z / n);
     Vec3::new(
         (1.0 - 2.0 * (y * y + z * z)) * v.x
@@ -139,10 +145,16 @@ fn slerp(q0: Quat, q1: Quat, t: f64) -> Quat {
     if d > 0.9995 {
         let q: Quat = std::array::from_fn(|i| q0[i] + t * (q1[i] - q0[i]));
         let n = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if !n.is_finite() || n == 0.0 {
+            return q0;
+        }
         return q.map(|v| v / n);
     }
-    let th = det::acos(d);
+    let th = det::acos(d.clamp(0.0, 1.0));
     let (a, b, s) = (det::sin((1.0 - t) * th), det::sin(t * th), det::sin(th));
+    if !s.is_finite() || s == 0.0 {
+        return q0;
+    }
     std::array::from_fn(|i| (a * q0[i] + b * q1[i]) / s)
 }
 
@@ -159,6 +171,9 @@ pub fn fold_frames(
     let mut frames = vec![board.to_vec(); n_frames];
     let count = mesh.inst_range.len();
     for (idx, (&(lo, hi), p)) in mesh.inst_range.iter().zip(places).enumerate() {
+        if lo >= hi {
+            continue;
+        }
         let pts = &mesh.verts2d[lo..hi];
         let flat = roll_points(pts, p, 0.0);
         let (q1, t) = horn(&board[lo..hi], &flat);
@@ -195,7 +210,11 @@ pub fn fold_frames(
 /// turning sleeve must stay clear of the next piece for its entire displayed pose.
 pub(crate) fn separate_panels(frame: &mut [Vec3], ranges: &[(usize, usize)]) {
     let mut cursor = 0.0;
+    let mut placed = false;
     for &(lo, hi) in ranges {
+        if lo >= hi {
+            continue;
+        }
         let piece = &mut frame[lo..hi];
         let min = piece.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
         let max = piece.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
@@ -203,9 +222,12 @@ pub(crate) fn separate_panels(frame: &mut [Vec3], ranges: &[(usize, usize)]) {
             p.x += cursor - min;
         }
         cursor += max - min + 0.04;
+        placed = true;
     }
-    for p in frame {
-        p.x -= (cursor - 0.04) / 2.0;
+    if placed {
+        for p in frame {
+            p.x -= (cursor - 0.04) / 2.0;
+        }
     }
 }
 
@@ -440,17 +462,17 @@ pub fn viewer_payload(
         fold.fold + fold.zip + fold.sew,
     ];
     let physical_start = (fold.fold + fold.zip).saturating_sub(1);
-    let mut kept: Vec<usize> = linspace(0.0, n.saturating_sub(1) as f64, keep.min(n))
-        .into_iter()
-        .map(|v| v.round_ties_even() as usize)
-        .chain(starts.iter().map(|&s| s.min(n.saturating_sub(1))))
-        .chain(
-            extras
-                .contact_replay
-                .then_some(physical_start.min(n.saturating_sub(1))),
-        )
-        .chain(std::iter::once(n.saturating_sub(1)))
-        .collect();
+    let mut kept: Vec<usize> = if n == 0 {
+        Vec::new()
+    } else {
+        linspace(0.0, (n - 1) as f64, keep.min(n))
+            .into_iter()
+            .map(|v| v.round_ties_even() as usize)
+            .chain(starts.iter().map(|&s| s.min(n - 1)))
+            .chain(extras.contact_replay.then_some(physical_start.min(n - 1)))
+            .chain(std::iter::once(n - 1))
+            .collect()
+    };
     kept.sort_unstable();
     kept.dedup();
     let (mut lo, mut hi) = (
@@ -462,6 +484,10 @@ pub fn viewer_payload(
             lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
             hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
         }
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        lo = Vec3::ZERO;
+        hi = Vec3::ZERO;
     }
     let span = [hi.x - lo.x, hi.y - lo.y, hi.z - lo.z].map(|d| d.max(1e-9));
     let (lo3, hi3) = ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
@@ -1038,5 +1064,49 @@ mod tests {
             assert!(viewer_html(&template.replace(marker, ""), &json!({})).is_err());
             assert!(viewer_html(&format!("{template}{marker}"), &json!({})).is_err());
         }
+    }
+
+    #[test]
+    fn empty_ranges_empty_frames_and_zero_quaternion_stay_finite_and_do_not_panic() {
+        let mesh = GarmentMesh {
+            instances: Vec::new(),
+            verts2d: Vec::new(),
+            faces: Vec::new(),
+            owner: Vec::new(),
+            inst_range: vec![(0, 0)],
+            pairs: Vec::new(),
+            seams: Vec::new(),
+            corner: std::collections::BTreeMap::new(),
+            index: std::collections::BTreeMap::new(),
+        };
+        assert!(board_layout(&mesh).is_empty());
+
+        let mut frame = vec![Vec3::new(1.0, 2.0, 3.0)];
+        separate_panels(&mut frame, &[(0, 0)]);
+        assert_eq!(frame, vec![Vec3::new(1.0, 2.0, 3.0)]);
+        separate_panels(&mut frame, &[(0, 0), (0, 1)]);
+        assert!(frame[0].is_finite());
+
+        assert_eq!(
+            rotate([0.0; 4], Vec3::new(1.0, 2.0, 3.0)),
+            Vec3::new(1.0, 2.0, 3.0)
+        );
+        let sq = slerp([0.0; 4], [0.0; 4], 0.5);
+        assert!(sq.iter().all(|v| v.is_finite()));
+
+        let extras = ViewerExtras {
+            contact_replay: false,
+            title: "Empty",
+            style: "EMPTY",
+            body: (&[], &[]),
+            gating: vec![],
+            advisory: vec![],
+            settled: true,
+            arm_deg: 35.0,
+        };
+        let payload = viewer_payload(&mesh, &FoldUp::default(), &extras, 60);
+        assert_eq!(payload["frames"], 0);
+        assert_eq!(payload["lo"], json!([0.0, 0.0, 0.0]));
+        assert_eq!(payload["hi"], json!([0.0, 0.0, 0.0]));
     }
 }

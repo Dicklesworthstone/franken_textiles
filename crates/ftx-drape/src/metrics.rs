@@ -53,16 +53,23 @@ fn norm(d: Vec3) -> f64 {
     (d.x * d.x + d.y * d.y + d.z * d.z).sqrt()
 }
 
-/// numpy `mean` of a 1-D array (pairwise sum / n).
+/// numpy `mean` of a 1-D array (pairwise sum / n); 0 on an empty slice.
 fn mean(v: &[f64]) -> f64 {
-    pairwise_sum(v) / v.len() as f64
+    if v.is_empty() {
+        0.0
+    } else {
+        pairwise_sum(v) / v.len() as f64
+    }
 }
 
-/// numpy `median` (the mean of the two middle values for an even count).
+/// numpy `median` (the mean of the two middle values for an even count); 0 on an empty slice.
 fn median(v: &[f64]) -> f64 {
+    let n = v.len();
+    if n == 0 {
+        return 0.0;
+    }
     let mut s = v.to_vec();
     s.sort_by(f64::total_cmp);
-    let n = s.len();
     if n % 2 == 1 {
         s[n / 2]
     } else {
@@ -95,6 +102,11 @@ fn fraction(flags: impl Iterator<Item = bool>) -> f64 {
 #[allow(clippy::too_many_lines)] // one pass, in the reference's order
 pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
     let seq = input.seq;
+    assert!(
+        seq.len() >= MIN_FRAMES,
+        "metrics requires at least {MIN_FRAMES} frames (got {})",
+        seq.len()
+    );
     let co = frame_mean(&seq[seq.len().saturating_sub(AVG_FRAMES)..]);
     let rest2d = &mesh.verts2d;
     let edges = face_edges(&mesh.faces);
@@ -396,6 +408,9 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
             let Some(idx) = mesh.index.get(&(id.clone(), e.id.clone())) else {
                 continue;
             };
+            if idx.is_empty() {
+                continue;
+            }
             let z = mean(&idx.iter().map(|&i| co[i].z).collect::<Vec<_>>()) / MM;
             let w = mean(&idx.iter().map(|&i| input.wrapped[i].z).collect::<Vec<_>>()) / MM;
             let key = format!("{id}/{}", e.id);
@@ -416,6 +431,9 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
             continue;
         }
         let (lo, hi) = mesh.inst_range[k];
+        if lo == hi {
+            continue;
+        }
         let now = mean(&co[lo..hi].iter().map(|p| p.z).collect::<Vec<_>>());
         let was = mean(
             &input.wrapped[lo..hi]
@@ -523,7 +541,11 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
             )
         })
         .collect();
-    let p99 = round(percentile(&drift, 99.0) / MM, 3);
+    let p99 = if drift.is_empty() {
+        0.0
+    } else {
+        round(percentile(&drift, 99.0) / MM, 3)
+    };
     if !settled {
         let (worst, share) = by_piece
             .iter()
@@ -541,8 +563,15 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
         ));
     }
 
-    let smin = strain.iter().copied().fold(f64::INFINITY, f64::min);
-    let smax = strain.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let (smin, smax, sp95) = if strain.is_empty() {
+        (0.0, 0.0, 0.0)
+    } else {
+        (
+            strain.iter().copied().fold(f64::INFINITY, f64::min),
+            strain.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            percentile(&strain, 95.0),
+        )
+    };
     report.insert("seams".into(), Value::Object(seams));
     report.insert("landmarks".into(), Value::Object(landmarks));
     report.insert("pieces".into(), Value::Object(pieces));
@@ -567,7 +596,7 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
     report.insert(
         "global_strain_pct".into(),
         json!({
-            "p95": round(percentile(&strain, 95.0) * 100.0, 2),
+            "p95": round(sp95 * 100.0, 2),
             "max": round(smax * 100.0, 2),
             "min": round(smin * 100.0, 2),
         }),
@@ -895,5 +924,57 @@ mod girth_coverage_tests {
         );
         assert_eq!(result["landmarks"], json!({}));
         assert_eq!(result["gating"], json!([]));
+    }
+
+    #[test]
+    fn empty_helpers_and_degenerate_empty_mesh_do_not_panic_or_emit_null_strain() {
+        assert_eq!(mean(&[]), 0.0);
+        assert_eq!(median(&[]), 0.0);
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [], "seams": []
+        }));
+        let mesh = GarmentMesh {
+            instances: Vec::new(),
+            verts2d: Vec::new(),
+            faces: Vec::new(),
+            owner: Vec::new(),
+            inst_range: Vec::new(),
+            pairs: Vec::new(),
+            seams: Vec::new(),
+            corner: std::collections::BTreeMap::new(),
+            index: std::collections::BTreeMap::new(),
+        };
+        let body = NearestTree::new(
+            vec![
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(3.0, -1.0, 0.0),
+                Vec3::new(-1.0, 3.0, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        let seq = vec![Vec::new(); MIN_FRAMES];
+        let out = metrics(
+            &mesh,
+            &MetricsInput {
+                pattern: &pat,
+                seq: &seq,
+                start: &[],
+                after_sew: &[],
+                wrapped: &[],
+                body: &body,
+                level_y: &|_, _| None,
+                fit_spec: &json!({"points": []}),
+                spacing: 10.0,
+                arm_deg: 35.0,
+            },
+        );
+        assert_eq!(
+            out["global_strain_pct"],
+            json!({"p95": 0.0, "max": 0.0, "min": 0.0})
+        );
+        assert_eq!(out["drift_p99_mm_per_frame"], json!(0.0));
+        assert_eq!(out["jitter_mm_per_frame"], json!(0.0));
     }
 }

@@ -466,7 +466,11 @@ pub fn start_state(mesh: &GarmentMesh, wrapped: Vec<Vec3>, body: &NearestTree) -
             .into_iter()
             .map(f64::abs)
             .collect();
-        let p95 = percentile(&strain, 95.0);
+        let p95 = if strain.is_empty() {
+            0.0
+        } else {
+            percentile(&strain, 95.0)
+        };
         blocks.push(p95);
         if p95 <= RELAX_TARGET_P95 {
             break;
@@ -480,5 +484,59 @@ pub fn start_state(mesh: &GarmentMesh, wrapped: Vec<Vec3>, body: &NearestTree) -
         relax_iterations: done,
         block_p95: blocks,
         gather_weights: weights,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::garment::build_garment;
+    use ftx_pattern::Pattern;
+    use serde_json::json;
+
+    #[test]
+    fn start_state_finishes_cleanly_when_every_edge_is_inside_gather_zone() {
+        // Two 30 mm tall pieces joined by a 1.5x gathered seam: every vertex is within 50 mm
+        // (GATHER_ZONE_MM) of the gathered seam, leaving no plain edges on the long piece.
+        // Putting both pieces inside the gather zone exercises empty `plain` without NaN p95.
+        let piece = |id: &str, w: f64| {
+            json!({
+                "id": id, "cut": {"qty": 1}, "grain": [[0, 0], [0, 20]],
+                "vertices": {"a": [0, 0], "b": [w, 0], "c": [w, 25], "d": [0, 25]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "placement": {"part": "torso"}
+            })
+        };
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [piece("ruffle", 45.0)],
+            "seams": [{"id": "self_gather", "a": "ruffle/top", "b": "ruffle/bottom", "ratio": 1.5}]
+        }));
+        let mesh = build_garment(&pat, 15.0).unwrap();
+        let weights = gather_weights(&mesh);
+        assert!(weights.iter().all(|&w| w < 1.0));
+        let wrapped: Vec<Vec3> = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * MM, p.y * MM, 0.2))
+            .collect();
+        let body = NearestTree::new(
+            vec![
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(2.0, -1.0, 0.0),
+                Vec3::new(-1.0, 2.0, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        let st = start_state(&mesh, wrapped, &body);
+        assert_eq!(st.relax_iterations, RELAX_ITERS);
+        assert_eq!(st.block_p95, vec![0.0]);
+        assert!(st.relaxed.iter().all(|p| p.is_finite()));
     }
 }

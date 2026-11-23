@@ -219,8 +219,26 @@ pub fn placements(
         };
         let (mut x0, mut y0) = (num("x0")?.unwrap_or(0.0), num("y0")?.unwrap_or(0.0));
         if let Some(sc) = piece.get("sim_scale").filter(|v| truthy(v)) {
-            x0 *= sc[0].as_f64().unwrap_or(1.0);
-            y0 *= sc[1].as_f64().unwrap_or(1.0);
+            let pair = sc
+                .as_array()
+                .filter(|a| a.len() == 2)
+                .ok_or_else(|| bad(format!("{id}: sim_scale must be [sx, sy]")))?;
+            let (sx, sy) = (
+                pair[0]
+                    .as_f64()
+                    .ok_or_else(|| bad(format!("{id}: sim_scale[0] must be a number")))?,
+                pair[1]
+                    .as_f64()
+                    .ok_or_else(|| bad(format!("{id}: sim_scale[1] must be a number")))?,
+            );
+            if !(sx.is_finite() && sx > 0.0 && sy.is_finite() && sy > 0.0) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("{id}: sim_scale [{sx}, {sy}] must be finite and positive"),
+                ));
+            }
+            x0 *= sx;
+            y0 *= sy;
         }
         let part = pl["part"]
             .as_str()
@@ -779,7 +797,11 @@ fn separated_leg_start(
         .into_iter()
         .map(f64::abs)
         .collect();
-    *start.block_p95.last_mut()? = ftx_core::np::percentile(&strain, 95.0);
+    *start.block_p95.last_mut()? = if strain.is_empty() {
+        0.0
+    } else {
+        ftx_core::np::percentile(&strain, 95.0)
+    };
     Some((start, moved, max_move / MM))
 }
 
@@ -881,9 +903,11 @@ pub(crate) fn build_scene_resolved(
                                     .into_iter()
                                     .map(f64::abs)
                                     .collect();
-                            start
-                                .block_p95
-                                .push(ftx_core::np::percentile(&strain, 95.0));
+                            start.block_p95.push(if strain.is_empty() {
+                                0.0
+                            } else {
+                                ftx_core::np::percentile(&strain, 95.0)
+                            });
                         }
                         if let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
                             && admit(&candidate).is_ok()

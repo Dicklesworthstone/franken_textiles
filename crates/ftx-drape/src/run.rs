@@ -1230,7 +1230,7 @@ fn add_run_fields(
     o.insert(
         "initial_strain_pct".into(),
         json!({
-            "p95": round(percentile(&init, 95.0), 1),
+            "p95": if init.is_empty() { 0.0 } else { round(percentile(&init, 95.0), 1) },
             "max": round(init.iter().copied().fold(0.0, f64::max), 1),
         }),
     );

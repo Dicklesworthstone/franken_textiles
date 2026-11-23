@@ -178,6 +178,16 @@ fn assign_path(
     pts: &[Vec2],
     edge_pts: &mut BTreeMap<(String, String), Vec<Vec2>>,
 ) -> Result<(), Refusal> {
+    if pts.len() < 2 {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            format!(
+                "{}: seam path has {} samples (need at least 2)",
+                inst.id,
+                pts.len()
+            ),
+        ));
+    }
     let mut cuts = vec![0];
     for e in &eids[..eids.len().saturating_sub(1)] {
         let to = &inst.edge(e).map_err(|e| doc_error(&e))?.to;
@@ -197,12 +207,16 @@ fn assign_path(
     cuts.push(pts.len() - 1);
     for (k, e) in eids.iter().enumerate() {
         let (a, b) = (cuts[k], cuts[k + 1]);
-        let slice = if a <= b {
-            pts[a..=b].to_vec()
-        } else {
-            Vec::new()
-        };
-        edge_pts.insert((inst.id.clone(), e.clone()), slice);
+        if a > b {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!(
+                    "{}/{e}: non-monotonic seam junction cuts ({a} > {b})",
+                    inst.id
+                ),
+            ));
+        }
+        edge_pts.insert((inst.id.clone(), e.clone()), pts[a..=b].to_vec());
     }
     Ok(())
 }
@@ -215,7 +229,11 @@ fn path_indices(
     let mut out = Vec::new();
     for (k, e) in eids.iter().enumerate() {
         let idx = &index[&(iid.to_string(), e.clone())];
-        out.extend_from_slice(if k == 0 { idx } else { &idx[1..] });
+        out.extend_from_slice(if k == 0 {
+            idx
+        } else {
+            idx.get(1..).unwrap_or(&[])
+        });
     }
     out
 }
@@ -336,6 +354,15 @@ pub fn build_garment(pattern: &Pattern, spacing: f64) -> Result<GarmentMesh, Ref
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
             format!("mesh spacing {spacing} mm must be positive"),
+        ));
+    }
+    if !pattern.build_errors.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!(
+                "cannot mesh malformed pattern: {}",
+                pattern.build_errors.join("; ")
+            ),
         ));
     }
     let raw = pattern.raw();
@@ -523,10 +550,25 @@ pub fn build_garment(pattern: &Pattern, spacing: f64) -> Result<GarmentMesh, Ref
     }
     for inst in &insts {
         if let Some(sc) = piece_def(inst).get("sim_scale").filter(|v| truthy(v)) {
+            let pair = sc.as_array().filter(|a| a.len() == 2).ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("{}: sim_scale must be [sx, sy]", inst.id),
+                )
+            })?;
             let (sx, sy) = (
-                number(&sc[0], "sim_scale[0]")?,
-                number(&sc[1], "sim_scale[1]")?,
+                number(&pair[0], "sim_scale[0]")?,
+                number(&pair[1], "sim_scale[1]")?,
             );
+            if !(sx.is_finite() && sx > 0.0 && sy.is_finite() && sy > 0.0) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "{}: sim_scale [{sx}, {sy}] must be finite and positive",
+                        inst.id
+                    ),
+                ));
+            }
             let (lo, hi) = mesh.inst_range[pos(&inst.id)];
             for p in &mut mesh.verts2d[lo..hi] {
                 *p = Vec2::new(p.x * sx, p.y * sy);
@@ -844,6 +886,82 @@ mod tests {
         assert_eq!(
             digest,
             "180a58857b4049576200c36884c5420c96e3b3830fb7461f511fda5b368e78cf"
+        );
+    }
+
+    #[test]
+    fn sim_scale_must_be_two_finite_positive_numbers() {
+        for (bad_scale, expected) in [
+            (json!([0.0, 1.0]), RefusalCode::OutOfRange),
+            (json!([-1.0, 1.0]), RefusalCode::OutOfRange),
+            (json!([1.0, -0.5]), RefusalCode::OutOfRange),
+            (json!([1.0, 1.0, 2.0]), RefusalCode::InvalidDocument),
+            (json!(["x", 1.0]), RefusalCode::InvalidDocument),
+            (json!(true), RefusalCode::InvalidDocument),
+        ] {
+            let mut piece = rect("A", 100.0, 50.0);
+            piece["placement"] = json!({"part": "torso"});
+            piece["sim_scale"] = bad_scale.clone();
+            let doc = json!({
+                "schema": "fabric-pattern/1", "units": "mm",
+                "pieces": [piece], "seams": []
+            });
+            let err = build_garment(&Pattern::new(doc), 12.0).unwrap_err();
+            assert_eq!(err.code, expected, "sim_scale={bad_scale}: {err:?}");
+        }
+        let mut ok_piece = rect("A", 100.0, 50.0);
+        ok_piece["placement"] = json!({"part": "torso"});
+        ok_piece["sim_scale"] = json!([0.8, 0.5]);
+        let g = build_garment(
+            &Pattern::new(json!({
+                "schema": "fabric-pattern/1", "units": "mm",
+                "pieces": [ok_piece], "seams": []
+            })),
+            12.0,
+        )
+        .unwrap();
+        assert!(!g.faces.is_empty());
+        assert!(g.faces.iter().all(|f| {
+            let (a, b, c) = (g.verts2d[f[0]], g.verts2d[f[1]], g.verts2d[f[2]]);
+            (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) > 0.0
+        }));
+    }
+
+    #[test]
+    fn assign_path_and_path_indices_handle_empty_and_non_monotonic_cuts_safely() {
+        let doc = json!({
+            "schema": "fabric-pattern/1", "units": "mm",
+            "pieces": [rect("A", 100.0, 50.0)], "seams": []
+        });
+        let pat = Pattern::new(doc);
+        let inst = pat.instance("A").unwrap();
+        let mut edge_pts = BTreeMap::new();
+        let err = assign_path(inst, &["bottom".into()], &[], &mut edge_pts).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+
+        // Non-monotonic junction cuts (second junction matches index 0 while first matches index 2).
+        let reversed_pts = vec![
+            Vec2::new(100.0, 50.0),
+            Vec2::new(100.0, 25.0),
+            Vec2::new(100.0, 0.0),
+            Vec2::new(0.0, 0.0),
+        ];
+        let err = assign_path(
+            inst,
+            &["bottom".into(), "right".into(), "top".into()],
+            &reversed_pts,
+            &mut edge_pts,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+
+        // Defensive path_indices guard never panics on an empty second edge entry.
+        let mut idx = BTreeMap::new();
+        idx.insert(("A".into(), "bottom".into()), vec![0, 1]);
+        idx.insert(("A".into(), "right".into()), Vec::new());
+        assert_eq!(
+            path_indices(&idx, "A", &["bottom".into(), "right".into()]),
+            vec![0, 1]
         );
     }
 }
