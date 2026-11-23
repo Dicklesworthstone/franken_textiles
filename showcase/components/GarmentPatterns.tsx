@@ -2,6 +2,7 @@ const patterns = {
   column: ["Column skirt", "/atelier/column.pdf"],
   flare: ["Flared skirt", "/atelier/flare.pdf"],
   bolero: ["Zouave bolero", "/patterns/bolero.pdf"],
+  "bolero-full-hand": ["355 mm Zouave bolero", "/fittings/bolero-full-hand-A4.pdf"],
   trousers: ["Gathered trousers", "/patterns/trousers.pdf"],
   fez: ["Fez", "/patterns/fez.pdf"],
   dress: ["Garden sundress", "/sundress/pattern-A4.pdf"],

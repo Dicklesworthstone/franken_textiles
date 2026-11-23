@@ -16,7 +16,7 @@ const midnight = ["#172930","#f5ead5","#ecaa78"] as Plate["colors"];
 const oxblood = ["#43262e","#faebd9","#efb896"] as Plate["colors"];
 
 export const plates = {
-  home: {title:["From cut","to cloth."],caption:"Follow the pieces from the cutting table to the sewn garment. Print the same cut at full size.",category:"The pattern room",specimen:"Six gores on a fitted 68 cm form",colors:["#f3ecde","#342a24","#974531"],images:["flare-sewn","flare-cut","flare-join"],layout:"contact"},
+  home: {title:["Sewing patterns","in motion"],caption:"See how the pieces sew and drape, then print the same cut at full size.",category:"Construction study",specimen:"355 mm Zouave bolero",colors:["#252920","#f8f0de","#ffc39c"],images:["full-hand-sewn","full-hand-cut","full-hand-join"],layout:"contact"},
   skirtStudy: {title:["The skirt","atelier."],caption:"See where the bound waist sits on the body, then print the cut you see.",category:"A six-panel study",specimen:"65–80 cm waists · two hem sweeps",colors:["#e8e2cf","#2a392e","#97553e"],images:["skirt-column","skirt-flare"],layout:"pair"},
   wrapSkirt: {title:["A wrap skirt","with ties."],caption:"Compare two tie settings on standing and seated Anny slices. The pattern stays fixed and is available as a full-scale PDF.",category:"Wrap geometry",specimen:"Pattern pieces · standing and seated Anny slices",colors:["#e8e2cf","#2a392e","#97553e"],images:["wrap-skirt"]},
   trouserStudy: {title:["Room to","move."],caption:"Bend the knees, change the elastic and take a section through seven sewn panels.",category:"The trouser study",specimen:"A fitted Anny form · elastic casings",colors:["#edf0df","#263c35","#976039"],images:["trouser-form"]},

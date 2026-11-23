@@ -11,14 +11,16 @@ const studies = {
   flare: {name:"Flared skirt", cut:"Six gores · 68 cm form", text:"Each gore widens from the waist to the hem. Joined edge to edge, the six pieces give the hem 168 cm of sweep.",pdf:"/atelier/flare.pdf", href:"/studies/skirt/?cut=flare&waist=680#skirt-atelier"},
   blue: {name:"Blue Hussar dolman", cut:"1761 · jacket shell", text:"The paired fronts carry the cord from the cutting table onto the chest. The back, side pieces and two-part sleeves close around the form.",pdf:"/patterns/hussar-blue.pdf", href:"/wardrobe/hussar/#native-dolman"},
   yellow: {name:"Yellow Hussar dolman", cut:"1765 · jacket shell", text:"Pale cord follows the same jacket front into the sewn shape. This color study uses the Blue dolman’s recorded drape. The Yellow uniform has its own full pattern.",pdf:"/patterns/hussar-yellow.pdf", href:"/wardrobe/hussar/#native-dolman"},
+  "bolero-full-hand": {name:"355 mm Zouave bolero", cut:"355 mm sleeve · 201.7 mm cuff", text:"All 49 physical frames passed the full-hand contact check. Turn on the fitted form in the 3D replay to inspect the clearance.", pdf:"/fittings/bolero-full-hand-A4.pdf", href:"/fittings/bolero-full-hand-replay"},
   bolero: {name:"Zouave bolero", cut:"Five pieces · 52 cm chest", text:"Two fronts meet the back at the shoulders. Each sleeve rolls into a tube before its cap joins the armhole.",pdf:"/patterns/bolero.pdf", href:"/sections/studies/#drape-room"},
   trousers: {name:"Gathered trousers", cut:"Seven pieces · standing form", text:"The legs close along their inseams. Shorter cuffs and an elastic waistband gather the fullness at both ends.",pdf:"/patterns/trousers.pdf", href:"/studies/trousers/#trouser-fit"},
-  ensemble: {name:"Bolero and trousers", cut:"Twelve pieces · coupled drape", text:"Follow both cuts into one outfit. The final sewing and gravity steps include contact between the jacket and trousers.",pdf:"/patterns/bolero.pdf", href:"/sections/studies/#drape-room"},
+  ensemble: {name:"Bolero and trousers", cut:"Twelve pieces · coupled drape", text:"Follow both cuts into one outfit. The final sewing and gravity steps include contact between the jacket and trousers.",pdf:"/patterns/bolero.pdf", href:"/sections/studies/?outfit=joint#drape-room"},
   fez: {name:"Felt fez", cut:"Crown and tip · geometric assembly", text:"Close the two ends of the curved crown and its upper edge becomes a circle. The round tip fits that opening. The fold follows the drafted cone dimensions.",pdf:"/patterns/fez.pdf", href:"/sections/draft/"},
 } as const;
 export type Garment = keyof typeof studies;
 const all:readonly Garment[] = ["flare","column","sundress","eased","blue","yellow","bolero","trousers","ensemble","fez"];
-export const constructionFilms=all.map(id=>({id:"construction-"+id,title:studies[id].name+" · from cut to cloth",detail:studies[id].cut}));
+const homepage:readonly Garment[] = ["bolero-full-hand", "sundress", "eased", "flare", "column", "bolero", "trousers", "ensemble", "blue", "yellow", "fez"];
+export const constructionFilms=homepage.map(id=>({id:"construction-"+id,title:studies[id].name+" · from cut to cloth",detail:studies[id].cut}));
 const chapters = [
   {name:"Flat pattern", image:"cut", frame:0},
   {name:"Match the edges", image:"join", frame:53},
@@ -29,10 +31,11 @@ export function ConstructionMotion({garment, hero=false}:{garment:Garment;hero?:
   const data=studies[garment], base="construction-"+garment;
   const imageFile=(index:number)=>filmFile(index===2?base:base+"-"+chapters[index].image,"jpg");
   const video=useRef<HTMLVideoElement>(null);
-  const manual=useRef<boolean|undefined>(undefined), wantTime=useRef<number|null>(null);
+  const manual=useRef<boolean|undefined>(undefined), wantTime=useRef<number|null>(hero ? 3.875 : null);
   // The 4K film or its 1080p copy, once the device has said which it can decode.
   const source=useRef<string|undefined>(undefined);
-  const [playing,setPlaying]=useState(false),[chapter,setChapter]=useState(0),[still,setStill]=useState<number|null>(0);
+  const firstChapter = hero ? 2 : 0;
+  const [playing,setPlaying]=useState(false),[chapter,setChapter]=useState(firstChapter),[still,setStill]=useState<number|null>(firstChapter);
   useEffect(()=>{
     const el=video.current!, reduced=matchMedia("(prefers-reduced-motion: reduce)");
     const save=(navigator as Navigator & {connection?:{saveData?:boolean}}).connection?.saveData;
@@ -79,12 +82,12 @@ export function ConstructionMotion({garment, hero=false}:{garment:Garment;hero?:
     </div>
     <div className="construction-chapters" role="group" aria-label="Construction chapters">{chapters.map((c,i)=>
       <button key={c.image} type="button" aria-pressed={chapter===i} onClick={()=>pick(i)}>
-        <img src={imageFile(i)} alt="" loading={hero?"eager":"lazy"}/>
+        {!hero&&<img src={imageFile(i)} alt="" loading="lazy"/>}
         <span>{c.name}</span></button>)}</div>
   </div>;
 }
 
-export default function ConstructionStudy({choices=all,hero=false,value,onSelect}:{choices?:readonly Garment[];hero?:boolean;value?:Garment;onSelect?:(garment:Garment)=>void}) {
+export default function ConstructionStudy({hero=false,choices=hero?homepage:all,value,onSelect}:{choices?:readonly Garment[];hero?:boolean;value?:Garment;onSelect?:(garment:Garment)=>void}) {
   const [local,select]=useState<Garment>(choices[0]),id=useId();
   const selected=value??local,study=studies[selected];
   useEffect(()=>{
@@ -92,27 +95,53 @@ export default function ConstructionStudy({choices=all,hero=false,value,onSelect
     const key=new URLSearchParams(location.search).get("garment") as Garment|null;
     if(key&&choices.includes(key))select(key);
   },[choices,value]);
-  return <section id={hero?"construction":undefined} className={"construction-study"+(hero?" construction-hero":"")} aria-labelledby={id}>
-    <div className="construction-copy">
-      <p className="construction-eyebrow">{hero?"FrankenTextiles · Rust & WebAssembly":"Construction study"}</p>
-      {hero?<h1 id={id}>From cut<br/><em>to cloth.</em></h1>:<h2 id={id}>From cut <em>to cloth.</em></h2>}
-      {hero&&<>
-        <p className="construction-pitch">Deterministic sewing patterns, parametric Anny bodies, and contact-correct cloth draping — built in Rust to run identically on your CLI and in your browser, with nothing uploaded.</p>
+  const selector = <label className="construction-select"><span>Garment</span>
+    <select value={selected} onChange={e=>(onSelect??select)(e.target.value as Garment)}>
+      {choices.map(k=><option key={k} value={k}>{studies[k].name}</option>)}
+    </select>
+  </label>;
+  const patterns = <div className="construction-links">
+    <a href={study.pdf} download>{selected==="ensemble"?"Jacket pattern":"Full-scale A4 pattern"}</a>
+    {selected==="ensemble"&&<a href="/patterns/trousers.pdf" download>Trouser pattern</a>}
+  </div>;
+  if (hero) {
+    const fullHand = selected === "bolero-full-hand";
+    return <section id="construction" className="construction-study construction-hero" aria-labelledby={id}>
+      <div className="construction-copy">
+        <h1 id={id}>Sewing patterns <em>in motion</em></h1>
+        <p className="construction-pitch">Draft to measurements, see how the pieces sew and drape, and print the same cut at full size.</p>
         <div className="construction-cta">
-          <a className="construction-primary" href="/#workbenches">Open a workbench <span aria-hidden="true" className="arrow arrow-diagonal"/></a>
-          <a className="construction-secondary" href="/how-it-works/">How it works <span aria-hidden="true" className="arrow"/></a>
+          <a className="construction-primary" href={study.href}>{fullHand ? "Turn the bolero in 3D" : "Open garment study"} <span aria-hidden="true" className="arrow"/></a>
+          <a className="construction-secondary" href={fullHand ? "/workbench/?sample=full-hand-bolero" : "/#workbenches"}>{fullHand ? "Edit the draft" : "Open a workbench"}</a>
         </div>
-      </>}
-      <div className={hero?"construction-specimen":undefined}>
-        {choices.length>1?<label className="construction-select">Choose a garment<select value={selected} onChange={e=>(onSelect??select)(e.target.value as Garment)}>
-          {choices.map(k=><option key={k} value={k}>{studies[k].name}</option>)}</select></label>:<h3>{study.name}</h3>}
+      </div>
+      <div className="construction-exhibit">
+        <div className="construction-exhibit-bar">
+          <span>Construction study</span>
+          {selector}
+        </div>
+        <ConstructionMotion key={selected} garment={selected} hero/>
+        <div className="construction-exhibit-note">
+          <div>
+            <p className="construction-spec">{study.cut}</p>
+            <p className="construction-description">{study.text}</p>
+          </div>
+          {patterns}
+        </div>
+      </div>
+    </section>;
+  }
+  return <section className="construction-study" aria-labelledby={id}>
+    <div className="construction-copy">
+      <p className="construction-eyebrow">Construction study</p>
+      <h2 id={id}>From cut <em>to cloth.</em></h2>
+      <div>
+        {choices.length>1?selector:<h3>{study.name}</h3>}
         <p className="construction-spec">{study.cut}</p><p className="construction-description">{study.text}
           {selected!=="fez"&&" Lines on the board mark matching edges. The film cuts to the checked seam placement, then follows the cloth under gravity."}</p>
-        <div className="construction-links">{hero&&<a href={study.href}>Open the study ↗</a>}
-          <a href={study.pdf} download>{selected==="ensemble"?"Jacket pattern":"Full-size pattern"} ↓</a>
-          {selected==="ensemble"&&<a href="/patterns/trousers.pdf" download>Trouser pattern ↓</a>}</div>
+        {patterns}
       </div>
     </div>
-    <ConstructionMotion key={selected} garment={selected} hero={hero}/>
+    <ConstructionMotion key={selected} garment={selected}/>
   </section>;
 }

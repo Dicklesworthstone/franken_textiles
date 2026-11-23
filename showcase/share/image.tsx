@@ -8,9 +8,9 @@ import { plates, type Plate, type PlateId } from "./catalog";
 type Artwork = { file: string; crop?: [left: number, top: number, width: number, height: number]; contain?: string; preserveOutline?: boolean };
 const raisedArmStudy = "public/fittings/bolero-raised-start.png";
 const art: Record<string, Artwork> = {
-  "flare-cut": {file:"public/media/construction-flare-cut.jpg"},
-  "flare-join": {file:"public/media/construction-flare-join.jpg"},
-  "flare-sewn": {file:"public/media/construction-flare.jpg"},
+  "full-hand-cut": {file:"public/media/construction-bolero-full-hand-cut.jpg"},
+  "full-hand-join": {file:"public/media/construction-bolero-full-hand-join.jpg"},
+  "full-hand-sewn": {file:"public/media/construction-bolero-full-hand.jpg",contain:"#39352b",preserveOutline:true},
   "blue-cut": {file:"public/media/construction-blue-cut.jpg"},
   "blue-join": {file:"public/media/construction-blue-join.jpg"},
   "bolero-settled": {file:raisedArmStudy,crop:[770,204,722,231]},

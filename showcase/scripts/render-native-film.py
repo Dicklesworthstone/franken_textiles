@@ -48,6 +48,8 @@ uniform sampler2D cloth_image;
 uniform sampler2DShadow shadow_image;
 uniform float fabric_pitch;
 uniform float fabric_mix;
+uniform float fabric_sheen;
+uniform mat3 axes;
 uniform bool shadows;
 uniform bool shadow_only;
 in vec3 n;
@@ -81,6 +83,12 @@ void main() {
         colour = fabric_mix >= 1.0 ? swatch : mix(base, base * swatch, fabric_mix);
     }
     vec3 lit = colour * light + vec3(0.013, 0.010, 0.007);
+    if (fabric_mix > 0.0 && fabric_sheen > 0.0) {
+        vec3 eye = transpose(axes)[2];
+        float grazing = pow(1.0 - abs(dot(normal, eye)), 2.5);
+        float scatter = grazing * (0.35 + 0.65 * max(dot(normal, rim), 0.0));
+        lit += fabric_sheen * scatter * mix(colour, vec3(1.0, 0.74, 0.52), 0.33);
+    }
     pixel = vec4(pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
 }
 """
@@ -308,6 +316,8 @@ def native_source(args, layout):
 
 def render(args):
     recorded, ids, faces, panels, body, body_faces, layout, phases = SOURCE["load"](args.garment, args.native)
+    bolero = args.garment == "bolero"
+    garment_only = args.garment == "bolero-full-hand"
     cloth_colours = np.tile(SOURCE["FABRIC_COLORS"][args.garment], (len(recorded[0]), 1))
     if args.garment == "ensemble":
         for name, (start, end) in panels.items():
@@ -335,6 +345,7 @@ def render(args):
     shading["cloth_image"].value = 0
     shading["shadow_image"].value = 1
     shading["fabric_pitch"].value = pitch
+    shading["fabric_sheen"].value = .32 if garment_only else 0
     cloth = Surface(ctx, shading, recorded[0], faces, recorded[0][:, [0, 2]], pattern_colours, depth)
     marks = ctx.program(vertex_shader=MARK_VERTEX, fragment_shader=MARK_FRAGMENT)
     mark_buffer = ctx.buffer(reserve=max(1, len(faces))*6*12, dynamic=True)
@@ -367,23 +378,24 @@ def render(args):
         marks_vao.render(mode=mode, vertices=len(points))
 
     models, bounds = [], [recorded[-1]]
-    floor = recorded[-1, :, 2].min() - .001
+    floor = recorded[-1, :, 2].min() - (.12 if garment_only else .001)
     mount = None
-    if body is not None:
+    # The cover isolates the recorded cloth. The matching viewer shows the full collision audit body.
+    if body is not None and not garment_only:
         floor = body[:, 2].min() - .009
-        head_fraction = .18 if args.garment in ("bolero", "ensemble") else .114
+        head_fraction = .18 if bolero or args.garment == "ensemble" else .114
         head = body[:, 2].max() - np.ptp(body[:, 2])*head_fraction
         lower_body = args.garment in ("column", "flare", "trousers")
         if lower_body:
             head = min(head, recorded[-1, :, 2].max() + .14)
         visible = np.ones(len(body), dtype=bool)
-        if args.garment in ("blue", "yellow", "bolero"):
+        if bolero or args.garment in ("blue", "yellow"):
             hem = min(recorded[-1][start:end, 2].min() for piece, (start, end) in panels.items() if "back" in piece)
             hip = hem-.021
-            half_width = .27 if args.garment != "bolero" else .125
+            half_width = .125 if bolero else .27
             trunk = np.abs(body[:, 0]) < half_width
             drop = np.ptp(recorded[-1, :, 2]) * .28
-            if args.garment == "bolero":
+            if bolero:
                 visible &= (body[:, 2] >= hip) | ~trunk
             else:
                 floor = min(hip-drop, recorded[-1, :, 2].min()-.022, body[~trunk, 2].min()-.025)
@@ -393,14 +405,14 @@ def render(args):
             mount = (hip, drop, (low+high)/2, (high[0]-low[0])*.48)
         body_faces = body_faces[visible[body_faces].all(axis=1)]
         body, body_faces = trim_top(body, body_faces, head)
-        if lower_body or args.garment == "bolero":
+        if lower_body or bolero:
             body_faces = main_component(body_faces, len(body))
         dressed_form = body[np.unique(body_faces)]
         bounds.append(dressed_form)
         models.append(Surface(ctx, shading, body, body_faces, body[:, [0, 2]], np.tile((.46,.34,.235), (len(body),1)), depth))
         if mount:
             hip, drop, center, radius = mount
-            if args.garment == "bolero":
+            if bolero:
                 floor = min(hip-drop, dressed_form[:, 2].min()-.027)
             stand, triangles = turned_stand(center, floor, hip, radius)
             models.append(Surface(ctx, shading, stand, triangles, stand[:, [0, 2]], np.tile((.093, .052, .030), (len(stand), 1)), depth))
@@ -513,6 +525,6 @@ if __name__ == "__main__":
         parser.error("choose a new .png path for a still or .mp4 path for a film")
     if args.out.exists():
         parser.error(f"{args.out} already exists")
-    if args.native is None and args.garment in ("bolero","trousers","column","flare","ensemble"):
+    if args.native is None and args.garment in ("bolero","bolero-full-hand","trousers","column","flare","ensemble"):
         parser.error("this garment needs its original native drape directory")
     render(args)

@@ -220,8 +220,12 @@ actual pattern boundaries, seam pairs and garment meshes with direct lighting.
 ```sh
 python3 scripts/render-native-film.py sundress /path/to/new-media/construction-sundress.mp4
 python3 scripts/render-native-film.py bolero /path/to/new-media/construction-bolero.mp4 /path/to/native-solve
+python3 scripts/render-native-film.py bolero-full-hand /path/to/new-media/construction-bolero-full-hand.mp4 /path/to/full-hand-solve
 node --test scripts/films.test.mjs
 ```
+
+The `bolero-full-hand` film uses the same audited point cache as the homepage's full-hand replay.
+The film isolates the cloth for a clear view of the seams and hems. The replay shows it on the fitted Anny form.
 
 The trouser films can also be rendered directly from the published native surfaces. Choose `posture`,
 `elastic` or `section`. The skirt comparison takes the finished column and flare construction films.

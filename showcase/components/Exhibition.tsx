@@ -14,7 +14,7 @@ import {ExhibitionCover,ExhibitionFeatures} from "./site/ExhibitionCover";
 import SiteHeader from "./site/SiteHeader";
 import SiteFooter from "./site/SiteFooter";
 import Reveal from "./site/Reveal";
-import { Claims, Deliverables, Manifesto, Pipeline, PlatformCapabilities, StartHere } from "./site/Story";
+import { Claims, Deliverables, Pipeline, PlatformCapabilities, StartHere } from "./site/Story";
 import VisualFitting from "./site/VisualFitting";
 import { workbench } from "./site/links";
 import type { PanelOutline } from "../components/garmentMesh";
@@ -253,7 +253,7 @@ export default function Exhibition({section}: {section?: string}) {
         <div className="dr-reel"><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/></div></figure>
           <button onClick={()=>setItem({reel:true})}><span><small>Studio film</small><strong>Inside the wardrobe</strong></span><Arrow diagonal/></button></div>
       </div></section>}
-      {!section && <><Manifesto/><VisualFitting/><Pipeline/></>}
+      {!section && <><VisualFitting/><Pipeline/></>}
       {show("wardrobe") && <section id="wardrobe" className="paper wardrobe-gallery"><div className="wrap collection">
         <div className="section-top"><div><p className="kicker">Interactive garments</p><Heading className="section-title"><a href="/sections/wardrobe/">The wardrobe<span>.</span></a></Heading></div>
           <p>Take a garment off the rail. Turn it around, change the figure, or look beneath a layer.</p></div>

@@ -20,7 +20,12 @@ test("every construction study pairs a full-size cut with its three film chapter
     await page.goto(site);
     const stage=page.locator("#construction"),select=stage.getByRole("combobox");
     const choices=await select.locator("option").evaluateAll(options=>options.map(o=>o.value));
-    assert.equal(choices.length,10);
+    assert.equal(choices.length,11);
+    assert.equal(await select.inputValue(),"bolero-full-hand");
+    assert.equal(await stage.getByRole("button",{name:"Sewn article",exact:true}).getAttribute("aria-pressed"),"true");
+    assert.equal(await stage.getByRole("link",{name:"Turn the bolero in 3D"}).getAttribute("href"),"/fittings/bolero-full-hand-replay");
+    assert.equal(await stage.getByRole("link",{name:"Edit the draft"}).getAttribute("href"),"/workbench/?sample=full-hand-bolero");
+    assert.equal(await stage.getByRole("link",{name:"Full-scale A4 pattern"}).getAttribute("href"),"/fittings/bolero-full-hand-A4.pdf");
     for(const garment of choices){
       await select.selectOption(garment);
       const motion=stage.locator(`[data-garment="${garment}"]`);
@@ -174,6 +179,7 @@ test("each gallery garment has a downloadable full-size sewing PDF", async () =>
       }
     }
     await page.goto(new URL("/sections/films/",site).href);
+    assert.ok(await page.locator('.screening a[href="/fittings/bolero-full-hand-A4.pdf"]').isVisible());
     await page.getByRole("button",{name:/Lightly eased sundress/}).click();
     assert.ok(await page.locator('.screening a[href="/exhibits/sundress/light-A4.pdf"]').isVisible());
     await page.getByRole("button",{name:/The hussar’s cabinet/}).click();

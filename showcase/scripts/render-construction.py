@@ -33,6 +33,7 @@ FABRIC_COLORS = {
     "sundress": (.16, .38, .29), "eased": (.16, .38, .29),
     "blue": (.013, .022, .049), "yellow": (.019, .019, .022),
     "trousers": (.052, .103, .137), "bolero": (.27, .042, .028),
+    "bolero-full-hand": (.55, .137, .068),
     "ensemble": (.03, .14, .105), "fez": (.26, .017, .021),
     "column": (.28, .16, .09), "flare": (.32, .15, .07),
 }
@@ -117,6 +118,9 @@ def load(name, native):
         expected = document(PUBLIC/"atelier/study.json")["runs"][name+"-680"]["pc2Sha256"]
     elif name == "bolero":
         expected = document(PUBLIC/"exhibits/poses/runs.json")["cases"]["520-35"]["sourcePc2Sha256"]
+    elif name == "bolero-full-hand":
+        # The admitted 355 mm cut from the visual fitting walkthrough.
+        expected = "ca9e425831e0b8ec3f4f11e51d0974226d3b63ab115f4420dde54ab74c7b478a"
     elif name == "ensemble":
         expected = document(PUBLIC/"exhibits/poses/ensemble.json")["pc2Sha256"]
     else:
