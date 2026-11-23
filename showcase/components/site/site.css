@@ -405,8 +405,8 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 .ft-index small{font:500 11px/1 var(--mono);color:#6d6558}
 @media(max-width:1279px){.ft-nav-extra{display:none}}
 /* A running stitch sewn along the header's lower edge as the page is read. It is revealed by a clip, not by
-   growing its width, so scrolling does not lay anything out again; where scroll timelines are missing it
-   stays clipped. */
+   growing its width, so scrolling does not lay anything out again. Where scroll timelines are missing,
+   SiteHeader sets the same clip from the scroll position. */
 .ft-thread{position:absolute;inset:auto 0 -1.5px 0;height:2px;pointer-events:none;clip-path:inset(0 100% 0 0);
   background:repeating-linear-gradient(90deg,var(--rust) 0 9px,transparent 9px 14px)}
 @supports (animation-timeline:scroll()){

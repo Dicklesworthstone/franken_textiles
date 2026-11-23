@@ -40,9 +40,19 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
   const sheet = useRef<HTMLDialogElement>(null);
   // The id of a section on this page that a sheet entry was just followed to; focus goes there on close.
   const landing = useRef<string | null>(null);
+  const thread = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    const onScroll = () => setStuck(window.scrollY > 6);
+    // The style sheet draws the reading thread with a scroll timeline. Not every browser has one (Firefox
+    // 158 does not), so there the same clip is set from the scroll position here.
+    const styled = CSS.supports("animation-timeline: scroll()");
+    const onScroll = () => {
+      setStuck(window.scrollY > 6);
+      if (styled || !thread.current) return;
+      const range = document.documentElement.scrollHeight - window.innerHeight;
+      const unread = range > 0 ? 100 - Math.min(1, Math.max(0, window.scrollY / range)) * 100 : 100;
+      thread.current.style.clipPath = `inset(0 ${unread.toFixed(2)}% 0 0)`;
+    };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
@@ -108,7 +118,7 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
           </button>
         </div>
       </div>
-      <span className="ft-thread" aria-hidden="true"/>
+      <span ref={thread} className="ft-thread" aria-hidden="true"/>
     </header>
     <dialog ref={sheet} className="ft-sheet" aria-label="Site menu" onClose={() => setOpen(false)} onClick={followed}>
       <div className="ft-sheet-top wrap">
