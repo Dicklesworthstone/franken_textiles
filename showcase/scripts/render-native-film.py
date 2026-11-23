@@ -169,8 +169,9 @@ class Surface:
         layout = ("3f 3f 2f 3f 2f", "position", "normal", "uv", "colour", "detail") if detail is not None \
             else ("3f 3f 2f 3f", "position", "normal", "uv", "colour")
         self.vao = ctx.vertex_array(program, [(self.buffer, *layout)], self.indices)
-        stride = (12 if detail is not None else 10) * 4 - 12
-        self.depth = (ctx.vertex_array(depth_shader, [(self.buffer, f"3f {stride}x", "position")], self.indices)
+        # The depth pass reads only the position: skip the other 8 floats (10 with the detail) of a vertex.
+        skip = self.vertices.shape[1] * 4 - 12
+        self.depth = (ctx.vertex_array(depth_shader, [(self.buffer, f"3f {skip}x", "position")], self.indices)
                       if depth_shader is not None else None)
         self.update(positions)
 
