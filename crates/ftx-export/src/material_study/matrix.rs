@@ -319,6 +319,11 @@ impl Request {
                     .material_key
                     .as_deref()
                     .expect("worst-case guidance nominates one material");
+                let mut objective_label = serde_json::to_string(&objective.metric)
+                    .map_err(|error| invalid(error.to_string()))?;
+                if let Some(region) = &objective.region {
+                    objective_label.push_str(&format!(" in region {region:?}"));
+                }
                 if let (Some([lo, hi]), Some([lower_case, upper_case])) = (
                     reading.reported_bounds,
                     guidance.best_reported_bound_case_keys.as_ref(),
@@ -326,8 +331,7 @@ impl Request {
                     format!(
                         "Worst-case retained trial '{trial}' on material '{}': nominal limiting case '{case}', {} = {} {}; reported worst-case range [{lo}, {hi}] {}, with lower endpoint from '{lower_case}' and upper endpoint from '{upper_case}'. Endpoints aggregate the same metric across all admitted cases, not a single case's interval or an average. Only strictly separated ranges establish improvement; overlaps and touching endpoints remain unresolved. Source ranges are conditional enclosures, not statistical confidence or uncertain geometry. Inspect consumer_cases for all original readings and refusals.",
                         material,
-                        serde_json::to_string(&objective.metric)
-                            .map_err(|error| invalid(error.to_string()))?,
+                        objective_label,
                         reading.value,
                         reading.unit,
                         reading.unit
@@ -336,8 +340,7 @@ impl Request {
                     format!(
                     "Worst-case retained trial '{trial}' on material '{}': limiting case '{case}', {} = {} {}. This is the original admitted case reading, not an average. Every named case admitted this trial; the limiting case can change between trials. Inspect consumer_cases for all readings and refusals.",
                     material,
-                    serde_json::to_string(&objective.metric)
-                        .map_err(|error| invalid(error.to_string()))?,
+                    objective_label,
                     reading.value,
                     reading.unit
                     )
@@ -436,12 +439,13 @@ impl Request {
                     || policy.objectives.len() != 1
                     || first.is_none_or(|first| {
                         policy.objectives[0].metric != first.metric
+                            || policy.objectives[0].region != first.region
                             || std::mem::discriminant(&policy.objectives[0].direction)
                                 != std::mem::discriminant(&first.direction)
                     })
             }) {
                 return Err(invalid(
-                    "worst-case guidance requires one identical metric, direction and comparison basis in every case",
+                    "worst-case guidance requires one identical metric, region, direction and comparison basis in every case",
                 ));
             }
         }

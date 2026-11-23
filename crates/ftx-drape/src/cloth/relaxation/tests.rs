@@ -5,6 +5,14 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::materials::{Catalog, Material};
 
 fn solver(compression: f64, nonlinear: bool) -> Solver {
+    solver_with_compression_model(compression, nonlinear, CompressionModel::AxisAligned)
+}
+
+fn solver_with_compression_model(
+    compression: f64,
+    nonlinear: bool,
+    compression_model: CompressionModel,
+) -> Solver {
     let mut selection: Selection = serde_json::from_str(include_str!(
         "../../../../../tests/fixtures/materials/synthetic-relaxation.json"
     ))
@@ -35,6 +43,7 @@ fn solver(compression: f64, nonlinear: bool) -> Solver {
         m.areal_kg_m2,
     )
     .unwrap();
+    model.compression_model = compression_model;
     model
         .set_membrane_responses(&[snapshot.membrane_response().unwrap()])
         .unwrap();
@@ -65,38 +74,48 @@ fn near(a: f64, b: f64, tol: f64) {
 
 #[test]
 fn assembled_maxwell_gradient_and_hessian_include_grain_geometry_and_compression_chain_rule() {
-    for (compression, nonlinear) in [(1., false), (0.03, false), (1., true)] {
-        let mut s = solver(compression, nonlinear);
-        s.relaxation.as_mut().unwrap().advance(&s.x, 0.017).unwrap();
-        let x = vec![
-            Vec3::new(0.001, 0.001, -0.003),
-            Vec3::new(0.1008, 0.002, -0.002),
-            Vec3::new(0.002, 0.1009, -0.001),
-        ];
-        let inertia = Some((&s.x[..], 0.02));
-        let (gradient, hessian) = s.assemble(&x, inertia, false);
-        let h = 1e-8;
-        for (j, expected) in gradient.iter().enumerate() {
-            let plus = perturb(&x, j, h);
-            let minus = perturb(&x, j, -h);
-            near(
-                (s.potential(&plus, inertia).unwrap() - s.potential(&minus, inertia).unwrap())
-                    / (2. * h),
-                *expected,
-                1e-6,
-            );
-            let (gp, _) = s.assemble(&plus, inertia, false);
-            let (gm, _) = s.assemble(&minus, inertia, false);
-            for i in 0..9 {
-                let (indices, values) = hessian.row(i);
-                let hij = indices
-                    .iter()
-                    .position(|k| *k == j)
-                    .map_or(0., |k| values[k]);
-                near((gp[i] - gm[i]) / (2. * h), hij, 1e-5);
+    for model in [CompressionModel::AxisAligned, CompressionModel::Principal] {
+        for (compression, nonlinear) in [(1., false), (0.03, false), (1., true), (0.03, true)] {
+            let mut s = solver_with_compression_model(compression, nonlinear, model);
+            s.relaxation.as_mut().unwrap().advance(&s.x, 0.017).unwrap();
+            let x = vec![
+                Vec3::new(0.001, 0.001, -0.003),
+                Vec3::new(0.1008, 0.002, -0.002),
+                Vec3::new(0.002, 0.1009, -0.001),
+            ];
+            let inertia = Some((&s.x[..], 0.02));
+            let (gradient, hessian) = s.assemble(&x, inertia, false);
+            let h = 1e-8;
+            for (j, expected) in gradient.iter().enumerate() {
+                let plus = perturb(&x, j, h);
+                let minus = perturb(&x, j, -h);
+                near(
+                    (s.potential(&plus, inertia).unwrap() - s.potential(&minus, inertia).unwrap())
+                        / (2. * h),
+                    *expected,
+                    1e-6,
+                );
+                let (gp, _) = s.assemble(&plus, inertia, false);
+                let (gm, _) = s.assemble(&minus, inertia, false);
+                for i in 0..9 {
+                    let (indices, values) = hessian.row(i);
+                    let hij = indices
+                        .iter()
+                        .position(|k| *k == j)
+                        .map_or(0., |k| values[k]);
+                    near((gp[i] - gm[i]) / (2. * h), hij, 1e-5);
+                }
             }
         }
     }
+}
+
+#[test]
+fn changing_the_compression_model_cannot_reuse_bound_maxwell_memory() {
+    let mut s = solver(0.03, false);
+    s.model.compression_model = CompressionModel::Principal;
+    assert!(s.membrane_energy().is_err());
+    assert!(s.step(0.02).is_err());
 }
 
 #[test]

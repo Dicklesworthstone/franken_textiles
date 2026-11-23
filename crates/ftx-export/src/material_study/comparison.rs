@@ -976,8 +976,25 @@ impl Metric {
 pub struct Objective {
     /// Computed output and its fixed physical dimension.
     pub metric: Metric,
+    /// Exact named material region; omission compares the admitted selected union.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "constraint_region"
+    )]
+    pub region: Option<String>,
     /// Smaller or larger, explicitly chosen even for signed quantities.
     pub direction: Direction,
+}
+
+impl Objective {
+    /// Resolve the authored scope without substituting the selected union for a missing region.
+    pub(super) fn reading<'a>(&self, candidate: &'a Candidate) -> Option<&'a Reading> {
+        match &self.region {
+            Some(region) => candidate.regional_readings.get(region)?.get(&self.metric),
+            None => candidate.readings.get(&self.metric),
+        }
+    }
 }
 
 /// Inclusive constraints on computed outputs, in the metric's fixed units.
@@ -1014,7 +1031,7 @@ fn constraint_region<'de, D: serde::Deserializer<'de>>(
 pub struct Policy {
     /// Explicit nominal outputs or supported conditional mass/heat/vapor/body-water source bounds.
     pub basis: Basis,
-    /// One to sixteen unique objective metrics. No hidden scalarization or automatic winner.
+    /// One to sixteen unique metric/region objectives. No hidden scalarization or automatic winner.
     pub objectives: Vec<Objective>,
     /// At most 64 inclusive constraints, unique by metric and optional region.
     #[serde(default)]
@@ -1071,7 +1088,7 @@ pub struct Candidate {
     pub key: String,
     /// Available objective/constraint readings; missing values are not inserted as zero.
     pub readings: BTreeMap<Metric, Reading>,
-    /// Admitted regional guard values, separately from the selected-union objective readings.
+    /// Admitted regional objective/guard values, separately from the selected-union readings.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub regional_readings: BTreeMap<String, BTreeMap<Metric, Reading>>,
     /// Required consumer, missing metric or failed constraint reasons.
@@ -1142,9 +1159,23 @@ impl Policy {
                 "comparison needs 1..16 objectives, at most 64 constraints and 16 consumers",
             ));
         }
-        let mut metrics = BTreeSet::new();
-        if self.objectives.iter().any(|o| !metrics.insert(o.metric)) {
-            return Err(invalid("comparison objective metrics must be unique"));
+        let mut objectives = BTreeSet::new();
+        for objective in &self.objectives {
+            if !objectives.insert((objective.metric, objective.region.as_deref())) {
+                return Err(invalid(
+                    "comparison objective metric/region scopes must be unique",
+                ));
+            }
+            if objective.region.as_ref().is_some_and(|region| {
+                region.trim().is_empty()
+                    || region.len() > 512
+                    || !objective.metric.supports_regions()
+                    || self.basis != Basis::Nominal
+            }) {
+                return Err(invalid(
+                    "regional comparison objectives need a nonempty name of at most 512 UTF-8 bytes and a nominal material-strain or body-contact metric",
+                ));
+            }
         }
         let mut constraints = BTreeSet::new();
         for c in &self.constraints {
@@ -1447,6 +1478,12 @@ impl Policy {
             report.notes.push("Material-strain objectives use signed, dimensionless raw material-frame Green strains [E11, E22, 2E12] before numerical gather/compression softening, on the explicitly selected retained instances. Motion extrema include the initial state and every accepted mechanical sample; no continuous-time bound is claimed. Canonical source domains describe constitutive characterization support. Authored comparison constraints are design requirements, never measured failure, rupture, comfort or safe-fit limits. Static and motion strain consumers remain independent of thermal qualification; a refused motion history cannot substitute its static result.");
         }
         if self
+            .objectives
+            .iter()
+            .any(|objective| objective.region.is_some())
+        {
+            report.notes.push("Named regional objectives and constraints use only the exact region of their admitted strain or body-contact consumer. Omitted scopes use the selected union, whose readings stay separate. Regional contact loads at shared welded vertices are not additive. A missing region or incomplete motion excludes the candidate without a union or zero fallback. Preferences and bounds are authored nominal design requirements, not measured failure, pressure, comfort or empirical fit limits.");
+        } else if self
             .constraints
             .iter()
             .any(|constraint| constraint.region.is_some())
@@ -1883,6 +1920,35 @@ impl Policy {
                             "{metric:?} has no complete valid reported bounds; its nominal value remains visible but no exact range is substituted"
                         )));
                     }
+                    for region in self
+                        .objectives
+                        .iter()
+                        .filter(|objective| objective.metric == metric)
+                        .filter_map(|objective| objective.region.as_ref())
+                    {
+                        let Some(value) = metric
+                            .regional_value(region, &admitted)
+                            .filter(|value| value.is_finite() && (metric.signed() || *value >= 0.))
+                        else {
+                            result.exclusions.push(invalid(format!(
+                                "{metric:?} for objective region {region:?} is unavailable; no union, zero or partial value substituted"
+                            )));
+                            continue;
+                        };
+                        result
+                            .regional_readings
+                            .entry(region.clone())
+                            .or_default()
+                            .insert(
+                                metric,
+                                Reading {
+                                    value,
+                                    reported_bounds: None,
+                                    unit: metric.unit(currency).into(),
+                                    consumer: metric.consumer(),
+                                },
+                            );
+                    }
                     for c in self.constraints.iter().filter(|c| c.metric == metric) {
                         let constraint_value = if let Some(region) = &c.region {
                             let Some(value) =
@@ -1989,16 +2055,14 @@ impl Policy {
         let mut strictly = false;
         for objective in &self.objectives {
             let interval = |candidate: &Candidate| {
-                let reading = &candidate.readings[&objective.metric];
-                match self.basis {
+                let reading = objective.reading(candidate)?;
+                Some(match self.basis {
                     Basis::Nominal => [reading.value, reading.value],
-                    Basis::ReportedBounds => {
-                        reading.reported_bounds.expect("admitted source range")
-                    }
-                }
+                    Basis::ReportedBounds => reading.reported_bounds?,
+                })
             };
-            let [al, ah] = interval(a);
-            let [bl, bh] = interval(b);
+            let [al, ah] = interval(a)?;
+            let [bl, bh] = interval(b)?;
             match objective.direction {
                 Direction::Minimize => {
                     if ah > bl {

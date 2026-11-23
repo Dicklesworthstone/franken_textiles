@@ -5,7 +5,7 @@ use ftx_drape::material::resolve;
 use ftx_drape::motion::{MotionOptions, advance_body};
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
 use ftx_drape::scene::PartFrames;
-use ftx_drape::{Body, ClothModel, ContactParams, PartFrame, Solver};
+use ftx_drape::{Body, ClothModel, CompressionModel, ContactParams, PartFrame, Solver};
 use ftx_pattern::Pattern;
 use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::material_relaxation::{
@@ -312,6 +312,19 @@ fn source_selection_reaches_only_assigned_retained_triangles_in_real_sewn_scene(
 }
 
 fn check_sewn_selection(selected: Selection) {
+    check_sewn_selection_with_model(selected, CompressionModel::AxisAligned, 1.0);
+}
+
+#[test]
+fn principal_compression_binds_before_maxwell_history_in_real_sewn_scene() {
+    check_sewn_selection_with_model(selection(), CompressionModel::Principal, 0.03);
+}
+
+fn check_sewn_selection_with_model(
+    selected: Selection,
+    compression_model: CompressionModel,
+    compression: f64,
+) {
     let parallel = selected
         .record
         .as_ref()
@@ -330,6 +343,8 @@ fn check_sewn_selection(selected: Selection) {
         sew_steps: 3,
         drape_steps: 3,
         step: 0.001,
+        compression_model,
+        compression,
         ..DrapeOptions::default()
     };
     let surface = Body::new(
@@ -368,6 +383,7 @@ fn check_sewn_selection(selected: Selection) {
         "history admission precedes sewing and gravity steps"
     );
     let run = drape(&Pattern::new(p.clone()), &json!({}), &body, &opts, |_| {}).unwrap();
+    assert_eq!(run.scene.solver.model.compression_model, compression_model);
     let mut checked = drape(
         &Pattern::new(p.clone()),
         &json!({}),

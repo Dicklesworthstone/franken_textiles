@@ -107,8 +107,15 @@ impl Field {
             energy += match &self.entries[i] {
                 Some(b) => element.area * b.memory.response(b.strain(x)?, incremental)?.energy,
                 None => model.membrane_response(i).map_or_else(
-                    || element.energy(x, &model.material(i)),
-                    |law| element.response_energy(x, law, &model.material(i)),
+                    || model.membrane_energy(i, x),
+                    |law| {
+                        element.response_energy_with_model(
+                            x,
+                            law,
+                            &model.material(i),
+                            model.compression_model,
+                        )
+                    },
                 ),
             };
         }
@@ -310,8 +317,15 @@ impl Solver {
                 .enumerate()
                 .map(|(i, e)| {
                     self.model.membrane_response(i).map_or_else(
-                        || e.energy(&self.x, &self.model.material(i)),
-                        |law| e.response_energy(&self.x, law, &self.model.material(i)),
+                        || self.model.membrane_energy(i, &self.x),
+                        |law| {
+                            e.response_energy_with_model(
+                                &self.x,
+                                law,
+                                &self.model.material(i),
+                                self.model.compression_model,
+                            )
+                        },
                     )
                 })
                 .sum()

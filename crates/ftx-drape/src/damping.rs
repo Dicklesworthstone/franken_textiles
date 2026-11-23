@@ -11,6 +11,14 @@
 //!   dihedral curvature-rate potentials. Because Green strain `E(x)` and dihedral angle `θ(x)` are
 //!   exact Euclidean invariants, both terms exert **exact zero force** on arbitrary 3D rigid
 //!   translation and rotation (no parasitic molasses drag in free fall or swinging motion).
+//!   Source-selected panel laws use their directional curvature tensor and full reference area,
+//!   replacing their inactive scalar hinges. Vector-Hessian curvature increments are expressed in
+//!   a source-triangle frame carried by the garment; normal-projected increments use raw covariant
+//!   curvature, independent of preferred shape. Both keep rigid motion out of the rate response.
+//!
+//! Internal rates use backward differences of endpoint strain/curvature even when the structural
+//! integrator is generalized-alpha. Its aerodynamic velocity is the generalized midpoint, but the
+//! internal-rate extension is not a second-order Kelvin-Voigt time discretization.
 //!
 //! Honesty boundary: aerodynamic drag coefficients are uncalibrated reference defaults unless
 //! measured in experiment. Physics KATs verify terminal velocity, anisotropy, and SE(3) invariance;
@@ -21,6 +29,7 @@ use std::f64::consts::PI;
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use serde::{Deserialize, Serialize};
 
+use crate::bending::PanelRateState;
 use crate::cloth::ClothModel;
 use crate::elements::Local;
 
@@ -129,8 +138,8 @@ pub struct DampingOptions {
     /// (seconds; `0.0` disables). Strictly SE(3)-invariant.
     #[serde(skip_serializing_if = "is_zero_f64")]
     pub rayleigh_membrane_s: f64,
-    /// Stiffness-proportional hinge dihedral curvature-rate damping time constant `β_b`
-    /// (seconds; `0.0` disables). Strictly SE(3)-invariant.
+    /// Stiffness-proportional curvature-rate damping time constant `β_b` (seconds; `0.0` disables).
+    /// Uses source-panel tensors where selected, and scalar dihedral hinges elsewhere. SE(3)-invariant.
     #[serde(skip_serializing_if = "is_zero_f64")]
     pub rayleigh_bending_s: f64,
 }
@@ -219,6 +228,8 @@ pub(crate) struct DampingStep<'a> {
     pub(crate) tri_e0: Vec<[f64; 3]>,
     /// Reference dihedral angle `θ(x0)` per hinge (empty when `rayleigh_bending_s == 0`).
     pub(crate) hinge_theta0: Vec<f64>,
+    /// Source-panel curvature in objective coordinates, with each original directional tensor.
+    panel_curvature0: Vec<PanelRateState>,
 }
 
 impl<'a> DampingStep<'a> {
@@ -292,6 +303,15 @@ impl<'a> DampingStep<'a> {
         } else {
             Vec::new()
         };
+        let panel_curvature0 = if options.rayleigh_bending_s > 0.0 {
+            model
+                .panel_bending_patches()
+                .iter()
+                .map(|patch| patch.rate_state(x0))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
         Ok(Some(Self {
             options,
             h,
@@ -299,6 +319,7 @@ impl<'a> DampingStep<'a> {
             tri_frames,
             tri_e0,
             hinge_theta0,
+            panel_curvature0,
         }))
     }
 
@@ -334,6 +355,13 @@ impl<'a> DampingStep<'a> {
                 let theta = hinge.dihedral_angle(x);
                 let d = wrap_angle_diff(theta - self.hinge_theta0[i]);
                 total += 0.5 * rate * b * hinge.dihedral_weight() * d * d;
+            }
+            for (patch, &previous) in model
+                .panel_bending_patches()
+                .iter()
+                .zip(&self.panel_curvature0)
+            {
+                total += patch.rate_energy(x, previous, rate);
             }
         }
         total
@@ -394,6 +422,24 @@ impl<'a> DampingStep<'a> {
         let d = wrap_angle_diff(theta_cur - self.hinge_theta0[hinge_index]);
         let target = theta_cur - d;
         Some(hinge.dihedral_quadratic_local(x, target, coeff))
+    }
+
+    /// Objective source-panel bending-rate response on the panel's existing six-vertex support.
+    #[must_use]
+    pub(crate) fn rayleigh_panel_local(
+        &self,
+        model: &ClothModel,
+        panel_index: usize,
+        x: &[Vec3],
+    ) -> Option<Local<18, 324>> {
+        if self.options.rayleigh_bending_s <= 0.0 {
+            return None;
+        }
+        Some(model.panel_bending_patches()[panel_index].rate_local(
+            x,
+            self.panel_curvature0[panel_index],
+            self.options.rayleigh_bending_s / self.h,
+        ))
     }
 }
 
@@ -838,5 +884,89 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, RefusalCode::OutOfRange);
+    }
+
+    #[test]
+    fn source_panel_rates_survive_replaced_scalar_hinges() {
+        use ftx_pattern::material_bending::BendingTensor;
+
+        let (rest, triangles) = crate::cloth::grid(0.12, 0.08, 5, 4, Vec2::ZERO);
+        let x0: Vec<_> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let trial: Vec<_> = rest
+            .iter()
+            .map(|p| {
+                Vec3::new(
+                    p.x,
+                    p.y,
+                    0.7 * p.x * p.x + 0.4 * p.y * p.y - 0.2 * p.x * p.y,
+                )
+            })
+            .collect();
+        let options = DampingOptions {
+            rayleigh_bending_s: 0.02,
+            ..DampingOptions::default()
+        };
+        for normal in [false, true] {
+            let mut model = ClothModel::new(
+                rest.clone(),
+                &triangles,
+                Membrane::orthotropic(500.0, 300.0, 0.2, 60.0, 1.0),
+                1e-5,
+                0.15,
+            )
+            .unwrap();
+            let mut law = BendingTensor::new(0.002, 0.005, 0.0004, 0.003).unwrap();
+            if normal {
+                law = law.normal_projected();
+            }
+            model
+                .set_panel_bending(
+                    &rest,
+                    &triangles,
+                    &(0..rest.len()).collect::<Vec<_>>(),
+                    &vec![Some(law); triangles.len()],
+                )
+                .unwrap();
+            assert!((0..model.hinges.len()).all(|i| model.hinge_rigidity(i) == 0.0));
+            let h = 0.01;
+            let step = DampingStep::build(
+                &model,
+                options,
+                &x0,
+                h,
+                VelocityMap::ImplicitEuler {
+                    x0: &x0,
+                    inv_h: 1.0 / h,
+                },
+            )
+            .unwrap()
+            .unwrap();
+            let expected: f64 = model
+                .panel_bending_patches()
+                .iter()
+                .map(|patch| patch.energy(&trial) * options.rayleigh_bending_s / h)
+                .sum();
+            assert!(expected > 1e-6);
+            let actual = step.energy(&model, &trial);
+            assert!(
+                (actual - expected).abs() < 1e-12 * expected,
+                "normal={normal}: actual {actual}, expected {expected}"
+            );
+            assert_eq!(step.panel_curvature0.len(), triangles.len());
+            assert!(
+                step.rayleigh_panel_local(&model, 0, &trial)
+                    .unwrap()
+                    .grad
+                    .iter()
+                    .any(|g| g.abs() > 1e-8)
+            );
+            assert!(
+                model
+                    .panel_bending_patches()
+                    .iter()
+                    .all(|patch| patch.tensor() == law)
+            );
+            assert_eq!(step.energy(&model, &x0), 0.0);
+        }
     }
 }

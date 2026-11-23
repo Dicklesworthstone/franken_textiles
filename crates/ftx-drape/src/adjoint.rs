@@ -18,7 +18,7 @@
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
 use crate::cloth::Solver;
-use crate::elements::{Membrane, soften};
+use crate::elements::{CompressionModel, Membrane, principal_strain_jets, soften};
 use crate::sparse::advanced::{
     BACKWARD_ERROR_ULPS, rigal_gaches_backward_error, true_relative_residual,
 };
@@ -457,15 +457,34 @@ impl Solver {
                 0.5 * (f2.dot(f2) - 1.0),
                 f1.dot(f2),
             ];
-            let (eff, dphi, _) = soften(raw, &mat);
-            let mut w = [0.0f64; 3];
-            for (a, &vi) in e.v.iter().enumerate() {
-                let (ga0, ga1) = (e.g[a][0], e.g[a][1]);
-                let lv = lam[vi];
-                w[0] += dphi[0] * ga0 * f1.dot(lv);
-                w[1] += dphi[1] * ga1 * f2.dot(lv);
-                w[2] += ga0 * f2.dot(lv) + ga1 * f1.dot(lv);
-            }
+            let (eff, w) = if self.model.compression_model == CompressionModel::Principal
+                && mat.compression != [1.0; 2]
+            {
+                let mapped = principal_strain_jets(raw, &mat);
+                let mut raw_w = [0.0; 3];
+                for (a, &vi) in e.v.iter().enumerate() {
+                    let (ga0, ga1) = (e.g[a][0], e.g[a][1]);
+                    let lv = lam[vi];
+                    raw_w[0] += ga0 * f1.dot(lv);
+                    raw_w[1] += ga1 * f2.dot(lv);
+                    raw_w[2] += ga0 * f2.dot(lv) + ga1 * f1.dot(lv);
+                }
+                (
+                    mapped.map(|v| v.v),
+                    mapped.map(|v| v.g[0] * raw_w[0] + v.g[1] * raw_w[1] + v.g[2] * raw_w[2]),
+                )
+            } else {
+                let (eff, dphi, _) = soften(raw, &mat);
+                let mut w = [0.0; 3];
+                for (a, &vi) in e.v.iter().enumerate() {
+                    let (ga0, ga1) = (e.g[a][0], e.g[a][1]);
+                    let lv = lam[vi];
+                    w[0] += dphi[0] * ga0 * f1.dot(lv);
+                    w[1] += dphi[1] * ga1 * f2.dot(lv);
+                    w[2] += ga0 * f2.dot(lv) + ga1 * f1.dot(lv);
+                }
+                (eff, w)
+            };
             pull_q[0] += e.area * eff[0] * w[0];
             pull_q[1] += e.area * eff[1] * w[1];
             pull_q[2] += e.area * (eff[1] * w[0] + eff[0] * w[1]);
@@ -628,67 +647,70 @@ mod tests {
 
     #[test]
     fn ift_constitutive_gradient_matches_central_fd_under_active_compression_softening() {
-        // Compress the sheet along x while pulling softly along y and z so compression softening
-        // (`raw[0] < 0`, `dphi[0] < 1`) is active at equilibrium while staying strictly stable.
-        let make = |e1: f64, e2: f64, nu12: f64, g12: f64, bending: f64| {
-            let (rest, tris) = grid(0.10, 0.10, 2, 2, Vec2::ZERO);
-            let x: Vec<Vec3> = rest
+        for compression_model in [CompressionModel::AxisAligned, CompressionModel::Principal] {
+            // Compress the sheet along x while pulling softly along y and z so compression softening
+            // (`raw[0] < 0`, `dphi[0] < 1`) is active at equilibrium while staying strictly stable.
+            let make = |e1: f64, e2: f64, nu12: f64, g12: f64, bending: f64| {
+                let (rest, tris) = grid(0.10, 0.10, 2, 2, Vec2::ZERO);
+                let x: Vec<Vec3> = rest
+                    .iter()
+                    .map(|p| Vec3::new(p.x * 0.985, p.y * 1.01, 0.006 * (p.x / 0.10)))
+                    .collect();
+                let fixed: Vec<[bool; 3]> = rest
+                    .iter()
+                    .map(|p| {
+                        if p.x == 0.0 || (p.x - 0.10).abs() < 1e-12 {
+                            [true, true, true]
+                        } else {
+                            [false, false, false]
+                        }
+                    })
+                    .collect();
+                let mat = Membrane::orthotropic(e1, e2, nu12, g12, 0.12);
+                let mut model = ClothModel::new(rest, &tris, mat, bending, 0.2).unwrap();
+                model.compression_model = compression_model;
+                let mut s = Solver::new(model, x, &fixed, Vec3::new(0.0, 0.5, -12.0));
+                s.tol = 1e-12;
+                s
+            };
+            let (e1, e2, nu12, g12, bending) = (250.0, 180.0, 0.2, 45.0, 2e-3);
+            let mut base = make(e1, e2, nu12, g12, bending);
+            base.static_solve().unwrap();
+            let dj_dx: Vec<Vec3> = base
+                .x
                 .iter()
-                .map(|p| Vec3::new(p.x * 0.985, p.y * 1.01, 0.006 * (p.x / 0.10)))
+                .map(|&p| p + Vec3::new(0.1, -0.2, 1.0))
                 .collect();
-            let fixed: Vec<[bool; 3]> = rest
-                .iter()
-                .map(|p| {
-                    if p.x == 0.0 || (p.x - 0.10).abs() < 1e-12 {
-                        [true, true, true]
-                    } else {
-                        [false, false, false]
-                    }
-                })
-                .collect();
-            let mat = Membrane::orthotropic(e1, e2, nu12, g12, 0.12);
-            let model = ClothModel::new(rest, &tris, mat, bending, 0.2).unwrap();
-            let mut s = Solver::new(model, x, &fixed, Vec3::new(0.0, 0.5, -12.0));
-            s.tol = 1e-12;
-            s
-        };
-        let (e1, e2, nu12, g12, bending) = (250.0, 180.0, 0.2, 45.0, 2e-3);
-        let mut base = make(e1, e2, nu12, g12, bending);
-        base.static_solve().unwrap();
-        let dj_dx: Vec<Vec3> = base
-            .x
-            .iter()
-            .map(|&p| p + Vec3::new(0.1, -0.2, 1.0))
-            .collect();
-        let grad = base.constitutive_gradient(&dj_dx, [0.0; 4], 0.0).unwrap();
-        let d_ortho = orthotropic_chain_rule(e1, e2, nu12, g12, grad.dq).unwrap();
-        let analytic = [
-            d_ortho[0],
-            d_ortho[1],
-            d_ortho[2],
-            d_ortho[3],
-            grad.d_bending,
-        ];
-        let p0 = [e1, e2, nu12, g12, bending];
-        let dirs = vec![
-            vec![1.0, 0.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0, 0.0, 0.0],
-            vec![0.0, 0.0, 0.0, 1.0, 0.0],
-            vec![0.0, 0.0, 0.0, 0.0, 1e-4],
-        ];
-        let eval_j = |p: &[f64]| -> f64 {
-            let mut s = make(p[0], p[1], p[2], p[3], p[4]);
-            s.x = base.x.clone();
-            s.static_solve().unwrap();
-            s.x.iter()
-                .map(|p| 0.5 * p.norm2() + Vec3::new(0.1, -0.2, 1.0).dot(*p))
-                .sum()
-        };
-        let verdict = verify_gradient(&eval_j, &p0, &analytic, &dirs, 1e-4, 1e-5);
-        assert!(
-            verdict.pass,
-            "compression-softened IFT adjoint failed FD gate: {verdict:?}"
-        );
+            let grad = base.constitutive_gradient(&dj_dx, [0.0; 4], 0.0).unwrap();
+            let d_ortho = orthotropic_chain_rule(e1, e2, nu12, g12, grad.dq).unwrap();
+            let analytic = [
+                d_ortho[0],
+                d_ortho[1],
+                d_ortho[2],
+                d_ortho[3],
+                grad.d_bending,
+            ];
+            let p0 = [e1, e2, nu12, g12, bending];
+            let dirs = vec![
+                vec![1.0, 0.0, 0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 0.0, 0.0, 1e-4],
+            ];
+            let eval_j = |p: &[f64]| -> f64 {
+                let mut s = make(p[0], p[1], p[2], p[3], p[4]);
+                s.x = base.x.clone();
+                s.static_solve().unwrap();
+                s.x.iter()
+                    .map(|p| 0.5 * p.norm2() + Vec3::new(0.1, -0.2, 1.0).dot(*p))
+                    .sum()
+            };
+            let verdict = verify_gradient(&eval_j, &p0, &analytic, &dirs, 1e-4, 1e-5);
+            assert!(
+                verdict.pass,
+                "compression-softened IFT adjoint failed FD gate: {verdict:?}"
+            );
+        }
     }
 
     #[test]

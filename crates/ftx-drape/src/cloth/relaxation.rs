@@ -7,7 +7,7 @@ use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
 use serde_json::{Value, json};
 
 use super::{ClothModel, SolveReport, Solver};
-use crate::elements::{Local, Membrane, MembraneElement, soften};
+use crate::elements::{CompressionModel, Local, Membrane, MembraneElement, effective_strain};
 
 #[cfg(test)]
 mod tests;
@@ -16,6 +16,7 @@ mod tests;
 struct Bound {
     element: MembraneElement,
     material: Membrane,
+    compression_model: CompressionModel,
     equilibrium: Option<CompiledMembrane>,
     domain: Option<StrainDomain>,
     law: CompiledRelaxation,
@@ -47,7 +48,11 @@ impl Bound {
                 "triangle strain outside Maxwell characterization domain",
             ));
         }
-        Ok(soften(strain, &self.material).0)
+        Ok(effective_strain(
+            strain,
+            &self.material,
+            self.compression_model,
+        ))
     }
 }
 
@@ -80,6 +85,7 @@ impl Field {
             if let Some(b) = entry {
                 if model.membranes[i] != b.element
                     || model.material(i) != b.material
+                    || model.compression_model != b.compression_model
                     || model.membrane_response(i) != b.equilibrium.as_ref()
                     || model.membrane_domain(i) != b.domain
                 {
@@ -107,7 +113,9 @@ impl Field {
     pub(super) fn local(&self, i: usize, x: &[Vec3], h: Option<f64>) -> Option<Local<9, 81>> {
         self.entries[i].as_ref().map(|b| {
             b.element
-                .local_with_response(x, &b.material, |strain| b.memory.response(strain, h).ok())
+                .local_with_response_model(x, &b.material, b.compression_model, |strain| {
+                    b.memory.response(strain, h).ok()
+                })
         })
     }
 
@@ -212,10 +220,12 @@ impl Solver {
                 if !law.contains(strain) {
                     return Err(bad("initial triangle strain outside Maxwell domain"));
                 }
-                let memory = law.initialize(soften(strain, &material).0)?;
+                let compression_model = self.model.compression_model;
+                let memory = law.initialize(effective_strain(strain, &material, compression_model))?;
                 Ok(Some(Bound {
                     element,
                     material,
+                    compression_model,
                     memory,
                     dissipated_j: 0.,
                     law: law.clone(),

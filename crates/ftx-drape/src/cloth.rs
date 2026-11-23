@@ -315,6 +315,18 @@ impl ClothModel {
         Ok(())
     }
 
+    fn check_dihedral_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        if self.bending_model == BendingModel::DiscreteShells {
+            for (i, hinge) in self.hinges.iter().enumerate() {
+                hinge.check_dihedral_domain(x).map_err(|mut refusal| {
+                    refusal.message = format!("hinge {i}: {}", refusal.message);
+                    refusal
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Membrane energy of element `e` under [`Self::compression_model`].
     #[must_use]
     pub fn membrane_energy(&self, e: usize, x: &[Vec3]) -> f64 {
@@ -470,7 +482,14 @@ impl ClothModel {
                 .map(|(i, e)| {
                     self.membrane_response(i).map_or_else(
                         || self.membrane_energy(i, x),
-                        |law| e.response_energy(x, law, &self.material(i)),
+                        |law| {
+                            e.response_energy_with_model(
+                                x,
+                                law,
+                                &self.material(i),
+                                self.compression_model,
+                            )
+                        },
                     )
                 })
                 .sum()
@@ -1144,7 +1163,14 @@ impl Solver {
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
                         || self.model.membrane_local(i, &self.x),
-                        |law| e.response_local(&self.x, law, &self.model.material(i)),
+                        |law| {
+                            e.response_local_with_model(
+                                &self.x,
+                                law,
+                                &self.model.material(i),
+                                self.model.compression_model,
+                            )
+                        },
                     )
                 });
             if let Some(extra) = self
@@ -1263,13 +1289,11 @@ impl Solver {
             ));
         }
         if self.model.compression_model == CompressionModel::Principal
-            && (self.model.element_responses.is_some()
-                || self.relaxation.is_some()
-                || self.membrane_plasticity.is_some())
+            && self.membrane_plasticity.is_some()
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                "CompressionModel::Principal is not admitted alongside calibrated nonlinear or history membrane laws, which operate on axis-aligned material-frame strains",
+                "CompressionModel::Principal is not admitted alongside membrane plasticity, whose return map operates on axis-aligned material-frame strains",
             ));
         }
         Ok(())
@@ -1327,7 +1351,6 @@ impl Solver {
         !self.model.is_heterogeneous()
             && self.model.bending_model.is_default()
             && self.model.hinges.iter().all(|h| h.rest_angle == 0.0)
-            && self.model.compression_model.is_default()
             && self.damping.is_default()
             && self.model.element_materials.is_none()
             && self.model.element_responses.is_none()
@@ -1361,6 +1384,7 @@ impl Solver {
             } => {
                 self.model.check_membrane_domains(x)?;
                 self.model.check_panel_bending_domains(x)?;
+                self.model.check_dihedral_domains(x)?;
                 let x_eval: Vec<Vec3> = x
                     .iter()
                     .zip(x0)
@@ -1368,6 +1392,7 @@ impl Solver {
                     .collect();
                 self.model.check_membrane_domains(&x_eval)?;
                 self.model.check_panel_bending_domains(&x_eval)?;
+                self.model.check_dihedral_domains(&x_eval)?;
                 let panels = self
                     .plasticity
                     .as_ref()
@@ -1418,6 +1443,7 @@ impl Solver {
     ) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
         self.model.check_panel_bending_domains(x)?;
+        self.model.check_dihedral_domains(x)?;
         let panels = self
             .plasticity
             .as_ref()
@@ -1561,7 +1587,14 @@ impl Solver {
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
                         || self.model.membrane_local(i, x_el),
-                        |law| e.response_local(x_el, law, &self.model.material(i)),
+                        |law| {
+                            e.response_local_with_model(
+                                x_el,
+                                law,
+                                &self.model.material(i),
+                                self.model.compression_model,
+                            )
+                        },
                     )
                 });
             if let Some(extra) = self
@@ -1640,6 +1673,19 @@ impl Solver {
             for (i, h) in self.model.hinges.iter().enumerate() {
                 if let Some(mut l) = damping.rayleigh_bending_local(&self.model, i, x) {
                     scatter(&h.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
+                }
+            }
+            for (i, patch) in self.model.panel_bending_patches().iter().enumerate() {
+                if let Some(mut l) = damping.rayleigh_panel_local(&self.model, i, x) {
+                    scatter(
+                        &patch.v,
+                        &l.grad,
+                        &mut l.hess,
+                        l.psd,
+                        1.0,
+                        &mut sink,
+                        &mut g,
+                    );
                 }
             }
         }
@@ -1778,6 +1824,33 @@ impl Solver {
         self.contact
             .as_ref()
             .map_or(1.0, |c| c.step_bound(&self.x, &self.displacement(p)))
+    }
+
+    fn dihedral_step_bound(&self, p: &[f64], ctx: StepContext<'_>) -> f64 {
+        if self.model.bending_model != BendingModel::DiscreteShells {
+            return 1.0;
+        }
+        let dx = self.displacement(p);
+        let bound_at = |x: &[Vec3], dx: &[Vec3]| {
+            self.model.hinges.iter().fold(1.0_f64, |bound, hinge| {
+                bound.min(hinge.dihedral_step_bound(x, dx))
+            })
+        };
+        let bound = bound_at(&self.x, &dx);
+        if let StepContext::GeneralizedAlpha { x0, params, .. } = ctx {
+            // Generalized-alpha evaluates elastic forces at an affine midpoint while
+            // publishing the actual endpoint. Both geometric paths must stay admitted.
+            let x_eval: Vec<_> = self
+                .x
+                .iter()
+                .zip(x0)
+                .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                .collect();
+            let dx_eval: Vec<_> = dx.iter().map(|&d| d * params.elastic_weight()).collect();
+            bound.min(bound_at(&x_eval, &dx_eval))
+        } else {
+            bound
+        }
     }
 
     /// Projected Newton (or configured [`NewtonStrategy`]) on the potential from the current positions.
@@ -1998,8 +2071,9 @@ impl Solver {
                 break;
             }
             // Never step through the body or another cloth layer: cap α by additive CCD.
-            let mut alpha = self.ccd_step_bound(&p);
-            rep.ccd_limited += usize::from(alpha < 1.0);
+            let ccd_alpha = self.ccd_step_bound(&p);
+            rep.ccd_limited += usize::from(ccd_alpha < 1.0);
+            let mut alpha = ccd_alpha.min(self.dihedral_step_bound(&p, ctx));
             let mut accepted = false;
             for _ in 0..50 {
                 let trial = self.apply(&self.x, &p, alpha);
@@ -2234,10 +2308,11 @@ impl Solver {
                 break;
             }
             let ccd_alpha = self.ccd_step_bound(&p);
-            if ccd_alpha < 1.0 {
-                rep.ccd_limited += 1;
+            rep.ccd_limited += usize::from(ccd_alpha < 1.0);
+            let step_alpha = ccd_alpha.min(self.dihedral_step_bound(&p, ctx));
+            if step_alpha < 1.0 {
                 for v in &mut p {
-                    *v *= ccd_alpha;
+                    *v *= step_alpha;
                 }
                 let mut hp = vec![0.0; self.nfree];
                 h_mat.spmv(&p, &mut hp);
@@ -2272,7 +2347,7 @@ impl Solver {
             };
             let slope: f64 = g.iter().zip(&p).map(|(a, b)| a * b).sum();
             let precision_step = !(rho > 1e-4 && model_decrease > 0.0)
-                && ccd_alpha == 1.0
+                && step_alpha == 1.0
                 && !out.hit_boundary
                 && -slope <= 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs())
                 && (trial_energy - energy).abs()
@@ -2297,7 +2372,7 @@ impl Solver {
             } else if rho < 0.25 && !precision_step {
                 delta = (0.25 * delta).max(min_radius);
                 rep.halvings += 1;
-            } else if rho > 0.75 && out.hit_boundary && ccd_alpha == 1.0 {
+            } else if rho > 0.75 && out.hit_boundary && step_alpha == 1.0 {
                 delta = (2.0 * delta).min(max_radius);
             }
             if accepted {
@@ -2496,31 +2571,22 @@ impl Solver {
         Ok(())
     }
 
-    /// Refuses fail-closed when the requested bending, damping, or compression formulation would
-    /// be silently bypassed by the bound constitutive law (orthotropic panel-bending patches,
-    /// characterized nonlinear membrane laws, Maxwell relaxation, or membrane plasticity).
+    /// Refuses fail-closed when the requested bending or compression formulation would be
+    /// silently bypassed by the bound constitutive law (orthotropic panel-bending patches
+    /// or membrane plasticity).
     ///
     /// # Errors
     /// [`RefusalCode::InvalidDocument`] on an incompatible constitutive combination.
     pub fn check_constitutive_models(&self) -> Result<(), Refusal> {
         self.check_bending_model()?;
-        if self.damping.rayleigh_bending_s > 0.0 && !self.model.panel_bending_patches().is_empty() {
-            return Err(Refusal::new(
-                RefusalCode::InvalidDocument,
-                "orthotropic panel-bending patches do not implement scalar Rayleigh hinge bending damping",
-            )
-            .repair("Set rayleigh_bending_s = 0 with orthotropic characterized bending materials, or use an isotropic scalar bending law with Rayleigh bending damping."));
-        }
         if self.model.compression_model == CompressionModel::Principal
-            && (self.model.element_responses.is_some()
-                || self.relaxation.is_some()
-                || self.membrane_plasticity.is_some())
+            && self.membrane_plasticity.is_some()
         {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
-                "characterized nonlinear, viscoelastic, or plastic membrane laws do not implement CompressionModel::Principal",
+                "membrane plasticity does not implement CompressionModel::Principal",
             )
-            .repair("Use CompressionModel::AxisAligned with nonlinear/history membrane laws, or use a linear orthotropic membrane with Principal compression softening."));
+            .repair("Use CompressionModel::AxisAligned with membrane plasticity, or remove the plastic law to use Principal compression softening."));
         }
         Ok(())
     }
@@ -2562,13 +2628,16 @@ impl Solver {
     /// Implicit-Euler (or configured [`TimeIntegrator`]) step from the accepted physical state
     /// `self.x` (`x_n`), optionally seeding free DOFs of the Newton minimizer at `guess` without
     /// altering `x_n` in the inertia predictor or post-step velocity. Falls back to `step` when
-    /// contact is active.
+    /// contact or finite-angle bending is active.
     pub(crate) fn step_with_guess(
         &mut self,
         h: f64,
         guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
-        if guess.is_none() || self.contact.is_some() {
+        if guess.is_none()
+            || self.contact.is_some()
+            || self.model.bending_model == BendingModel::DiscreteShells
+        {
             return self.step_at_body(h, None);
         }
         self.check_liquid_mass()?;
@@ -2610,6 +2679,7 @@ impl Solver {
     ) -> Result<SolveReport, Refusal> {
         self.check_integrator_history()?;
         self.model.check_panel_bending_domains(&self.x)?;
+        self.model.check_dihedral_domains(&self.x)?;
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -3158,6 +3228,7 @@ impl Solver {
         }
         self.model.check_membrane_domains(x)?;
         self.model.check_panel_bending_domains(x)?;
+        self.model.check_dihedral_domains(x)?;
         if let Some(field) = &self.membrane_plasticity {
             field.check(&self.model, x)?;
         }
@@ -3176,7 +3247,14 @@ impl Solver {
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
                         || self.model.membrane_local(i, x),
-                        |law| e.response_local(x, law, &self.model.material(i)),
+                        |law| {
+                            e.response_local_with_model(
+                                x,
+                                law,
+                                &self.model.material(i),
+                                self.model.compression_model,
+                            )
+                        },
                     )
                 });
             if let Some(extra) = self
@@ -3782,6 +3860,136 @@ mod self_contact_tests {
 mod strategy_and_integrator_tests {
     use super::*;
 
+    fn creased_hinge(degrees: f64, target_degrees: f64) -> Solver {
+        let rest = vec![
+            Vec2::ZERO,
+            Vec2::new(0.02, 0.0),
+            Vec2::new(0.01, 0.02),
+            Vec2::new(0.01, -0.02),
+        ];
+        let mut model = ClothModel::new(
+            rest,
+            &[[0, 1, 2], [1, 0, 3]],
+            Membrane::orthotropic(1.0, 1.0, 0.0, 0.5, 1.0),
+            1e-8,
+            0.2,
+        )
+        .unwrap();
+        model.bending_model = BendingModel::DiscreteShells;
+        model
+            .set_hinge_rest_angles(&[target_degrees.to_radians()])
+            .unwrap();
+        let (sin, cos) = ftx_core::det::sin_cos(degrees.to_radians());
+        let x = vec![
+            Vec3::ZERO,
+            Vec3::new(0.02, 0.0, 0.0),
+            Vec3::new(0.01, 0.02, 0.0),
+            Vec3::new(0.01, -0.02 * cos, 0.02 * sin),
+        ];
+        let mut solver = Solver::new(
+            model,
+            x,
+            &[[true; 3], [true; 3], [true; 3], [true, true, false]],
+            Vec3::ZERO,
+        );
+        solver.tol = 1e-11;
+        solver
+    }
+
+    #[test]
+    fn discrete_shells_refuses_branch_crossing_and_preserves_accepted_state() {
+        for strategy in [
+            NewtonStrategy::ProjectedNewton,
+            NewtonStrategy::AdaptiveIlu {
+                pcg_iters: 64,
+                max_shifts: 4,
+            },
+            NewtonStrategy::trust_region_default(),
+        ] {
+            for integrator in [
+                TimeIntegrator::ImplicitEuler,
+                TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+            ] {
+                let mut solver = creased_hinge(170.0, -170.0);
+                solver.newton_strategy = strategy;
+                solver.integrator = integrator;
+                solver.v[3].z = -1.0;
+                let original = solver.clone();
+                // The prescribed x/y constraints prevent unfolding the long way around.
+                // Inertia requests a negative z across the hairpin, so the step must fail
+                // rather than accepting a lower-energy value on the opposite angle branch.
+                let error = solver.step(0.01).unwrap_err();
+                assert_eq!(
+                    error.code,
+                    RefusalCode::NotConverged,
+                    "{strategy:?} {integrator:?}: {error:?}"
+                );
+                assert_eq!(solver.x, original.x);
+                assert_eq!(solver.v, original.v);
+                assert_eq!(solver.a, original.a);
+                assert_eq!(solver.accel_initialized, original.accel_initialized);
+                assert_eq!(solver.pattern.is_some(), original.pattern.is_some());
+            }
+        }
+        let mut hairpin = creased_hinge(0.0, 0.0);
+        hairpin.x[3] = Vec3::new(0.01, 0.02, 0.0);
+        assert_eq!(
+            hairpin.step(0.01).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            hairpin.static_solve().unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+    }
+
+    #[test]
+    fn discrete_shells_guards_generalized_alpha_midpoint_and_warm_start() {
+        let solver = creased_hinge(35.0, 35.0);
+        let params = GeneralizedAlphaParams::new(1.0).unwrap();
+        let midpoint = creased_hinge(175.0, 35.0).x;
+        let x0: Vec<_> = midpoint
+            .iter()
+            .zip(&solver.x)
+            .map(|(&m, &x)| m * 2.0 - x)
+            .collect();
+        let dx = vec![-0.01];
+        let ctx = StepContext::GeneralizedAlpha {
+            x0: &x0,
+            xt: &solver.x,
+            h: 0.01,
+            params,
+            damping: None,
+        };
+        let endpoint_bound = solver.dihedral_step_bound(&dx, StepContext::Static);
+        let both_bound = solver.dihedral_step_bound(&dx, ctx);
+        assert!(both_bound > 0.0 && both_bound < endpoint_bound);
+        let trial = solver.apply(&solver.x, &dx, both_bound);
+        solver.potential_ctx(&trial, ctx).unwrap();
+        let eval: Vec<_> = trial
+            .iter()
+            .zip(&x0)
+            .map(|(&x, &x0)| params.eval_pos(x, x0))
+            .collect();
+        assert!(solver.model.hinges[0].dihedral_angle(&eval) > 0.0);
+
+        for integrator in [
+            TimeIntegrator::ImplicitEuler,
+            TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+        ] {
+            let mut plain = creased_hinge(170.0, 170.0);
+            plain.integrator = integrator;
+            let mut guessed = plain.clone();
+            let guess = creased_hinge(-170.0, 170.0).x;
+            let report = plain.step(0.001).unwrap();
+            let guessed_report = guessed.step_with_guess(0.001, Some(&guess)).unwrap();
+            assert_eq!(guessed.x, plain.x);
+            assert_eq!(guessed.v, plain.v);
+            assert_eq!(guessed_report.iterations, report.iterations);
+            assert_eq!(guessed_report.ccd_limited, 0);
+        }
+    }
+
     fn hanging_sheet() -> Solver {
         let (rest, tris) = grid(0.10, 0.08, 4, 3, Vec2::ZERO);
         let x: Vec<Vec3> = rest
@@ -4291,8 +4499,8 @@ mod strategy_and_integrator_tests {
     }
 
     #[test]
-    fn check_constitutive_models_refuses_discrete_shells_on_panel_bending_and_principal_on_nonlinear_or_plastic_membrane()
-     {
+    fn constitutive_models_admit_principal_nonlinear_and_refuse_unsupported_bending_or_plasticity()
+    {
         use ftx_pattern::{
             material_bending::BendingTensor,
             material_catalog::Selection,
@@ -4320,6 +4528,8 @@ mod strategy_and_integrator_tests {
         let mut fixed = vec![[false; 3]; rest.len()];
         fixed[0] = [true; 3];
         fixed[1] = [true; 3];
+        // Static admission needs a third, noncollinear support to remove rigid rotation.
+        fixed[rest.len() - 1] = [true; 3];
 
         pb_model.bending_model = BendingModel::DiscreteShells;
         let mut pb_solver = Solver::new(pb_model.clone(), x.clone(), &fixed, Vec3::ZERO);
@@ -4343,32 +4553,17 @@ mod strategy_and_integrator_tests {
         pb_model.bending_model = BendingModel::Quadratic;
         let mut pb_rayleigh = Solver::new(pb_model.clone(), x.clone(), &fixed, Vec3::ZERO);
         pb_rayleigh.damping.rayleigh_bending_s = 0.002;
-        assert_eq!(
-            pb_rayleigh.check_constitutive_models().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            pb_rayleigh.step(0.01).unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            pb_rayleigh
-                .step_with_guess(0.01, Some(&x))
-                .unwrap_err()
-                .code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            pb_rayleigh.static_solve().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
+        pb_rayleigh.check_constitutive_models().unwrap();
+        pb_rayleigh.step(0.01).unwrap();
+        pb_rayleigh.step_with_guess(0.01, Some(&x)).unwrap();
+        pb_rayleigh.static_solve().unwrap();
 
         let mut pb_ok = Solver::new(pb_model, x, &fixed, Vec3::ZERO);
         pb_ok.check_constitutive_models().unwrap();
         pb_ok.step(0.01).unwrap();
 
-        // 2. Characterized nonlinear membrane law and membrane plasticity must refuse
-        //    CompressionModel::Principal fail-closed, while succeeding under AxisAligned.
+        // 2. Principal compression reaches characterized nonlinear laws through every solver
+        //    entry point. Plastic return maps still require AxisAligned compression.
         let selected: Selection = serde_json::from_str(include_str!(
             "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
         ))
@@ -4406,7 +4601,7 @@ mod strategy_and_integrator_tests {
         let mut nl_model = ClothModel::new(
             tri_rest.clone(),
             &[[0, 1, 2]],
-            Membrane::orthotropic(1000.0, 600.0, 0.0, 300.0, 1.0),
+            Membrane::orthotropic(1000.0, 600.0, 0.0, 300.0, 0.05),
             0.0,
             0.2,
         )
@@ -4414,29 +4609,60 @@ mod strategy_and_integrator_tests {
         nl_model.set_membrane_responses(&[Some(compiled)]).unwrap();
         nl_model.compression_model = CompressionModel::Principal;
         let mut nl_solver = Solver::new(nl_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO);
-        assert_eq!(
-            nl_solver.check_constitutive_models().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            nl_solver.step(0.01).unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            nl_solver
-                .step_with_guess(0.01, Some(&tri_x))
-                .unwrap_err()
-                .code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            nl_solver.static_solve().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
+        nl_solver.check_constitutive_models().unwrap();
+        nl_solver.step(0.01).unwrap();
+        nl_solver.step_with_guess(0.01, Some(&tri_x)).unwrap();
+        nl_solver.static_solve().unwrap();
+
+        // Mixed principal tension/compression must use the same law for energy, Newton
+        // assembly and exported material reactions, including the fixed vertices.
+        nl_solver.x[2] = Vec3::new(0.006, 0.039, 0.0);
+        let principal_energy = nl_model.elastic_energy(&nl_solver.x);
+        let forces = nl_solver.checked_elastic_forces().unwrap();
+        let (gradient, _) = nl_solver.assemble_static_exact();
+        for axis in 0..3 {
+            assert!((gradient[axis] + forces[2][axis]).abs() < 1e-12);
+        }
+        let eps = 1e-7;
+        for vertex in 0..3 {
+            for axis in 0..3 {
+                let mut plus = nl_solver.x.clone();
+                let mut minus = plus.clone();
+                let offset = [
+                    Vec3::new(eps, 0.0, 0.0),
+                    Vec3::new(0.0, eps, 0.0),
+                    Vec3::new(0.0, 0.0, eps),
+                ][axis];
+                plus[vertex] += offset;
+                minus[vertex] -= offset;
+                let derivative = (nl_model.elastic_energy(&plus) - nl_model.elastic_energy(&minus))
+                    / (2.0 * eps);
+                assert!((forces[vertex][axis] + derivative).abs() < 1e-6);
+            }
+        }
+        nl_solver.step(0.001).unwrap();
+        assert!(nl_solver.x.iter().all(|p| p.is_finite()));
+
         nl_model.compression_model = CompressionModel::AxisAligned;
+        let axis_energy =
+            nl_model.elastic_energy(&[tri_x[0], tri_x[1], Vec3::new(0.006, 0.039, 0.0)]);
+        assert!((principal_energy - axis_energy).abs() > 1e-6);
         let mut nl_ok = Solver::new(nl_model, tri_x.clone(), &tri_fixed, Vec3::ZERO);
         nl_ok.check_constitutive_models().unwrap();
         nl_ok.step(0.01).unwrap();
+
+        // Softening cannot admit a physical strain outside the source's characterized domain.
+        nl_solver.x[2] = Vec3::new(0.0, 0.12, 0.0);
+        let before = (
+            nl_solver.x.clone(),
+            nl_solver.v.clone(),
+            nl_solver.a.clone(),
+        );
+        assert_eq!(
+            nl_solver.step(0.01).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!((nl_solver.x, nl_solver.v, nl_solver.a), before);
 
         // 2b. Membrane plasticity
         let mut pl_model = ClothModel::new(
@@ -4472,7 +4698,7 @@ mod strategy_and_integrator_tests {
         pl_ok.check_constitutive_models().unwrap();
         pl_ok.step(0.01).unwrap();
 
-        // 2c. Standalone Maxwell membrane relaxation
+        // 2c. A source-bound Maxwell law supports both compression transforms.
         let relax_sel: Selection = serde_json::from_str(include_str!(
             "../../../tests/fixtures/materials/synthetic-relaxation.json"
         ))
@@ -4487,29 +4713,20 @@ mod strategy_and_integrator_tests {
         let mut rx_model = ClothModel::new(
             vec![Vec2::ZERO, Vec2::new(0.04, 0.0), Vec2::new(0.0, 0.04)],
             &[[0, 1, 2]],
-            Membrane::orthotropic(rm.warp_n_m, rm.weft_n_m, rm.poisson, rm.shear_n_m, 1.0),
+            Membrane::orthotropic(rm.warp_n_m, rm.weft_n_m, rm.poisson, rm.shear_n_m, 0.05),
             0.0,
             rm.areal_kg_m2,
         )
         .unwrap();
-        rx_model.compression_model = CompressionModel::Principal;
-        let mut rx_solver = Solver::new(rx_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO)
-            .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
-            .unwrap();
-        assert_eq!(
-            rx_solver.check_constitutive_models().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            rx_solver.step(0.01).unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        rx_model.compression_model = CompressionModel::AxisAligned;
-        let mut rx_ok = Solver::new(rx_model, tri_x, &tri_fixed, Vec3::ZERO)
-            .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
-            .unwrap();
-        rx_ok.check_constitutive_models().unwrap();
-        rx_ok.step(0.01).unwrap();
+        for compression_model in [CompressionModel::AxisAligned, CompressionModel::Principal] {
+            rx_model.compression_model = compression_model;
+            let mut rx_solver =
+                Solver::new(rx_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO)
+                    .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
+                    .unwrap();
+            rx_solver.check_constitutive_models().unwrap();
+            rx_solver.step(0.01).unwrap();
+        }
     }
 }
 
