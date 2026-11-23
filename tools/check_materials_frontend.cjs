@@ -7006,6 +7006,12 @@ const guidedFiniteVaporReadings=[
   ['guidedTextileVaporSampleMax','textile_water_max_sample_vapor_pressure_pa','Pa'],
   ['guidedTextileVaporRemaining','textile_water_remaining_vapor_mass_kg','kg'],
   ['guidedTextileVaporHeatRemoved','textile_water_isothermal_heat_removed_j','J']];
+const guidedSupplyExchangeReadings=[
+  ['guidedTextileSupplyRequested','textile_water_requested_supply_mass_kg'],
+  ['guidedTextileSupplyUnmet','textile_water_unmet_supply_mass_kg'],
+  ['guidedTextileSupplyRemaining','textile_water_remaining_supply_mass_kg'],
+  ['guidedTextileAmbientInflow','textile_water_ambient_vapor_inflow_mass_kg'],
+  ['guidedTextileAmbientOutflow','textile_water_ambient_vapor_outflow_mass_kg']];
 // Source-transport double; Rust owns exact material, phase and thermal qualification.
 const guidedTextileWaterPolicyOriginal=' {"schema":"ftx-textile-surface-water/4","bindings":{"front.R":{'+
   '"material_sha256":"'+'b'.repeat(64)+'","initial_liquid_kg_m2":-0.0}},"maximum_liquid_loading_kg_m2":1.000e-2,'+
@@ -14873,6 +14879,7 @@ test('finite shared liquid supply preserves one donor ledger, source requests an
   p.select('scenarioRequest',input);p.e.scenarioRequest.handlers.change();
   const donor={schema:'ftx-textile-liquid-reservoir-result/1',initial_liquid_mass_kg:0.005,
     remaining_liquid_mass_kg:0,supplied_liquid_mass_kg:0.005,temperature_c:40,elapsed_seconds:2,
+    requested_liquid_mass_kg:0.025,unmet_liquid_mass_kg:0.02,demand_balance_error_kg:0,
     exhaustion_events:1,mass_balance_error_kg:0,liquid_enthalpy_change_j:-840,
     exported_liquid_enthalpy_j:840,enthalpy_balance_error_j:0};
   const water={schema:'ftx-textile-surface-water-result/2',request:policy,
@@ -14894,6 +14901,7 @@ test('finite shared liquid supply preserves one donor ledger, source requests an
   const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
   const rows=ending=>plain(table(ending).children.slice(2).map(row=>row.children.map(cell=>String(cell.textContent))));
   assert.deepEqual(rows('finite shared liquid supply'),[['0.005','0','0.005','0','40','2','1']]);
+  assert.deepEqual(rows('complete liquid delivery demand'),[['0.025','0.02','0']]);
   assert.deepEqual(rows('finite liquid donor sensible energy'),[['-840','840','0']]);
   assert.deepEqual(rows('finite liquid donor source'),[['<one finite donor>','estimate','Explicit shared stock at constant temperature']]);
   assert.equal(table('textile evaporation and sensible energy').children[2].children[3].textContent,'840');
@@ -14914,6 +14922,9 @@ test('finite shared liquid supply preserves one donor ledger, source requests an
   obsolete.emit({type:'result',request,result:report,files:[{name:'stale.json',text:raw}]});
   assert.equal(s.hidden,true);assert.equal(p.live.size,0);
   p.ready();await p.e.scenario.onclick();
+  for(const field of ['requested_liquid_mass_kg','unmet_liquid_mass_kg','demand_balance_error_kg'])delete donor[field];
+  p.emit(report);assert.deepEqual(rows('complete liquid delivery demand'),[['Unavailable','Unavailable','Unavailable']]);
+  await p.e.scenario.onclick();
   evaluation.motion=refused('finite donor source does not qualify the supplied liquid temperature');p.emit(report);
   assert.equal(table('finite shared liquid supply'),undefined);
   assert.equal(table('finite liquid donor sensible energy'),undefined);
@@ -19197,6 +19208,58 @@ test('guided finite-vapor criteria require same-case water and cancel dependent 
       p.e[prefix+'MinimumLimit'].value='-1';before=p.current().messages.length;await p.e.scenario.onclick();
       assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/nonnegative/);
     }
+  }
+});
+
+test('guided finite delivery and ambient exchange retain five nominal goals and immutable named-case limits',async()=>{
+  const html=read('materials.html'),{p}=await guidedScenarioSetup();guidedTextileWaterSource(p);
+  p.e.guidedDrapeMassGoal.checked=false;p.e.guidedRequireTransientSurface.checked=true;
+  const objectives=[],constraints=[];
+  for(const [index,[prefix,metric]] of guidedSupplyExchangeReadings.entries()) {
+    for(const suffix of ['Goal','Direction','MinimumLimit','Limit']) {
+      const tags=[...html.matchAll(new RegExp('<(?:input|select)\\b[^>]*\\bid="'+prefix+suffix+'"[^>]*>','g'))];
+      assert.equal(tags.length,1,prefix+suffix);
+      if(suffix.endsWith('Limit'))assert.match(tags[0][0],/\bmin="0"/);
+    }
+    assert.equal(p.e[prefix+'Goal'].checked,false);assert.equal(p.e[prefix+'Direction'].value,'');
+    const direction=index%2?'maximize':'minimize';p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value=direction;
+    p.e[prefix+'MinimumLimit'].value='0';p.e[prefix+'Limit'].value='0.125';
+    objectives.push({metric,direction});constraints.push({metric,minimum:0,maximum:0.125});
+  }
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1),policy=JSON.parse(sent.studyRequest).comparison;
+  assert.equal(sent.type,'scenario',p.e.error.textContent);assert.deepEqual(policy.objectives,objectives);assert.deepEqual(policy.constraints,constraints);
+  assert.ok(sent.scenarioRequest.includes(guidedTextileWaterMotionOriginal),'Source phases reach native admission without an invented donor or ambient boundary');
+  const report=scenarioReport();report.comparison={policy,motion_required:true,frontier:['A'],incomparable:[],alternatives:[
+    {key:'A',eligible:true,dominated_by:[],exclusions:[],readings:Object.fromEntries(guidedSupplyExchangeReadings.map(([,metric])=>
+      [metric,{value:0,unit:'kg',consumer:'transient_surface'}]))},
+    {key:'B',eligible:false,dominated_by:[],exclusions:[{message:'Finite liquid donor or ambient boundary is unavailable'}],readings:{}}]};
+  p.emit(report);const output=section(p,'Fresh drape and heat alternatives');
+  for(const label of ['Requested liquid delivery','Unmet liquid delivery','Remaining donor liquid','Incoming ambient vapor','Outgoing reservoir vapor'])
+    assert.match(visibleText(output),new RegExp(label));
+  assert.match(visibleText(output),/Demand continues over the complete accepted history/);
+  assert.match(visibleText(output),/sealed finite reservoir leaves these readings unavailable/);
+  assert.match(visibleText(output),/Finite liquid donor or ambient boundary is unavailable/);
+  guidedNamedCases(p);p.e.guidedScenarioPolicySource.value='snapshot';await saveGuidedCase(p,'finite wet case');
+  assert.equal(p.e.guidedScenarioCases.children.length,1,p.e.error.textContent);
+  p.e.guidedTextileSupplyUnmetLimit.value='0';p.e.guidedTextileSupplyUnmetLimit.handlers.input();
+  await p.e.scenario.onclick();const named=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+  assert.deepEqual(named.cases[0].comparison.objectives,objectives);assert.deepEqual(named.cases[0].comparison.constraints,constraints);
+});
+
+test('guided finite delivery and ambient criteria enforce nominal water scope and cancel stale work',async()=>{
+  for(const [prefix] of guidedSupplyExchangeReadings) {
+    const {p}=await guidedScenarioSetup();guidedMotionSourceControls(p);guidedDryHeatControls(p);guidedDryHeatFilm(p);await addGuidedMotion(p,0.002,35);
+    p.e.guidedDrapeMassGoal.checked=false;p.e[prefix+'Goal'].checked=true;p.e[prefix+'Direction'].value='minimize';
+    let before=p.current().messages.length;await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/Textile-water criteria/);
+    guidedLiquidSource(p);p.e.guidedBasis.value='reported_bounds';before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/reported-bound comparison/);
+    p.e.guidedBasis.value='nominal';p.e[prefix+'MinimumLimit'].value='-1';before=p.current().messages.length;
+    await p.e.scenario.onclick();assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/nonnegative/);
+    p.e[prefix+'MinimumLimit'].value='0';await p.e.scenario.onclick();const old=p.current(),sent=old.messages.at(-1);
+    assert.equal(sent.type,'scenario',p.e.error.textContent);p.e[prefix+'Limit'].value='0.1';p.e[prefix+'Limit'].handlers.input();
+    assert.equal(old.dead,true);p.ready();old.emit({type:'result',request:sent.request,result:scenarioReport(),files:[{name:'stale-water.json',text:'{}'}]});
+    assert.equal(p.live.size,0);assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
   }
 });
 

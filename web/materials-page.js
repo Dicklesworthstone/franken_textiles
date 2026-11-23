@@ -156,6 +156,9 @@ const guidedTransportMetrics = [
   ["guidedTextileWaterEvaporated", "textile_water_evaporated_mass_kg"],
   ["guidedTextileWaterRemaining", "textile_water_remaining_mass_kg"],
   ["guidedTextileWaterSupplied", "textile_water_supplied_mass_kg"],
+  ["guidedTextileSupplyRequested", "textile_water_requested_supply_mass_kg"],
+  ["guidedTextileSupplyUnmet", "textile_water_unmet_supply_mass_kg"],
+  ["guidedTextileSupplyRemaining", "textile_water_remaining_supply_mass_kg"],
   ["guidedTextileWaterCondensed", "textile_water_condensed_mass_kg"],
   ["guidedTextileWaterDrained", "textile_water_drained_mass_kg"],
   ["guidedTextileWaterLatent", "textile_water_latent_energy_j"],
@@ -165,6 +168,8 @@ const guidedTransportMetrics = [
   ["guidedTextileVaporSampleMax", "textile_water_max_sample_vapor_pressure_pa"],
   ["guidedTextileVaporRemaining", "textile_water_remaining_vapor_mass_kg"],
   ["guidedTextileVaporHeatRemoved", "textile_water_isothermal_heat_removed_j"],
+  ["guidedTextileAmbientInflow", "textile_water_ambient_vapor_inflow_mass_kg"],
+  ["guidedTextileAmbientOutflow", "textile_water_ambient_vapor_outflow_mass_kg"],
   ["guidedTextileFinalMass", "textile_water_final_inertial_mass_kg"],
   ["guidedTextilePeakMass", "textile_water_max_sample_inertial_mass_kg"],
   ["guidedTransientSurfaceInsideEnergy", "transient_surface_inside_energy_j"],
@@ -1068,6 +1073,9 @@ function objectiveComparison(parent, r) {
     textile_water_evaporated_mass_kg: "Evaporated textile water",
     textile_water_remaining_mass_kg: "Remaining textile liquid",
     textile_water_supplied_mass_kg: "Supplied textile liquid",
+    textile_water_requested_supply_mass_kg: "Requested liquid delivery",
+    textile_water_unmet_supply_mass_kg: "Unmet liquid delivery",
+    textile_water_remaining_supply_mass_kg: "Remaining donor liquid",
     textile_water_condensed_mass_kg: "Condensed textile water",
     textile_water_drained_mass_kg: "Drained textile water",
     textile_water_latent_energy_j: "Textile evaporation latent energy",
@@ -1077,6 +1085,8 @@ function objectiveComparison(parent, r) {
     textile_water_max_sample_vapor_pressure_pa: "Maximum sampled finite-reservoir vapor pressure",
     textile_water_remaining_vapor_mass_kg: "Remaining finite-reservoir vapor",
     textile_water_isothermal_heat_removed_j: "Finite-reservoir isothermal heat removed",
+    textile_water_ambient_vapor_inflow_mass_kg: "Incoming ambient vapor",
+    textile_water_ambient_vapor_outflow_mass_kg: "Outgoing reservoir vapor",
     textile_water_final_inertial_mass_kg: "Final wet-cloth inertial mass",
     textile_water_max_sample_inertial_mass_kg: "Maximum sampled wet-cloth inertial mass"
   };
@@ -1121,6 +1131,19 @@ function objectiveComparison(parent, r) {
       "Isothermal heat removed is signed: positive removes heat from the reservoir; negative supplies heat to hold its declared temperature. " +
       "A missing reservoir leaves these readings unavailable.";
     parent.append(reservoir);
+  }
+  if (metrics.some(o => ["textile_water_requested_supply_mass_kg", "textile_water_unmet_supply_mass_kg",
+    "textile_water_remaining_supply_mass_kg"].includes(o.metric))) {
+    const donor = document.createElement("p");
+    donor.textContent = "Finite liquid-source criteria keep requested delivery, post-exhaustion shortfall and remaining donor stock separate from liquid retained on the textile. " +
+      "Demand continues over the complete accepted history after stock runs out. A missing finite donor or older receipts without demand leave the corresponding readings unavailable.";
+    parent.append(donor);
+  }
+  if (metrics.some(o => ["textile_water_ambient_vapor_inflow_mass_kg", "textile_water_ambient_vapor_outflow_mass_kg"].includes(o.metric))) {
+    const ambient = document.createElement("p");
+    ambient.textContent = "Ambient vapor criteria retain cumulative incoming and outgoing transfer separately through the independently qualified constant or interval boundary. " +
+      "A sealed finite reservoir leaves these readings unavailable; an admitted zero-conductance boundary can report zero transfer.";
+    parent.append(ambient);
   }
   if (metrics.some(o => ["textile_water_final_inertial_mass_kg", "textile_water_max_sample_inertial_mass_kg"].includes(o.metric))) {
     const wetMass = document.createElement("p");
@@ -1531,6 +1554,11 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         cells(inventory, [metric(donor.initial_liquid_mass_kg), metric(donor.remaining_liquid_mass_kg),
           metric(donor.supplied_liquid_mass_kg), metric(donor.mass_balance_error_kg),
           metric(donor.temperature_c), metric(donor.elapsed_seconds), metric(donor.exhaustion_events)]);
+        const demand = table(parent, `${key}: complete liquid delivery demand`,
+          ["Requested liquid (kg)", "Unmet delivery (kg)", "Demand residual (kg)"]);
+        cells(demand, [donor.requested_liquid_mass_kg == null ? "Unavailable" : metric(donor.requested_liquid_mass_kg),
+          donor.unmet_liquid_mass_kg == null ? "Unavailable" : metric(donor.unmet_liquid_mass_kg),
+          donor.demand_balance_error_kg == null ? "Unavailable" : metric(donor.demand_balance_error_kg)]);
         const donorEnergy = table(parent, `${key}: finite liquid donor sensible energy`,
           ["Donor enthalpy change (J)", "Exported liquid enthalpy (J)", "Enthalpy residual (J)"]);
         cells(donorEnergy, [metric(donor.liquid_enthalpy_change_j), metric(donor.exported_liquid_enthalpy_j),

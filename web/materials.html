@@ -2128,6 +2128,47 @@ include the initial reservoir and retained mechanical endpoints; they do not bou
 <p class="note">Positive isothermal heat removes energy from the reservoir; negative heat supplies energy to hold its declared
 temperature. This is separate from the textile boundary-energy ledger. Minimizing its signed value does not minimize its magnitude.</p>
 </details>
+<details><summary>Finite liquid delivery and ambient vapor exchange</summary>
+<p class="note">These nominal criteria need the same case's complete textile-water history.
+Finite-source delivery demand continues after the shared donor is exhausted; unmet demand is separate from physical water inventory.
+Remaining donor stock is separate from liquid on the cloth. Ambient inflow and outflow require an independently qualified exchange boundary.
+Missing policies or older receipts without demand leave readings unavailable; admitted zero transfer remains zero.</p>
+<label><input id="guidedTextileSupplyRequestedGoal" type="checkbox"> Compare requested liquid delivery (kg)</label>
+<div class="study-fields">
+<label>Delivery-demand direction <select id="guidedTextileSupplyRequestedDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize requested delivery</option><option value="maximize">Maximize requested delivery</option></select></label>
+<label>Minimum requested delivery (kg) <input id="guidedTextileSupplyRequestedMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum requested delivery (kg) <input id="guidedTextileSupplyRequestedLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileSupplyUnmetGoal" type="checkbox"> Compare unmet liquid delivery (kg)</label>
+<div class="study-fields">
+<label>Shortfall direction <select id="guidedTextileSupplyUnmetDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize unmet delivery</option><option value="maximize">Maximize unmet delivery</option></select></label>
+<label>Minimum unmet delivery (kg) <input id="guidedTextileSupplyUnmetMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum unmet delivery (kg) <input id="guidedTextileSupplyUnmetLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileSupplyRemainingGoal" type="checkbox"> Compare remaining donor liquid (kg)</label>
+<div class="study-fields">
+<label>Donor-stock direction <select id="guidedTextileSupplyRemainingDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize remaining donor stock</option><option value="maximize">Maximize remaining donor stock</option></select></label>
+<label>Minimum remaining donor liquid (kg) <input id="guidedTextileSupplyRemainingMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum remaining donor liquid (kg) <input id="guidedTextileSupplyRemainingLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileAmbientInflowGoal" type="checkbox"> Compare incoming ambient vapor (kg)</label>
+<div class="study-fields">
+<label>Ambient-inflow direction <select id="guidedTextileAmbientInflowDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize incoming ambient vapor</option><option value="maximize">Maximize incoming ambient vapor</option></select></label>
+<label>Minimum incoming ambient vapor (kg) <input id="guidedTextileAmbientInflowMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum incoming ambient vapor (kg) <input id="guidedTextileAmbientInflowLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+<label><input id="guidedTextileAmbientOutflowGoal" type="checkbox"> Compare outgoing reservoir vapor (kg)</label>
+<div class="study-fields">
+<label>Ambient-outflow direction <select id="guidedTextileAmbientOutflowDirection"><option value="">Choose a direction</option>
+<option value="minimize">Minimize outgoing reservoir vapor</option><option value="maximize">Maximize outgoing reservoir vapor</option></select></label>
+<label>Minimum outgoing reservoir vapor (kg) <input id="guidedTextileAmbientOutflowMinimumLimit" type="number" min="0" step="any" placeholder="No minimum"></label>
+<label>Maximum outgoing reservoir vapor (kg) <input id="guidedTextileAmbientOutflowLimit" type="number" min="0" step="any" placeholder="No maximum"></label>
+</div>
+</details>
 <p class="note">Initial liquid, supply, condensation and drainage need their own declared policies and qualification.
 Supply, condensation and drainage criteria remain unavailable when their supporting policy is absent. An admitted phase can
 legitimately report zero transfer. Evaporation removes latent energy, condensation releases it, and drainage
