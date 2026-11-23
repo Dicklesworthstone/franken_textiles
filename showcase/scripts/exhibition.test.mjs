@@ -621,3 +621,35 @@ test("the hussar wardrobe connects the dressed figure, pattern front and native 
     assert.equal(dst,"76,65,58"); // Tajima header begins with "LA:".
   } finally {await p.close();}
 });
+
+test("the menu lands the keyboard on a section, a closed rail names its links, and the atelier's form spans a phone", async () => {
+  const phone = await browser.newPage({ ...opts, viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  try {
+    await phone.goto(site);
+    const sheet = phone.locator("dialog.ft-sheet");
+    const settled = id => phone.waitForFunction(target =>
+      !document.querySelector("dialog.ft-sheet[open]") && document.activeElement?.id === target, id);
+    await phone.getByRole("button", { name: "Menu" }).click();
+    await sheet.getByRole("navigation", { name: "On this page" }).getByRole("link", { name: "Wardrobe" }).press("Enter");
+    await settled("wardrobe");
+    await phone.keyboard.press("Tab");
+    assert.equal(await phone.evaluate(() => !!document.activeElement?.closest("#wardrobe")), true,
+      "After an entry that points into this page, the next Tab continues inside that section");
+    // The click usually lands on a child of the link, which once left the sheet open over the scrolled page.
+    await phone.getByRole("button", { name: "Menu" }).click();
+    await sheet.locator('a[href="/#materials"] strong').click();
+    await settled("materials");
+    // The form once shared a grid row with three control groups and was squeezed to 135 px.
+    await phone.goto(new URL("/studies/skirt/", site).href);
+    const form = await phone.locator(".sa-display").boundingBox();
+    assert.ok(form.width >= 380, `The fitted form spans the phone (${form.width} px)`);
+  } finally { await phone.close(); }
+  const wide = await browser.newPage({ ...opts, viewport: { width: 1440, height: 900 } });
+  try {
+    await wide.goto(site);
+    // Its labels are not displayed until it is opened, so each link carries its name another way.
+    const rail = wide.getByRole("navigation", { name: "On this page" });
+    assert.equal(await rail.getByRole("link").count(), 14);
+    assert.equal(await rail.getByRole("link", { name: "Wardrobe", exact: true }).count(), 1);
+  } finally { await wide.close(); }
+});

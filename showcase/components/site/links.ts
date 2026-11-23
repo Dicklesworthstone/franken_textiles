@@ -54,7 +54,7 @@ export const homeSections = [
   ["construction", "From cut to cloth"],
   ["drape-room", "Drape room"],
   ["visual-fitting", "Visual fitting"],
-  ["how", "How a pattern is made"],
+  ["how", "How a pattern gets made"],
   ["wardrobe", "Wardrobe"],
   ["studio", "Studios"],
   ["materials", "Materials"],
