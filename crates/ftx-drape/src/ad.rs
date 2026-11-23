@@ -70,6 +70,40 @@ impl<const N: usize> Jet<N> {
             -1.0 / (self.v * self.v),
         )
     }
+
+    /// Four-quadrant arctangent `atan2(y, x)` (deterministic `ftx_core::det::atan2`), for
+    /// `(x, y) != (0, 0)`. Smooth across `θ = 0` and `±π/2` with no division-by-zero at flat
+    /// angles; returns non-finite derivatives when `x = y = 0`.
+    #[must_use]
+    pub fn atan2(y: Self, x: Self) -> Self {
+        let r2 = x.v * x.v + y.v * y.v;
+        if !(r2.is_finite() && r2 > 0.0) {
+            return Self {
+                v: f64::NAN,
+                g: [f64::NAN; N],
+                h: [[f64::NAN; N]; N],
+            };
+        }
+        let inv_r2 = 1.0 / r2;
+        let inv_r4 = inv_r2 * inv_r2;
+        let fy = x.v * inv_r2;
+        let fx = -y.v * inv_r2;
+        let fxx = 2.0 * x.v * y.v * inv_r4;
+        let fyy = -fxx;
+        let fxy = (y.v * y.v - x.v * x.v) * inv_r4;
+        let mut out = Self::constant(ftx_core::det::atan2(y.v, x.v));
+        for i in 0..N {
+            out.g[i] = fy * y.g[i] + fx * x.g[i];
+            for j in 0..N {
+                out.h[i][j] = fy * y.h[i][j]
+                    + fx * x.h[i][j]
+                    + fyy * y.g[i] * y.g[j]
+                    + fxx * x.g[i] * x.g[j]
+                    + fxy * (y.g[i] * x.g[j] + x.g[i] * y.g[j]);
+            }
+        }
+        out
+    }
 }
 
 impl<const N: usize> Add for Jet<N> {
@@ -689,5 +723,51 @@ mod tests {
 
         let bad = gradcheck(|[x]: [Dual<1>; 1]| Dual::constant(x.v) * x, [1.3], 5e-6);
         assert!(!bad.pass && bad.max_rel_err > 0.3, "{bad:?}");
+    }
+
+    #[test]
+    fn jet_atan2_matches_finite_differences_across_all_quadrants() {
+        let eps = 1e-6;
+        let eval = |p: [f64; 2]| {
+            let x = Jet::<2>::var(p[0], 0);
+            let y = Jet::<2>::var(p[1], 1);
+            // Compose with nonlinear inputs so non-zero input Hessians are also exercised.
+            let u = x * x - y * 0.5;
+            let v = y + x * y * 0.25;
+            Jet::atan2(v, u)
+        };
+        for p in [
+            [1.2, 0.0],
+            [0.8, 0.9],
+            [-0.7, 1.1],
+            [-1.3, -0.4],
+            [0.3, -1.2],
+            [-1.5, 0.05],
+        ] {
+            let j = eval(p);
+            assert!(j.v.is_finite());
+            for i in 0..2 {
+                let mut pp = p;
+                let mut pm = p;
+                pp[i] += eps;
+                pm[i] -= eps;
+                let fd_g = (eval(pp).v - eval(pm).v) / (2.0 * eps);
+                assert!(
+                    (j.g[i] - fd_g).abs() < 1e-7 * fd_g.abs().max(1.0),
+                    "p={p:?} i={i} g={} fd={fd_g}",
+                    j.g[i]
+                );
+                for k in 0..2 {
+                    let fd_h = (eval(pp).g[k] - eval(pm).g[k]) / (2.0 * eps);
+                    assert!(
+                        (j.h[i][k] - fd_h).abs() < 1e-6 * fd_h.abs().max(1.0),
+                        "p={p:?} ({i},{k}) h={} fd={fd_h}",
+                        j.h[i][k]
+                    );
+                }
+            }
+        }
+        let deg = Jet::<2>::atan2(Jet::var(0.0, 1), Jet::var(0.0, 0));
+        assert!(deg.v.is_nan() && deg.g[0].is_nan() && deg.h[0][0].is_nan());
     }
 }
