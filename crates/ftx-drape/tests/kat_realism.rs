@@ -16,7 +16,14 @@
 use ftx_core::{Vec2, Vec3};
 use ftx_drape::damping::{AirDrag, DampingOptions};
 use ftx_drape::elements::{BendingModel, CompressionModel, Membrane};
-use ftx_drape::{ClothModel, Solver, TimeIntegrator, grid, hex_grid};
+use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
+use ftx_drape::scene::PartFrames;
+use ftx_drape::{
+    AdaptiveBarrierPolicy, Body, ClothModel, ContactParams, PartFrame, Solver, StickSlipFriction,
+    TimeIntegrator, grid, hex_grid,
+};
+use ftx_pattern::Pattern;
+use serde_json::json;
 
 fn cotton() -> Membrane {
     Membrane::orthotropic(1200.0, 600.0, 0.25, 100.0, 1.0)
@@ -376,5 +383,247 @@ fn kat_principal_compression_eliminates_bias_locking_in_static_solve() {
     assert!(
         e_principal < 0.2 * e_axis,
         "Principal compression softening should eliminate 45° bias lockup: principal={e_principal:.4e} vs axis={e_axis:.4e}"
+    );
+}
+
+#[test]
+fn kat_adaptive_barrier_normalizes_light_silk_and_heavy_wool_clearance() {
+    // FTX-27e KAT 1: 40 g/m² silk vs 500 g/m² wool settling onto a flat rigid table under gravity.
+    // Fixed legacy kappa = 100 N/m makes silk hover near dhat (> 85% of dhat); AdaptiveBarrierPolicy
+    // scales kappa proportionally to fabric weight and stiffness so both light silk and heavy wool
+    // settle at consistent, non-hovering, non-crushed barrier clearance inside (0.15, 0.75) * dhat.
+    let (rest, tris) = grid(0.06, 0.06, 2, 2, Vec2::ZERO);
+    let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0022)).collect();
+    let fixed = vec![[false; 3]; rest.len()];
+    let floor = Body::new(
+        vec![
+            Vec3::new(-0.2, -0.2, 0.0),
+            Vec3::new(0.2, -0.2, 0.0),
+            Vec3::new(0.2, 0.2, 0.0),
+            Vec3::new(-0.2, 0.2, 0.0),
+        ],
+        vec![[0, 1, 2], [0, 2, 3]],
+        5e-3,
+    )
+    .unwrap();
+    let base_contact = ContactParams {
+        dhat: 1e-3,
+        thickness: 1.5e-3,
+        kappa: 100.0,
+        mu: 0.4,
+        eps_v: 1e-3,
+    };
+
+    let settle_gap_fraction =
+        |areal: f64, tensile: f64, adaptive: Option<AdaptiveBarrierPolicy>| {
+            let mat = Membrane::orthotropic(tensile, tensile, 0.25, 0.4 * tensile, 1.0);
+            let model = ClothModel::new(rest.clone(), &tris, mat, 1e-5, areal).unwrap();
+            let mean_mass = model.mass.iter().sum::<f64>() / model.mass.len() as f64;
+            let mut solver = Solver::new(model, x0.clone(), &fixed, Vec3::new(0.0, 0.0, -9.81))
+                .with_contact(floor.clone(), base_contact)
+                .unwrap();
+            if let Some(policy) = adaptive {
+                solver
+                    .contact
+                    .as_mut()
+                    .unwrap()
+                    .set_adaptive_barrier(policy, mean_mass, tensile, 9.81)
+                    .unwrap();
+            }
+            solver.tol = 1e-8;
+            for _ in 0..40 {
+                if let Some(c) = solver.contact.as_mut() {
+                    c.adapt_barrier_stiffness(&solver.x);
+                }
+                solver.step(1.0 / 60.0).unwrap();
+            }
+            let mean_z = solver.x.iter().map(|p| p.z).sum::<f64>() / solver.x.len() as f64;
+            (mean_z - base_contact.thickness) / base_contact.dhat
+        };
+
+    let silk_fixed = settle_gap_fraction(0.04, 150.0, None);
+    let policy = AdaptiveBarrierPolicy::default();
+    let silk_adapt = settle_gap_fraction(0.04, 150.0, Some(policy));
+    let wool_adapt = settle_gap_fraction(0.50, 1500.0, Some(policy));
+    assert!(
+        silk_fixed > 0.80,
+        "legacy fixed kappa=100 should leave 40 g/m² silk hovering near dhat, got {silk_fixed:.4}"
+    );
+    assert!(
+        (0.15..0.75).contains(&silk_adapt),
+        "adaptive silk clearance fraction {silk_adapt:.4} outside (0.15, 0.75)"
+    );
+    assert!(
+        (0.15..0.75).contains(&wool_adapt),
+        "adaptive wool clearance fraction {wool_adapt:.4} outside (0.15, 0.75)"
+    );
+    assert!(
+        (silk_adapt - wool_adapt).abs() < 0.25,
+        "adaptive clearance should normalize 12.5× weight ratio: silk={silk_adapt:.4}, wool={wool_adapt:.4}"
+    );
+}
+
+#[test]
+fn kat_stick_slip_friction_holds_above_kinetic_angle_and_slides_once_overcome() {
+    // FTX-27e KAT 2: Inclined-plane stick-slip transition with mu_s = 0.6, mu_k = 0.3.
+    // At slope tan(theta) = 0.45 (between mu_k and mu_s), stick-slip holds the cloth with tiny
+    // regularized creep while kinetic-only Coulomb (mu = 0.3) slides far downslope.
+    // Once slope exceeds static threshold (tan(theta) = 0.70 > mu_s), stick-slip breaks free and
+    // slides substantially faster than a pure mu = 0.6 law because sliding drops toward mu_k = 0.3.
+    let (rest, tris) = grid(0.05, 0.05, 1, 1, Vec2::ZERO);
+    let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0020)).collect();
+    let fixed = vec![[false; 3]; rest.len()];
+    let floor = Body::new(
+        vec![
+            Vec3::new(-0.5, -0.5, 0.0),
+            Vec3::new(1.5, -0.5, 0.0),
+            Vec3::new(1.5, 0.5, 0.0),
+            Vec3::new(-0.5, 0.5, 0.0),
+        ],
+        vec![[0, 1, 2], [0, 2, 3]],
+        5e-3,
+    )
+    .unwrap();
+    let law = StickSlipFriction::new(0.6, 0.3, 0.02).unwrap();
+
+    let run_slope = |tan_theta: f64, mu: f64, ss: Option<StickSlipFriction>, steps: usize| -> f64 {
+        let inv_sec = 1.0 / (1.0 + tan_theta * tan_theta).sqrt();
+        let g = Vec3::new(9.81 * tan_theta * inv_sec, 0.0, -9.81 * inv_sec);
+        let model = ClothModel::new(rest.clone(), &tris, cotton(), 1e-5, 0.25).unwrap();
+        let mean_mass = model.mass.iter().sum::<f64>() / model.mass.len() as f64;
+        let params = ContactParams {
+            dhat: 1e-3,
+            thickness: 1.5e-3,
+            kappa: 100.0,
+            mu,
+            eps_v: 1e-3,
+        };
+        let mut solver = Solver::new(model, x0.clone(), &fixed, g)
+            .with_contact(floor.clone(), params)
+            .unwrap();
+        let c = solver.contact.as_mut().unwrap();
+        c.set_adaptive_barrier(AdaptiveBarrierPolicy::default(), mean_mass, 900.0, 9.81)
+            .unwrap();
+        if let Some(s) = ss {
+            c.set_stick_slip(s).unwrap();
+        }
+        solver.friction_rounds = 2;
+        solver.tol = 1e-8;
+        let x_start = solver.x.iter().map(|p| p.x).sum::<f64>() / solver.x.len() as f64;
+        for _ in 0..steps {
+            solver.step(1.0 / 60.0).unwrap();
+        }
+        let x_end = solver.x.iter().map(|p| p.x).sum::<f64>() / solver.x.len() as f64;
+        x_end - x_start
+    };
+
+    let hold_ss = run_slope(0.45, 0.3, Some(law), 40);
+    let slide_kinetic = run_slope(0.45, 0.3, None, 40);
+    assert!(
+        slide_kinetic > 5.0 * hold_ss && hold_ss < 0.005,
+        "below mu_s=0.6 at tan=0.45, stick-slip ({hold_ss:.5} m) should hold while mu_k=0.3 slides ({slide_kinetic:.5} m)"
+    );
+
+    let breakaway_ss = run_slope(0.70, 0.6, Some(law), 40);
+    let pure_static_mu = run_slope(0.70, 0.6, None, 40);
+    assert!(
+        breakaway_ss > 1.5 * pure_static_mu && breakaway_ss > 0.05,
+        "above mu_s=0.6 at tan=0.70, stick-slip ({breakaway_ss:.5} m) should break away faster than constant mu=0.6 ({pure_static_mu:.5} m)"
+    );
+}
+
+#[test]
+fn kat_drape_options_adaptive_barrier_and_stick_slip_wire_end_to_end_and_preserve_default() {
+    struct CylFrames;
+    impl PartFrames for CylFrames {
+        fn frame(&self, _: &str) -> Option<PartFrame> {
+            Some(PartFrame {
+                origin: Vec3::ZERO,
+                up: Vec3::new(0., 0., 1.),
+                front: Vec3::new(0., -1., 0.),
+                lat: Vec3::new(1., 0., 0.),
+            })
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+            Some(10.0)
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            30.0
+        }
+    }
+    let mut verts = Vec::new();
+    for z in [-0.04, 0.08] {
+        for i in 0..16 {
+            let (s, c) = ftx_core::det::sin_cos(i as f64 * std::f64::consts::TAU / 16.0);
+            verts.push(Vec3::new(0.03 * c, 0.03 * s, z));
+        }
+    }
+    let mut tris = Vec::new();
+    for i in 0..16 {
+        let j = (i + 1) % 16;
+        tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+    }
+    let frames = CylFrames;
+    let body = DrapeBody {
+        frames: &frames,
+        collision: (&verts, &tris),
+        display: (&verts, &tris),
+        arm_deg: 35.0,
+    };
+    let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
+    let pat = Pattern::new(json!({
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "pieces": [{
+            "id": "band",
+            "cut": {"qty": 1},
+            "vertices": {"a": [0, 0], "b": [w, 0], "c": [w, 20], "d": [0, 20]},
+            "edges": [
+                {"id": "bottom", "from": "a", "to": "b"},
+                {"id": "right", "from": "b", "to": "c"},
+                {"id": "top", "from": "c", "to": "d"},
+                {"id": "left", "from": "d", "to": "a"}
+            ],
+            "notches": [],
+            "grain": [[0, 0], [0, 20]],
+            "placement": {"part": "torso", "radius_mm": 35, "x0": w / 2.0}
+        }],
+        "seams": [{"id": "join", "a": "band/right", "b": "band/left"}]
+    }));
+
+    let base_opts = DrapeOptions {
+        sew_steps: 4,
+        drape_steps: 6,
+        step: 0.01,
+        ..DrapeOptions::default()
+    };
+    let base = drape(&pat, &json!({}), &body, &base_opts, |_| {}).unwrap();
+    assert!(base.report["numerical"].get("adaptive_barrier").is_none());
+    assert!(base.report["numerical"].get("stick_slip").is_none());
+    assert!(
+        base.report["contact_diagnostics"]
+            .get("final_body_kappa_n_m")
+            .is_none()
+    );
+
+    let ss = StickSlipFriction::new(0.6, 0.3, 0.02).unwrap();
+    let rich_opts = DrapeOptions {
+        adaptive_barrier: Some(AdaptiveBarrierPolicy::default()),
+        stick_slip: Some(ss),
+        ..base_opts
+    };
+    let rich = drape(&pat, &json!({}), &body, &rich_opts, |_| {}).unwrap();
+    assert!(rich.report["numerical"]["adaptive_barrier"].is_object());
+    assert_eq!(rich.report["numerical"]["stick_slip"], json!(ss));
+    let final_kappa = rich.report["contact_diagnostics"]["final_body_kappa_n_m"]
+        .as_f64()
+        .expect("adaptive barrier must report final_body_kappa_n_m");
+    assert!(
+        final_kappa.is_finite() && final_kappa > 0.0 && final_kappa != base_opts.contact.kappa,
+        "adaptive kappa ({final_kappa}) should scale away from hardcoded legacy 100.0"
+    );
+    assert_eq!(
+        rich.scene.solver.contact.as_ref().unwrap().stick_slip(),
+        Some(ss)
     );
 }

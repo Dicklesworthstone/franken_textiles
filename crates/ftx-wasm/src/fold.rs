@@ -271,6 +271,15 @@ pub struct FoldSettings {
     /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping (omitted when disabled).
     #[serde(default, skip_serializing_if = "ftx_drape::DampingOptions::is_default")]
     pub damping: ftx_drape::DampingOptions,
+    /// Opt-in Li et al. (2020) adaptive IPC barrier stiffness scaling (omitted when legacy fixed `kappa`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_barrier: Option<ftx_drape::AdaptiveBarrierPolicy>,
+    /// Opt-in smooth static/kinetic stick-slip friction for cloth–body contact (omitted when legacy Coulomb `mu`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stick_slip: Option<ftx_drape::StickSlipFriction>,
+    /// Opt-in smooth static/kinetic stick-slip friction for cloth–cloth self-contact (omitted when legacy Coulomb `mu`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_stick_slip: Option<ftx_drape::StickSlipFriction>,
 }
 
 impl Default for FoldSettings {
@@ -296,6 +305,9 @@ impl Default for FoldSettings {
             bending_model: ftx_drape::BendingModel::Quadratic,
             compression_model: ftx_drape::CompressionModel::AxisAligned,
             damping: ftx_drape::DampingOptions::default(),
+            adaptive_barrier: None,
+            stick_slip: None,
+            self_stick_slip: None,
         }
     }
 }
@@ -421,6 +433,9 @@ fn fold_on_source(
         bending_model,
         compression_model,
         damping,
+        adaptive_barrier,
+        stick_slip,
+        self_stick_slip,
     } = options;
     let m = |r: ftx_core::Refusal| r.to_string();
     let mut pose = Pose::drape();
@@ -453,6 +468,9 @@ fn fold_on_source(
         bending_model,
         compression_model,
         damping,
+        adaptive_barrier,
+        stick_slip,
+        self_stick_slip,
         ..defaults
     };
     opts.self_contact = Some(ftx_drape::contact::ContactParams {
@@ -1004,6 +1022,9 @@ mod tests {
         assert!(def_val.get("bending_model").is_none());
         assert!(def_val.get("compression_model").is_none());
         assert!(def_val.get("damping").is_none());
+        assert!(def_val.get("adaptive_barrier").is_none());
+        assert!(def_val.get("stick_slip").is_none());
+        assert!(def_val.get("self_stick_slip").is_none());
         assert!(def_val.get("step_s").is_none());
         assert!(def_val.get("sew_steps").is_none());
         assert!(def_val.get("drape_steps").is_none());
@@ -1017,6 +1038,10 @@ mod tests {
         custom["newton_strategy"] =
             json!({"kind": "adaptive_ilu", "pcg_iters": 64, "max_shifts": 4});
         custom["integrator"] = json!({"kind": "generalized_alpha", "rho_inf": 0.8});
+        custom["adaptive_barrier"] =
+            serde_json::to_value(ftx_drape::AdaptiveBarrierPolicy::default()).unwrap();
+        custom["stick_slip"] = json!({"mu_s": 0.6, "mu_k": 0.3, "transition_v_m_s": 0.02});
+        custom["self_stick_slip"] = json!({"mu_s": 0.5, "mu_k": 0.25, "transition_v_m_s": 0.015});
         let parsed: FoldSettings = serde_json::from_value(custom.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), custom);
         assert_eq!(

@@ -69,6 +69,7 @@ const USAGE: &str = "usage:
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
+            [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -79,6 +80,7 @@ const USAGE: &str = "usage:
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
+            [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
@@ -215,6 +217,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 || name == "static-equilibrium"
                 || name == "time-subdivision"
                 || name == "air-drag"
+                || name == "adaptive-barrier"
                 || measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
@@ -999,6 +1002,51 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
             bad_input("--rayleigh-bending-s must be a finite nonnegative duration in seconds")
         })?;
     }
+    if args.options.contains_key("adaptive-barrier") {
+        opts.adaptive_barrier = Some(ftx_drape::AdaptiveBarrierPolicy::default());
+    }
+    for (prefix, slot) in [
+        ("stick-slip", &mut opts.stick_slip),
+        ("self-stick-slip", &mut opts.self_stick_slip),
+    ] {
+        let mus_k = format!("{prefix}-mus");
+        let muk_k = format!("{prefix}-muk");
+        let v_k = format!("{prefix}-v");
+        let any = args.options.contains_key(&mus_k)
+            || args.options.contains_key(&muk_k)
+            || args.options.contains_key(&v_k);
+        if any {
+            let mu_s = args
+                .options
+                .get(&mus_k)
+                .ok_or_else(|| bad_input(format!("--{prefix}-* requires --{mus_k} and --{muk_k}")))?
+                .parse::<f64>()
+                .map_err(|_| {
+                    bad_input(format!("--{mus_k} must be a finite friction coefficient"))
+                })?;
+            let mu_k = args
+                .options
+                .get(&muk_k)
+                .ok_or_else(|| bad_input(format!("--{prefix}-* requires --{mus_k} and --{muk_k}")))?
+                .parse::<f64>()
+                .map_err(|_| {
+                    bad_input(format!("--{muk_k} must be a finite friction coefficient"))
+                })?;
+            let transition_v_m_s = match args.options.get(&v_k) {
+                Some(v) => v.parse::<f64>().map_err(|_| {
+                    bad_input(format!(
+                        "--{v_k} must be a positive transition speed in m/s"
+                    ))
+                })?,
+                None => 0.02,
+            };
+            *slot = Some(ftx_drape::StickSlipFriction::new(
+                mu_s,
+                mu_k,
+                transition_v_m_s,
+            )?);
+        }
+    }
     opts.validate()?;
     Ok(opts)
 }
@@ -1153,6 +1201,13 @@ fn cmd_drape_bound(
             "air-rho",
             "rayleigh-membrane-s",
             "rayleigh-bending-s",
+            "adaptive-barrier",
+            "stick-slip-mus",
+            "stick-slip-muk",
+            "stick-slip-v",
+            "self-stick-slip-mus",
+            "self-stick-slip-muk",
+            "self-stick-slip-v",
             "model",
             "time-step-s",
             "newton-tol-m-s",
@@ -2605,6 +2660,9 @@ mod tests {
         assert!(def.bending_model.is_default());
         assert!(def.compression_model.is_default());
         assert!(def.damping.is_default());
+        assert!(def.adaptive_barrier.is_none());
+        assert!(def.stick_slip.is_none());
+        assert!(def.self_stick_slip.is_none());
 
         let rich = drape_options(
             &parse(
@@ -2625,6 +2683,19 @@ mod tests {
                     "0.002",
                     "--rayleigh-bending-s",
                     "0.004",
+                    "--adaptive-barrier",
+                    "--self-contact-mm",
+                    "0.5",
+                    "--stick-slip-mus",
+                    "0.6",
+                    "--stick-slip-muk",
+                    "0.3",
+                    "--stick-slip-v",
+                    "0.025",
+                    "--self-stick-slip-mus",
+                    "0.5",
+                    "--self-stick-slip-muk",
+                    "0.25",
                 ]
                 .map(String::from),
             )
@@ -2642,6 +2713,74 @@ mod tests {
         assert_eq!(drag.rho_air_kg_m3, 1.2);
         assert_eq!(rich.damping.rayleigh_membrane_s, 0.002);
         assert_eq!(rich.damping.rayleigh_bending_s, 0.004);
+        assert_eq!(
+            rich.adaptive_barrier,
+            Some(ftx_drape::AdaptiveBarrierPolicy::default())
+        );
+        assert_eq!(
+            rich.stick_slip,
+            Some(ftx_drape::StickSlipFriction::new(0.6, 0.3, 0.025).unwrap())
+        );
+        assert_eq!(
+            rich.self_stick_slip,
+            Some(ftx_drape::StickSlipFriction::new(0.5, 0.25, 0.02).unwrap())
+        );
+
+        // Valid FTX-27e flags must pass known_options on both `drape` and `round --sim`.
+        for cmd_argv in [
+            vec![
+                "drape",
+                "absent-pattern.json",
+                "--adaptive-barrier",
+                "--self-contact-mm",
+                "0.5",
+                "--stick-slip-mus",
+                "0.6",
+                "--stick-slip-muk",
+                "0.3",
+                "--stick-slip-v",
+                "0.025",
+                "--self-stick-slip-mus",
+                "0.5",
+                "--self-stick-slip-muk",
+                "0.25",
+                "--self-stick-slip-v",
+                "0.015",
+            ],
+            vec![
+                "round",
+                "absent-ws",
+                "--sim",
+                "--adaptive-barrier",
+                "--self-contact-mm",
+                "0.5",
+                "--stick-slip-mus",
+                "0.6",
+                "--stick-slip-muk",
+                "0.3",
+                "--stick-slip-v",
+                "0.025",
+                "--self-stick-slip-mus",
+                "0.5",
+                "--self-stick-slip-muk",
+                "0.25",
+                "--self-stick-slip-v",
+                "0.015",
+            ],
+        ] {
+            let parsed = parse(&cmd_argv.iter().map(|s| (*s).into()).collect::<Vec<_>>()).unwrap();
+            let err = if cmd_argv[0] == "drape" {
+                cmd_drape(&parsed).unwrap_err()
+            } else {
+                round::cmd_round(&parsed).unwrap_err()
+            };
+            assert!(
+                !err.message.contains("unknown option"),
+                "{} must recognize FTX-27e options: {}",
+                cmd_argv[0],
+                err.message
+            );
+        }
 
         for bad in [
             vec!["--bending-model", "bogus"],
@@ -2651,12 +2790,35 @@ mod tests {
             vec!["--air-drag", "--air-rho", "NaN"],
             vec!["--rayleigh-membrane-s", "-0.001"],
             vec!["--rayleigh-bending-s", "NaN"],
+            vec!["--stick-slip-mus", "0.5"],
+            vec!["--stick-slip-v", "0.02"],
+            vec!["--stick-slip-mus", "0.2", "--stick-slip-muk", "0.4"],
+            vec![
+                "--stick-slip-mus",
+                "0.5",
+                "--stick-slip-muk",
+                "0.3",
+                "--stick-slip-v",
+                "0.0",
+            ],
+            vec!["--self-stick-slip-muk", "0.2"],
+            vec![
+                "--self-stick-slip-mus",
+                "0.5",
+                "--self-stick-slip-muk",
+                "0.25",
+            ],
         ] {
             let mut argv = vec!["drape", "absent-pattern.json"];
             argv.extend(bad.iter().copied());
             let args = parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
             let err = cmd_drape(&args).unwrap_err();
             assert_ne!(err.code, RefusalCode::Io, "{}", err.message);
+            assert!(
+                !err.message.contains("unknown option"),
+                "drape must recognize physics realism options: {}",
+                err.message
+            );
 
             let mut round_argv = vec!["round", "absent-ws", "--sim"];
             round_argv.extend(bad.iter().copied());

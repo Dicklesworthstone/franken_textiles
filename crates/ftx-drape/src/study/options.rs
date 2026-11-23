@@ -1,7 +1,7 @@
 //! Serialization at the scenario boundary, leaving numerical option definitions unchanged.
 use crate::{
     cloth::NewtonStrategy,
-    contact::ContactParams,
+    contact::{AdaptiveBarrierPolicy, ContactParams, StickSlipFriction},
     damping::DampingOptions,
     elements::{BendingModel, CompressionModel},
     integrator::TimeIntegrator,
@@ -70,6 +70,12 @@ struct Options {
     compression_model: CompressionModel,
     #[serde(default, skip_serializing_if = "DampingOptions::is_default")]
     damping: DampingOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adaptive_barrier: Option<AdaptiveBarrierPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stick_slip: Option<StickSlipFriction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    self_stick_slip: Option<StickSlipFriction>,
 }
 
 impl Serialize for DrapeOptions {
@@ -222,6 +228,54 @@ mod tests {
 
         declared["damping"]["unknown_field"] = serde_json::json!(1);
         assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
+    }
+
+    #[test]
+    fn adaptive_barrier_and_stick_slip_are_opt_in_and_round_trip() {
+        let ordinary = serde_json::to_value(DrapeOptions::default()).unwrap();
+        assert!(ordinary.get("adaptive_barrier").is_none());
+        assert!(ordinary.get("stick_slip").is_none());
+        assert!(ordinary.get("self_stick_slip").is_none());
+
+        let mut declared = ordinary.clone();
+        declared["self_contact"] = serde_json::to_value(DrapeOptions::default().contact).unwrap();
+        declared["adaptive_barrier"] =
+            serde_json::to_value(AdaptiveBarrierPolicy::default()).unwrap();
+        declared["stick_slip"] = serde_json::json!({
+            "mu_s": 0.6,
+            "mu_k": 0.3,
+            "transition_v_m_s": 0.02
+        });
+        declared["self_stick_slip"] = serde_json::json!({
+            "mu_s": 0.5,
+            "mu_k": 0.25,
+            "transition_v_m_s": 0.015
+        });
+        let options: DrapeOptions = serde_json::from_value(declared.clone()).unwrap();
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), declared);
+
+        // self_stick_slip without self_contact must refuse fail-closed.
+        let mut missing_self = declared.clone();
+        missing_self["self_contact"] = serde_json::Value::Null;
+        let missing_self_opts: DrapeOptions = serde_json::from_value(missing_self).unwrap();
+        assert!(missing_self_opts.validate().is_err());
+
+        // mu_s < mu_k must refuse fail-closed.
+        let mut bad_ss = declared.clone();
+        bad_ss["stick_slip"]["mu_s"] = serde_json::json!(0.1);
+        let bad_ss_opts: DrapeOptions = serde_json::from_value(bad_ss).unwrap();
+        assert!(bad_ss_opts.validate().is_err());
+
+        // Unknown fields in adaptive_barrier or stick_slip must be rejected.
+        declared["adaptive_barrier"]["extra"] = serde_json::json!(1.0);
+        assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
+        assert!(
+            serde_json::from_value::<DrapeOptions>(ordinary)
+                .unwrap()
+                .adaptive_barrier
+                .is_none()
+        );
     }
 
     #[test]

@@ -55,7 +55,9 @@ pub mod winding;
 pub use cloth::{
     ClothModel, NewtonStrategy, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube,
 };
-pub use contact::{Body, Contact, ContactParams, Intersection};
+pub use contact::{
+    AdaptiveBarrierPolicy, Body, Contact, ContactParams, Intersection, StickSlipFriction,
+};
 pub use damping::{AirDrag, DampingOptions};
 pub use elements::{BendingModel, CompressionModel, Hinge, Membrane, MembraneElement};
 pub use garment::{GarmentMesh, GatherRelief, SeamRecord, build_garment};

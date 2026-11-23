@@ -546,6 +546,25 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                     let _ = write!(out, " Damping: {}.", xml_escape(&parts.join(", ")));
                 }
             }
+            if sim["numerical"]["adaptive_barrier"].is_object() {
+                out.push_str(" Adaptive IPC barrier: enabled.");
+            }
+            if let Some(ss) = sim["numerical"]["stick_slip"].as_object()
+                && let (Some(mu_s), Some(mu_k)) = (
+                    ss.get("mu_s").and_then(Value::as_f64),
+                    ss.get("mu_k").and_then(Value::as_f64),
+                )
+            {
+                let _ = write!(out, " Stick-slip friction: μs = {mu_s}, μk = {mu_k}.");
+            }
+            if let Some(ss) = sim["numerical"]["self_stick_slip"].as_object()
+                && let (Some(mu_s), Some(mu_k)) = (
+                    ss.get("mu_s").and_then(Value::as_f64),
+                    ss.get("mu_k").and_then(Value::as_f64),
+                )
+            {
+                let _ = write!(out, " Self stick-slip friction: μs = {mu_s}, μk = {mu_k}.");
+            }
             if let Some(settle) = sim["numerical"]["settling"].as_object()
                 && let (Some(steps), Some(max_steps)) = (
                     settle.get("steps").and_then(Value::as_u64),

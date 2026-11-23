@@ -315,6 +315,15 @@ fn attach(
     if !opts.damping.is_default() {
         comparison["shared_settings"]["damping"] = json!(opts.damping);
     }
+    if let Some(policy) = opts.adaptive_barrier {
+        comparison["shared_settings"]["adaptive_barrier"] = json!(policy);
+    }
+    if let Some(friction) = opts.stick_slip {
+        comparison["shared_settings"]["stick_slip"] = json!(friction);
+    }
+    if let Some(friction) = opts.self_stick_slip {
+        comparison["shared_settings"]["self_stick_slip"] = json!(friction);
+    }
     for f in &flags {
         flag(&mut primary.report, f)?;
     }

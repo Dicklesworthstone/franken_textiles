@@ -236,6 +236,13 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
             "permanent in-plane set requires compression factor 1; softened Green-strain plasticity is not characterized",
         ));
     }
+    if inputs.report["basis"] != "legacy_uncertain"
+        && (inputs.options.stick_slip.is_some() || inputs.options.self_stick_slip.is_some())
+    {
+        return Err(invalid(
+            "uniform stick-slip friction cannot override a characterized material record's friction evidence",
+        ));
+    }
     Ok(inputs)
 }
 

@@ -14,7 +14,7 @@ use crate::animation::{
     viewer_html, viewer_payload, zip_frames,
 };
 use crate::cloth::NewtonStrategy;
-use crate::contact::{Contact, ContactParams};
+use crate::contact::{AdaptiveBarrierPolicy, Contact, ContactParams, StickSlipFriction};
 use crate::damping::DampingOptions;
 use crate::elements::{BendingModel, CompressionModel};
 use crate::garment::{GarmentMesh, build_garment, simulation_scope};
@@ -154,6 +154,12 @@ pub struct DrapeOptions {
     pub compression_model: CompressionModel,
     /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping (default: disabled).
     pub damping: DampingOptions,
+    /// Opt-in Li et al. (2020) adaptive IPC barrier stiffness scaling (`None` preserves legacy fixed `kappa`).
+    pub adaptive_barrier: Option<AdaptiveBarrierPolicy>,
+    /// Opt-in smooth static/kinetic stick-slip friction for cloth–body contact (`None` preserves legacy Coulomb `mu`).
+    pub stick_slip: Option<StickSlipFriction>,
+    /// Opt-in smooth static/kinetic stick-slip friction for cloth–cloth self-contact (`None` preserves legacy Coulomb `mu`).
+    pub self_stick_slip: Option<StickSlipFriction>,
 }
 
 impl Default for DrapeOptions {
@@ -189,6 +195,9 @@ impl Default for DrapeOptions {
             bending_model: BendingModel::Quadratic,
             compression_model: CompressionModel::AxisAligned,
             damping: DampingOptions::default(),
+            adaptive_barrier: None,
+            stick_slip: None,
+            self_stick_slip: None,
         }
     }
 }
@@ -212,6 +221,21 @@ impl DrapeOptions {
         self.contact.validate()?;
         if let Some(p) = self.self_contact {
             p.validate()?;
+        }
+        if let Some(policy) = self.adaptive_barrier {
+            policy.validate()?;
+        }
+        if let Some(friction) = self.stick_slip {
+            friction.validate()?;
+        }
+        if let Some(friction) = self.self_stick_slip {
+            friction.validate()?;
+            if self.self_contact.is_none() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "cloth-cloth stick-slip friction requires self-contact to be enabled",
+                ));
+            }
         }
         for (name, value) in [
             ("mesh spacing", self.spacing),
@@ -560,6 +584,41 @@ pub fn drape_observed(
         }
         progress("self-contact: start audit passed; cloth–cloth contact enabled");
     }
+    if let Some(contact) = scene.solver.contact.as_mut() {
+        if let Some(policy) = opts.adaptive_barrier {
+            let n_verts = scene.solver.model.mass.len();
+            let mean_mass = if n_verts > 0 {
+                scene.solver.model.mass.iter().sum::<f64>() / n_verts as f64
+            } else {
+                0.0
+            };
+            let (stiff_area, total_area) = scene.solver.model.membranes.iter().enumerate().fold(
+                (0.0, 0.0),
+                |(sa, a), (i, e)| {
+                    let q = scene.solver.model.material(i).q;
+                    let et = 0.5 * (q[0][0] + q[1][1]);
+                    (sa + et * e.area, a + e.area)
+                },
+            );
+            let membrane_stiffness = if total_area > 0.0 {
+                stiff_area / total_area
+            } else {
+                fabric.tensile_n_m
+            };
+            let ref_gravity = if opts.drape_steps > 0 || opts.max_settle_steps > 0 {
+                GRAVITY
+            } else {
+                0.0
+            };
+            contact.set_adaptive_barrier(policy, mean_mass, membrane_stiffness, ref_gravity)?;
+        }
+        if let Some(friction) = opts.stick_slip {
+            contact.set_stick_slip(friction)?;
+        }
+        if let Some(friction) = opts.self_stick_slip {
+            contact.set_self_stick_slip(friction)?;
+        }
+    }
     scene.solver.tol = opts.tol;
     scene.solver.pcg_iters = opts.pcg_iters;
     scene.solver.newton_strategy = opts.newton_strategy;
@@ -735,7 +794,7 @@ pub fn drape_observed(
                 let field = material.contact_materials.as_ref()?;
                 Some(field.surfaces[field.piece_ids[piece]?].friction_body)
             })()
-            .unwrap_or(opts.contact.mu)
+            .unwrap_or_else(|| opts.stick_slip.map_or(opts.contact.mu, |s| s.mu_s))
         })
         .collect();
     add_run_fields(
@@ -1015,6 +1074,15 @@ fn add_numerical_report(
     if !opts.damping.is_default() {
         report["numerical"]["damping"] = json!(opts.damping);
     }
+    if let Some(policy) = opts.adaptive_barrier {
+        report["numerical"]["adaptive_barrier"] = json!(policy);
+    }
+    if let Some(friction) = opts.stick_slip {
+        report["numerical"]["stick_slip"] = json!(friction);
+    }
+    if let Some(friction) = opts.self_stick_slip {
+        report["numerical"]["self_stick_slip"] = json!(friction);
+    }
     if let Some(policy) = opts.time_subdivision {
         let intervals: Vec<_> = sew
             .samples
@@ -1120,6 +1188,14 @@ fn add_contact_report(
         "minimum_sampled_active_self_gap_m":minimum(true),
         "friction_basis":"counts describe the frozen lag state, not a measured sticking/sliding verdict",
         "final_reactions":reactions});
+    if let Some(c) = scene.solver.contact.as_ref()
+        && c.adaptive_barrier().is_some()
+    {
+        report["contact_diagnostics"]["final_body_kappa_n_m"] = json!(c.params.kappa);
+        if let Some(sp) = c.self_contact_params() {
+            report["contact_diagnostics"]["final_self_kappa_n_m"] = json!(sp.kappa);
+        }
+    }
 }
 
 fn band_window(initial: &[Vec3], frames: &[Vec<Vec3>], vertices: &[usize], step: f64) -> Value {
@@ -1794,6 +1870,29 @@ mod self_contact_tests {
                 self_contact: Some(ContactParams {
                     mu: -0.1,
                     ..default.contact
+                }),
+                ..default
+            },
+            DrapeOptions {
+                adaptive_barrier: Some(AdaptiveBarrierPolicy {
+                    target_gap_fraction: 1.0,
+                    ..AdaptiveBarrierPolicy::default()
+                }),
+                ..default
+            },
+            DrapeOptions {
+                stick_slip: Some(StickSlipFriction {
+                    mu_s: 0.2,
+                    mu_k: 0.4,
+                    transition_v_m_s: 0.02,
+                }),
+                ..default
+            },
+            DrapeOptions {
+                self_stick_slip: Some(StickSlipFriction {
+                    mu_s: 0.5,
+                    mu_k: 0.3,
+                    transition_v_m_s: 0.02,
                 }),
                 ..default
             },
