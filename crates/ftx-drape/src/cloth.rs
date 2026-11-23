@@ -2532,6 +2532,7 @@ impl Solver {
         }
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
+        self.check_bending_model()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -4139,6 +4140,36 @@ mod strategy_and_integrator_tests {
         assert_eq!(c.self_contact_params().unwrap().kappa, prev_self_k);
         assert_eq!(c.stick_slip(), Some(body_ss));
         assert_eq!(c.self_stick_slip(), Some(self_ss));
+    }
+
+    #[test]
+    fn step_with_guess_refuses_authored_crease_under_quadratic_bending() {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.02, 0.0),
+            Vec2::new(0.0, 0.02),
+            Vec2::new(0.02, 0.02),
+        ];
+        let x: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let mut model = ClothModel::new(
+            rest,
+            &[[0, 1, 2], [1, 3, 2]],
+            Membrane::orthotropic(1000.0, 1000.0, 0.0, 100.0, 0.05),
+            1e-4,
+            0.2,
+        )
+        .unwrap();
+        model.set_hinge_rest_angles(&[0.5]).unwrap();
+        let mut solver = Solver::new(
+            model,
+            x.clone(),
+            &[[true; 3], [true; 3], [false; 3], [false; 3]],
+            Vec3::ZERO,
+        );
+        let err = solver
+            .step_with_guess(0.01, Some(&x))
+            .expect_err("step_with_guess must refuse authored creases under Quadratic bending");
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
     }
 }
 

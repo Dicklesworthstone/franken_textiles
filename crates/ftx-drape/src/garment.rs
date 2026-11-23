@@ -1021,16 +1021,16 @@ fn smooth_interior_cvt(
     pinned_count: usize,
     crease_constraints: &[([usize; 2], f64)],
     mut faces: Vec<[usize; 3]>,
+    mut resolved_creases: Vec<([usize; 2], f64)>,
     sizing: &SizingField,
     iterations: usize,
     inst_id: &str,
 ) -> Result<(Vec<[usize; 3]>, Vec<([usize; 2], f64)>), Refusal> {
     let n_free = allp.len().saturating_sub(pinned_count);
     if iterations == 0 || n_free == 0 {
-        return Ok((faces, crease_constraints.to_vec()));
+        return Ok((faces, resolved_creases));
     }
     let stop_tol = CVT_STOP_REL * sizing.min_spacing;
-    let mut resolved_creases = crease_constraints.to_vec();
     for _ in 0..iterations {
         let mut star: Vec<Vec<[usize; 3]>> = vec![Vec::new(); n_free];
         for &[i, j, k] in &faces {
@@ -1819,7 +1819,6 @@ fn triangulate_with_creases(
             boundary_constraints.insert(edge_key(u, v));
         }
     }
-    let mut known_constraints = boundary_constraints.clone();
     let mut assigned_creases: BTreeMap<(usize, usize), f64> = BTreeMap::new();
     let mut record_crease = |su: usize, sv: usize, angle: f64| -> Result<(), Refusal> {
         let sk = edge_key(su, sv);
@@ -1857,22 +1856,26 @@ fn triangulate_with_creases(
         if let Some(dir) = cdt.get_edge_from_neighbors(ha, hb)
             && cdt.is_constraint_edge(dir.as_undirected().fix())
         {
-            known_constraints.insert(edge_key(ha.index(), hb.index()));
             record_crease(ha.index(), hb.index(), angle)?;
         } else {
-            let new_edges: Vec<(usize, usize)> = cdt
+            // Spade split `(ha, hb)` across one or more collinear vertices. Collect every
+            // constraint sub-edge lying on `[pa, pb]` (including already-constrained sub-edges)
+            // so conflicting overlapping creases are refused rather than silently skipped.
+            let (pa, pb) = (points[ca], points[cb]);
+            let tol = (1e-6 * norm2(pb - pa)).max(1e-9);
+            let seg_edges: Vec<(usize, usize)> = cdt
                 .undirected_edges()
                 .filter_map(|e| {
                     if !cdt.is_constraint_edge(e.fix()) {
                         return None;
                     }
                     let [u, v] = e.vertices().map(|h| h.fix().index());
-                    let sk = edge_key(u, v);
-                    (!known_constraints.contains(&sk)).then_some(sk)
+                    let (pu, pv) = (points[first[&u]], points[first[&v]]);
+                    (dist_point_segment(pu, pa, pb) <= tol && dist_point_segment(pv, pa, pb) <= tol)
+                        .then_some(edge_key(u, v))
                 })
                 .collect();
-            for (su, sv) in new_edges {
-                known_constraints.insert(edge_key(su, sv));
+            for (su, sv) in seg_edges {
                 record_crease(su, sv, angle)?;
             }
         }
@@ -2268,6 +2271,7 @@ pub fn build_garment_with_options(
                     pinned_count,
                     &crease_constraints,
                     faces,
+                    resolved,
                     &sizing,
                     options.cvt_iterations,
                     &inst.id,
@@ -3064,5 +3068,51 @@ mod tests {
         };
         let err = adaptive_interior(&giant_boundary, &sizing, "giant").unwrap_err();
         assert_eq!(err.code, RefusalCode::BudgetExceeded);
+    }
+
+    #[test]
+    fn split_creases_refuse_conflict_and_cvt_without_free_vertices_keeps_resolved() {
+        // Square [0, 20]^2 with a crease spanning (0, 10) -> (20, 10) across a midpoint (10, 10),
+        // so CDT splits the constraint into two sub-edges: (5, 6) and (6, 2).
+        let mut pts = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(20.0, 0.0),
+            Vec2::new(20.0, 10.0),
+            Vec2::new(20.0, 20.0),
+            Vec2::new(0.0, 20.0),
+            Vec2::new(0.0, 10.0),
+            Vec2::new(10.0, 10.0), // collinear interior midpoint on crease (5, 2)
+        ];
+        let nb = 6;
+        let constraints = [([5, 2], 0.5_f64)];
+        let (faces, resolved) = triangulate_with_creases(&pts, nb, &constraints, "strip").unwrap();
+        assert_eq!(
+            resolved,
+            vec![([2, 6], 0.5), ([5, 6], 0.5)],
+            "CDT must split crease across collinear midpoint"
+        );
+
+        // With cvt_iterations > 0 and zero free interior vertices (pinned_count == pts.len()),
+        // smooth_interior_cvt must preserve the CDT-resolved split crease edges rather than
+        // returning the unsplit raw constraint [5, 2].
+        let sizing = SizingField::from_boundary(&pts[..nb], 12.0, 12.0);
+        let (_, cvt_creases) = smooth_interior_cvt(
+            &mut pts,
+            nb,
+            pts.len(),
+            &constraints,
+            faces,
+            resolved.clone(),
+            &sizing,
+            4,
+            "strip",
+        )
+        .unwrap();
+        assert_eq!(cvt_creases, resolved);
+
+        // A second overlapping crease over the same split path with a different angle must refuse.
+        let conflicting = [([5, 2], 0.5_f64), ([5, 2], -0.5_f64)];
+        let err = triangulate_with_creases(&pts, nb, &conflicting, "strip").unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
     }
 }

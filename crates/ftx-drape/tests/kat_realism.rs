@@ -1100,7 +1100,7 @@ fn kat_authored_internal_and_seam_creases_fold_under_discrete_shells_and_refuse_
             .collect();
         let mut model = ClothModel::new(
             rest_m.clone(),
-            m.faces.clone(),
+            &m.faces,
             Membrane::orthotropic(1200.0, 1200.0, 0.2, 400.0, 1.0),
             1e-4,
             0.2,
@@ -1127,19 +1127,24 @@ fn kat_authored_internal_and_seam_creases_fold_under_discrete_shells_and_refuse_
                 .collect();
             model.set_hinge_rest_angles(&angles).unwrap();
         }
-        // Start flat with a tiny z nudge on the right half to break flat-plane symmetry, pin left edge.
+        // Start flat with a tiny linear z-tilt on the free right wing to break flat-plane symmetry,
+        // pinning the left half through the crease axis so the right wing can fold isometrically.
         let x0: Vec<Vec3> = rest_m
             .iter()
-            .map(|p| Vec3::new(p.x, p.y, if p.x > 0.041 { -1e-4 } else { 0.0 }))
+            .map(|p| {
+                let z = if p.x > 0.04 {
+                    -1e-2 * (p.x - 0.04)
+                } else {
+                    0.0
+                };
+                Vec3::new(p.x, p.y, z)
+            })
             .collect();
-        let mut solver = Solver::new(model, x0);
-        solver.gravity = Vec3::ZERO;
-        for (i, p) in rest_m.iter().enumerate() {
-            if p.x < 0.039 {
-                solver.pin(i);
-            }
-        }
-        solver.static_solve().unwrap();
+        let fixed: Vec<[bool; 3]> = rest_m.iter().map(|p| [p.x <= 0.04 + 1e-6; 3]).collect();
+        let mut solver = Solver::new(model, x0, &fixed, Vec3::ZERO);
+        solver.tol = 1e-10;
+        let rep = solver.static_solve().unwrap();
+        assert!(rep.converged, "swatch fold failed to converge: {rep:?}");
         let creased_angles: Vec<f64> = solver
             .model
             .hinges
