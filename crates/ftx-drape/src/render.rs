@@ -873,6 +873,11 @@ pub fn still_camera(body: &ColouredMesh, garment: &ColouredMesh, view: &str) -> 
         "three_quarter" => 35.0,
         _ => return None,
     };
+    if body.vertices.iter().any(|v| !v.is_finite())
+        || garment.vertices.iter().any(|v| !v.is_finite())
+    {
+        return None;
+    }
     let zs = |m: &ColouredMesh| {
         m.vertices
             .iter()
@@ -939,9 +944,9 @@ pub fn pick_still(
     );
     Some(match hit {
         None => StillHit::Background,
-        Some(h) if h.tri < body.triangles.len() => StillHit::Body,
+        Some(h) if h.tri < scene.first[1] => StillHit::Body,
         Some(h) => StillHit::Garment {
-            vertices: garment.triangles[h.tri - body.triangles.len()],
+            vertices: scene.tris[h.tri].map(|v| v - body.vertices.len()),
             position_m: cam.eye + d * h.t,
         },
     })
@@ -1473,5 +1478,43 @@ mod tests {
         assert!(still_camera(&empty, &mesh, "front").is_none());
         assert!(still_camera(&mesh, &empty, "front").is_none());
         assert!(stills(&empty, &mesh, &mesh, 16, 16).is_empty());
+
+        // Non-finite vertices must not be masked by f64::min/max in still_camera.
+        let mut nan_mesh = mesh.clone();
+        nan_mesh.vertices[1].z = f64::NAN;
+        assert!(still_camera(&nan_mesh, &mesh, "front").is_none());
+        assert!(still_camera(&mesh, &nan_mesh, "front").is_none());
+
+        // pick_still must index garment hits via Scene::first[1] even when an out-of-range
+        // triangle was filtered from body or garment during Scene::new.
+        let bad_body = ColouredMesh {
+            vertices: vec![
+                Vec3::new(-2.0, 2.0, 0.0),
+                Vec3::new(2.0, 2.0, 0.0),
+                Vec3::new(0.0, 2.0, 1.0),
+            ],
+            triangles: vec![[0, 1, 99], [0, 1, 2]],
+            colours: vec![[0.5; 3]; 3],
+        };
+        let bad_garment = ColouredMesh {
+            vertices: vec![
+                Vec3::new(-1.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            triangles: vec![[0, 1, 42], [0, 1, 2]],
+            colours: vec![[0.5; 3]; 3],
+        };
+        let picked = pick_still(&bad_body, &bad_garment, "front", [32, 32], [16, 16]);
+        assert!(
+            matches!(
+                picked,
+                Some(StillHit::Garment {
+                    vertices: [0, 1, 2],
+                    ..
+                })
+            ),
+            "expected native garment triangle [0, 1, 2], got {picked:?}"
+        );
     }
 }
