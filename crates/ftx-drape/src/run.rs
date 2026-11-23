@@ -650,7 +650,6 @@ pub fn drape_observed(
     scene.solver.newton_strategy = opts.newton_strategy;
     scene.solver.integrator = opts.integrator;
     scene.solver.model.bending_model = opts.bending_model;
-    scene.solver.model.compression_model = opts.compression_model;
     scene.solver.damping = opts.damping;
     scene.solver.check_constitutive_models()?;
     scene.solver.check_integrator_history()?;

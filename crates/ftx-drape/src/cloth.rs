@@ -470,7 +470,14 @@ impl ClothModel {
                 .map(|(i, e)| {
                     self.membrane_response(i).map_or_else(
                         || self.membrane_energy(i, x),
-                        |law| e.response_energy(x, law, &self.material(i)),
+                        |law| {
+                            e.response_energy_with_model(
+                                x,
+                                law,
+                                &self.material(i),
+                                self.compression_model,
+                            )
+                        },
                     )
                 })
                 .sum()
@@ -1144,7 +1151,14 @@ impl Solver {
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
                         || self.model.membrane_local(i, &self.x),
-                        |law| e.response_local(&self.x, law, &self.model.material(i)),
+                        |law| {
+                            e.response_local_with_model(
+                                &self.x,
+                                law,
+                                &self.model.material(i),
+                                self.model.compression_model,
+                            )
+                        },
                     )
                 });
             if let Some(extra) = self
@@ -1263,13 +1277,11 @@ impl Solver {
             ));
         }
         if self.model.compression_model == CompressionModel::Principal
-            && (self.model.element_responses.is_some()
-                || self.relaxation.is_some()
-                || self.membrane_plasticity.is_some())
+            && self.membrane_plasticity.is_some()
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                "CompressionModel::Principal is not admitted alongside calibrated nonlinear or history membrane laws, which operate on axis-aligned material-frame strains",
+                "CompressionModel::Principal is not admitted alongside membrane plasticity, whose return map operates on axis-aligned material-frame strains",
             ));
         }
         Ok(())
@@ -1326,7 +1338,6 @@ impl Solver {
     pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
         !self.model.is_heterogeneous()
             && self.model.bending_model.is_default()
-            && self.model.compression_model.is_default()
             && self.damping.is_default()
             && self.model.element_materials.is_none()
             && self.model.element_responses.is_none()
@@ -1560,7 +1571,14 @@ impl Solver {
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
                         || self.model.membrane_local(i, x_el),
-                        |law| e.response_local(x_el, law, &self.model.material(i)),
+                        |law| {
+                            e.response_local_with_model(
+                                x_el,
+                                law,
+                                &self.model.material(i),
+                                self.model.compression_model,
+                            )
+                        },
                     )
                 });
             if let Some(extra) = self
@@ -2495,9 +2513,9 @@ impl Solver {
         Ok(())
     }
 
-    /// Refuses fail-closed when the requested bending, damping, or compression formulation would
-    /// be silently bypassed by the bound constitutive law (orthotropic panel-bending patches,
-    /// characterized nonlinear membrane laws, Maxwell relaxation, or membrane plasticity).
+    /// Refuses fail-closed when the requested bending, damping, or compression formulation would be
+    /// silently bypassed by the bound constitutive law (orthotropic panel-bending patches
+    /// or membrane plasticity).
     ///
     /// # Errors
     /// [`RefusalCode::InvalidDocument`] on an incompatible constitutive combination.
@@ -2511,15 +2529,13 @@ impl Solver {
             .repair("Set rayleigh_bending_s = 0 with orthotropic characterized bending materials, or use an isotropic scalar bending law with Rayleigh bending damping."));
         }
         if self.model.compression_model == CompressionModel::Principal
-            && (self.model.element_responses.is_some()
-                || self.relaxation.is_some()
-                || self.membrane_plasticity.is_some())
+            && self.membrane_plasticity.is_some()
         {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
-                "characterized nonlinear, viscoelastic, or plastic membrane laws do not implement CompressionModel::Principal",
+                "membrane plasticity does not implement CompressionModel::Principal",
             )
-            .repair("Use CompressionModel::AxisAligned with nonlinear/history membrane laws, or use a linear orthotropic membrane with Principal compression softening."));
+            .repair("Use CompressionModel::AxisAligned with membrane plasticity, or remove the plastic law to use Principal compression softening."));
         }
         Ok(())
     }
@@ -3172,7 +3188,14 @@ impl Solver {
                 .unwrap_or_else(|| {
                     self.model.membrane_response(i).map_or_else(
                         || self.model.membrane_local(i, x),
-                        |law| e.response_local(x, law, &self.model.material(i)),
+                        |law| {
+                            e.response_local_with_model(
+                                x,
+                                law,
+                                &self.model.material(i),
+                                self.model.compression_model,
+                            )
+                        },
                     )
                 });
             if let Some(extra) = self
@@ -4213,8 +4236,8 @@ mod strategy_and_integrator_tests {
     }
 
     #[test]
-    fn check_constitutive_models_refuses_discrete_shells_on_panel_bending_and_principal_on_nonlinear_or_plastic_membrane()
-     {
+    fn constitutive_models_admit_principal_nonlinear_and_refuse_unsupported_bending_or_plasticity()
+    {
         use ftx_pattern::{
             material_bending::BendingTensor,
             material_catalog::Selection,
@@ -4289,8 +4312,8 @@ mod strategy_and_integrator_tests {
         pb_ok.check_constitutive_models().unwrap();
         pb_ok.step(0.01).unwrap();
 
-        // 2. Characterized nonlinear membrane law and membrane plasticity must refuse
-        //    CompressionModel::Principal fail-closed, while succeeding under AxisAligned.
+        // 2. Principal compression reaches characterized nonlinear laws through every solver
+        //    entry point. Plastic return maps still require AxisAligned compression.
         let selected: Selection = serde_json::from_str(include_str!(
             "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
         ))
@@ -4328,7 +4351,7 @@ mod strategy_and_integrator_tests {
         let mut nl_model = ClothModel::new(
             tri_rest.clone(),
             &[[0, 1, 2]],
-            Membrane::orthotropic(1000.0, 600.0, 0.0, 300.0, 1.0),
+            Membrane::orthotropic(1000.0, 600.0, 0.0, 300.0, 0.05),
             0.0,
             0.2,
         )
@@ -4336,29 +4359,60 @@ mod strategy_and_integrator_tests {
         nl_model.set_membrane_responses(&[Some(compiled)]).unwrap();
         nl_model.compression_model = CompressionModel::Principal;
         let mut nl_solver = Solver::new(nl_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO);
-        assert_eq!(
-            nl_solver.check_constitutive_models().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            nl_solver.step(0.01).unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            nl_solver
-                .step_with_guess(0.01, Some(&tri_x))
-                .unwrap_err()
-                .code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            nl_solver.static_solve().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
+        nl_solver.check_constitutive_models().unwrap();
+        nl_solver.step(0.01).unwrap();
+        nl_solver.step_with_guess(0.01, Some(&tri_x)).unwrap();
+        nl_solver.static_solve().unwrap();
+
+        // Mixed principal tension/compression must use the same law for energy, Newton
+        // assembly and exported material reactions, including the fixed vertices.
+        nl_solver.x[2] = Vec3::new(0.006, 0.039, 0.0);
+        let principal_energy = nl_model.elastic_energy(&nl_solver.x);
+        let forces = nl_solver.checked_elastic_forces().unwrap();
+        let (gradient, _) = nl_solver.assemble_static_exact();
+        for axis in 0..3 {
+            assert!((gradient[axis] + forces[2][axis]).abs() < 1e-12);
+        }
+        let eps = 1e-7;
+        for vertex in 0..3 {
+            for axis in 0..3 {
+                let mut plus = nl_solver.x.clone();
+                let mut minus = plus.clone();
+                let offset = [
+                    Vec3::new(eps, 0.0, 0.0),
+                    Vec3::new(0.0, eps, 0.0),
+                    Vec3::new(0.0, 0.0, eps),
+                ][axis];
+                plus[vertex] += offset;
+                minus[vertex] -= offset;
+                let derivative = (nl_model.elastic_energy(&plus) - nl_model.elastic_energy(&minus))
+                    / (2.0 * eps);
+                assert!((forces[vertex][axis] + derivative).abs() < 1e-6);
+            }
+        }
+        nl_solver.step(0.001).unwrap();
+        assert!(nl_solver.x.iter().all(|p| p.is_finite()));
+
         nl_model.compression_model = CompressionModel::AxisAligned;
+        let axis_energy =
+            nl_model.elastic_energy(&[tri_x[0], tri_x[1], Vec3::new(0.006, 0.039, 0.0)]);
+        assert!((principal_energy - axis_energy).abs() > 1e-6);
         let mut nl_ok = Solver::new(nl_model, tri_x.clone(), &tri_fixed, Vec3::ZERO);
         nl_ok.check_constitutive_models().unwrap();
         nl_ok.step(0.01).unwrap();
+
+        // Softening cannot admit a physical strain outside the source's characterized domain.
+        nl_solver.x[2] = Vec3::new(0.0, 0.12, 0.0);
+        let before = (
+            nl_solver.x.clone(),
+            nl_solver.v.clone(),
+            nl_solver.a.clone(),
+        );
+        assert_eq!(
+            nl_solver.step(0.01).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!((nl_solver.x, nl_solver.v, nl_solver.a), before);
 
         // 2b. Membrane plasticity
         let mut pl_model = ClothModel::new(
@@ -4394,7 +4448,7 @@ mod strategy_and_integrator_tests {
         pl_ok.check_constitutive_models().unwrap();
         pl_ok.step(0.01).unwrap();
 
-        // 2c. Standalone Maxwell membrane relaxation
+        // 2c. A source-bound Maxwell law supports both compression transforms.
         let relax_sel: Selection = serde_json::from_str(include_str!(
             "../../../tests/fixtures/materials/synthetic-relaxation.json"
         ))
@@ -4409,29 +4463,20 @@ mod strategy_and_integrator_tests {
         let mut rx_model = ClothModel::new(
             vec![Vec2::ZERO, Vec2::new(0.04, 0.0), Vec2::new(0.0, 0.04)],
             &[[0, 1, 2]],
-            Membrane::orthotropic(rm.warp_n_m, rm.weft_n_m, rm.poisson, rm.shear_n_m, 1.0),
+            Membrane::orthotropic(rm.warp_n_m, rm.weft_n_m, rm.poisson, rm.shear_n_m, 0.05),
             0.0,
             rm.areal_kg_m2,
         )
         .unwrap();
-        rx_model.compression_model = CompressionModel::Principal;
-        let mut rx_solver = Solver::new(rx_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO)
-            .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
-            .unwrap();
-        assert_eq!(
-            rx_solver.check_constitutive_models().unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        assert_eq!(
-            rx_solver.step(0.01).unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
-        rx_model.compression_model = CompressionModel::AxisAligned;
-        let mut rx_ok = Solver::new(rx_model, tri_x, &tri_fixed, Vec3::ZERO)
-            .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
-            .unwrap();
-        rx_ok.check_constitutive_models().unwrap();
-        rx_ok.step(0.01).unwrap();
+        for compression_model in [CompressionModel::AxisAligned, CompressionModel::Principal] {
+            rx_model.compression_model = compression_model;
+            let mut rx_solver =
+                Solver::new(rx_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO)
+                    .with_relaxation(&[relax_mat.membrane_relaxation().unwrap()])
+                    .unwrap();
+            rx_solver.check_constitutive_models().unwrap();
+            rx_solver.step(0.01).unwrap();
+        }
     }
 }
 

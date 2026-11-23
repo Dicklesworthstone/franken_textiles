@@ -896,7 +896,7 @@ pub(crate) fn build_scene_resolved_with_options(
     options.validate()?;
     let (skin_vertices, skin_triangles) = collision;
     let build = |mesh, start| {
-        build_scene_inner(
+        let mut scene = build_scene_inner(
             pattern,
             mesh,
             frames,
@@ -912,7 +912,11 @@ pub(crate) fn build_scene_resolved_with_options(
             material.contact_materials.as_ref(),
             start,
             options,
-        )
+        )?;
+        // Constitutive memory binds to the selected strain transform. Apply it to every start
+        // candidate before initialization, including contact-driven fallback rebuilds.
+        scene.solver.model.compression_model = material.options.compression_model;
+        Ok::<_, Refusal>(scene)
     };
     let mut scene = build(mesh, None)?;
     if let Some(params) = material.options.self_contact {

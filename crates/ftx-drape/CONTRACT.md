@@ -61,8 +61,14 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   `ImplicitEuler` and `GeneralizedAlpha`) and stiffness-proportional Green-strain-rate / dihedral-rate
   Rayleigh damping (`DampingOptions`), exerting exact zero drag on rigid 3D translation and rotation.
 - **Principal-strain tension-field softening (`FTX-27c`)**: `CompressionModel::Principal` applies
-  the `C²` `tanh` blend to Green-strain eigenvalues via the singularity-free spectral formula
-  `Φ(E) = A I + B (E − m I)`, eliminating 45° bias membrane locking; refuses nonlinear/history laws.
+  the `C²` `tanh` blend to Green-strain eigenvalues through a shared spectral transform for linear
+  and characterized nonlinear membranes, Maxwell histories, and homogeneous elastic adjoints.
+  Projector divided differences provide consistent forces and exact Hessians at repeated and nearly
+  repeated eigenvalues; source stiffness stays in its authored grain frame. Physical strain and
+  effective response domains remain enforced, and area responses use the raw physical metric.
+  Histories retain the selected transform from initialization and refuse a changed selector.
+  Plastic return maps still require axis-aligned compression. This numerical softening is not an
+  empirically qualified anisotropic tension-field constitutive law.
 - **Folded-hem & seam-allowance construction mechanics (`FTX-27d`)**: `ConstructionMechanicsOptions`
   and `compute_construction_field` apply uncalibrated area/bending multipliers on open hem bands and
   sewn seam allowances (refused on characterized material records and panel bending).

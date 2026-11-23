@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ad::{JVec, Jet};
 
+mod compression;
+
 /// Hinge bending formulation for [`crate::cloth::ClothModel`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -267,6 +269,35 @@ impl MembraneElement {
         law.evaluate(eff).map_or(f64::NAN, |r| self.area * r.energy)
     }
 
+    /// Characterized energy under the selected compression transform. The area response, when
+    /// present, still acts on the raw physical metric. No source domain is widened.
+    #[must_use]
+    pub fn response_energy_with_model(
+        &self,
+        x: &[Vec3],
+        law: &CompiledMembrane,
+        m: &Membrane,
+        model: CompressionModel,
+    ) -> f64 {
+        if model.is_default() || principal_ratio(m) >= 1.0 {
+            return self.response_energy(x, law, m);
+        }
+        let e = self.strain(x);
+        if law.check_domain(e).is_err() {
+            return f64::NAN;
+        }
+        let eff = effective_strain(e, m, model);
+        if law.area_ratio_range().is_some() {
+            return law
+                .evaluate_separable(eff)
+                .zip(law.evaluate_area(e))
+                .map_or(f64::NAN, |(base, area)| {
+                    self.area * (base.energy + area.energy)
+                });
+        }
+        law.evaluate(eff).map_or(f64::NAN, |r| self.area * r.energy)
+    }
+
     /// Exact chain-rule gradient/Hessian for a characterized nonlinear membrane response.
     /// The material tangent supplied by the response replaces Q; geometric and gather-softening
     /// terms remain identical to the linear element. No extrapolation is performed.
@@ -295,6 +326,57 @@ impl MembraneElement {
             return base;
         }
         self.local_with_response(x, m, |strain| law.evaluate(strain))
+    }
+
+    /// Characterized response with the full selected strain Jacobian and Hessian. Physical area
+    /// energy is pulled back from raw strain independently of the softened separable response.
+    #[must_use]
+    pub fn response_local_with_model(
+        &self,
+        x: &[Vec3],
+        law: &CompiledMembrane,
+        m: &Membrane,
+        model: CompressionModel,
+    ) -> Local<9, 81> {
+        if model.is_default() || principal_ratio(m) >= 1.0 {
+            return self.response_local(x, law, m);
+        }
+        if law.check_domain(self.strain(x)).is_err() {
+            return self.local_with_response_model(x, m, model, |_| None);
+        }
+        if law.area_ratio_range().is_some() {
+            let mut base =
+                self.local_with_response_model(x, m, model, |e| law.evaluate_separable(e));
+            let raw = Membrane {
+                compression: [1.0; 2],
+                ..*m
+            };
+            let area = self.local_with_response(x, &raw, |e| law.evaluate_area(e));
+            base.energy += area.energy;
+            for (base, area) in base.grad.iter_mut().zip(area.grad) {
+                *base += area;
+            }
+            for (base, area) in base.hess.iter_mut().zip(area.hess) {
+                *base += area;
+            }
+            base.psd = false;
+            return base;
+        }
+        self.local_with_response_model(x, m, model, |strain| law.evaluate(strain))
+    }
+
+    pub(crate) fn local_with_response_model(
+        &self,
+        x: &[Vec3],
+        m: &Membrane,
+        model: CompressionModel,
+        evaluate: impl FnOnce([f64; 3]) -> Option<Response>,
+    ) -> Local<9, 81> {
+        if model.is_default() || principal_ratio(m) >= 1.0 {
+            self.local_with_response(x, m, evaluate)
+        } else {
+            compression::local(self, x, m, evaluate)
+        }
     }
 
     // Shared exact geometric/compression chain rule for equilibrium and Maxwell responses. The
@@ -673,150 +755,33 @@ impl MembraneElement {
 /// Scalar isotropic principal-strain softening ratio `r = (c0 * c1)^(1/4) ∈ (0, 1]` (equals
 /// `c.sqrt()` whenever warp and weft compression factors coincide).
 fn principal_ratio(m: &Membrane) -> f64 {
-    (m.compression[0] * m.compression[1]).sqrt().sqrt()
+    if m.compression[0] == m.compression[1] {
+        m.compression[0].sqrt()
+    } else {
+        // Taking roots first preserves every admitted positive factor, including subnormals.
+        m.compression[0].sqrt().sqrt() * m.compression[1].sqrt().sqrt()
+    }
 }
 
-/// Scalar `C²` softening `φ(λ)` and its derivatives `(φ, φ', φ'', φ''', φ⁴, φ⁵)`.
-fn phi_derivs(lambda: f64, r: f64, delta: f64) -> [f64; 6] {
-    if lambda >= 0.0 || r >= 1.0 {
-        return [lambda, 1.0, 0.0, 0.0, 0.0, 0.0];
+/// Shared coordinates for equilibrium response, accepted Maxwell memory and adjoint pullbacks.
+pub(crate) fn effective_strain(e: [f64; 3], m: &Membrane, model: CompressionModel) -> [f64; 3] {
+    if model.is_default() || principal_ratio(m) >= 1.0 {
+        soften(e, m).0
+    } else {
+        soften_principal_value(e, principal_ratio(m), m.transition)
     }
-    let t = ftx_core::det::tanh(lambda / delta);
-    let t2 = t * t;
-    let s2 = 1.0 - t2;
-    let omr = 1.0 - r;
-    let inv_d = 1.0 / delta;
-    let inv_d2 = inv_d * inv_d;
-    let inv_d3 = inv_d2 * inv_d;
-    let inv_d4 = inv_d2 * inv_d2;
-    [
-        r * lambda + omr * delta * t,
-        r + omr * s2,
-        -omr * 2.0 * s2 * t * inv_d,
-        -omr * 2.0 * s2 * (1.0 - 3.0 * t2) * inv_d2,
-        omr * 8.0 * t * s2 * (2.0 - 3.0 * t2) * inv_d3,
-        omr * 8.0 * s2 * (2.0 - 15.0 * t2 + 15.0 * t2 * t2) * inv_d4,
-    ]
 }
 
 fn soften_principal_value(e: [f64; 3], r: f64, delta: f64) -> [f64; 3] {
-    let m = 0.5 * (e[0] + e[1]);
-    let d = 0.5 * (e[0] - e[1]);
-    let g = 0.5 * e[2];
-    let s2 = d * d + g * g;
-    let s = s2.sqrt();
-    let l1 = m + s;
-    let l2 = m - s;
-    if l2 >= 0.0 {
-        return e;
-    }
-    let (a, b) = if s > 1e-4 * delta {
-        let p1 = phi_derivs(l1, r, delta)[0];
-        let p2 = phi_derivs(l2, r, delta)[0];
-        (0.5 * (p1 + p2), (p1 - p2) / (2.0 * s))
-    } else if l1 < 0.0 {
-        let p = phi_derivs(m, r, delta);
-        (
-            p[0] + 0.5 * p[2] * s2 + (1.0 / 24.0) * p[4] * s2 * s2,
-            p[1] + (1.0 / 6.0) * p[3] * s2 + (1.0 / 120.0) * p[5] * s2 * s2,
-        )
-    } else if s > 1e-12 * delta {
-        let p1 = phi_derivs(l1, r, delta)[0];
-        let p2 = phi_derivs(l2, r, delta)[0];
-        (0.5 * (p1 + p2), (p1 - p2) / (2.0 * s))
-    } else {
-        (m, 1.0)
-    };
-    [a + b * d, a - b * d, b * e[2]]
+    compression::value(e, r, delta)
 }
 
-fn jet_bivariate<const N: usize>(
-    m: Jet<N>,
-    u: Jet<N>,
-    f: f64,
-    grad: [f64; 2],
-    hess: [f64; 3],
-) -> Jet<N> {
-    let [fm, fu] = grad;
-    let [fmm, fmu, fuu] = hess;
-    let mut out = Jet::constant(f);
-    for i in 0..N {
-        out.g[i] = fm * m.g[i] + fu * u.g[i];
-        for j in 0..N {
-            out.h[i][j] = fm * m.h[i][j]
-                + fu * u.h[i][j]
-                + fmm * m.g[i] * m.g[j]
-                + fuu * u.g[i] * u.g[j]
-                + fmu * (m.g[i] * u.g[j] + u.g[i] * m.g[j]);
-        }
-    }
-    out
+pub(crate) fn principal_strain_jets(e: [f64; 3], m: &Membrane) -> [Jet<3>; 3] {
+    soften_principal_jets(e, principal_ratio(m), m.transition)
 }
 
-/// Exact singularity-free spectral transform `Φ(E) = A(m, s²) I + B(m, s²)(E − m I)` and its
-/// first/second derivatives with respect to Voigt strain `(E₁₁, E₂₂, γ₁₂)`.
 fn soften_principal_jets(e: [f64; 3], r: f64, delta: f64) -> [Jet<3>; 3] {
-    let e0 = Jet::<3>::var(e[0], 0);
-    let e1 = Jet::<3>::var(e[1], 1);
-    let e2 = Jet::<3>::var(e[2], 2);
-    let m = (e0 + e1) * 0.5;
-    let d = (e0 - e1) * 0.5;
-    let g = e2 * 0.5;
-    let u = d * d + g * g;
-    let s2 = u.v;
-    let s = s2.sqrt();
-    let l1 = m.v + s;
-    let l2 = m.v - s;
-    if l2 >= 0.0 {
-        return [e0, e1, e2];
-    }
-    let (a_jet, b_jet) = if s > 5e-3 * delta || (l1 >= 0.0 && s > 1e-6 * delta) {
-        let p1 = phi_derivs(l1, r, delta);
-        let p2 = phi_derivs(l2, r, delta);
-        let inv_2s = 0.5 / s;
-        let inv_2u = 0.5 / s2;
-        let a_v = 0.5 * (p1[0] + p2[0]);
-        let a_m = 0.5 * (p1[1] + p2[1]);
-        let b_v = (p1[0] - p2[0]) * inv_2s;
-        let b_m = (p1[1] - p2[1]) * inv_2s;
-        let a_u = 0.5 * b_m;
-        let a_mm = 0.5 * (p1[2] + p2[2]);
-        let b_mm = (p1[2] - p2[2]) * inv_2s;
-        let a_mu = 0.5 * b_mm;
-        let a_uu = (a_mm - b_m) * (0.25 / s2);
-        let b_u = (a_m - b_v) * inv_2u;
-        let b_mu = (a_mm - b_m) * inv_2u;
-        let b_uu = (a_mu - 3.0 * b_u) * inv_2u;
-        (
-            jet_bivariate(m, u, a_v, [a_m, a_u], [a_mm, a_mu, a_uu]),
-            jet_bivariate(m, u, b_v, [b_m, b_u], [b_mm, b_mu, b_uu]),
-        )
-    } else if l1 < 0.0 {
-        // Both eigenvalues strictly negative and close (`s <= 5e-3 * delta`): exact analytic
-        // Taylor expansion in `u = s²` around `m` avoids `0/0` division completely.
-        let p = phi_derivs(m.v, r, delta);
-        let a_v = p[0] + 0.5 * p[2] * s2 + (1.0 / 24.0) * p[4] * s2 * s2;
-        let a_m = p[1] + 0.5 * p[3] * s2;
-        let a_u = 0.5 * p[2] + (1.0 / 12.0) * p[4] * s2;
-        let a_mm = p[2] + 0.5 * p[4] * s2;
-        let a_mu = 0.5 * p[3] + (1.0 / 12.0) * p[5] * s2;
-        let a_uu = (1.0 / 12.0) * p[4];
-
-        let b_v = p[1] + (1.0 / 6.0) * p[3] * s2 + (1.0 / 120.0) * p[5] * s2 * s2;
-        let b_m = p[2] + (1.0 / 6.0) * p[4] * s2;
-        let b_u = (1.0 / 6.0) * p[3] + (1.0 / 60.0) * p[5] * s2;
-        let b_mm = p[3] + (1.0 / 6.0) * p[5] * s2;
-        let b_mu = (1.0 / 6.0) * p[4];
-        let b_uu = (1.0 / 60.0) * p[5];
-        (
-            jet_bivariate(m, u, a_v, [a_m, a_u], [a_mm, a_mu, a_uu]),
-            jet_bivariate(m, u, b_v, [b_m, b_u], [b_mm, b_mu, b_uu]),
-        )
-    } else {
-        // Straddling zero with `|m| <= s <= 1e-6 * delta`: `φ(λ) - λ = O(1e-18 * delta)`.
-        return [e0, e1, e2];
-    };
-    [a_jet + b_jet * d, a_jet - b_jet * d, b_jet * e2]
+    compression::principal(e, r, delta)
 }
 
 fn mat3(q: &[[f64; 3]; 3], e: [f64; 3]) -> [f64; 3] {
@@ -1240,7 +1205,7 @@ mod tests {
 
     /// Central differences (step `h`, m) of the energy and of the gradient against the analytic
     /// gradient and Hessian.
-    fn check<const N: usize, const NN: usize>(
+    pub(super) fn check<const N: usize, const NN: usize>(
         x: &[Vec3],
         dofs: &[usize],
         h: f64,
@@ -1396,14 +1361,20 @@ mod tests {
             .map(|p| Vec3::new(1.07 * p.x + 0.01 * p.y, 0.96 * p.y, 0.02 * p.x))
             .collect();
         assert!(law.contains(e.strain(&x)));
-        check(
-            &x,
-            &[0, 1, 2],
-            1e-7,
-            |x| e.response_energy(x, &law, &mat),
-            |x| e.response_local(x, &law, &mat),
-        );
-        assert!(e.response_local(&x, &law, &mat).energy.is_finite());
+        for model in [CompressionModel::AxisAligned, CompressionModel::Principal] {
+            check(
+                &x,
+                &[0, 1, 2],
+                1e-7,
+                |x| e.response_energy_with_model(x, &law, &mat, model),
+                |x| e.response_local_with_model(x, &law, &mat, model),
+            );
+            assert!(
+                e.response_local_with_model(&x, &law, &mat, model)
+                    .energy
+                    .is_finite()
+            );
+        }
     }
 
     #[test]
