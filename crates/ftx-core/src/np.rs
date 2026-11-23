@@ -43,12 +43,12 @@ pub fn arange(start: f64, stop: f64, step: f64) -> Vec<f64> {
 
 /// numpy `percentile(values, p)` with the default linear method: virtual index
 /// `(n·q + (1 − q)) − 1` for `q = p/100`, then numpy's two-sided lerp between the neighbouring order
-/// statistics (`a + (b − a)·γ`, or `b − (b − a)·(1 − γ)` when γ ≥ 0.5). NaN for an empty slice or
-/// NaN `p`; NaNs in `values` sort last, as in numpy.
+/// statistics (`a + (b − a)·γ`, or `b − (b − a)·(1 − γ)` when γ ≥ 0.5). NaN for an empty slice,
+/// NaN `p`, or any NaN in `values`, as in numpy.
 #[must_use]
 pub fn percentile(values: &[f64], p: f64) -> f64 {
     let n = values.len();
-    if n == 0 || p.is_nan() {
+    if n == 0 || p.is_nan() || values.iter().any(|x| x.is_nan()) {
         return f64::NAN;
     }
     if n == 1 {
@@ -296,11 +296,11 @@ fn aheapsort<T: PartialOrd + Copy>(v: &[T], a: &mut [usize]) {
 }
 
 /// numpy `median` of float64 values: the middle order statistic, or the mean of the two middle ones
-/// (`(a + b)/2`). NaN for an empty slice.
+/// (`(a + b)/2`). NaN for an empty slice or any NaN in `values`, as in numpy.
 #[must_use]
 pub fn median(values: &[f64]) -> f64 {
     let n = values.len();
-    if n == 0 {
+    if n == 0 || values.iter().any(|x| x.is_nan()) {
         return f64::NAN;
     }
     let mut v = values.to_vec();
@@ -313,10 +313,11 @@ pub fn median(values: &[f64]) -> f64 {
 }
 
 /// numpy `median` of a float32 array, which numpy computes in float32: `(a + b)/2` rounded to float32.
+/// NaN for an empty slice or any NaN in `values`, as in numpy.
 #[must_use]
 pub fn median_f32(values: &[f32]) -> f32 {
     let n = values.len();
-    if n == 0 {
+    if n == 0 || values.iter().any(|x| x.is_nan()) {
         return f32::NAN;
     }
     let mut v = values.to_vec();
@@ -330,11 +331,11 @@ pub fn median_f32(values: &[f32]) -> f32 {
 
 /// numpy 2.5.4 `percentile` of a float32 array at a Python number `p` (linear method): `q = p / 100`, the
 /// virtual index `(n − 1)·q` and the fraction in float64, the fraction cast to float32, the two-sided lerp
-/// in float32.
+/// in float32. NaN for an empty slice, NaN `p`, or any NaN in `values`, as in numpy.
 #[must_use]
 pub fn percentile_f32(values: &[f32], p: f64) -> f32 {
     let n = values.len();
-    if n == 0 || p.is_nan() {
+    if n == 0 || p.is_nan() || values.iter().any(|x| x.is_nan()) {
         return f32::NAN;
     }
     if n == 1 {
@@ -503,6 +504,24 @@ mod tests {
         assert!(percentile_f32(&[42.0], f64::NAN).is_nan());
         assert_eq!(percentile_f32(&[42.0], f64::INFINITY), 42.0);
         assert_eq!(percentile_f32(&[42.0], f64::NEG_INFINITY), 42.0);
+
+        // Both +NaN and -NaN (x86_64 0.0/0.0 QNaN Indefinite) must propagate identically across ISAs.
+        let neg_nan_f64 = f64::from_bits(0xfff8_0000_0000_0000);
+        let neg_nan_f32 = f32::from_bits(0xffc0_0000);
+        for nan in [f64::NAN, neg_nan_f64] {
+            let s = [1.0, 2.0, 3.0, nan];
+            assert!(median(&s).is_nan());
+            for p in [0.0, 50.0, 95.0, 100.0] {
+                assert!(percentile(&s, p).is_nan(), "p={p}");
+            }
+        }
+        for nan in [f32::NAN, neg_nan_f32] {
+            let s = [1.0f32, 2.0, 3.0, nan];
+            assert!(median_f32(&s).is_nan());
+            for p in [0.0, 50.0, 95.0, 100.0] {
+                assert!(percentile_f32(&s, p).is_nan(), "p={p}");
+            }
+        }
     }
 
     #[test]

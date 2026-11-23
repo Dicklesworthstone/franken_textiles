@@ -192,7 +192,22 @@ pub fn bezier(ctrl: &[Vec2], n: usize) -> Vec<Vec2> {
 }
 
 fn binomial(n: usize, k: usize) -> f64 {
-    (0..k).fold(1u64, |acc, i| acc * (n - i) as u64 / (i as u64 + 1)) as f64
+    let k = k.min(n - k);
+    let mut acc = 1u128;
+    for i in 0..k {
+        let num = (n - i) as u128;
+        let den = (i + 1) as u128;
+        if let Some(prod) = acc.checked_mul(num) {
+            acc = prod / den;
+        } else {
+            let mut f = acc as f64;
+            for j in i..k {
+                f = f * (n - j) as f64 / (j + 1) as f64;
+            }
+            return f;
+        }
+    }
+    acc as f64
 }
 
 /// The polyline of an edge from `p0` to `p1`, endpoints included: 2 points for a line, `dense`
@@ -365,5 +380,14 @@ mod tests {
         assert_eq!(round_trip["type"], Value::from("cubic"));
         assert!(bezier(&[], 10).is_empty());
         assert!(bezier(&[v(0.0, 0.0), v(1.0, 1.0)], 0).is_empty());
+
+        // High-degree Bezier (degree >= 63 overflows u64 in naive binomials) must not panic or wrap.
+        let ctrl: Vec<Vec2> = (0..70).map(|i| v(i as f64, 0.0)).collect();
+        let pts = bezier(&ctrl, 5);
+        assert_eq!(pts.len(), 5);
+        assert!(pts.iter().all(|p| p.is_finite()));
+        assert_eq!(pts[0], v(0.0, 0.0));
+        assert!((pts[2].x - 34.5).abs() < 1e-11 && pts[2].y.abs() < 1e-11);
+        assert_eq!(pts[4], v(69.0, 0.0));
     }
 }

@@ -292,6 +292,9 @@ impl Parser<'_> {
                 if t.is_empty() {
                     return self.err("unexpected character");
                 }
+                if !is_valid_json_number(t.as_bytes()) {
+                    return Err(format!("bad number at byte {start}"));
+                }
                 if !t.contains(['.', 'e', 'E']) {
                     if let Ok(n) = t.parse::<i64>() {
                         return Ok(PyJson::Int(n));
@@ -348,12 +351,15 @@ impl Parser<'_> {
                     }
                     flush(&mut out, &mut units);
                     out.push(match e {
+                        b'"' => '"',
+                        b'\\' => '\\',
+                        b'/' => '/',
                         b'n' => '\n',
                         b't' => '\t',
                         b'r' => '\r',
                         b'b' => '\u{8}',
                         b'f' => '\u{c}',
-                        other => char::from(other),
+                        _ => return Err(format!("bad escape at byte {}", self.i - 1)),
                     });
                 }
                 _ => {
@@ -372,6 +378,48 @@ impl Parser<'_> {
         flush(&mut out, &mut units);
         Ok(out)
     }
+}
+
+/// RFC 8259 §6 JSON number syntax (`-? (0 | [1-9][0-9]*) (\.[0-9]+)? ([eE][+-]?[0-9]+)?`).
+fn is_valid_json_number(b: &[u8]) -> bool {
+    let mut i = 0;
+    if b.get(i) == Some(&b'-') {
+        i += 1;
+    }
+    match b.get(i) {
+        Some(b'0') => i += 1,
+        Some(b'1'..=b'9') => {
+            i += 1;
+            while b.get(i).is_some_and(u8::is_ascii_digit) {
+                i += 1;
+            }
+        }
+        _ => return false,
+    }
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        let frac_start = i;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        if i == frac_start {
+            return false;
+        }
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let exp_start = i;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        if i == exp_start {
+            return false;
+        }
+    }
+    i == b.len()
 }
 
 fn write_str(out: &mut String, s: &str) {
@@ -453,5 +501,19 @@ mod tests {
 
         let err = PyJson::parse(r#""\u+123""#).unwrap_err();
         assert!(err.contains("bad \\u escape"), "{err}");
+
+        for bad in ["+1", "01", "-01", ".5", "1.", "1-2", "-", "1e", "1e+"] {
+            let err = PyJson::parse(bad).unwrap_err();
+            assert!(err.contains("bad number"), "{bad}: {err}");
+        }
+        for bad_str in [r#""\q""#, r#""\x41""#] {
+            let err = PyJson::parse(bad_str).unwrap_err();
+            assert!(err.contains("bad escape"), "{bad_str}: {err}");
+        }
+        assert_eq!(PyJson::parse("-0").unwrap(), PyJson::Int(0));
+        assert_eq!(
+            PyJson::parse(r#""a\/b\"c\\d""#).unwrap(),
+            PyJson::str("a/b\"c\\d")
+        );
     }
 }
