@@ -1029,9 +1029,7 @@ impl SupplyReservoir {
                 unmet == 0. && expected.unmet == 0.
             } else if expected.unmet > 0. {
                 unmet > 0. && accumulated_near(unmet, expected.unmet, expected.unmet_scale, steps)
-            } else if self.initial_mass > 0.
-                && expected.boundary_depletion_scale > 0.
-                && steps > 1
+            } else if self.initial_mass > 0. && expected.boundary_depletion_scale > 0. && steps > 1
             {
                 accumulated_near(unmet, 0., expected.boundary_depletion_scale, steps)
             } else {

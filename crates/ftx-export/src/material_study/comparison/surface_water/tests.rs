@@ -4703,3 +4703,342 @@ fn scheduled_ambient_cancellation_preserves_the_checked_aggregate_enthalpy() {
         [totals[0], totals[1], totals[5]]
     );
 }
+
+#[test]
+fn finite_liquid_supply_demand_ledger_admits_shortfall_tiny_unmet_and_refuses_forged_totals() {
+    // 1. Older finite-supply receipts (without requested/unmet demand fields) stay admissible
+    // and expose remaining donor inventory without inventing unavailable demand readings.
+    let (a, d, s, m) = finite_supplied_case();
+    let old_heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+    let old_admitted = numerical_heat(&s, &m, old_heat);
+    assert_eq!(
+        Metric::TextileWaterRemainingSupplyMassKg.value(&a, &old_admitted),
+        Some(0.)
+    );
+    assert_eq!(
+        Metric::TextileWaterRequestedSupplyMassKg.value(&a, &old_admitted),
+        None
+    );
+    assert_eq!(
+        Metric::TextileWaterUnmetSupplyMassKg.value(&a, &old_admitted),
+        None
+    );
+
+    // 2. Newer finite-supply receipts carry requested, unmet and demand_balance_error_kg.
+    // In finite_supplied_case(), front demands 2*mass over [0, 1] and exhausts at t = 0.5.
+    let mut with_demand = m.clone();
+    let h = &mut with_demand["transient_surface"]["result"];
+    let mass = h["surface_water"]["supplied_liquid_kg"].as_f64().unwrap();
+    let requested = 2. * mass;
+    let unmet = mass;
+    for path in [
+        "/surface_water/supply_reservoir",
+        "/trace/0/surface_water/supply_reservoir",
+    ] {
+        let donor = h.pointer_mut(path).unwrap();
+        donor["requested_liquid_mass_kg"] = json!(requested);
+        donor["unmet_liquid_mass_kg"] = json!(unmet);
+        donor["demand_balance_error_kg"] = json!((mass - requested) + unmet);
+    }
+    let heat = admit_heat(&a, &d, &s, &with_demand, Consumer::TransientSurface).unwrap();
+    let admitted = numerical_heat(&s, &with_demand, heat);
+    for (metric, expected) in [
+        (Metric::TextileWaterRequestedSupplyMassKg, requested),
+        (Metric::TextileWaterUnmetSupplyMassKg, unmet),
+        (Metric::TextileWaterRemainingSupplyMassKg, 0.),
+    ] {
+        assert_eq!(metric.consumer(), Consumer::TransientSurface);
+        assert_eq!(metric.unit(None), "kg");
+        assert!(!metric.signed());
+        assert!(!metric.supports_bounds());
+        assert_eq!(metric.value(&a, &admitted), Some(expected));
+        let encoded = serde_json::to_value(metric).unwrap();
+        assert_eq!(serde_json::from_value::<Metric>(encoded).unwrap(), metric);
+    }
+
+    // 3. Partial, null, unknown or trace/final-mixed demand ledgers refuse fail-closed.
+    for fault in 0..5 {
+        let mut bad = with_demand.clone();
+        let h = &mut bad["transient_surface"]["result"];
+        match fault {
+            0 => {
+                for path in [
+                    "/surface_water/supply_reservoir",
+                    "/trace/0/surface_water/supply_reservoir",
+                ] {
+                    h.pointer_mut(path)
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("unmet_liquid_mass_kg");
+                }
+            }
+            1 => {
+                for path in [
+                    "/surface_water/supply_reservoir",
+                    "/trace/0/surface_water/supply_reservoir",
+                ] {
+                    h.pointer_mut(path).unwrap()["requested_liquid_mass_kg"] = Value::Null;
+                }
+            }
+            2 => {
+                for path in [
+                    "/surface_water/supply_reservoir",
+                    "/trace/0/surface_water/supply_reservoir",
+                ] {
+                    h.pointer_mut(path).unwrap()["extra_field"] = json!(0.);
+                }
+            }
+            3 => {
+                // Balanced forged totals: (supplied - requested) + unmet == 0, but disagrees
+                // with the independent source-schedule integral.
+                for path in [
+                    "/surface_water/supply_reservoir",
+                    "/trace/0/surface_water/supply_reservoir",
+                ] {
+                    let donor = h.pointer_mut(path).unwrap();
+                    donor["requested_liquid_mass_kg"] = json!(requested + mass);
+                    donor["unmet_liquid_mass_kg"] = json!(unmet + mass);
+                    donor["demand_balance_error_kg"] = json!(0.);
+                }
+            }
+            _ => {
+                // Mixing an older trace row with a newer final receipt must refuse.
+                for key in [
+                    "requested_liquid_mass_kg",
+                    "unmet_liquid_mass_kg",
+                    "demand_balance_error_kg",
+                ] {
+                    h["trace"][0]["surface_water"]["supply_reservoir"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(key);
+                }
+            }
+        }
+        assert!(
+            admit_heat(&a, &d, &s, &bad, Consumer::TransientSurface).is_err(),
+            "demand fault {fault}"
+        );
+    }
+
+    // 4. Tiny post-exhaustion shortfalls (2^-40 relative to 1 kg delivered) must be admitted
+    // at their own scale and catch both zeroed-out unmet and balanced tiny forgeries.
+    let tiny = 2.0_f64.powi(-40);
+    let motion = json!({
+        "keyframes": [{"time_s": 1.}, {"time_s": 2.}],
+        "duration_s": 2.
+    });
+    let owners = json!({"front": {}}).as_object().unwrap().clone();
+    let request = json!({
+        "schema": "ftx-textile-liquid-supply/2",
+        "bindings": {
+            "front": {
+                "rate_kg_m2_s": [1., tiny],
+                "temperature_c": [30., 30.]
+            }
+        },
+        "source": {"reference":"test:tiny-shortfall","accessed_on":"2026-11-22",
+            "note":"Synthetic two-interval donor exhaustion with tiny post-depletion demand"},
+        "evidence": "estimate", "allow_estimates": true,
+        "method": "Exact piecewise reference-area demand",
+        "finite_reservoir": {
+            "schema": "ftx-textile-liquid-reservoir/1",
+            "model": "well_mixed_constant_temperature_liquid_inventory/1",
+            "initial_liquid_mass_kg": 1., "temperature_c": 30.,
+            "source": {"reference":"test:tiny-donor","accessed_on":"2026-11-22",
+                "note":"Synthetic 1 kg shared donor"},
+            "evidence": "estimate", "allow_estimates": true,
+            "method": "Homogeneous withdrawal",
+            "qualification": "Synthetic constant-temperature donor over [0, 2] s"
+        }
+    });
+    let mut supply = Supply::new(&request, &owners, &motion, 4200., 0., [0., 60.]).unwrap();
+    supply
+        .limit_inventory(&BTreeMap::from([("front", 1.)]))
+        .unwrap();
+    let energy = 4200. * 30.;
+    let make_water = |t: f64, req: f64, unmet: f64| {
+        json!({
+            "supplied_liquid_kg": 1.,
+            "supplied_liquid_sensible_energy_j": energy,
+            "supply_reservoir": {
+                "schema": "ftx-textile-liquid-reservoir-result/1",
+                "initial_liquid_mass_kg": 1.,
+                "remaining_liquid_mass_kg": 0.,
+                "supplied_liquid_mass_kg": 1.,
+                "requested_liquid_mass_kg": req,
+                "unmet_liquid_mass_kg": unmet,
+                "temperature_c": 30.,
+                "elapsed_seconds": t,
+                "exhaustion_events": 1,
+                "liquid_enthalpy_change_j": -energy,
+                "exported_liquid_enthalpy_j": energy,
+                "mass_balance_error_kg": 0.,
+                "demand_balance_error_kg": (1. - req) + unmet,
+                "enthalpy_balance_error_j": 0.
+            }
+        })
+    };
+    let expected_1 = supply.expected_demand(1.).unwrap();
+    let expected_2 = supply.expected_demand(2.).unwrap();
+    assert_eq!(expected_1.unmet, 0.);
+    assert_eq!(expected_2.unmet, tiny);
+    assert_eq!(expected_2.unmet_scale, tiny);
+    let mut donor =
+        SupplyReservoir::new(&request["finite_reservoir"], 4200., 0., [0., 60.]).unwrap();
+    donor
+        .admit(&make_water(1., 1., 0.), 1., 1, expected_1)
+        .unwrap();
+    donor
+        .admit(&make_water(2., 1. + tiny, tiny), 2., 2, expected_2)
+        .unwrap();
+    // Zeroing the tiny shortfall or doubling both requested and unmet (keeping balance 0) must refuse.
+    for (req, unmet) in [(1., 0.), (1. + 2. * tiny, 2. * tiny), (1. + tiny, 0.)] {
+        let mut probe =
+            SupplyReservoir::new(&request["finite_reservoir"], 4200., 0., [0., 60.]).unwrap();
+        probe
+            .admit(&make_water(1., 1., 0.), 1., 1, expected_1)
+            .unwrap();
+        assert!(
+            probe
+                .admit(&make_water(2., req, unmet), 2., 2, expected_2)
+                .is_err(),
+            "expected refusal for req={req} unmet={unmet}"
+        );
+    }
+
+    // 5. Unexhausted donor must keep unmet strictly zero; initially empty donor must match
+    // requested == unmet and refuse zeroed shortfall.
+    let mut rich_req = request.clone();
+    rich_req["finite_reservoir"]["initial_liquid_mass_kg"] = json!(5.);
+    let mut rich = Supply::new(&rich_req, &owners, &motion, 4200., 0., [0., 60.]).unwrap();
+    rich.limit_inventory(&BTreeMap::from([("front", 1.)]))
+        .unwrap();
+    let rich_exp = rich.expected_demand(1.).unwrap();
+    let mut rich_water = json!({
+        "supplied_liquid_kg": 1.,
+        "supplied_liquid_sensible_energy_j": energy,
+        "supply_reservoir": {
+            "schema": "ftx-textile-liquid-reservoir-result/1",
+            "initial_liquid_mass_kg": 5.,
+            "remaining_liquid_mass_kg": 4.,
+            "supplied_liquid_mass_kg": 1.,
+            "requested_liquid_mass_kg": 1.,
+            "unmet_liquid_mass_kg": 0.,
+            "temperature_c": 30.,
+            "elapsed_seconds": 1.,
+            "exhaustion_events": 0,
+            "liquid_enthalpy_change_j": -energy,
+            "exported_liquid_enthalpy_j": energy,
+            "mass_balance_error_kg": 0.,
+            "demand_balance_error_kg": 0.,
+            "enthalpy_balance_error_j": 0.
+        }
+    });
+    SupplyReservoir::new(&rich_req["finite_reservoir"], 4200., 0., [0., 60.])
+        .unwrap()
+        .admit(&rich_water, 1., 1, rich_exp)
+        .unwrap();
+    rich_water["supply_reservoir"]["requested_liquid_mass_kg"] = json!(1. + 1e-12);
+    rich_water["supply_reservoir"]["unmet_liquid_mass_kg"] = json!(1e-12);
+    assert!(
+        SupplyReservoir::new(&rich_req["finite_reservoir"], 4200., 0., [0., 60.])
+            .unwrap()
+            .admit(&rich_water, 1., 1, rich_exp)
+            .is_err()
+    );
+
+    let mut empty_req = request;
+    empty_req["finite_reservoir"]["initial_liquid_mass_kg"] = json!(0.);
+    let mut empty = Supply::new(&empty_req, &owners, &motion, 4200., 0., [0., 60.]).unwrap();
+    empty
+        .limit_inventory(&BTreeMap::from([("front", 1.)]))
+        .unwrap();
+    let empty_exp = empty.expected_demand(2.).unwrap();
+    let mut empty_water = json!({
+        "supplied_liquid_kg": 0.,
+        "supplied_liquid_sensible_energy_j": 0.,
+        "supply_reservoir": {
+            "schema": "ftx-textile-liquid-reservoir-result/1",
+            "initial_liquid_mass_kg": 0.,
+            "remaining_liquid_mass_kg": 0.,
+            "supplied_liquid_mass_kg": 0.,
+            "requested_liquid_mass_kg": 1. + tiny,
+            "unmet_liquid_mass_kg": 1. + tiny,
+            "temperature_c": 30.,
+            "elapsed_seconds": 2.,
+            "exhaustion_events": 0,
+            "liquid_enthalpy_change_j": 0.,
+            "exported_liquid_enthalpy_j": 0.,
+            "mass_balance_error_kg": 0.,
+            "demand_balance_error_kg": 0.,
+            "enthalpy_balance_error_j": 0.
+        }
+    });
+    SupplyReservoir::new(&empty_req["finite_reservoir"], 4200., 0., [0., 60.])
+        .unwrap()
+        .admit(&empty_water, 2., 2, empty_exp)
+        .unwrap();
+    empty_water["supply_reservoir"]["unmet_liquid_mass_kg"] = json!(0.);
+    assert!(
+        SupplyReservoir::new(&empty_req["finite_reservoir"], 4200., 0., [0., 60.])
+            .unwrap()
+            .admit(&empty_water, 2., 2, empty_exp)
+            .is_err()
+    );
+}
+
+#[test]
+fn ambient_vapor_inflow_and_outflow_metrics_expose_separate_channels_and_stay_unavailable_when_closed()
+ {
+    for (a, d, s, m) in [ambient_reservoir_case(), scheduled_ambient_reservoir_case()] {
+        let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+        let exchange = &heat.result["surface_water"]["vapor_reservoir"]["ambient_exchange"];
+        let incoming = exchange["incoming_vapor_mass_kg"].as_f64().unwrap();
+        let outgoing = exchange["outgoing_vapor_mass_kg"].as_f64().unwrap();
+        let admitted = numerical_heat(&s, &m, heat);
+        for (metric, expected) in [
+            (Metric::TextileWaterAmbientVaporInflowMassKg, incoming),
+            (Metric::TextileWaterAmbientVaporOutflowMassKg, outgoing),
+        ] {
+            assert_eq!(metric.consumer(), Consumer::TransientSurface);
+            assert_eq!(metric.unit(None), "kg");
+            assert!(!metric.signed());
+            assert!(!metric.supports_bounds());
+            assert_eq!(metric.value(&a, &admitted), Some(expected));
+            let encoded = serde_json::to_value(metric).unwrap();
+            assert_eq!(serde_json::from_value::<Metric>(encoded).unwrap(), metric);
+        }
+        // Without supply/2, finite-donor metrics stay unavailable on ambient-vapor cases.
+        for donor_metric in [
+            Metric::TextileWaterRequestedSupplyMassKg,
+            Metric::TextileWaterUnmetSupplyMassKg,
+            Metric::TextileWaterRemainingSupplyMassKg,
+        ] {
+            assert_eq!(donor_metric.value(&a, &admitted), None);
+        }
+    }
+
+    // Closed finite vapor reservoirs and prescribed-ambient versions cannot supply ambient
+    // inflow/outflow readings, and unlimited/no-supply cases cannot supply donor readings.
+    for (a, d, s, m) in [
+        finite_reservoir_case(false, false),
+        case(),
+        supplied_case(),
+        condensing_case(),
+        draining_case(true),
+    ] {
+        let heat = admit_heat(&a, &d, &s, &m, Consumer::TransientSurface).unwrap();
+        let admitted = numerical_heat(&s, &m, heat);
+        for metric in [
+            Metric::TextileWaterRequestedSupplyMassKg,
+            Metric::TextileWaterUnmetSupplyMassKg,
+            Metric::TextileWaterRemainingSupplyMassKg,
+            Metric::TextileWaterAmbientVaporInflowMassKg,
+            Metric::TextileWaterAmbientVaporOutflowMassKg,
+        ] {
+            assert_eq!(metric.value(&a, &admitted), None, "{metric:?}");
+        }
+    }
+}

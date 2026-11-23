@@ -1027,6 +1027,24 @@ or repeated history scan is added. They are sampled extrema, not thermal-substep
 bounds. All five require version 5; an older prescribed atmosphere cannot supply a missing finite
 inventory or an artificial zero. Source-reported uncertainty bounds remain unavailable.
 
+When water version 5 also enables a separately qualified constant or interval-scheduled ambient
+boundary (`ambient_exchange` or `ambient_exchange_by_interval`), cumulative inflow
+(`textile_water_ambient_vapor_inflow_mass_kg`) and outflow
+(`textile_water_ambient_vapor_outflow_mass_kg`) are available as separate nonnegative kilogram
+objectives and inclusive constraints. Closed finite reservoirs and prescribed infinite atmospheres
+leave both unavailable without inventing zeros.
+
+When liquid supply version 2 (`ftx-textile-liquid-supply/2`) enables a shared finite donor, final
+remaining donor inventory (`textile_water_remaining_supply_mass_kg`, distinct from liquid retained
+on the textile) is available for all admitted donor receipts, and complete authored delivery demand
+(`textile_water_requested_supply_mass_kg`) and post-exhaustion shortfall
+(`textile_water_unmet_supply_mass_kg`) are available whenever the admitted donor receipts carry the
+verified demand ledger. Comparison admission independently integrates reference-area schedules and
+checks every retained trace and final donor receipt, including tiny post-exhaustion shortfalls and
+balanced forged totals, while preserving replay of older donor receipts without inventing
+unavailable demand readings. Unlimited supply (`supply/1`) and version 1 water leave all three donor
+metrics unavailable.
+
 No absorbed moisture, sorption, in-plane wicking, droplet/fog phase, changing wet material law,
 body-to-textile water delivery, thermoregulation or empirical garment qualification is inferred.
 

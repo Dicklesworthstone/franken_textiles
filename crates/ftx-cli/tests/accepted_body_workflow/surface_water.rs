@@ -3028,9 +3028,13 @@ fn ambient_vapor_exchange_workflow(scheduled: bool) {
     }
     study["comparison"]["objectives"] = json!([
         {"metric":"textile_water_final_vapor_pressure_pa","direction":"minimize"},
-        {"metric":"textile_water_condensed_mass_kg","direction":"minimize"}]);
-    study["comparison"]["constraints"][0] =
-        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.});
+        {"metric":"textile_water_condensed_mass_kg","direction":"minimize"},
+        {"metric":"textile_water_ambient_vapor_inflow_mass_kg","direction":"minimize"},
+        {"metric":"textile_water_ambient_vapor_outflow_mass_kg","direction":"minimize"}]);
+    study["comparison"]["constraints"] = json!([
+        {"metric":"textile_water_remaining_mass_kg","minimum":0.},
+        {"metric":"textile_water_ambient_vapor_inflow_mass_kg","minimum":0.},
+        {"metric":"textile_water_ambient_vapor_outflow_mass_kg","minimum":0.}]);
     qualify_mechanics(&pattern, &study, &mut single, true);
     replay(
         &pattern,
@@ -3194,11 +3198,40 @@ fn ambient_vapor_exchange_workflow(scheduled: bool) {
                     "combined open-reservoir energy {energy}"
                 );
             }
+            let readings = &keyed(&report["comparison"]["alternatives"], "qualified")["readings"];
             assert_eq!(
-                keyed(&report["comparison"]["alternatives"], "qualified")["readings"]["textile_water_final_vapor_pressure_pa"]
-                    ["value"],
+                readings["textile_water_final_vapor_pressure_pa"]["value"],
                 gas["vapor_pressure_pa"]
             );
+            assert_eq!(
+                readings["textile_water_ambient_vapor_inflow_mass_kg"]["value"],
+                gas["ambient_exchange"]["incoming_vapor_mass_kg"]
+            );
+            assert_eq!(
+                readings["textile_water_ambient_vapor_inflow_mass_kg"]["unit"],
+                "kg"
+            );
+            assert_eq!(
+                readings["textile_water_ambient_vapor_outflow_mass_kg"]["value"],
+                gas["ambient_exchange"]["outgoing_vapor_mass_kg"]
+            );
+            assert_eq!(
+                readings["textile_water_ambient_vapor_outflow_mass_kg"]["unit"],
+                "kg"
+            );
+            if scheduled {
+                assert!(
+                    readings["textile_water_ambient_vapor_outflow_mass_kg"]["value"]
+                        .as_f64()
+                        .unwrap()
+                        > 0.
+                );
+            } else {
+                assert_eq!(
+                    readings["textile_water_ambient_vapor_outflow_mass_kg"]["value"],
+                    0.
+                );
+            }
             assert_eq!(
                 keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["status"],
                 "refused"
@@ -3263,9 +3296,15 @@ fn finite_liquid_supply_replays_shared_depletion_native_portable_and_named_cases
     water["supply"] = supply.clone();
     study["comparison"]["objectives"] = json!([
         {"metric":"textile_water_supplied_mass_kg","direction":"minimize"},
+        {"metric":"textile_water_requested_supply_mass_kg","direction":"minimize"},
+        {"metric":"textile_water_unmet_supply_mass_kg","direction":"minimize"},
+        {"metric":"textile_water_remaining_supply_mass_kg","direction":"maximize"},
         {"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]);
-    study["comparison"]["constraints"][0] =
-        json!({"metric":"textile_water_remaining_mass_kg","minimum":0.0});
+    study["comparison"]["constraints"] = json!([
+        {"metric":"textile_water_remaining_mass_kg","minimum":0.0},
+        {"metric":"textile_water_requested_supply_mass_kg","minimum":0.0},
+        {"metric":"textile_water_unmet_supply_mass_kg","minimum":0.0},
+        {"metric":"textile_water_remaining_supply_mass_kg","minimum":0.0,"maximum":0.0}]);
     qualify_mechanics(&pattern, &study, &mut single, true);
     let mechanics = &mut single["motion"]["transient_surface"]["mechanical_coupling"];
     mechanics["bindings"]["outer"] = mechanics["bindings"]["band"].clone();
@@ -3356,6 +3395,21 @@ fn finite_liquid_supply_replays_shared_depletion_native_portable_and_named_cases
                     + donor["liquid_enthalpy_change_j"].as_f64().unwrap()
                     - sample["net_boundary_energy_j"].as_f64().unwrap();
                 assert!(energy.abs() < 1e-8, "closed donor/textile energy {energy}");
+                let second_demand_rate = band_area * 0.005 + outer_area * 0.007;
+                let expected_requested = first_demand_rate * time.min(0.001)
+                    + second_demand_rate * (time - 0.001).max(0.0);
+                let expected_unmet = first_demand_rate
+                    * (time.min(0.001) - depletion_time).max(0.0)
+                    + second_demand_rate * (time - 0.001).max(0.0);
+                near(
+                    donor["requested_liquid_mass_kg"].as_f64().unwrap(),
+                    expected_requested,
+                );
+                near(
+                    donor["unmet_liquid_mass_kg"].as_f64().unwrap(),
+                    expected_unmet,
+                );
+                assert!(donor["demand_balance_error_kg"].as_f64().unwrap().abs() < 1e-18);
                 if time >= 0.001 {
                     assert_eq!(donor["remaining_liquid_mass_kg"], 0.0);
                     assert_eq!(donor["exhaustion_events"], 1);
@@ -3371,11 +3425,30 @@ fn finite_liquid_supply_replays_shared_depletion_native_portable_and_named_cases
                 mechanics["remaining_liquid_mass_kg"].as_f64().unwrap(),
                 water["remaining_liquid_kg"].as_f64().unwrap(),
             );
+            let readings = &keyed(&report["comparison"]["alternatives"], "qualified")["readings"];
             assert_eq!(
-                keyed(&report["comparison"]["alternatives"], "qualified")["readings"]["textile_water_supplied_mass_kg"]
-                    ["value"],
+                readings["textile_water_supplied_mass_kg"]["value"],
                 water["supplied_liquid_kg"]
             );
+            assert_eq!(
+                readings["textile_water_requested_supply_mass_kg"]["value"],
+                donor["requested_liquid_mass_kg"]
+            );
+            assert_eq!(
+                readings["textile_water_unmet_supply_mass_kg"]["value"],
+                donor["unmet_liquid_mass_kg"]
+            );
+            assert_eq!(
+                readings["textile_water_remaining_supply_mass_kg"]["value"],
+                donor["remaining_liquid_mass_kg"]
+            );
+            for metric in [
+                "textile_water_requested_supply_mass_kg",
+                "textile_water_unmet_supply_mass_kg",
+                "textile_water_remaining_supply_mass_kg",
+            ] {
+                assert_eq!(readings[metric]["unit"], "kg");
+            }
             assert_eq!(
                 keyed(&report["simulations"], "missing-ret")["evaluation"]["result"]["motion"]["status"],
                 "refused"

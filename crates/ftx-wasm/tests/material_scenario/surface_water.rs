@@ -1893,3 +1893,235 @@ fn portable_surface_water_supply_rewets_real_cloth_and_qualifies_complete_decisi
         assert_eq!(refused["comparison"]["frontier"], json!([]));
     }
 }
+
+#[test]
+fn finite_supply_demand_and_ambient_vapor_decisions_replay_with_inclusive_constraints() {
+    let (pattern, mut input, mut raw) = inputs();
+    input.variants.truncate(1);
+    let metrics = [
+        "textile_water_requested_supply_mass_kg",
+        "textile_water_unmet_supply_mass_kg",
+        "textile_water_remaining_supply_mass_kg",
+        "textile_water_ambient_vapor_inflow_mass_kg",
+        "textile_water_ambient_vapor_outflow_mass_kg",
+    ];
+    let objectives: Vec<Value> = metrics
+        .iter()
+        .map(|metric| json!({"metric": metric, "direction": "minimize"}))
+        .collect();
+    let policy = json!({
+        "basis": "nominal",
+        "required_consumers": ["transient_surface"],
+        "objectives": objectives
+    });
+    input.comparison = Some(serde_json::from_value(policy.clone()).unwrap());
+    raw.as_object_mut().unwrap().remove("coverage");
+    raw["motion"]["keyframes"] = json!([
+        {"time_s": 0.001, "arm_abduction_deg": 35.},
+        {"time_s": 0.002, "arm_abduction_deg": 35.}
+    ]);
+    raw["motion"]["max_trials"] = json!(16);
+    let sheet = &mut raw["motion"]["transient_surface"];
+    sheet["initial_temperature_c"] = json!(20.);
+    sheet["boundaries"] = json!([sheet["boundaries"][0], sheet["boundaries"][0]]);
+    let band_area = std::f64::consts::TAU * 180.0 * 20.0 * 1e-6;
+    let initial_donor = band_area * 0.002 * 0.0005;
+    let provenance = json!({
+        "reference": "test:portable-water-decisions",
+        "accessed_on": "2026-11-22",
+        "note": "Synthetic finite liquid donor and scheduled ambient vapor boundary; no empirical claim"
+    });
+    let water = &mut sheet["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/5");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("outside_vapor_pressure_pa");
+    water["bindings"]["band"]["initial_liquid_kg_m2"] = json!(0.);
+    water["maximum_liquid_loading_kg_m2"] = json!(0.2);
+    water["wet_vapor_pressure_pa"] = json!([[-20., 0.], [80., 0.]]);
+    water["qualification"] = json!(
+        "Synthetic zero wet pressure over [-20,80] C and [0,0.2] kg/m2; not measured condensation"
+    );
+    water["supply"] = json!({
+        "schema": "ftx-textile-liquid-supply/2",
+        "bindings": {
+            "band": {"rate_kg_m2_s": [0.002, 0.006], "temperature_c": [30., 30.]}
+        },
+        "source": provenance,
+        "evidence": "estimate",
+        "allow_estimates": true,
+        "method": "Synthetic reference-area delivery demand",
+        "finite_reservoir": {
+            "schema": "ftx-textile-liquid-reservoir/1",
+            "model": "well_mixed_constant_temperature_liquid_inventory/1",
+            "initial_liquid_mass_kg": initial_donor,
+            "temperature_c": 30.,
+            "source": provenance,
+            "evidence": "estimate",
+            "allow_estimates": true,
+            "method": "Synthetic shared constant-temperature liquid donor",
+            "qualification": "Artificial 30 C donor over [0, 0.002] s"
+        }
+    });
+    water["condensation"] = json!({
+        "schema": "ftx-textile-condensation/1",
+        "vapor_temperature_c": [20., 20.],
+        "source": provenance,
+        "evidence": "estimate",
+        "allow_estimates": true,
+        "method": "Synthetic bidirectional free-film transfer",
+        "qualification": "Artificial exact Ret over declared domain"
+    });
+    water["vapor_reservoir"] = json!({
+        "schema": "ftx-textile-vapor-reservoir/2",
+        "model": "isothermal_constant_vapor_capacitance/1",
+        "vapor_capacitance_kg_pa": 1e-15,
+        "initial_vapor_mass_kg": 1e-12,
+        "temperature_c": 20.,
+        "pressure_domain_pa": [0., 10000.],
+        "max_iterations": 128,
+        "mass_tolerance_kg": 1e-18,
+        "ambient_exchange_by_interval": [
+            {
+                "schema": "ftx-textile-vapor-exchange/1",
+                "model": "linear_pressure_vapor_exchange/1",
+                "conductance_kg_pa_s": 1e-11,
+                "ambient_vapor_pressure_pa": 2000.,
+                "ambient_temperature_c": 35.,
+                "reservoir_pressure_domain_pa": [0., 10000.],
+                "source": provenance,
+                "evidence": "estimate",
+                "allow_estimates": true,
+                "method": "Explicit pressure-driven mass transfer",
+                "qualification": "Synthetic humid first interval"
+            },
+            {
+                "schema": "ftx-textile-vapor-exchange/1",
+                "model": "linear_pressure_vapor_exchange/1",
+                "conductance_kg_pa_s": 2e-11,
+                "ambient_vapor_pressure_pa": 0.,
+                "ambient_temperature_c": 10.,
+                "reservoir_pressure_domain_pa": [0., 10000.],
+                "source": provenance,
+                "evidence": "estimate",
+                "allow_estimates": true,
+                "method": "Explicit pressure-driven mass transfer",
+                "qualification": "Synthetic dry second interval"
+            }
+        ],
+        "source": provenance,
+        "evidence": "estimate",
+        "allow_estimates": true,
+        "method": "Explicit isothermal vapor capacitance",
+        "qualification": "Synthetic constant capacitance over [0, 10000] Pa"
+    });
+
+    let result = study(&raw, &input, &pattern);
+    let simulation = keyed(&result["simulations"], "qualified")["evaluation"]["result"].clone();
+    let water_out = &simulation["motion"]["result"]["transient_surface"]["result"]["surface_water"];
+    let donor = &water_out["supply_reservoir"];
+    let ambient = &water_out["vapor_reservoir"]["ambient_exchange"];
+    let values = [
+        donor["requested_liquid_mass_kg"].as_f64().unwrap(),
+        donor["unmet_liquid_mass_kg"].as_f64().unwrap(),
+        donor["remaining_liquid_mass_kg"].as_f64().unwrap(),
+        ambient["incoming_vapor_mass_kg"].as_f64().unwrap(),
+        ambient["outgoing_vapor_mass_kg"].as_f64().unwrap(),
+    ];
+    assert!(values[0] > initial_donor);
+    assert!(values[1] > 0.);
+    assert_eq!(values[2], 0.);
+    assert!(values[3] > 0.);
+    assert!(values[4] > 0.);
+    let row = keyed(&result["comparison"]["alternatives"], "qualified");
+    assert_eq!(row["eligible"], true, "{row}");
+    for (metric, expected) in metrics.iter().zip(values) {
+        assert_eq!(row["readings"][metric]["value"], expected, "{metric}");
+        assert_eq!(row["readings"][metric]["unit"], "kg");
+        assert!(row["readings"][metric]["reported_bounds"].is_null());
+    }
+
+    // Re-admit the complete result with exact inclusive constraints and check both violation
+    // directions across donor demand and ambient exchange metrics.
+    let exact_constraints: Vec<Value> = metrics
+        .iter()
+        .zip(values)
+        .map(|(metric, value)| json!({"metric": metric, "minimum": value, "maximum": value}))
+        .collect();
+    for mode in 0..5 {
+        let mut guarded = policy.clone();
+        guarded["constraints"] = json!(exact_constraints);
+        match mode {
+            0 => {}
+            1 => {
+                guarded["constraints"][0]["minimum"] = json!(values[0] * 1.01);
+                guarded["constraints"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("maximum");
+            }
+            2 => {
+                guarded["constraints"][1]["maximum"] = json!(values[1] * 0.99);
+                guarded["constraints"][1]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("minimum");
+            }
+            3 => {
+                guarded["constraints"][3]["minimum"] = json!(values[3] * 1.01);
+                guarded["constraints"][3]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("maximum");
+            }
+            _ => {
+                guarded["constraints"][4]["maximum"] = json!(values[4] * 0.99);
+                guarded["constraints"][4]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("minimum");
+            }
+        }
+        let mut guarded_input = input.clone();
+        guarded_input.comparison = Some(serde_json::from_value(guarded).unwrap());
+        let guarded = serde_json::to_value(
+            guarded_input
+                .evaluate_with(&pattern, &result["scenario"], |_, _| Ok(simulation.clone()))
+                .unwrap(),
+        )
+        .unwrap();
+        let guarded_row = keyed(&guarded["comparison"]["alternatives"], "qualified");
+        assert_eq!(
+            guarded_row["eligible"],
+            mode == 0,
+            "mode {mode}: {guarded_row}"
+        );
+    }
+
+    // Without finite donor or ambient exchange, those objectives leave the candidate ineligible
+    // rather than inventing zero shortfalls or zero ambient flows.
+    let mut closed = raw.clone();
+    closed["motion"]["transient_surface"]["surface_water"]["supply"]["schema"] =
+        json!("ftx-textile-liquid-supply/1");
+    closed["motion"]["transient_surface"]["surface_water"]["supply"]
+        .as_object_mut()
+        .unwrap()
+        .remove("finite_reservoir");
+    closed["motion"]["transient_surface"]["surface_water"]["vapor_reservoir"]["schema"] =
+        json!("ftx-textile-vapor-reservoir/1");
+    closed["motion"]["transient_surface"]["surface_water"]["vapor_reservoir"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ambient_exchange_by_interval");
+    let closed_result = study(&closed, &input, &pattern);
+    let closed_row = keyed(&closed_result["comparison"]["alternatives"], "qualified");
+    assert_eq!(closed_row["eligible"], false, "{closed_row}");
+    for metric in metrics {
+        assert!(closed_row["readings"][metric].is_null(), "{metric}");
+    }
+}
