@@ -168,3 +168,32 @@ sleeves as crossing the displayed hand in its start preview, and they drape: tha
 untangled, so treat a crossing there as a reason to drape, not as a refusal. Tilting the wrap axis
 toward the hand (`frame_rotation`) or widening its cylinder did not start the 385 mm sleeve, with
 a 201.7 mm or a 230 mm cuff.
+
+## Reproduce the 355 mm full-hand replay
+
+Use a new `work` directory and point `model` to the pinned Anny 0.6.1 conversion. This cut has a
+355 mm sleeve and a 201.7 mm cuff. The nominal 10° thumb-base rotations are authored in the source
+joint frames. The fit checks still use the same reference measurements.
+
+```sh
+mkdir -p "$work"
+jq -S '.cases[] | select(.id=="zouave_bolero-920") | .input.measurements' \
+  tests/fixtures/oracle/draft/programs.json > "$work/measurements.json"
+printf '%s\n' '{"sleeve_extra":35,"cuff_ease":59}' > "$work/style.json"
+thumbs='{"left_rotation_vector_rad":[0.11641167,-0.010614,-0.12960467],"right_rotation_vector_rad":[0.11641167,0.010614,0.12960467]}'
+
+ftx draft zouave_bolero --measurements "$work/measurements.json" --style "$work/style.json" --out "$work/cut"
+ftx validate "$work/cut/pattern.json" --fit "$work/cut/fit_spec.json" --measurements "$work/measurements.json"
+ftx drape "$work/cut/pattern.json" --fit "$work/cut/fit_spec.json" --measurements "$work/measurements.json" \
+  --model "$model" --out "$work/sim" --hands full --arm-deg 35 --thumb-pose "$thumbs" \
+  --spacing-mm 12 --self-contact-mm 2 --sew 12 --drape 36 --time-subdivision --res 840x620
+ftx viewer "$work/sim" --check-contact --view front
+ftx viewer "$work/sim" --pattern "$work/cut/pattern.json" --out "$work/bolero-full-hand-replay.html"
+ftx export a4 "$work/cut/pattern.json" --out "$work/print"
+ftx check "$work/print"
+```
+
+The full-display audit covers the accepted start, 12 sewn states and 36 gravity states. Open the
+replay at the flat board, step through the seam join and turn the final garment to inspect both cuffs.
+The paper pattern in `print/` uses the cut from the replay. Print at 100% and measure the calibration
+square before cutting fabric. A sewn sample is needed to confirm fit.

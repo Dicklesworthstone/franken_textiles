@@ -42,6 +42,7 @@ ftx viewer work/rounds/001/sim --check-contact --json`,
     links: [
       { href: "/fittings/bolero-revision-A4.pdf", label: "Download revised A4 PDF ↓", download: true },
       { href: "/how-it-works/#visual-fitting", label: "Read the full walkthrough →", download: false },
+      { href: "/how-it-works/#full-hand-bolero", label: "See the 355 mm full-hand replay", download: false },
       { href: `${repo}/blob/main/.agents/skills/visual-pattern-fitting/SKILL.md`, label: "Visual fitting skill ↗", download: false },
     ],
   },

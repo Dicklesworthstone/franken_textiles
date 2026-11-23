@@ -6,7 +6,7 @@ import { repo } from "../../components/site/links";
 
 export const metadata: Metadata = {
   title: "How it works · FrankenTextiles",
-  description: "Follow a visual fitting from a long bolero sleeve to a revised sewing pattern. Inspect the simulated garment, find the flat edge, and compare two cuts on the same body.",
+  description: "Trace a simulated bolero cuff back to its flat edge, replay a revised cut on an Anny body with full hand contact, and print the matching sewing pattern.",
   alternates: { canonical: "/how-it-works/" },
 };
 
@@ -92,6 +92,18 @@ export default function HowItWorks() {
           Print the revised A4 pattern <span aria-hidden="true" className="arrow"/></a>
           <a className="ft-text-link" href={repo+"/blob/main/.agents/skills/visual-pattern-fitting/SKILL.md"}>
           Reproduce the fitting <span aria-hidden="true" className="arrow"/></a></div>
+        <h3 id="full-hand-bolero">The 355 mm sleeve with full hand contact</h3>
+        <p>This cut combines a 355 mm sleeve with a 201.7 mm cuff on a synthetic 92 cm Anny body.
+          Both flat dimensions passed their checks. The 3D replay goes from the flat pieces through sewing
+          and gravity drape. The contact audit checked all 49 physical frames against the full displayed
+          body and the other cloth panels.</p>
+        <div className="ft-visual-frame"><img src="/fittings/bolero-full-hand-detail.webp" width="525" height="280"
+          loading="lazy" alt="Three-quarter and side views of the simulated bolero showing where the cuffs end at the hands."/></div>
+        <p>The simulation used default cloth properties. A sewn sample is still needed to assess fit.</p>
+        <div className="ft-hero-actions">
+          <a className="primary" href="/fittings/bolero-full-hand-replay.html">Replay the cut in 3D</a>
+          <a className="ft-text-link" href="/fittings/bolero-full-hand-A4.pdf" download>Download this full-scale A4 pattern</a>
+        </div>
       </div>
     </div></section>
 
