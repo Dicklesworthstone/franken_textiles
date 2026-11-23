@@ -869,9 +869,12 @@ pub struct Hinge {
     /// Rest dihedral angle `θ₀` (rad, default `0.0` flat) used by [`BendingModel::DiscreteShells`]
     /// for pressed pleats, ironed creases, or folded lapels.
     pub rest_angle: f64,
-    // Rest-chart normal orientation signs (`+1` or `-1`) for the two adjacent triangles so
-    // `dihedral_angle == 0` in any flat configuration regardless of vertex swap or winding.
-    pub(crate) orient: [f64; 2],
+    // Rest-chart normal orientation sign (`+1` or `-1`, shared by both triangles) so
+    // `dihedral_angle == 0` whenever the two triangles unfold flat onto opposite sides of the
+    // shared edge — matching `BendingModel::Quadratic` even across cross-chart seams where both
+    // 2D rest charts have the same winding sign — and positive angles always fold toward `first`'s
+    // public (`+z` rest) side regardless of vertex swap or edge reversal.
+    pub(crate) orient: f64,
 }
 
 fn cot(a: Vec2, b: Vec2) -> f64 {
@@ -898,7 +901,6 @@ impl Hinge {
         let (edge0, edge1) = (b - a, d - c);
         let (edge0_sq, edge1_sq) = (edge0.norm2(), edge1.norm2());
         let cross0 = edge0.cross(first[2] - a);
-        let cross1 = edge1.cross(opposite - c);
         // An isometric weld admits the original rigid map into the first chart. Keep its
         // arithmetic on that domain, including the identity for neighbors in the same chart.
         let second = if edge0_sq == edge1_sq && (a, b) != (c, d) {
@@ -936,8 +938,7 @@ impl Hinge {
             edge0_sq.sqrt()
         };
         let k = [end0 + end1, start0 + start1, -start0 - end0, -start1 - end1];
-        let s0 = if cross0 >= 0.0 { 1.0 } else { -1.0 };
-        let s1 = if cross1 <= 0.0 { 1.0 } else { -1.0 };
+        let orient = if cross0 >= 0.0 { 1.0 } else { -1.0 };
         (a0 > 0.0
             && a1 > 0.0
             && edge_length.is_finite()
@@ -950,7 +951,7 @@ impl Hinge {
             weight: 1.0 / (a0 + a1),
             edge_length,
             rest_angle: 0.0,
-            orient: [s0, s1],
+            orient,
         })
     }
 
@@ -989,16 +990,16 @@ impl Hinge {
         if !(e_len.is_finite() && e_len > 0.0) {
             return f64::NAN;
         }
-        let e_hat = e * (self.orient[0] / e_len);
-        let n0 = e.cross(p2 - p0) * self.orient[0];
-        let n1 = (p3 - p0).cross(e) * self.orient[1];
+        let e_hat = e * (self.orient / e_len);
+        let n0 = e.cross(p2 - p0) * self.orient;
+        let n1 = (p3 - p0).cross(e) * self.orient;
         let cos_raw = n0.dot(n1);
         let sin_raw = n1.cross(n0).dot(e_hat);
-        let r2 = cos_raw * cos_raw + sin_raw * sin_raw;
-        if !(r2.is_finite() && r2 > 0.0) {
+        let scale = cos_raw.abs().max(sin_raw.abs());
+        if !(scale.is_finite() && scale > 0.0) {
             return f64::NAN;
         }
-        ftx_core::det::atan2(sin_raw, cos_raw)
+        ftx_core::det::atan2(sin_raw / scale, cos_raw / scale)
     }
 
     /// Exact value, gradient (12) and Hessian (12 × 12) of the signed dihedral angle `θ(x)` via
@@ -1018,16 +1019,15 @@ impl Hinge {
                 h: [[f64::NAN; 12]; 12],
             };
         }
-        let inv_e_len = Jet::constant(self.orient[0]) / e_len2.sqrt();
+        let inv_e_len = Jet::constant(self.orient) / e_len2.sqrt();
         let e_hat = JVec([e.0[0] * inv_e_len, e.0[1] * inv_e_len, e.0[2] * inv_e_len]);
         let d2 = p2.sub(&p0);
         let d3 = p3.sub(&p0);
         let n0_raw = e.cross(&d2);
         let n1_raw = d3.cross(&e);
-        let s0 = self.orient[0];
-        let s1 = self.orient[1];
-        let n0 = JVec([n0_raw.0[0] * s0, n0_raw.0[1] * s0, n0_raw.0[2] * s0]);
-        let n1 = JVec([n1_raw.0[0] * s1, n1_raw.0[1] * s1, n1_raw.0[2] * s1]);
+        let s = self.orient;
+        let n0 = JVec([n0_raw.0[0] * s, n0_raw.0[1] * s, n0_raw.0[2] * s]);
+        let n1 = JVec([n1_raw.0[0] * s, n1_raw.0[1] * s, n1_raw.0[2] * s]);
         let cos_raw = n0.dot(&n1);
         let sin_raw = n1.cross(&n0).dot(&e_hat);
         Jet::atan2(sin_raw, cos_raw)
@@ -1551,6 +1551,40 @@ mod tests {
             Vec3::new(0.006, -0.009 * c, 0.009 * s),
         ];
         assert!((hinge.dihedral_angle(&fold_up) - swapped.dihedral_angle(&fold_up)).abs() < 1e-12);
+
+        // Cross-chart seam where both 2D rest triangles have the same winding sign (e.g. a
+        // `reverse: false` seam) must still report theta == 0 when unfolded flat in 3D, matching
+        // `BendingModel::Quadratic`, and positive valley angle + exact FD derivatives when folded.
+        let same_sign_seam = Hinge::from_rest_triangles(
+            [0, 1, 2, 3],
+            [rest[0], rest[1], rest[2]],
+            [rest[0], rest[1], Vec2::new(0.006, 0.009)],
+        )
+        .unwrap();
+        let flat_3d = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.01, 0.0, 0.0),
+            Vec3::new(0.004, 0.008, 0.0),
+            Vec3::new(0.006, -0.009, 0.0),
+        ];
+        assert!(same_sign_seam.energy(&flat_3d, b).abs() < 1e-24);
+        assert!(
+            same_sign_seam.dihedral_angle(&flat_3d).abs() < 1e-14,
+            "same-sign cross-chart seam must have zero dihedral angle when flat, got {}",
+            same_sign_seam.dihedral_angle(&flat_3d)
+        );
+        assert!(
+            (same_sign_seam.dihedral_angle(&fold_up) - 40.0_f64.to_radians()).abs() < 1e-12,
+            "got {}",
+            same_sign_seam.dihedral_angle(&fold_up)
+        );
+        check(
+            &fold_up,
+            &[0, 1, 2, 3],
+            1e-7,
+            |p| same_sign_seam.dihedral_energy(p, b),
+            |p| same_sign_seam.dihedral_local(p, b),
+        );
 
         // Hairpin fold torque check: Discrete Shells torque grows monotonically from 90° to 170°,
         // whereas legacy quadratic Hinge torque collapses toward zero as sin(θ) -> 0.
