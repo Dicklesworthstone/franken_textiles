@@ -19,3 +19,7 @@ workspace = true
 [[example]]
 name = "pose-display-form"
 path = "../../showcase/scripts/pose-display-form.rs"
+
+[[example]]
+name = "bake-posable-body"
+path = "../../showcase/scripts/bake-posable-body.rs"
