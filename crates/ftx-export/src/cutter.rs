@@ -31,6 +31,16 @@ pub struct CutterFile {
 /// # Errors
 /// A cut outline without a valid union exterior.
 pub fn cutter_ring(g: &Geom) -> Result<Vec<Vec2>, Refusal> {
+    if g.cut.iter().any(|p| !p.is_finite())
+        || g.notches
+            .iter()
+            .any(|n| !n.base.is_finite() || !n.inward.is_finite() || !n.tangent.is_finite())
+    {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            format!("{}: cutter geometry contains non-finite coordinates", g.iid),
+        ));
+    }
     let mut polys = vec![g.cut.clone()];
     for n in &g.notches {
         let out = Vec2::new(-n.inward.x, -n.inward.y);
@@ -66,6 +76,12 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
     let mut report = Vec::new();
     let mut too_large = Vec::new();
     for g in ctx.instance_geoms(6.0)? {
+        if g.has_non_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("{}: cutter geometry contains non-finite coordinates", g.iid),
+            ));
+        }
         let gr = g.transform(&rotation(grain_vertical_rotation(&g)));
         let ring = cutter_ring(&gr)?;
         let (mut lo, mut hi) = (
@@ -254,5 +270,33 @@ mod tests {
         g.notches.clear();
         let err = cutter_ring(&g).unwrap_err();
         assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+    }
+
+    #[test]
+    fn cutter_ring_refuses_non_finite_cut_even_when_notches_are_valid() {
+        let raw = r#"{
+          "schema":"fabric-pattern/1","style":"NAN","units":"mm",
+          "meta":{"size_label":"2T","sa_mm":10},
+          "pieces":[{
+            "id":"p1",
+            "vertices":{"a":[0,0],"b":[100,0],"c":[100,80],"d":[0,80]},
+            "edges":[
+              {"id":"e0","from":"a","to":"b"},
+              {"id":"e1","from":"b","to":"c"},
+              {"id":"e2","from":"c","to":"d"},
+              {"id":"e3","from":"d","to":"a"}
+            ],
+            "notches":[{"id":"n1","edge":"e0","s":0.5}],
+            "cut":{"qty":1}
+          }]
+        }"#;
+        let pattern = Pattern::new(serde_json::from_str(raw).unwrap());
+        let ctx = Ctx::new(&pattern, ExportOptions::default()).unwrap();
+        let mut g = ctx.geom(crate::Source::Piece(0), 6.0).unwrap();
+        assert!(!g.notches.is_empty());
+        g.cut[0].x = f64::NAN;
+        // Without a direct finiteness check, union_exterior drops g.cut and returns the 3 mm notch triangle.
+        let err = cutter_ring(&g).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
     }
 }

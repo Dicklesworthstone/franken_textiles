@@ -344,16 +344,42 @@ pub fn read_dst(data: &[u8]) -> DstRead {
 }
 
 /// Points evenly spaced along a polyline at most `step` mm apart (closed lines are closed first).
-fn resample(pts: &[Vec2], step: f64, closed: bool) -> Vec<Vec2> {
+fn resample(pts: &[Vec2], step: f64, closed: bool) -> Result<Vec<Vec2>, Refusal> {
     if pts.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+    if pts.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "DST polyline contains non-finite coordinates",
+        ));
+    }
+    if !step.is_finite() || step <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "DST resample step must be finite and positive",
+        ));
     }
     let mut p = pts.to_vec();
     if closed && (p[0] - p[p.len() - 1]).norm() > 1e-6 {
         p.push(p[0]);
     }
-    let n = ((polyline_length(&p) / step).ceil() as usize).max(1);
-    at_fractions(&p, &np::linspace(0.0, 1.0, n + 1))
+    let len = polyline_length(&p);
+    if !len.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "DST polyline length overflow",
+        ));
+    }
+    let count = (len / step).ceil();
+    if !count.is_finite() || count > MAX_RECORDS as f64 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("DST resampled stitch count exceeds header limit ({MAX_RECORDS})"),
+        ));
+    }
+    let n = (count as usize).max(1);
+    Ok(at_fractions(&p, &np::linspace(0.0, 1.0, n + 1)))
 }
 
 /// Joins braid lines whose ends meet (a half border and its mirror at the fold), then orders them nearest
@@ -446,6 +472,23 @@ pub fn export_embroidery(ctx: &Ctx) -> Result<(Vec<DstFile>, Option<Readme>), Re
         if braid.is_empty() {
             continue;
         }
+        if g.sew.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!("{}: embroidery piece has no sew outline", g.iid),
+            ));
+        }
+        if g.sew.iter().any(|p| !p.is_finite())
+            || braid.iter().any(|d| d.pts.iter().any(|p| !p.is_finite()))
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!(
+                    "{}: embroidery geometry contains non-finite coordinates",
+                    g.iid
+                ),
+            ));
+        }
         let (mut lo, mut hi) = (
             Vec2::new(f64::INFINITY, f64::INFINITY),
             Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -454,19 +497,50 @@ pub fn export_embroidery(ctx: &Ctx) -> Result<(Vec<DstFile>, Option<Readme>), Re
             lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
             hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
         }
-        let c = Vec2::new(0.5 * (lo.x + hi.x), 0.5 * (lo.y + hi.y));
-        let centred: Vec<Vec2> = g.sew.iter().map(|&p| p - c).collect();
-        let place = resample(&centred, PLACE_STITCH_MM, true);
-        let runs: Vec<Vec<Vec2>> = couch_order(
-            braid
-                .iter()
-                .map(|d| (d.pts.iter().map(|&p| p - c).collect(), d.closed))
-                .collect(),
-            0.5,
-        )
-        .into_iter()
-        .map(|(p, closed)| resample(&p, COUCH_STITCH_MM, closed))
-        .collect();
+        let c = Vec2::new(0.5 * lo.x + 0.5 * hi.x, 0.5 * lo.y + 0.5 * hi.y);
+        if !c.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("{}: embroidery centre is not finite", g.iid),
+            ));
+        }
+        let max_mm = MAX_COORD_STEPS as f64 * 0.1 + 0.05;
+        let check_centred = |pts: &[Vec2]| -> Result<Vec<Vec2>, Refusal> {
+            let mut out = Vec::with_capacity(pts.len());
+            for &p in pts {
+                let q = p - c;
+                if !q.is_finite() {
+                    return Err(Refusal::new(
+                        RefusalCode::NonFinite,
+                        format!("{}: centred DST coordinate is not finite", g.iid),
+                    ));
+                }
+                if q.x.abs() > max_mm || q.y.abs() > max_mm {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "{}: centred DST coordinate ({}, {}) mm exceeds 5-digit header limit (±{:.1} mm)",
+                            g.iid,
+                            q.x,
+                            q.y,
+                            MAX_COORD_STEPS as f64 * 0.1
+                        ),
+                    ));
+                }
+                out.push(q);
+            }
+            Ok(out)
+        };
+        let centred = check_centred(&g.sew)?;
+        let place = resample(&centred, PLACE_STITCH_MM, true)?;
+        let centred_braid: Vec<(Vec<Vec2>, bool)> = braid
+            .iter()
+            .map(|d| Ok((check_centred(&d.pts)?, d.closed)))
+            .collect::<Result<_, Refusal>>()?;
+        let runs: Vec<Vec<Vec2>> = couch_order(centred_braid, 0.5)
+            .into_iter()
+            .map(|(p, closed)| resample(&p, COUCH_STITCH_MM, closed))
+            .collect::<Result<_, Refusal>>()?;
         let name = format!(
             "{}_{}_{}_soutache.dst",
             ctx.style,
@@ -682,5 +756,54 @@ mod tests {
         let mut with_tail = bytes;
         with_tail.push(0x99);
         assert!(!read_dst(&with_tail).ended);
+    }
+
+    #[test]
+    fn export_embroidery_refuses_huge_coordinates_and_bad_resample_without_oom() {
+        let huge = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "HUGEDST",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 0},
+            "pieces": [{
+                "id": "p1",
+                "name": "P1",
+                "vertices": {
+                    "a": [0, 0],
+                    "b": [1e9, 0],
+                    "c": [1e9, 1e9],
+                    "d": [0, 1e9]
+                },
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "decor": [
+                    {"kind": "soutache", "pts": [[10, 10], [50000, 10]], "width_mm": 3.0, "closed": false}
+                ],
+                "cut": {"qty": 1}
+            }]
+        });
+        let pat = ftx_pattern::Pattern::new(huge);
+        let ctx = Ctx::new(&pat, crate::ExportOptions::default()).unwrap();
+        assert_eq!(
+            export_embroidery(&ctx).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+
+        assert_eq!(
+            resample(&[Vec2::new(f64::NAN, 0.0)], 2.5, false)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            resample(&[Vec2::ZERO, Vec2::new(1e12, 0.0)], 2.5, false)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
     }
 }

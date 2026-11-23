@@ -792,6 +792,9 @@ fn poly_rect_distance(poly: &[Vec2], lo: Vec2, hi: Vec2) -> f64 {
     best
 }
 
+/// Upper bound on total tiles per tiled/copy-shop PDF (caps memory on pathological layouts).
+const MAX_TILES: usize = 10_000;
+
 /// The tiles of a layout on a paper's frames, row-major; blank where no cut line reaches the tile (shrunk by
 /// 0.01 mm).
 #[must_use]
@@ -807,11 +810,18 @@ pub fn tile_grid(lay: &Layout, paper: &Paper) -> (usize, usize, Vec<Tile>) {
     }
     let cols_f = (lay.width / paper.fw - 1e-9).ceil();
     let rows_f = (lay.height / paper.fh - 1e-9).ceil();
-    if !cols_f.is_finite() || !rows_f.is_finite() || cols_f > 10_000.0 || rows_f > 10_000.0 {
+    if !cols_f.is_finite()
+        || !rows_f.is_finite()
+        || cols_f > MAX_TILES as f64
+        || rows_f > MAX_TILES as f64
+    {
         return (0, 0, Vec::new());
     }
     let cols = (cols_f as usize).max(1);
     let rows = (rows_f as usize).max(1);
+    if cols.checked_mul(rows).is_none_or(|n| n > MAX_TILES) {
+        return (0, 0, Vec::new());
+    }
     let mut tiles = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
@@ -833,6 +843,20 @@ pub fn tile_grid(lay: &Layout, paper: &Paper) -> (usize, usize, Vec<Tile>) {
         }
     }
     (cols, rows, tiles)
+}
+
+fn checked_tile_grid(lay: &Layout, paper: &Paper) -> Result<(usize, usize, Vec<Tile>), Refusal> {
+    let (cols, rows, tiles) = tile_grid(lay, paper);
+    if cols == 0 || rows == 0 || tiles.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "{} tile grid exceeds the {MAX_TILES}-tile limit or has non-finite dimensions",
+                paper.name
+            ),
+        ));
+    }
+    Ok((cols, rows, tiles))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1132,16 +1156,18 @@ pub struct PdfFile {
     pub entry: Value,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tiles_doc(
     ctx: &Ctx,
     lay: &Layout,
     paper: &Paper,
+    grid: (usize, usize, Vec<Tile>),
     kind: &str,
     title: String,
     with_info: bool,
     k: f64,
 ) -> (PdfDoc, Value) {
-    let (cols, rows, tiles) = tile_grid(lay, paper);
+    let (cols, rows, tiles) = grid;
     let size_ocg = format!("Size {}", ctx.size);
     let mut ocgs = vec![size_ocg.clone()];
     ocgs.extend(OCG_COMMON.iter().map(|s| (*s).to_string()));
@@ -1377,8 +1403,9 @@ pub fn export_tiled(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
     }
     let mut out = Vec::new();
     for paper in [Paper::letter(), Paper::a4()] {
+        let grid = checked_tile_grid(lay, &paper)?;
         let title = format!("{} {} tiles", ctx.style, paper.name);
-        let (doc, meta) = tiles_doc(ctx, lay, &paper, "home tiles", title, true, 1.0);
+        let (doc, meta) = tiles_doc(ctx, lay, &paper, grid, "home tiles", title, true, 1.0);
         let name = format!("{}_{}.pdf", ctx.style, paper.name);
         out.push(PdfFile {
             entry: entry("tiled", &name, [paper.w, paper.h], &meta),
@@ -1413,18 +1440,30 @@ pub fn export_copyshop(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
         ("A0", (841.0, 1189.0)),
         ("36x48in", (36.0 * INCH, 48.0 * INCH)),
     ] {
-        let mut best: Option<(usize, Paper)> = None;
+        let mut best: Option<(usize, Paper, (usize, usize, Vec<Tile>))> = None;
+        let mut last_err = None;
         for (ww, hh) in [(w, h), (h, w)] {
             let paper = Paper::copyshop(label, ww, hh);
-            let (_, _, tiles) = tile_grid(lay, &paper);
-            let n = tiles.iter().filter(|t| !t.blank).count();
-            if best.as_ref().is_none_or(|b| n < b.0) {
-                best = Some((n, paper));
+            match checked_tile_grid(lay, &paper) {
+                Ok(grid) => {
+                    let n = grid.2.iter().filter(|t| !t.blank).count();
+                    if best.as_ref().is_none_or(|b| n < b.0) {
+                        best = Some((n, paper, grid));
+                    }
+                }
+                Err(err) => last_err = Some(err),
             }
         }
-        let Some((n, paper)) = best else { continue };
+        let Some((n, paper, grid)) = best else {
+            return Err(last_err.unwrap_or_else(|| {
+                Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("copy-shop {label} tile grid exceeds limit"),
+                )
+            }));
+        };
         let title = format!("{} copyshop {label}", ctx.style);
-        let (doc, meta) = tiles_doc(ctx, lay, &paper, "copyshop", title, n > 1, 2.0);
+        let (doc, meta) = tiles_doc(ctx, lay, &paper, grid, "copyshop", title, n > 1, 2.0);
         let name = format!("{}_COPYSHOP_{label}.pdf", ctx.style);
         out.push(PdfFile {
             entry: entry(
@@ -1759,5 +1798,46 @@ mod tests {
             model: Vec::new(),
         };
         assert_eq!(tile_grid(&huge_lay, &Paper::a4()), (0, 0, Vec::new()));
+        // Product cap prevents 10_000 x 10_000 OOM even when each axis is under MAX_TILES.
+        let wide_tall = Layout {
+            items: Vec::new(),
+            width: 1_000_000.0,
+            height: 1_000_000.0,
+            model: Vec::new(),
+        };
+        assert_eq!(tile_grid(&wide_tall, &Paper::a4()), (0, 0, Vec::new()));
+
+        let giant = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "GIANT",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 0},
+            "pieces": [{
+                "id": "p1",
+                "name": "P1",
+                "vertices": {
+                    "a": [0, 0],
+                    "b": [1e7, 0],
+                    "c": [1e7, 1e7],
+                    "d": [0, 1e7]
+                },
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        }));
+        let giant_ctx = Ctx::new(&giant, ExportOptions::default()).unwrap();
+        assert_eq!(
+            export_tiled(&giant_ctx).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            export_copyshop(&giant_ctx).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
     }
 }

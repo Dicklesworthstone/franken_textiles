@@ -112,6 +112,12 @@ fn edge_segs(inst: &Instance, eid: &str, ids: &mut Ids) -> Result<Vec<Seg>, Refu
             .ok_or_else(|| bad(format!("{}: no vertex {v}", inst.id)))
     };
     let (p0, p1) = (get(&e.from)?, get(&e.to)?);
+    if !p0.is_finite() || !p1.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            format!("{}: edge {eid} has non-finite endpoint", inst.id),
+        ));
+    }
     let kind = e
         .curve
         .as_ref()
@@ -137,9 +143,14 @@ fn edge_segs(inst: &Instance, eid: &str, ids: &mut Ids) -> Result<Vec<Seg>, Refu
             segs.extend(pts.windows(2).map(|w| (1, vec![w[0], w[1]])));
         }
     }
-    Ok(segs
-        .into_iter()
+    segs.into_iter()
         .map(|(degree, ctrl)| {
+            if ctrl.iter().any(|p| !p.is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    format!("{}: edge {eid} produced non-finite curve controls", inst.id),
+                ));
+            }
             let mut s = Seg {
                 degree,
                 ctrl,
@@ -148,9 +159,15 @@ fn edge_segs(inst: &Instance, eid: &str, ids: &mut Ids) -> Result<Vec<Seg>, Refu
                 id: ids.next(),
             };
             s.length = seg_len(&s);
-            s
+            if !s.length.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    format!("{}: edge {eid} length is not finite", inst.id),
+                ));
+            }
+            Ok(s)
         })
-        .collect())
+        .collect()
 }
 
 type Segs = BTreeMap<String, Vec<Seg>>;
@@ -645,5 +662,52 @@ mod tests {
             "expected zero-length warning, got {warns:?}"
         );
         assert_eq!(entry.get("stitches"), Some(&PyJson::Int(0)));
+    }
+
+    #[test]
+    fn export_garmentcode_refuses_overflowing_edges_and_curve_controls() {
+        let huge_edge = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "HUGEGC",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 0},
+            "pieces": [{
+                "id": "p",
+                "name": "P",
+                "vertices": {"v0": [0, 0], "v1": [1e308, 1e308], "v2": [0, 100]},
+                "edges": [
+                    {"id": "e0", "from": "v0", "to": "v1"},
+                    {"id": "e1", "from": "v1", "to": "v2"},
+                    {"id": "e2", "from": "v2", "to": "v0"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        });
+        let pat = Pattern::new(huge_edge);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let err = export_garmentcode(&ctx).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
+
+        let huge_ctrl = serde_json::json!({
+            "schema": "fabric-pattern/1",
+            "style": "HUGECTRL",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 0},
+            "pieces": [{
+                "id": "p",
+                "name": "P",
+                "vertices": {"v0": [0, 0], "v1": [100, 0], "v2": [50, 100]},
+                "edges": [
+                    {"id": "e0", "from": "v0", "to": "v1", "curve": {"type": "quad", "c": [[1e308, 1e308]]}},
+                    {"id": "e1", "from": "v1", "to": "v2"},
+                    {"id": "e2", "from": "v2", "to": "v0"}
+                ],
+                "cut": {"qty": 1}
+            }]
+        });
+        let pat = Pattern::new(huge_ctrl);
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        let err = export_garmentcode(&ctx).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
     }
 }
