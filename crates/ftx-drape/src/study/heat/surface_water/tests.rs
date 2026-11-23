@@ -3331,6 +3331,9 @@ fn finite_supply_shares_stock_across_unequal_pieces_and_solves_the_actual_deplet
     let report = finite_snapshot(&history);
     let source = &report["supply_reservoir"];
     near(source["supplied_liquid_mass_kg"].as_f64().unwrap(), 0.03);
+    near(source["requested_liquid_mass_kg"].as_f64().unwrap(), 0.04);
+    near(source["unmet_liquid_mass_kg"].as_f64().unwrap(), 0.01);
+    near(source["demand_balance_error_kg"].as_f64().unwrap(), 0.);
     assert_eq!(source["remaining_liquid_mass_kg"], 0.);
     assert_eq!(source["exhaustion_events"], 1);
     near(source["elapsed_seconds"].as_f64().unwrap(), 1.);
@@ -3369,6 +3372,18 @@ fn finite_supply_shares_stock_across_unequal_pieces_and_solves_the_actual_deplet
     let after = finite_snapshot(&history);
     assert_eq!(after["supplied_liquid_kg"], report["supplied_liquid_kg"]);
     assert_eq!(after["supply_reservoir"]["exhaustion_events"], 1);
+    near(
+        after["supply_reservoir"]["requested_liquid_mass_kg"]
+            .as_f64()
+            .unwrap(),
+        0.08,
+    );
+    near(
+        after["supply_reservoir"]["unmet_liquid_mass_kg"]
+            .as_f64()
+            .unwrap(),
+        0.05,
+    );
     near(
         after["supply_reservoir"]["elapsed_seconds"]
             .as_f64()
@@ -3505,6 +3520,13 @@ fn finite_supply_preserves_unexhausted_and_empty_physics_and_enthalpy_reference(
     let b = finite_snapshot(&shifted);
     assert_eq!(a["supply_reservoir"]["exhaustion_events"], 0);
     near(
+        a["supply_reservoir"]["requested_liquid_mass_kg"]
+            .as_f64()
+            .unwrap(),
+        0.0001,
+    );
+    assert_eq!(a["supply_reservoir"]["unmet_liquid_mass_kg"], 0.);
+    near(
         a["supply_reservoir"]["remaining_liquid_mass_kg"]
             .as_f64()
             .unwrap(),
@@ -3530,11 +3552,47 @@ fn finite_supply_preserves_unexhausted_and_empty_physics_and_enthalpy_reference(
     assert_eq!(empty_report["supply_reservoir"]["exhaustion_events"], 0);
     assert_eq!(empty_report["supplied_liquid_kg"], 0.);
     near(
+        empty_report["supply_reservoir"]["requested_liquid_mass_kg"]
+            .as_f64()
+            .unwrap(),
+        0.0001,
+    );
+    assert_eq!(
+        empty_report["supply_reservoir"]["requested_liquid_mass_kg"],
+        empty_report["supply_reservoir"]["unmet_liquid_mass_kg"]
+    );
+    near(
         empty_report["supply_reservoir"]["elapsed_seconds"]
             .as_f64()
             .unwrap(),
         0.2,
     );
+}
+
+#[test]
+fn finite_supply_shortfall_follows_reference_area_and_changing_accepted_intervals() {
+    let mut history = with_finite_supply(
+        supplied_fixture(0., 0.125, vec![0.02, 0., 0.03], vec![20., 20., 20.]),
+        0.0025,
+        20.,
+    );
+    constant_wet_pressure(&mut history, 1000.);
+    // The reference area is 0.5 m² even when the moving current area changes. The first
+    // interval requests 0.005 kg, delivered stock is 0.0025 kg, then the valve closes.
+    for (time, interval, area) in [(0.5, 0, 1.), (1., 1, 0.25), (1.5, 2, 1.5)] {
+        history
+            .advance(&geometry(area), time, interval, interval, None, None, None)
+            .unwrap();
+    }
+    let report = finite_snapshot(&history);
+    let donor = &report["supply_reservoir"];
+    near(donor["requested_liquid_mass_kg"].as_f64().unwrap(), 0.0125);
+    near(donor["supplied_liquid_mass_kg"].as_f64().unwrap(), 0.0025);
+    near(donor["unmet_liquid_mass_kg"].as_f64().unwrap(), 0.01);
+    assert_eq!(donor["remaining_liquid_mass_kg"], 0.);
+    assert_eq!(donor["exhaustion_events"], 1);
+    near(donor["demand_balance_error_kg"].as_f64().unwrap(), 0.);
+    near(history.balance_error_j(), 0.);
 }
 
 #[test]
