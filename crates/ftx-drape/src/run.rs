@@ -652,7 +652,7 @@ pub fn drape_observed(
     scene.solver.model.bending_model = opts.bending_model;
     scene.solver.model.compression_model = opts.compression_model;
     scene.solver.damping = opts.damping;
-    scene.solver.check_bending_model()?;
+    scene.solver.check_constitutive_models()?;
     scene.solver.check_integrator_history()?;
     if opts.max_settle_steps > 0 {
         scene.solver.check_settling_history()?;

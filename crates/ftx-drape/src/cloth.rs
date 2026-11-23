@@ -2467,10 +2467,12 @@ impl Solver {
     }
 
     /// Refuses fail-closed if any hinge carries a non-zero authored rest dihedral angle `θ₀`
-    /// while [`BendingModel::Quadratic`] is selected (quadratic bending ignores `rest_angle`).
+    /// while [`BendingModel::Quadratic`] is selected (quadratic bending ignores `rest_angle`),
+    /// or if [`BendingModel::DiscreteShells`] is requested on a mesh using orthotropic
+    /// panel-bending patches (which replace scalar hinges and do not implement discrete shells).
     ///
     /// # Errors
-    /// [`RefusalCode::InvalidDocument`] when authored creases are paired with `BendingModel::Quadratic`.
+    /// [`RefusalCode::InvalidDocument`] when the requested bending model would be silently ignored.
     pub fn check_bending_model(&self) -> Result<(), Refusal> {
         if self.model.bending_model == BendingModel::Quadratic
             && self.model.hinges.iter().any(|h| h.rest_angle != 0.0)
@@ -2480,6 +2482,35 @@ impl Solver {
                 "authored crease/pleat rest angles require BendingModel::DiscreteShells",
             )
             .repair("Enable --bending-model discrete-shells (or BendingModel::DiscreteShells) to simulate pressed creases and pleats."));
+        }
+        if self.model.bending_model == BendingModel::DiscreteShells
+            && !self.model.panel_bending_patches().is_empty()
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "orthotropic panel-bending patches do not implement BendingModel::DiscreteShells",
+            )
+            .repair("Use BendingModel::Quadratic with orthotropic characterized bending materials, or use an isotropic scalar bending law with DiscreteShells."));
+        }
+        Ok(())
+    }
+
+    /// Refuses fail-closed when the requested bending or compression formulation would be
+    /// silently bypassed by the bound constitutive law (orthotropic panel-bending patches,
+    /// characterized nonlinear membrane laws, or membrane plasticity).
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] on an incompatible constitutive combination.
+    pub fn check_constitutive_models(&self) -> Result<(), Refusal> {
+        self.check_bending_model()?;
+        if self.model.compression_model == CompressionModel::Principal
+            && (self.model.element_responses.is_some() || self.membrane_plasticity.is_some())
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "characterized nonlinear or plastic membrane laws do not implement CompressionModel::Principal",
+            )
+            .repair("Use CompressionModel::AxisAligned with nonlinear/plastic membrane laws, or use a linear orthotropic membrane with Principal compression softening."));
         }
         Ok(())
     }
@@ -2493,7 +2524,7 @@ impl Solver {
     ) -> Result<SolveReport, Refusal> {
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
-        self.check_bending_model()?;
+        self.check_constitutive_models()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -2532,7 +2563,7 @@ impl Solver {
         }
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
-        self.check_bending_model()?;
+        self.check_constitutive_models()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -2998,7 +3029,7 @@ impl Solver {
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
-        self.check_bending_model()?;
+        self.check_constitutive_models()?;
         self.check_integrator_history()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
@@ -4170,6 +4201,147 @@ mod strategy_and_integrator_tests {
             .step_with_guess(0.01, Some(&x))
             .expect_err("step_with_guess must refuse authored creases under Quadratic bending");
         assert_eq!(err.code, RefusalCode::InvalidDocument);
+    }
+
+    #[test]
+    fn check_constitutive_models_refuses_discrete_shells_on_panel_bending_and_principal_on_nonlinear_or_plastic_membrane()
+     {
+        use ftx_pattern::{
+            material_bending::BendingTensor,
+            material_catalog::Selection,
+            materials::{CATALOG_SCHEMA, Catalog},
+        };
+
+        // 1. Orthotropic panel-bending patches must refuse BendingModel::DiscreteShells fail-closed,
+        //    while succeeding under BendingModel::Quadratic.
+        let (rest, tris) = crate::hex_grid(0.08, 0.08, 0.03, Vec2::ZERO);
+        let weld: Vec<usize> = (0..rest.len()).collect();
+        let tensor = BendingTensor::new(2e-3, 5e-4, 1e-4, 3e-4).unwrap();
+        let mut pb_model = ClothModel::new(
+            rest.clone(),
+            &tris,
+            Membrane::orthotropic(1000.0, 1000.0, 0.0, 200.0, 1.0),
+            2e-4,
+            0.2,
+        )
+        .unwrap();
+        pb_model
+            .set_panel_bending(&rest, &tris, &weld, &vec![Some(tensor); tris.len()])
+            .unwrap();
+        assert!(!pb_model.panel_bending_patches().is_empty());
+        let x: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let mut fixed = vec![[false; 3]; rest.len()];
+        fixed[0] = [true; 3];
+        fixed[1] = [true; 3];
+
+        pb_model.bending_model = BendingModel::DiscreteShells;
+        let mut pb_solver = Solver::new(pb_model.clone(), x.clone(), &fixed, Vec3::ZERO);
+        assert_eq!(
+            pb_solver.check_bending_model().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            pb_solver.step(0.01).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            pb_solver.step_with_guess(0.01, Some(&x)).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            pb_solver.static_solve().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        pb_model.bending_model = BendingModel::Quadratic;
+        let mut pb_ok = Solver::new(pb_model, x, &fixed, Vec3::ZERO);
+        pb_ok.check_constitutive_models().unwrap();
+        pb_ok.step(0.01).unwrap();
+
+        // 2. Characterized nonlinear membrane law and membrane plasticity must refuse
+        //    CompressionModel::Principal fail-closed, while succeeding under AxisAligned.
+        let selected: Selection = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-parallel-membrane.json"
+        ))
+        .unwrap();
+        let material = Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: Vec::new(),
+        }
+        .resolve(&selected)
+        .unwrap();
+        let tri_rest = vec![Vec2::ZERO, Vec2::new(0.04, 0.0), Vec2::new(0.0, 0.04)];
+        let tri_x = vec![
+            Vec3::ZERO,
+            Vec3::new(0.04, 0.0, 0.0),
+            Vec3::new(0.0, 0.04, 0.0),
+        ];
+        let tri_fixed = [[true; 3], [true; 3], [false; 3]];
+
+        // 2a. Nonlinear CompiledMembrane (`element_responses`)
+        let compiled = material.membrane_response().unwrap().unwrap();
+        let mut nl_model = ClothModel::new(
+            tri_rest.clone(),
+            &[[0, 1, 2]],
+            Membrane::orthotropic(1000.0, 600.0, 0.0, 300.0, 1.0),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        nl_model.set_membrane_responses(&[Some(compiled)]).unwrap();
+        nl_model.compression_model = CompressionModel::Principal;
+        let mut nl_solver = Solver::new(nl_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO);
+        assert_eq!(
+            nl_solver.check_constitutive_models().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            nl_solver.step(0.01).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            nl_solver
+                .step_with_guess(0.01, Some(&tri_x))
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            nl_solver.static_solve().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        nl_model.compression_model = CompressionModel::AxisAligned;
+        let mut nl_ok = Solver::new(nl_model, tri_x.clone(), &tri_fixed, Vec3::ZERO);
+        nl_ok.check_constitutive_models().unwrap();
+        nl_ok.step(0.01).unwrap();
+
+        // 2b. Membrane plasticity
+        let mut pl_model = ClothModel::new(
+            tri_rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(1000.0, 600.0, 0.0, 300.0, 1.0),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        pl_model.compression_model = CompressionModel::Principal;
+        let mut pl_solver = Solver::new(pl_model.clone(), tri_x.clone(), &tri_fixed, Vec3::ZERO)
+            .with_membrane_plasticity(&[material.membrane_plasticity().unwrap()])
+            .unwrap();
+        assert_eq!(
+            pl_solver.check_constitutive_models().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            pl_solver.step(0.01).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        pl_model.compression_model = CompressionModel::AxisAligned;
+        let mut pl_ok = Solver::new(pl_model, tri_x, &tri_fixed, Vec3::ZERO)
+            .with_membrane_plasticity(&[material.membrane_plasticity().unwrap()])
+            .unwrap();
+        pl_ok.check_constitutive_models().unwrap();
+        pl_ok.step(0.01).unwrap();
     }
 }
 
