@@ -18,10 +18,11 @@ use serde_json::Value;
 use crate::cloth::{ClothModel, SheetMaterial, SolveReport, Solver};
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::elements::ElasticSegment;
-use crate::garment::GarmentMesh;
+use crate::garment::{ConstructionMechanicsOptions, GarmentMesh};
 use crate::nearest::NearestTree;
 use crate::start::{
-    GATHER_COMPRESSION, MM, PartFrame, StartState, WrapPlacement, start_state, wrap_points,
+    GATHER_COMPRESSION, MM, PartFrame, SelfRepulsionOptions, StartState, WrapPlacement,
+    start_state, wrap_points,
 };
 use crate::stepping::{AcceptedSubstep, SubdivisionOptions};
 
@@ -695,6 +696,43 @@ fn elastic_ring(
         .collect())
 }
 
+/// Opt-in scene-assembly mechanics and start-state options (FTX-27d, FTX-27g).
+///
+/// Default leaves every legacy mesh, start state, cloth mass, and hinge bending bit-identical.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SceneBuildOptions {
+    /// Opt-in folded-hem and sewn seam-allowance mass and bending multipliers (FTX-27d).
+    #[serde(
+        default,
+        skip_serializing_if = "ConstructionMechanicsOptions::is_default"
+    )]
+    pub construction: ConstructionMechanicsOptions,
+    /// Opt-in spatial-hash cloth–cloth self-repulsion during start-state relaxation (FTX-27g).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_self_repulsion: Option<SelfRepulsionOptions>,
+}
+
+impl SceneBuildOptions {
+    /// True when all fields equal the legacy no-op default.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.construction.is_default() && self.start_self_repulsion.is_none()
+    }
+
+    /// Validates all configured scene-build options fail-closed.
+    ///
+    /// # Errors
+    /// As [`ConstructionMechanicsOptions::validate`] and [`SelfRepulsionOptions::validate`].
+    pub fn validate(&self) -> Result<(), Refusal> {
+        self.construction.validate()?;
+        if let Some(repulsion) = self.start_self_repulsion {
+            repulsion.validate()?;
+        }
+        Ok(())
+    }
+}
+
 /// Builds the scene: mesh → placements → start state against `skin` → weld → cloth model → solver with
 /// contact over the skin (no gravity yet).
 ///
@@ -713,6 +751,38 @@ pub fn build_scene(
     compression: f64,
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
+) -> Result<Scene, Refusal> {
+    build_scene_with_options(
+        pattern,
+        mesh,
+        frames,
+        skin_vertices,
+        skin_triangles,
+        fabric,
+        compression,
+        contact,
+        elastic,
+        SceneBuildOptions::default(),
+    )
+}
+
+/// Builds the scene with opt-in construction mechanics and/or start-state self-repulsion.
+/// Default [`SceneBuildOptions::default`] is bit-identical to [`build_scene`].
+///
+/// # Errors
+/// As [`build_scene`], plus [`SceneBuildOptions::validate`] and construction-mechanics refusals.
+#[allow(clippy::too_many_arguments)]
+pub fn build_scene_with_options(
+    pattern: &Pattern,
+    mesh: GarmentMesh,
+    frames: &dyn PartFrames,
+    skin_vertices: &[Vec3],
+    skin_triangles: &[[usize; 3]],
+    fabric: Fabric,
+    compression: f64,
+    contact: ContactParams,
+    elastic: Option<&ElasticCasing>,
+    options: SceneBuildOptions,
 ) -> Result<Scene, Refusal> {
     if pattern.raw()["fabric"].get("material").is_some()
         || pattern.raw()["fabric"].get("material_id").is_some()
@@ -741,6 +811,7 @@ pub fn build_scene(
         None,
         None,
         None,
+        options,
     )
 }
 
@@ -812,8 +883,32 @@ pub(crate) fn build_scene_resolved(
     collision: (&[Vec3], &[[usize; 3]]),
     material: &crate::material::MaterialInputs,
     elastics: &[ElasticCasing],
-    mut display_contact: Option<&mut crate::animation::ReplayContact>,
+    display_contact: Option<&mut crate::animation::ReplayContact>,
 ) -> Result<Scene, Refusal> {
+    build_scene_resolved_with_options(
+        pattern,
+        mesh,
+        frames,
+        collision,
+        material,
+        elastics,
+        display_contact,
+        SceneBuildOptions::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_scene_resolved_with_options(
+    pattern: &Pattern,
+    mesh: GarmentMesh,
+    frames: &dyn PartFrames,
+    collision: (&[Vec3], &[[usize; 3]]),
+    material: &crate::material::MaterialInputs,
+    elastics: &[ElasticCasing],
+    mut display_contact: Option<&mut crate::animation::ReplayContact>,
+    options: SceneBuildOptions,
+) -> Result<Scene, Refusal> {
+    options.validate()?;
     let (skin_vertices, skin_triangles) = collision;
     let build = |mesh, start| {
         build_scene_inner(
@@ -831,6 +926,7 @@ pub(crate) fn build_scene_resolved(
             material.piece_responses.as_deref(),
             material.contact_materials.as_ref(),
             start,
+            options,
         )
     };
     let mut scene = build(mesh, None)?;
@@ -878,15 +974,27 @@ pub(crate) fn build_scene_resolved(
                 ] {
                     let mut positions = scene.start.presewn.clone();
                     for iterations in (stride..original).step_by(stride) {
-                        positions = crate::start::relax(
-                            &scene.mesh,
-                            &positions,
-                            &scene.start.groups,
-                            &tree,
-                            stride,
-                            crate::start::RELAX_CLEARANCE,
-                            &scene.start.gather_weights,
-                        );
+                        positions = match options.start_self_repulsion {
+                            Some(repulsion) => crate::start::relax_with_repulsion(
+                                &scene.mesh,
+                                &positions,
+                                &scene.start.groups,
+                                &tree,
+                                stride,
+                                crate::start::RELAX_CLEARANCE,
+                                &scene.start.gather_weights,
+                                Some(repulsion),
+                            )?,
+                            None => crate::start::relax(
+                                &scene.mesh,
+                                &positions,
+                                &scene.start.groups,
+                                &tree,
+                                stride,
+                                crate::start::RELAX_CLEARANCE,
+                                &scene.start.gather_weights,
+                            ),
+                        };
                         let complete_block = iterations % crate::start::RELAX_ITERS == 0;
                         if stride == crate::start::RELAX_PUSH_OUT_ITERS && complete_block {
                             continue; // Bit-identical to an already refused coarse checkpoint.
@@ -1027,7 +1135,9 @@ fn build_scene_inner(
     piece_responses: Option<&[Option<ftx_pattern::material_response::CompiledMembrane>]>,
     contact_materials: Option<&crate::material::ContactMaterials>,
     start_override: Option<StartState>,
+    options: SceneBuildOptions,
 ) -> Result<Scene, Refusal> {
+    options.validate()?;
     fabric.validate()?;
     fabric.membrane(compression).validate()?;
     crate::collider::audit_surface(
@@ -1114,7 +1224,15 @@ fn build_scene_inner(
         ));
     }
     let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
-    let start = start_override.unwrap_or_else(|| start_state(&mesh, wrapped, &tree));
+    let start = match start_override {
+        Some(start) => start,
+        None => match options.start_self_repulsion {
+            Some(repulsion) => {
+                crate::start::start_state_with_repulsion(&mesh, wrapped, &tree, Some(repulsion))?
+            }
+            None => start_state(&mesh, wrapped, &tree),
+        },
+    };
     // Weld each sewing group into one vertex.
     let mut weld = vec![usize::MAX; mesh.verts2d.len()];
     let mut next = 0;
@@ -1228,6 +1346,27 @@ fn build_scene_inner(
         model.set_membrane_responses(&tri_responses)?;
     }
     model.check_membrane_domains(&x)?;
+    let tri_mass_mult = if options.construction.is_active() {
+        let base_areal: Vec<f64> = triangle_owner
+            .iter()
+            .map(|&owner| {
+                instance_fabrics
+                    .as_ref()
+                    .map_or(fabric.areal_kg_m2, |field| field[owner].areal_kg_m2)
+            })
+            .collect();
+        let field = model.apply_construction_mechanics(
+            &rest,
+            &source_triangles,
+            &triangle_owner,
+            &weld,
+            &base_areal,
+            options.construction,
+        )?;
+        Some(field.triangle_mass_multiplier)
+    } else {
+        None
+    };
     crate::attached_mass::bind(pattern, &mesh, &weld, &mut model)?;
     let mut elastic_rings = Vec::new();
     let mut elastic_groups = Vec::new();
@@ -1256,8 +1395,13 @@ fn build_scene_inner(
                 let density = instance_fabrics
                     .as_ref()
                     .map_or(fabric.areal_kg_m2, |field| field[owner].areal_kg_m2);
+                let share = if let Some(mults) = &tri_mass_mult {
+                    (density * mults[t]) * element.area / 3.0
+                } else {
+                    density * element.area / 3.0
+                };
                 for &v in &element.v {
-                    loaded_mass[v] += density * element.area / 3.0;
+                    loaded_mass[v] += share;
                 }
             }
         }
@@ -3178,5 +3322,171 @@ mod grain_tests {
             max_speed_or_nan(&[Vec3::new(1.0, 0.0, 0.0), Vec3::new(f64::NAN, 0.0, 0.0)]).is_nan()
         );
         assert!(max_speed_or_nan(&[Vec3::new(f64::INFINITY, 0.0, 0.0)]).is_infinite());
+    }
+
+    fn two_panel_cylinder_scene_inputs() -> (Pattern, Vec<Vec3>, Vec<[usize; 3]>) {
+        // Two 100 mm x 100 mm torso panels sewn together along their right/left side seams into a
+        // loose open-ended tube around a small 40 mm cylinder at z in [0.40, 0.70].
+        let pattern = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [
+                {
+                    "id": "front",
+                    "cut": {"qty": 1},
+                    "vertices": {"a": [-50, 0], "b": [50, 0], "c": [50, 100], "d": [-50, 100]},
+                    "edges": [
+                        {"id": "bottom", "from": "a", "to": "b"},
+                        {"id": "side_r", "from": "b", "to": "c"},
+                        {"id": "top", "from": "c", "to": "d"},
+                        {"id": "side_l", "from": "d", "to": "a"}
+                    ],
+                    "placement": {"part": "torso", "radius_mm": 80.0, "theta_deg": 0.0}
+                },
+                {
+                    "id": "back",
+                    "cut": {"qty": 1},
+                    "vertices": {"a": [-50, 0], "b": [50, 0], "c": [50, 100], "d": [-50, 100]},
+                    "edges": [
+                        {"id": "bottom", "from": "a", "to": "b"},
+                        {"id": "side_r", "from": "b", "to": "c"},
+                        {"id": "top", "from": "c", "to": "d"},
+                        {"id": "side_l", "from": "d", "to": "a"}
+                    ],
+                    "placement": {"part": "torso", "radius_mm": 80.0, "theta_deg": 180.0}
+                }
+            ],
+            "seams": [
+                {"a": "front:side_r", "b": "back:side_l", "reverse": true}
+            ]
+        }));
+        // Small open cylinder of radius 0.04 m centered on the z axis, well inside the 0.08 m wrap.
+        let n = 16usize;
+        let (r, z0, z1) = (0.04, 0.35, 0.75);
+        let mut verts = Vec::with_capacity(2 * n);
+        for i in 0..n {
+            let a = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+            let (s, c) = det::sin_cos(a);
+            verts.push(Vec3::new(r * c, r * s, z0));
+            verts.push(Vec3::new(r * c, r * s, z1));
+        }
+        let mut tris = Vec::with_capacity(2 * n);
+        for i in 0..n {
+            let j = (i + 1) % n;
+            tris.push([2 * i, 2 * j, 2 * j + 1]);
+            tris.push([2 * i, 2 * j + 1, 2 * i + 1]);
+        }
+        (pattern, verts, tris)
+    }
+
+    #[test]
+    fn scene_build_options_construction_and_self_repulsion_preserve_legacy_and_apply_cleanly() {
+        let (pattern, skin_v, skin_t) = two_panel_cylinder_scene_inputs();
+        let mesh = build_garment(&pattern, 20.0).unwrap();
+        let fabric = Fabric::default();
+        let contact = ContactParams {
+            dhat: 2e-3,
+            thickness: 5e-4,
+            kappa: 100.0,
+            mu: 0.3,
+            eps_v: 1e-3,
+        };
+
+        let legacy = build_scene(
+            &pattern,
+            mesh.clone(),
+            &DummyFrames,
+            &skin_v,
+            &skin_t,
+            fabric,
+            0.05,
+            contact,
+            None,
+        )
+        .unwrap();
+        let default_opt = build_scene_with_options(
+            &pattern,
+            mesh.clone(),
+            &DummyFrames,
+            &skin_v,
+            &skin_t,
+            fabric,
+            0.05,
+            contact,
+            None,
+            SceneBuildOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(legacy.solver.x, default_opt.solver.x);
+        assert_eq!(legacy.solver.model.mass, default_opt.solver.model.mass);
+        assert_eq!(
+            (0..legacy.solver.model.hinges.len())
+                .map(|h| legacy.solver.model.hinge_rigidity(h))
+                .collect::<Vec<_>>(),
+            (0..default_opt.solver.model.hinges.len())
+                .map(|h| default_opt.solver.model.hinge_rigidity(h))
+                .collect::<Vec<_>>()
+        );
+
+        let constructed = build_scene_with_options(
+            &pattern,
+            mesh.clone(),
+            &DummyFrames,
+            &skin_v,
+            &skin_t,
+            fabric,
+            0.05,
+            contact,
+            None,
+            SceneBuildOptions {
+                construction: ConstructionMechanicsOptions::standard(),
+                start_self_repulsion: Some(SelfRepulsionOptions::default()),
+            },
+        )
+        .unwrap();
+        let m_legacy: f64 = legacy.solver.model.mass.iter().sum();
+        let m_constructed: f64 = constructed.solver.model.mass.iter().sum();
+        assert!(
+            m_constructed > 1.2 * m_legacy,
+            "folded hems and seam allowances must increase total cloth mass: legacy={m_legacy} constructed={m_constructed}"
+        );
+        let max_rig_legacy = (0..legacy.solver.model.hinges.len())
+            .map(|h| legacy.solver.model.hinge_rigidity(h))
+            .fold(0.0, f64::max);
+        let max_rig_constructed = (0..constructed.solver.model.hinges.len())
+            .map(|h| constructed.solver.model.hinge_rigidity(h))
+            .fold(0.0, f64::max);
+        assert!(
+            (max_rig_constructed - 5.0 * max_rig_legacy).abs() <= 1e-12 * max_rig_legacy,
+            "hem band hinges must carry 5x base bending rigidity: legacy={max_rig_legacy} constructed={max_rig_constructed}"
+        );
+
+        // Invalid SceneBuildOptions refuse fail-closed.
+        let bad_opts = SceneBuildOptions {
+            construction: ConstructionMechanicsOptions {
+                hem_mass_multiplier: 2.0,
+                hem_width_mm: 0.0,
+                ..ConstructionMechanicsOptions::default()
+            },
+            start_self_repulsion: None,
+        };
+        assert_eq!(
+            build_scene_with_options(
+                &pattern,
+                mesh,
+                &DummyFrames,
+                &skin_v,
+                &skin_t,
+                fabric,
+                0.05,
+                contact,
+                None,
+                bad_opts,
+            )
+            .err()
+            .expect("invalid construction options must refuse")
+            .code,
+            RefusalCode::OutOfRange
+        );
     }
 }

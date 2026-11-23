@@ -1053,6 +1053,413 @@ fn smooth_interior_cvt(
     Ok(faces)
 }
 
+/// Opt-in garment construction mechanics multipliers for folded hem bands and sewn seam allowances
+/// (FTX-27d).
+///
+/// Multipliers are dimensionless factors applied on top of each triangle's single-ply areal mass
+/// and each hinge's base bending rigidity. Default values (`1.0×` everywhere, `0.0 mm` band
+/// widths) are a bit-identical no-op preserving legacy digests and omitted from serialized reports
+/// when default.
+///
+/// **No-Claim**: generic reference multipliers (e.g. `2×–3×` folded hem mass, `3×–8×` hem bending,
+/// `2×–4×` seam-allowance bending) are uncalibrated structural approximations, not measured
+/// laminate or stitch-class properties and do not establish garment fit.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConstructionMechanicsOptions {
+    /// Width of the folded hem band measured inward from open (non-seam) boundary edges, in mm
+    /// (default `0.0`; e.g. `15.0–25.0` mm for a double-folded hem).
+    pub hem_width_mm: f64,
+    /// Areal mass multiplier applied to triangles in the folded hem band (`>= 1.0`, default `1.0`).
+    pub hem_mass_multiplier: f64,
+    /// Bending rigidity multiplier applied to hinges in the folded hem band (`>= 1.0`, default
+    /// `1.0`).
+    pub hem_bending_multiplier: f64,
+    /// Width of the pressed seam-allowance band measured inward from sewn seam edges, in mm
+    /// (default `0.0`: only the welded seam hinge line itself is stiffened unless `seam_width_mm > 0`).
+    pub seam_width_mm: f64,
+    /// Areal mass multiplier applied to triangles in the seam-allowance band (`>= 1.0`, default
+    /// `1.0`).
+    pub seam_mass_multiplier: f64,
+    /// Bending rigidity multiplier applied to welded seam hinges and interior hinges inside
+    /// `seam_width_mm` of a sewn seam (`>= 1.0`, default `1.0`).
+    pub seam_bending_multiplier: f64,
+}
+
+impl Default for ConstructionMechanicsOptions {
+    fn default() -> Self {
+        Self {
+            hem_width_mm: 0.0,
+            hem_mass_multiplier: 1.0,
+            hem_bending_multiplier: 1.0,
+            seam_width_mm: 0.0,
+            seam_mass_multiplier: 1.0,
+            seam_bending_multiplier: 1.0,
+        }
+    }
+}
+
+impl ConstructionMechanicsOptions {
+    /// Uncalibrated reference garment construction defaults (20 mm folded hem at 2.5× mass / 5×
+    /// bending, 10 mm seam allowance at 2× mass / 3× bending). Structural approximation only, not
+    /// measured laminate constants.
+    #[must_use]
+    pub const fn standard() -> Self {
+        Self {
+            hem_width_mm: 20.0,
+            hem_mass_multiplier: 2.5,
+            hem_bending_multiplier: 5.0,
+            seam_width_mm: 10.0,
+            seam_mass_multiplier: 2.0,
+            seam_bending_multiplier: 3.0,
+        }
+    }
+
+    /// True when all fields equal the legacy no-op default.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// True when any mass or bending multiplier exceeds `1.0`.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.hem_mass_multiplier > 1.0
+            || self.hem_bending_multiplier > 1.0
+            || self.seam_mass_multiplier > 1.0
+            || self.seam_bending_multiplier > 1.0
+    }
+
+    /// Validates all widths and multipliers fail-closed.
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] for any non-finite value; [`RefusalCode::OutOfRange`] for
+    /// out-of-range widths/multipliers or band multipliers > 1 paired with zero band width.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        for (name, value) in [
+            ("hem band width", self.hem_width_mm),
+            ("hem mass multiplier", self.hem_mass_multiplier),
+            ("hem bending multiplier", self.hem_bending_multiplier),
+            ("seam allowance width", self.seam_width_mm),
+            ("seam mass multiplier", self.seam_mass_multiplier),
+            ("seam bending multiplier", self.seam_bending_multiplier),
+        ] {
+            Refusal::finite(name, value)?;
+        }
+        if !(0.0..=200.0).contains(&self.hem_width_mm) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "hem_width_mm {} must be within [0, 200] mm",
+                    self.hem_width_mm
+                ),
+            ));
+        }
+        if !(0.0..=100.0).contains(&self.seam_width_mm) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "seam_width_mm {} must be within [0, 100] mm",
+                    self.seam_width_mm
+                ),
+            ));
+        }
+        if !(1.0..=10.0).contains(&self.hem_mass_multiplier)
+            || !(1.0..=10.0).contains(&self.seam_mass_multiplier)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "hem and seam mass multipliers must be within [1, 10]",
+            ));
+        }
+        if !(1.0..=32.0).contains(&self.hem_bending_multiplier)
+            || !(1.0..=32.0).contains(&self.seam_bending_multiplier)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "hem and seam bending multipliers must be within [1, 32]",
+            ));
+        }
+        if (self.hem_mass_multiplier > 1.0 || self.hem_bending_multiplier > 1.0)
+            && self.hem_width_mm <= 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "hem mass/bending multipliers > 1 require hem_width_mm > 0",
+            ));
+        }
+        if self.seam_mass_multiplier > 1.0 && self.seam_width_mm <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "seam_mass_multiplier > 1 requires seam_width_mm > 0",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Deterministic per-triangle and per-hinge construction multipliers derived from flat rest
+/// geometry, piece ownership, and welded seam topology.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstructionField {
+    /// Areal mass multiplier per retained triangle (`>= 1.0`).
+    pub triangle_mass_multiplier: Vec<f64>,
+    /// Band bending multiplier per retained triangle (`>= 1.0`).
+    pub triangle_bending_multiplier: Vec<f64>,
+    /// Effective bending rigidity multiplier per solver hinge (`>= 1.0`).
+    pub hinge_bending_multiplier: Vec<f64>,
+    /// Number of retained triangles classified inside the open hem band.
+    pub hem_triangles: usize,
+    /// Number of retained triangles classified inside the seam-allowance band.
+    pub seam_band_triangles: usize,
+    /// Number of welded seam hinges (`common_source_verts < 2`).
+    pub seam_hinges: usize,
+    /// Number of open (non-seam) boundary edges identified across all pieces.
+    pub hem_edges: usize,
+}
+
+fn point_seg_dist2(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let ab = b - a;
+    let ab2 = ab.x * ab.x + ab.y * ab.y;
+    let t = if ab2 > 0.0 {
+        ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / ab2
+    } else {
+        0.0
+    }
+    .clamp(0.0, 1.0);
+    let q = a + ab * t;
+    let d = p - q;
+    d.x * d.x + d.y * d.y
+}
+
+fn build_segment_grid(segs: &[(Vec2, Vec2)], width_m: f64) -> SpatialGrid2D {
+    let mut lo = Vec2::new(f64::INFINITY, f64::INFINITY);
+    let mut hi = Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &(a, b) in segs {
+        lo.x = lo.x.min(a.x).min(b.x);
+        lo.y = lo.y.min(a.y).min(b.y);
+        hi.x = hi.x.max(a.x).max(b.x);
+        hi.y = hi.y.max(a.y).max(b.y);
+    }
+    let pad = (width_m + 1e-12) * 1.01;
+    let mut grid = SpatialGrid2D::new(
+        Vec2::new(lo.x - pad, lo.y - pad),
+        Vec2::new(hi.x + pad, hi.y + pad),
+        pad.max(1e-6),
+    );
+    for (id, &(a, b)) in segs.iter().enumerate() {
+        grid.insert_segment(a, b, id);
+    }
+    grid
+}
+
+/// Classifies open (non-seam) hem boundaries, welded seam hinges, and their inward construction
+/// bands in each piece's flat rest coordinates (metres).
+///
+/// # Errors
+/// [`RefusalCode::NonFinite`] or [`RefusalCode::OutOfRange`] on invalid `options`;
+/// [`RefusalCode::DegenerateGeometry`] on mismatched array lengths, out-of-range indices, or
+/// non-manifold welded edges shared by more than two retained triangles.
+pub fn compute_construction_field(
+    source_rest_m: &[Vec2],
+    source_triangles: &[[usize; 3]],
+    triangle_owner: &[usize],
+    weld: &[usize],
+    hinge_support: &[[(usize, f64); 2]],
+    options: ConstructionMechanicsOptions,
+) -> Result<ConstructionField, Refusal> {
+    options.validate()?;
+    let n_tris = source_triangles.len();
+    if triangle_owner.len() != n_tris || source_rest_m.len() != weld.len() {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "construction field requires matching triangle owners and source/weld vertex maps",
+        ));
+    }
+    if source_rest_m
+        .iter()
+        .any(|p| !p.x.is_finite() || !p.y.is_finite())
+    {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "construction field requires finite flat rest coordinates",
+        ));
+    }
+    type ConstructionEdgeUses = BTreeMap<(usize, usize), Vec<(usize, [usize; 2])>>;
+    let mut edge_uses: ConstructionEdgeUses = BTreeMap::new();
+    for (t, tri) in source_triangles.iter().enumerate() {
+        if tri.iter().any(|&v| v >= source_rest_m.len()) {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!("construction source triangle {t} indexes a missing vertex"),
+            ));
+        }
+        let w = tri.map(|v| weld[v]);
+        if w[0] == w[1] || w[1] == w[2] || w[0] == w[2] {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!("construction triangle {t} is collapsed after welding"),
+            ));
+        }
+        for k in 0..3 {
+            let (sa, sb) = (tri[k], tri[(k + 1) % 3]);
+            let (wa, wb) = (w[k], w[(k + 1) % 3]);
+            edge_uses
+                .entry((wa.min(wb), wa.max(wb)))
+                .or_default()
+                .push((t, [sa, sb]));
+        }
+    }
+
+    let mut hem_segments: BTreeMap<usize, Vec<(Vec2, Vec2)>> = BTreeMap::new();
+    let mut seam_segments: BTreeMap<usize, Vec<(Vec2, Vec2)>> = BTreeMap::new();
+    let mut hem_edges = 0usize;
+    for (key, uses) in &edge_uses {
+        match uses.as_slice() {
+            [(t, [sa, sb])] => {
+                hem_edges += 1;
+                hem_segments
+                    .entry(triangle_owner[*t])
+                    .or_default()
+                    .push((source_rest_m[*sa], source_rest_m[*sb]));
+            }
+            [(t1, [a1, b1]), (t2, [a2, b2])] => {
+                let common = source_triangles[*t1]
+                    .iter()
+                    .filter(|v| source_triangles[*t2].contains(v))
+                    .count();
+                if common < 2 {
+                    seam_segments
+                        .entry(triangle_owner[*t1])
+                        .or_default()
+                        .push((source_rest_m[*a1], source_rest_m[*b1]));
+                    seam_segments
+                        .entry(triangle_owner[*t2])
+                        .or_default()
+                        .push((source_rest_m[*a2], source_rest_m[*b2]));
+                }
+            }
+            _ => {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    format!("construction edge {key:?} is shared by more than two triangles"),
+                ));
+            }
+        }
+    }
+
+    let hem_w_m = options.hem_width_mm * 1e-3;
+    let seam_w_m = options.seam_width_mm * 1e-3;
+    let hem_w_tol2 = (hem_w_m + 1e-12) * (hem_w_m + 1e-12);
+    let seam_w_tol2 = (seam_w_m + 1e-12) * (seam_w_m + 1e-12);
+
+    let hem_grids: BTreeMap<usize, SpatialGrid2D> = if hem_w_m > 0.0 {
+        hem_segments
+            .iter()
+            .map(|(&owner, segs)| (owner, build_segment_grid(segs, hem_w_m)))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
+    let seam_grids: BTreeMap<usize, SpatialGrid2D> = if seam_w_m > 0.0 {
+        seam_segments
+            .iter()
+            .map(|(&owner, segs)| (owner, build_segment_grid(segs, seam_w_m)))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
+
+    let mut triangle_mass_multiplier = Vec::with_capacity(n_tris);
+    let mut triangle_bending_multiplier = Vec::with_capacity(n_tris);
+    let mut hem_triangles = 0usize;
+    let mut seam_band_triangles = 0usize;
+
+    for (t, tri) in source_triangles.iter().enumerate() {
+        let owner = triangle_owner[t];
+        let c = (source_rest_m[tri[0]] + source_rest_m[tri[1]] + source_rest_m[tri[2]]) / 3.0;
+        let in_hem = hem_w_m > 0.0
+            && hem_grids.get(&owner).is_some_and(|grid| {
+                let segs = &hem_segments[&owner];
+                grid.any_nearby(c, |id| {
+                    let (a, b) = segs[id];
+                    point_seg_dist2(c, a, b) <= hem_w_tol2
+                })
+            });
+        let in_seam = seam_w_m > 0.0
+            && seam_grids.get(&owner).is_some_and(|grid| {
+                let segs = &seam_segments[&owner];
+                grid.any_nearby(c, |id| {
+                    let (a, b) = segs[id];
+                    point_seg_dist2(c, a, b) <= seam_w_tol2
+                })
+            });
+        let mut m_mult = 1.0_f64;
+        let mut b_mult = 1.0_f64;
+        if in_hem {
+            hem_triangles += 1;
+            m_mult = m_mult.max(options.hem_mass_multiplier);
+            b_mult = b_mult.max(options.hem_bending_multiplier);
+        }
+        if in_seam {
+            seam_band_triangles += 1;
+            m_mult = m_mult.max(options.seam_mass_multiplier);
+            b_mult = b_mult.max(options.seam_bending_multiplier);
+        }
+        triangle_mass_multiplier.push(m_mult);
+        triangle_bending_multiplier.push(b_mult);
+    }
+
+    let mut hinge_bending_multiplier = Vec::with_capacity(hinge_support.len());
+    let mut seam_hinges = 0usize;
+    for &[(t1, wa), (t2, wb)] in hinge_support {
+        if t1 >= n_tris
+            || t2 >= n_tris
+            || !wa.is_finite()
+            || !wb.is_finite()
+            || wa < 0.0
+            || wb < 0.0
+            || wa + wb <= 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "invalid hinge support in construction field",
+            ));
+        }
+        let common = source_triangles[t1]
+            .iter()
+            .filter(|v| source_triangles[t2].contains(v))
+            .count();
+        let is_seam_hinge = common < 2;
+        let (ba, bb) = (
+            triangle_bending_multiplier[t1],
+            triangle_bending_multiplier[t2],
+        );
+        let mut hm = if ba == bb {
+            ba
+        } else {
+            let scale = wa.max(wb);
+            let (u, v) = (wa / scale, wb / scale);
+            ba * (u / (u + v)) + bb * (v / (u + v))
+        };
+        if is_seam_hinge {
+            seam_hinges += 1;
+            hm = hm.max(options.seam_bending_multiplier);
+        }
+        hinge_bending_multiplier.push(hm);
+    }
+
+    Ok(ConstructionField {
+        triangle_mass_multiplier,
+        triangle_bending_multiplier,
+        hinge_bending_multiplier,
+        hem_triangles,
+        seam_band_triangles,
+        seam_hinges,
+        hem_edges,
+    })
+}
+
 /// Constrained Delaunay of `points` with the first `nb` as the closed boundary loop; the triangles
 /// inside the loop, counter-clockwise, as indices into `points`.
 fn triangulate(points: &[Vec2], nb: usize, inst: &str) -> Result<Vec<[usize; 3]>, Refusal> {
@@ -1624,7 +2031,7 @@ mod tests {
                 .iter()
                 .map(|&j| {
                     let step = mesh.verts2d[v] - mesh.verts2d[j];
-                    step.x.hypot(step.y)
+                    det::hypot(step.x, step.y)
                 })
                 .fold(f64::INFINITY, f64::min);
             let want = ((d - 100.0) / 50.0).clamp(0.0, 1.0);
