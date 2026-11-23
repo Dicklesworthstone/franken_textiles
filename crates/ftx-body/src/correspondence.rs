@@ -237,13 +237,23 @@ impl CorrespondenceModel {
     }
 
     fn checked(model: AnnyModel, config: Configuration, hash: &str) -> Result<Self, Refusal> {
+        let header = &model.data().header;
         if hash != config.model_sha256
             || hash.len() != 64
-            || model.data().header.anny_version != "0.6.1"
-            || model.data().header.counts.bones == 0
+            || header.anny_version != "0.6.1"
+            || header.counts.bones == 0
+            || header.labels.bones.len() != header.counts.bones
+            || header.labels.bone_parents.len() != header.counts.bones
+            || header.labels.local_changes.len() != header.counts.local_changes
+            || header
+                .labels
+                .bone_parents
+                .iter()
+                .enumerate()
+                .any(|(j, &p)| p < -1 || (p >= 0 && p as u64 >= j as u64))
         {
             return Err(invalid(
-                "model SHA-256 or pinned Anny 0.6.1 identity does not match",
+                "model SHA-256, pinned Anny 0.6.1 identity, or bone/label tables do not match",
             ));
         }
         if !config.age_years.is_finite()
@@ -730,5 +740,94 @@ impl CorrespondenceModel {
                 ResolvedTarget::Tail(i) => body.transforms[*i].apply(rest.bone_tails[*i]),
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::AnnyData;
+    use ftx_core::Mat3;
+    use serde_json::json;
+
+    fn synthetic_anny_data() -> AnnyData {
+        AnnyData {
+            header: serde_json::from_value(json!({
+                "schema":"ftxbody/1", "model":"anny", "anny_version":"0.6.1",
+                "configuration":"synthetic", "licence":"synthetic", "package_sha256":{},
+                "counts":{"vertices":2,"faces":0,"bones":2,"blendshapes":0,
+                    "phenotype_blendshapes":0,"local_changes":0,"influences":1},
+                "phenotype":{"features":[],"components":[],"anchors":{},"exposed":[],"fixed_value":0.5},
+                "labels":{"blendshapes":[],"bones":["root","child"],
+                    "bone_parents":[-1,0],"local_changes":[]},
+                "y_axis":[0,1,0], "degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],
+                "waist_loop_final":[], "arrays":{}
+            }))
+            .unwrap(),
+            template_vertices: vec![Vec3::ZERO, Vec3::new(0.1, 0.2, 0.3)],
+            faces: vec![],
+            blendshape_row_ptr: vec![0],
+            blendshape_vertex: vec![],
+            blendshape_delta: vec![],
+            phenotype_mask: vec![],
+            template_bone_heads: vec![Vec3::ZERO, Vec3::new(0.0, 0.0, 0.5)],
+            template_bone_tails: vec![Vec3::new(0.0, 0.0, 0.5), Vec3::new(0.0, 0.0, 1.0)],
+            bone_heads_blendshapes: vec![],
+            bone_tails_blendshapes: vec![],
+            bone_rolls: vec![Mat3::IDENTITY; 2],
+            vertex_bone_indices: vec![0, 1],
+            vertex_bone_weights: vec![1.0, 1.0],
+            base_mesh_vertex_indices: vec![0, 1],
+        }
+    }
+
+    #[test]
+    fn correspondence_and_catalogue_handle_mismatched_bone_tables_without_panicking() {
+        let hash = "0".repeat(64);
+        let config = Configuration {
+            model_sha256: hash.clone(),
+            age_years: 3.0,
+            gender: 0.5,
+            fixed_shape: BTreeMap::new(),
+            shape_parameters: vec![Parameter {
+                name: "height".into(),
+                lower: 0.0,
+                upper: 1.0,
+            }],
+            root_translation_m: Vec3::ZERO,
+            root_rotation_rad: Vec3::ZERO,
+            joints: BTreeMap::new(),
+            pose_parameters: Vec::new(),
+            keypoints: BTreeMap::new(),
+            measurements: Vec::new(),
+        };
+
+        // Extra bone label past counts.bones must be refused in checked().
+        let mut extra_bone = synthetic_anny_data();
+        extra_bone.header.labels.bones.push("ghost".into());
+        let extra_model = AnnyModel::from_data(extra_bone).unwrap();
+        assert_eq!(
+            CorrespondenceModel::new(extra_model.clone(), config.clone(), &hash)
+                .err()
+                .expect("extra bone label must refuse")
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        // capture::catalogue must not panic even when bone_parents is shorter than bones.
+        let cat = capture::catalogue(&extra_model);
+        assert_eq!(cat.joints.len(), 2);
+        assert_eq!(cat.joints[1].parent_index, None);
+
+        // Non-topological bone_parents must be refused in checked().
+        let mut bad_parent = synthetic_anny_data();
+        bad_parent.header.labels.bone_parents[1] = 1;
+        let bad_model = AnnyModel::from_data(bad_parent).unwrap();
+        assert_eq!(
+            CorrespondenceModel::new(bad_model, config, &hash)
+                .err()
+                .expect("self-parent bone must refuse")
+                .code,
+            RefusalCode::InvalidDocument
+        );
     }
 }

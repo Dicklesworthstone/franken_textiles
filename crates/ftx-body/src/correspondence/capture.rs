@@ -160,7 +160,11 @@ pub fn catalogue(model: &AnnyModel) -> Catalogue {
         .enumerate()
         .skip(1)
         .map(|(index, name)| {
-            let parent_index = usize::try_from(labels.bone_parents[index]).ok();
+            let parent_index = labels
+                .bone_parents
+                .get(index)
+                .copied()
+                .and_then(|parent| usize::try_from(parent).ok());
             Bone {
                 name: name.clone(),
                 index,

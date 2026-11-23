@@ -1144,7 +1144,20 @@ pub fn trimmed_skin(
     roots: &[&str],
 ) -> Result<SkinMesh, Refusal> {
     let data = model.data();
+    let bone_count = data.header.counts.bones;
     let parents = &data.header.labels.bone_parents;
+    if parents.len() != bone_count
+        || data.header.labels.bones.len() != bone_count
+        || parents
+            .iter()
+            .enumerate()
+            .any(|(j, &p)| p < -1 || (p >= 0 && p as u64 >= j as u64))
+    {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "body model bone labels or hierarchy do not match header counts",
+        ));
+    }
     let mut cut = vec![false; parents.len()];
     for label in roots {
         let r = bone(model, label)?;
@@ -2204,5 +2217,30 @@ mod tests {
                 assert_eq!(*root, format!("finger{}-{joint}.{side}", index % 5 + 1));
             }
         }
+    }
+
+    #[test]
+    fn trimmed_skin_refuses_malformed_bone_labels_or_hierarchy_without_panicking() {
+        let (model, rest) = thumb_fixture();
+        // Out-of-bounds parent index must fail closed instead of panicking in cut[p].
+        let mut bad_parent = model.data().clone();
+        bad_parent.header.labels.bone_parents[1] = 99;
+        let bad_parent_model = AnnyModel::from_data(bad_parent).unwrap();
+        let err = trimmed_skin(&bad_parent_model, &rest.vertices, &["root"]).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+
+        // Non-topological self-parent must fail closed.
+        let mut self_parent = model.data().clone();
+        self_parent.header.labels.bone_parents[1] = 1;
+        let self_parent_model = AnnyModel::from_data(self_parent).unwrap();
+        let err = trimmed_skin(&self_parent_model, &rest.vertices, &["root"]).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+
+        // Extra bone label past bone_parents.len() must fail closed instead of panicking in cut[r].
+        let mut extra_label = model.data().clone();
+        extra_label.header.labels.bones.push("ghost_bone".into());
+        let extra_label_model = AnnyModel::from_data(extra_label).unwrap();
+        let err = trimmed_skin(&extra_label_model, &rest.vertices, &["ghost_bone"]).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
     }
 }

@@ -335,6 +335,12 @@ impl AnnyModel {
         let ncomp = w.len();
         let mut coef = Vec::with_capacity(c.blendshapes);
         if ncomp > 0 {
+            if c.phenotype_blendshapes.checked_mul(ncomp) != Some(self.data.phenotype_mask.len()) {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "phenotype mask length does not match phenotype blendshape and component counts",
+                ));
+            }
             for row in self.data.phenotype_mask.chunks_exact(ncomp) {
                 let mut prod = 1.0;
                 for (m, &mask) in row.iter().enumerate() {
@@ -758,6 +764,25 @@ mod tests {
         assert_eq!(
             model.pose(&rest, &huge_deltas).unwrap_err().code,
             RefusalCode::NonFinite
+        );
+
+        // Truncated phenotype_mask with ncomp > 0 refuses InvalidDocument instead of silently omitting blendshapes.
+        let mut bad_mask = model.data().clone();
+        bad_mask.header.counts.phenotype_blendshapes = 2;
+        bad_mask.header.phenotype.features = vec!["gender".into()];
+        bad_mask.header.phenotype.components = vec![("gender".into(), "f".into())];
+        bad_mask
+            .header
+            .phenotype
+            .anchors
+            .insert("gender".into(), vec![0.0]);
+        bad_mask.header.phenotype.exposed = vec!["gender".into()];
+        bad_mask.phenotype_mask = vec![1]; // expected 2 * 1 = 2 entries
+        let bad_mask_model = AnnyModel::from_data(bad_mask).unwrap();
+        let params = bad_mask_model.params(Phenotype::default());
+        assert_eq!(
+            bad_mask_model.coefficients(&params).unwrap_err().code,
+            RefusalCode::InvalidDocument
         );
     }
 }

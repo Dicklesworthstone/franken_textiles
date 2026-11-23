@@ -166,19 +166,26 @@ impl BodyFrames {
                 )
             })
         };
+        let bone_count = data.header.counts.bones;
         let parents = &data.header.labels.bone_parents;
         let k = data.header.counts.influences;
         let expected_weights = posed.vertices.len().checked_mul(k);
         if posed.vertices.is_empty()
             || posed.vertices.len() != data.header.counts.vertices
             || k == 0
-            || posed.bone_poses.len() != parents.len()
+            || parents.len() != bone_count
+            || data.header.labels.bones.len() != bone_count
+            || parents
+                .iter()
+                .enumerate()
+                .any(|(j, &p)| p < -1 || (p >= 0 && p as u64 >= j as u64))
+            || posed.bone_poses.len() != bone_count
             || expected_weights != Some(data.vertex_bone_weights.len())
             || expected_weights != Some(data.vertex_bone_indices.len())
             || data
                 .vertex_bone_indices
                 .iter()
-                .any(|&b| b as usize >= parents.len())
+                .any(|&b| b as usize >= bone_count)
             || data
                 .header
                 .waist_loop_final
@@ -712,9 +719,23 @@ mod tests {
         let err = BodyFrames::new(&make_model(vec![0], 1), &huge_posed).unwrap_err();
         assert_eq!(err.code, RefusalCode::NonFinite);
 
-        let mut huge_bone = posed;
+        let mut huge_bone = posed.clone();
         huge_bone.bone_poses[3].t.x = 1e306;
         let err = BodyFrames::new(&make_model(vec![0], 1), &huge_bone).unwrap_err();
         assert_eq!(err.code, RefusalCode::NonFinite);
+
+        // Out-of-bounds parent index -> InvalidDocument (not a panic in descendants)
+        let mut bad_parent = make_model(vec![0], 1).data().clone();
+        bad_parent.header.labels.bone_parents[4] = 999;
+        let bad_parent_model = AnnyModel::from_data(bad_parent).unwrap();
+        let err = BodyFrames::new(&bad_parent_model, &posed).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+
+        // Mismatched bone labels count -> InvalidDocument (not a panic in descendants/head)
+        let mut extra_bone = make_model(vec![0], 1).data().clone();
+        extra_bone.header.labels.bones.push("extra.bone".into());
+        let extra_bone_model = AnnyModel::from_data(extra_bone).unwrap();
+        let err = BodyFrames::new(&extra_bone_model, &posed).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
     }
 }
