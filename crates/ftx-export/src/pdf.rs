@@ -807,7 +807,7 @@ pub fn tile_grid(lay: &Layout, paper: &Paper) -> (usize, usize, Vec<Tile>) {
     }
     let cols_f = (lay.width / paper.fw - 1e-9).ceil();
     let rows_f = (lay.height / paper.fh - 1e-9).ceil();
-    if !cols_f.is_finite() || !rows_f.is_finite() {
+    if !cols_f.is_finite() || !rows_f.is_finite() || cols_f > 10_000.0 || rows_f > 10_000.0 {
         return (0, 0, Vec::new());
     }
     let cols = (cols_f as usize).max(1);
@@ -846,7 +846,13 @@ fn tile_map(
     (x, y, bw, bh): (f64, f64, f64, f64),
     ts: f64,
 ) {
-    if cols == 0 || rows == 0 || !paper.fw.is_finite() || paper.fw <= 0.0 || !paper.fh.is_finite() || paper.fh <= 0.0 {
+    if cols == 0
+        || rows == 0
+        || !paper.fw.is_finite()
+        || paper.fw <= 0.0
+        || !paper.fh.is_finite()
+        || paper.fh <= 0.0
+    {
         return;
     }
     let s = (bw / (cols as f64 * paper.fw)).min(bh / (rows as f64 * paper.fh));
@@ -1733,5 +1739,12 @@ mod tests {
             model: Vec::new(),
         };
         assert_eq!(tile_grid(&bad_lay, &Paper::a4()), (0, 0, Vec::new()));
+        let huge_lay = Layout {
+            items: Vec::new(),
+            width: 1e20,
+            height: 100.0,
+            model: Vec::new(),
+        };
+        assert_eq!(tile_grid(&huge_lay, &Paper::a4()), (0, 0, Vec::new()));
     }
 }
