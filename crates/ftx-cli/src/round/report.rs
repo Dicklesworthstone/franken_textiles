@@ -957,6 +957,10 @@ mod tests {
         assert!(!default_html.contains("Extra settling:"));
         assert!(!default_html.contains("Time subdivision:"));
         assert!(!default_html.contains("Static equilibrium comparison"));
+        assert!(!default_html.contains("Mesh:"));
+        assert!(!default_html.contains("Construction (uncalibrated):"));
+        assert!(!default_html.contains("Start self-repulsion:"));
+        assert!(!default_html.contains("Authored creases:"));
 
         let extended = json!({
             "round": 2,
@@ -972,6 +976,26 @@ mod tests {
                 },
                 "hand_collider": "knuckle",
                 "numerical": {
+                    "mesh": {
+                        "options": {"min_spacing_mm": 6.0, "cvt_iterations": 4},
+                        "quality": {"min_angle_deg": 32.5}
+                    },
+                    "construction": {
+                        "options": {
+                            "hem_width_mm": 20.0,
+                            "hem_mass_multiplier": 2.5,
+                            "hem_bending_multiplier": 5.0,
+                            "seam_width_mm": 10.0,
+                            "seam_mass_multiplier": 2.0,
+                            "seam_bending_multiplier": 3.0
+                        }
+                    },
+                    "start_self_repulsion": {
+                        "min_separation_m": 0.004,
+                        "stiffness": 0.5,
+                        "period": 5
+                    },
+                    "authored_crease_hinges": 14,
                     "settling": {"steps": 4, "max_steps": 12, "stop_reason": "quiet_window"},
                     "time_subdivision": {
                         "subdivided_nominal_intervals": 2,
@@ -998,6 +1022,12 @@ mod tests {
         assert!(ext_html.contains(
             "Thumb pose (rad): L [0, 0, 0.1745], R [0, 0, -0.1745] (4200 hand-surface pairs audited)."
         ));
+        assert!(ext_html.contains("Mesh: min spacing 6 mm, 4 CVT passes, min angle 32.5°."));
+        assert!(ext_html.contains(
+            "Construction (uncalibrated): hem 20 mm (2.5× mass, 5× bend), seam 10 mm (2× mass, 3× bend)."
+        ));
+        assert!(ext_html.contains("Start self-repulsion: 4.0 mm (stiffness 0.5, period 5)."));
+        assert!(ext_html.contains("Authored creases: 14 hinge(s)."));
         assert!(ext_html.contains("Extra settling: 4/12 steps (quiet_window)."));
         assert!(
             ext_html

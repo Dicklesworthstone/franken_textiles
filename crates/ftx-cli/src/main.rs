@@ -2864,9 +2864,21 @@ mod tests {
         assert_eq!(rich.mesh.cvt_iterations, 4);
         assert_eq!(rich.mesh.max_turning_angle_rad, 0.25);
         assert_eq!(rich.mesh.gather_refinement, 2.2);
+        let std_c = ftx_drape::ConstructionMechanicsOptions::standard();
         assert_eq!(rich.construction.hem_width_mm, 18.0);
-        assert_eq!(rich.construction.hem_mass_multiplier, 2.0);
-        assert_eq!(rich.construction.hem_bending_multiplier, 4.0);
+        assert_eq!(
+            rich.construction.hem_mass_multiplier,
+            std_c.hem_mass_multiplier
+        );
+        assert_eq!(
+            rich.construction.hem_bending_multiplier,
+            std_c.hem_bending_multiplier
+        );
+        assert_eq!(rich.construction.seam_width_mm, std_c.seam_width_mm);
+        assert_eq!(
+            rich.construction.seam_mass_multiplier,
+            std_c.seam_mass_multiplier
+        );
         assert_eq!(rich.construction.seam_bending_multiplier, 4.5);
         let rep = rich.start_self_repulsion.unwrap();
         assert!((rep.min_separation_m - 0.0035).abs() < 1e-12);
