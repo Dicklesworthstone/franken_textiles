@@ -265,6 +265,12 @@ pub fn measure_ref(pattern: &Pattern, r: &str) -> Result<f64, PyError> {
         let side = side
             .as_str()
             .ok_or_else(|| PyError::Value(format!("cannot parse reference {side}")))?;
+        if side.starts_with("seam:") {
+            return Err(PyError::Value(format!(
+                "cyclic or nested seam reference {}",
+                py::repr_str(side)
+            )));
+        }
         return measure_ref(pattern, side);
     }
     if let Some((inst_id, path)) = r.split_once('/') {
@@ -297,7 +303,11 @@ pub fn measure_ref(pattern: &Pattern, r: &str) -> Result<f64, PyError> {
     if let Some((stem, rest)) = r.split_once(':') {
         let (piece, _) = piece_by_stem(doc, stem)?;
         if rest == "width" || rest == "height" {
-            let (lo, hi) = bbox(&outline(piece, 60)?);
+            let o = outline(piece, 60)?;
+            if o.is_empty() {
+                return Err(PyError::Value(format!("{}: empty outline", piece.id)));
+            }
+            let (lo, hi) = bbox(&o);
             return Ok(if rest == "width" {
                 hi.x - lo.x
             } else {
@@ -323,4 +333,57 @@ pub fn measure_ref(pattern: &Pattern, r: &str) -> Result<f64, PyError> {
         "cannot parse reference {}",
         py::repr_str(r)
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn measure_ref_rejects_cyclic_seam_and_empty_outline_and_measures_valid_refs() {
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "REFS",
+            "units": "mm",
+            "pieces": [
+                {
+                    "id": "front",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "cut": {"qty": 1}
+                },
+                {
+                    "id": "empty",
+                    "vertices": {},
+                    "edges": [],
+                    "cut": {"qty": 1}
+                }
+            ],
+            "seams": [
+                {"id": "valid", "a": "front/e0", "b": "front/e2"},
+                {"id": "cycle", "a": "seam:cycle:a", "b": "front/e0"}
+            ]
+        }));
+        assert!((measure_ref(&pat, "seam:valid").unwrap() - 100.0).abs() < 1e-12);
+        assert!((measure_ref(&pat, "front:width").unwrap() - 100.0).abs() < 1e-12);
+        assert!((measure_ref(&pat, "front:height").unwrap() - 80.0).abs() < 1e-12);
+        assert!(matches!(
+            measure_ref(&pat, "seam:cycle"),
+            Err(PyError::Value(_))
+        ));
+        assert!(matches!(
+            measure_ref(&pat, "empty:width"),
+            Err(PyError::Value(_))
+        ));
+        assert!(matches!(
+            measure_ref(&pat, "empty:height"),
+            Err(PyError::Value(_))
+        ));
+    }
 }

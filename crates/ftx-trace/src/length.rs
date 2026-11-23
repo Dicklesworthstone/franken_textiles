@@ -89,20 +89,21 @@ pub fn parse_length(text: &str, default_unit: Option<&str>) -> Option<f64> {
         Some(n) => s[k..k + n].iter().collect::<String>().to_lowercase(),
         None => default_unit?.to_string(),
     };
-    match unit.as_str() {
+    let out = match unit.as_str() {
         "" => None,
         "in" | "inch" | "inches" | "\"" | "\u{201d}" | "\u{2033}" | "''" => Some(v * 25.4),
         "mm" => Some(v),
         "cm" => Some(v * 10.0),
         "m" => Some(v * 1000.0),
         _ => None,
-    }
+    };
+    out.filter(|x| x.is_finite())
 }
 
-/// A bare number as a length: itself when the default unit is millimetres, else `None`.
+/// A bare number as a length: itself when finite and the default unit is millimetres, else `None`.
 #[must_use]
 pub fn parse_number(x: f64, default_unit: Option<&str>) -> Option<f64> {
-    (default_unit == Some("mm")).then_some(x)
+    (default_unit == Some("mm") && x.is_finite()).then_some(x)
 }
 
 #[cfg(test)]
@@ -120,6 +121,13 @@ mod tests {
         assert_eq!(parse_length("Cut 2.6 fabric", None), None);
         assert_eq!(parse_length("3 inches", None), Some(3.0 * 25.4));
         assert_eq!(parse_length("1,5 m", None), Some(1500.0));
+        let huge = format!("{} mm", "9".repeat(320));
+        assert_eq!(parse_length(&huge, mm), None);
+        let nan_frac = format!("1 {}/{} mm", "9".repeat(320), "9".repeat(320));
+        assert_eq!(parse_length(&nan_frac, mm), None);
+        assert_eq!(parse_number(f64::NAN, mm), None);
+        assert_eq!(parse_number(f64::INFINITY, mm), None);
+        assert_eq!(parse_number(12.5, mm), Some(12.5));
     }
 
     #[test]
