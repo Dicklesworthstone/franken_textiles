@@ -169,7 +169,7 @@ pub fn forward_kinematics(
         let pose = if parents[j] < 0 {
             inv[0].compose(&m)
         } else {
-            let p = usize::try_from(parents[j]).unwrap_or(0);
+            let p = usize::try_from(parents[j]).expect("bone parent index out of range");
             assert!(p < j, "bone {j}: parent {p} must precede it");
             transforms[p].compose(&m)
         };
@@ -715,5 +715,13 @@ mod tests {
             "expected shortest-arc -80 deg, got {:?}",
             dqs_a[0]
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn fk_panics_on_u32_truncating_bone_parent() {
+        let rest = [Affine::IDENTITY, Affine::IDENTITY];
+        let deltas = [Affine::IDENTITY, Affine::IDENTITY];
+        let _ = forward_kinematics(&rest, &deltas, &[-1, 1i64 << 32]);
     }
 }

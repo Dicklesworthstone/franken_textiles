@@ -202,7 +202,11 @@ pub(super) fn simple(points: &[Vec2], work: &mut usize) -> Result<(), Refusal> {
 
 fn point_distance(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let d = b - a;
-    let t = ((p - a).dot(d) / d.norm2()).clamp(0.0, 1.0);
+    let l2 = d.norm2();
+    if l2 == 0.0 {
+        return (p - a).norm();
+    }
+    let t = ((p - a).dot(d) / l2).clamp(0.0, 1.0);
     (p - (a + d * t)).norm()
 }
 
@@ -213,6 +217,9 @@ pub(super) fn clearance(
     required: f64,
     work: &mut usize,
 ) -> Result<f64, Refusal> {
+    if points.len() < 2 || ring.len() < 3 {
+        return Err(bad("invalid stitch path for cut-edge clearance"));
+    }
     charge(work, points.len().saturating_mul(ring.len()))?;
     if !point_in_polygon(points[0], ring) {
         return Err(bad("offset stitch line is outside the cut outline"));
@@ -224,10 +231,19 @@ pub(super) fn clearance(
             if segments_touch(w[0], w[1], a, b) {
                 return Err(bad("offset stitch line crosses or touches the cut outline"));
             }
-            let distance = point_distance(w[0], a, b)
-                .min(point_distance(w[1], a, b))
-                .min(point_distance(a, w[0], w[1]))
-                .min(point_distance(b, w[0], w[1]));
+            let distances = [
+                point_distance(w[0], a, b),
+                point_distance(w[1], a, b),
+                point_distance(a, w[0], w[1]),
+                point_distance(b, w[0], w[1]),
+            ];
+            if distances.iter().any(|d| !d.is_finite()) {
+                return Err(bad("non-finite cut-edge clearance"));
+            }
+            let distance = distances[0]
+                .min(distances[1])
+                .min(distances[2])
+                .min(distances[3]);
             minimum = minimum.min(distance);
         }
     }
@@ -407,5 +423,64 @@ impl OffsetPath {
             minimum_cut_clearance_mm: minimum,
         };
         Ok((stations, Some(receipt)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_distance_and_clearance_handle_degenerate_and_short_inputs() {
+        let p = Vec2::new(3.0, 4.0);
+        let q = Vec2::new(0.0, 0.0);
+        assert_eq!(point_distance(p, q, q), 5.0);
+
+        let ring = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(100.0, 0.0),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(0.0, 100.0),
+        ];
+        let mut work = 0;
+        assert!(clearance(&[], &ring, 1.0, &mut work).is_err());
+        assert!(clearance(&[Vec2::new(50.0, 50.0)], &ring, 1.0, &mut work).is_err());
+        assert!(
+            clearance(
+                &[Vec2::new(10.0, 10.0), Vec2::new(20.0, 10.0)],
+                &ring[..2],
+                1.0,
+                &mut work
+            )
+            .is_err()
+        );
+
+        // Degenerate zero-length stitch chord and ring edge must still report exact distance.
+        let deg_ring = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(100.0, 0.0),
+            Vec2::new(100.0, 0.0),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(0.0, 100.0),
+        ];
+        let c = clearance(
+            &[Vec2::new(20.0, 10.0), Vec2::new(20.0, 10.0)],
+            &deg_ring,
+            5.0,
+            &mut work,
+        )
+        .unwrap();
+        assert!((c - 10.0).abs() < 1e-12);
+
+        // Non-finite station coordinates must be refused rather than swallowed by f64::min.
+        assert!(
+            clearance(
+                &[Vec2::new(20.0, 10.0), Vec2::new(f64::NAN, 10.0)],
+                &ring,
+                5.0,
+                &mut work
+            )
+            .is_err()
+        );
     }
 }

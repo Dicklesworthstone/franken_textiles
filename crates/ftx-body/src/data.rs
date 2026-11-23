@@ -342,7 +342,7 @@ impl AnnyData {
             let ok = if j == 0 {
                 p == -1
             } else {
-                p >= 0 && (p as usize) < j
+                usize::try_from(p).is_ok_and(|parent| parent < j)
             };
             if !ok {
                 return Err(bad(format!(
@@ -643,6 +643,116 @@ mod tests {
         );
         assert_eq!(
             AnnyData::from_bytes(&zero_race_fixed, false)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+    }
+
+    #[test]
+    fn from_bytes_refuses_u32_truncating_bone_parent_index() {
+        let build_two_bone = |bone_parents: [i64; 2]| -> Vec<u8> {
+            let mut payload = Vec::new();
+            let mut arrays = serde_json::Map::new();
+            let mut push_arr = |name: &str, dtype: &str, shape: Vec<usize>, bytes: &[u8]| {
+                let offset = payload.len() as u64;
+                payload.extend_from_slice(bytes);
+                arrays.insert(
+                    name.into(),
+                    json!({
+                        "dtype": dtype,
+                        "shape": shape,
+                        "offset": offset,
+                        "nbytes": bytes.len() as u64,
+                        "sha256": ""
+                    }),
+                );
+            };
+            let u32_bytes =
+                |xs: &[u32]| -> Vec<u8> { xs.iter().flat_map(|x| x.to_le_bytes()).collect() };
+            let f64_bytes =
+                |xs: &[f64]| -> Vec<u8> { xs.iter().flat_map(|x| x.to_le_bytes()).collect() };
+            let eye = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+            let two_eyes: Vec<f64> = eye.into_iter().chain(eye).collect();
+            push_arr("blendshape_row_ptr", "u32", vec![1], &u32_bytes(&[0]));
+            push_arr("bone_rolls", "f64", vec![2, 3, 3], &f64_bytes(&two_eyes));
+            push_arr(
+                "template_vertices",
+                "f64",
+                vec![1, 3],
+                &f64_bytes(&[0.0, 0.0, 0.0]),
+            );
+            push_arr("faces", "u32", vec![0, 3], &[]);
+            push_arr("blendshape_vertex", "u32", vec![0], &[]);
+            push_arr("blendshape_delta", "f64", vec![0, 3], &[]);
+            push_arr("phenotype_mask", "u8", vec![0, 26], &[]);
+            push_arr(
+                "template_bone_heads",
+                "f64",
+                vec![2, 3],
+                &f64_bytes(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            );
+            push_arr(
+                "template_bone_tails",
+                "f64",
+                vec![2, 3],
+                &f64_bytes(&[0.0, 1.0, 0.0, 0.0, 2.0, 0.0]),
+            );
+            push_arr("bone_heads_blendshapes", "f64", vec![0, 2, 3], &[]);
+            push_arr("bone_tails_blendshapes", "f64", vec![0, 2, 3], &[]);
+            push_arr("vertex_bone_indices", "u32", vec![1, 1], &u32_bytes(&[0]));
+            push_arr("vertex_bone_weights", "f64", vec![1, 1], &f64_bytes(&[1.0]));
+            push_arr("base_mesh_vertex_indices", "u32", vec![1], &u32_bytes(&[0]));
+
+            let components: Vec<Value> =
+                (0..26).map(|i| json!(["race", format!("c{i}")])).collect();
+            let header = json!({
+                "schema": "ftxbody/1",
+                "model": "anny",
+                "anny_version": "0.6.1",
+                "configuration": "synthetic",
+                "licence": "synthetic",
+                "package_sha256": {},
+                "counts": {
+                    "vertices": 1,
+                    "faces": 0,
+                    "bones": 2,
+                    "blendshapes": 0,
+                    "phenotype_blendshapes": 0,
+                    "local_changes": 0,
+                    "influences": 1
+                },
+                "phenotype": {
+                    "features": ["race"],
+                    "components": components,
+                    "anchors": {},
+                    "exposed": [],
+                    "fixed_value": 0.5
+                },
+                "labels": {
+                    "blendshapes": [],
+                    "bones": ["root", "child"],
+                    "bone_parents": bone_parents,
+                    "local_changes": []
+                },
+                "y_axis": [0.0, 1.0, 0.0],
+                "degenerate_rotation": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                "waist_loop_final": [0],
+                "arrays": Value::Object(arrays)
+            });
+            pack_ftxbody(&header, &payload)
+        };
+
+        assert!(AnnyData::from_bytes(&build_two_bone([-1, 0]), false).is_ok());
+        // 1 << 32 truncates to 0 under `p as usize` on 32-bit wasm32; must always be refused.
+        assert_eq!(
+            AnnyData::from_bytes(&build_two_bone([-1, 1i64 << 32]), false)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            AnnyData::from_bytes(&build_two_bone([-1, -1]), false)
                 .unwrap_err()
                 .code,
             RefusalCode::InvalidDocument
