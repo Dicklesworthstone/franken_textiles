@@ -310,10 +310,7 @@ impl<'a> Ctx<'a> {
         let lay = shelf_layout(&geoms, 15.0, 10.0, self.opts.layout_width, false, true, 0.0);
         if !lay.width.is_finite()
             || !lay.height.is_finite()
-            || lay
-                .items
-                .iter()
-                .any(|g| g.cut.iter().chain(&g.sew).any(|p| !p.is_finite()))
+            || lay.items.iter().any(Geom::has_non_finite)
         {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,

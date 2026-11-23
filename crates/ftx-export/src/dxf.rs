@@ -141,6 +141,9 @@ fn astm_notch_layer(kind: &str) -> &'static str {
 }
 
 fn r12_polyline(d: &mut Dxf, layer: &str, pts: &[(f64, f64)], closed: bool) {
+    if pts.is_empty() {
+        return;
+    }
     d.pair(0, "POLYLINE");
     d.pair(8, layer);
     d.int(66, 1);
@@ -247,6 +250,12 @@ pub fn export_dxf_astm(
             )
         })?;
         let g = ctx.geom(Source::Instance(inst), 10.0)?;
+        if g.has_non_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("{}: non-finite piece geometry in DXF export", g.iid),
+            ));
+        }
         let b = &mut blocks;
         b.pair(0, "BLOCK");
         b.pair(8, "0");
@@ -531,10 +540,13 @@ impl Handles {
 pub fn export_flat_dxf(ctx: &Ctx) -> Result<(String, String, PyJson), Refusal> {
     let geoms = ctx.instance_geoms(8.0)?;
     let lay = shelf_layout(&geoms, 20.0, 10.0, None, true, false, 0.0);
-    if !lay.width.is_finite() || !lay.height.is_finite() {
+    if !lay.width.is_finite()
+        || !lay.height.is_finite()
+        || lay.items.iter().any(Geom::has_non_finite)
+    {
         return Err(Refusal::new(
             RefusalCode::NonFinite,
-            "flat DXF layout dimensions are not finite",
+            "flat DXF layout dimensions or geometry are not finite",
         ));
     }
     let mut h = Handles(0x1F);
@@ -916,5 +928,12 @@ mod tests {
         let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
         let err = export_dxf_astm(&ctx, &PyJson::Dict(Vec::new()), true).unwrap_err();
         assert_eq!(err.code, RefusalCode::InvalidDocument);
+
+        let mut empty_poly = Dxf::default();
+        r12_polyline(&mut empty_poly, "8", &[], false);
+        assert!(
+            empty_poly.out.is_empty(),
+            "r12_polyline must not emit a 0-vertex POLYLINE entity"
+        );
     }
 }

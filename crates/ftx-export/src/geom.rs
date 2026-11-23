@@ -221,6 +221,44 @@ impl Geom {
             |(a, b, c, d), p| (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)),
         )
     }
+
+    /// True if any exported coordinate or dimension on this piece is `NaN` or infinite.
+    ///
+    /// Needed in addition to [`Self::bbox`] because IEEE-754 `f64::min`/`f64::max` silently
+    /// discard `NaN` coordinates when finite points are also present.
+    #[must_use]
+    pub fn has_non_finite(&self) -> bool {
+        let pts_bad = |pts: &[Vec2]| pts.iter().any(|p| !p.is_finite());
+        pts_bad(&self.cut)
+            || pts_bad(&self.sew)
+            || self.notches.iter().any(|n| {
+                !n.base.is_finite()
+                    || !n.inward.is_finite()
+                    || !n.tangent.is_finite()
+                    || !n.depth.is_finite()
+                    || !n.width.is_finite()
+                    || !n.sew_point.is_finite()
+                    || n.marks.iter().any(|mk| pts_bad(mk))
+            })
+            || self
+                .grain
+                .is_some_and(|(a, b)| !a.is_finite() || !b.is_finite())
+            || self.fold_lines.iter().any(|(pts, _)| pts_bad(pts))
+            || self.internal_draw.iter().any(|(pts, _)| pts_bad(pts))
+            || self.internal_cut.iter().any(|(pts, _)| pts_bad(pts))
+            || self
+                .drills
+                .iter()
+                .any(|&(p, d)| !p.is_finite() || !d.is_finite())
+            || self
+                .labels
+                .iter()
+                .any(|lb| !lb.p.is_finite() || !lb.size.is_finite())
+            || self
+                .decor
+                .iter()
+                .any(|d| !d.width.is_finite() || pts_bad(&d.pts))
+    }
 }
 
 /// An affine map `P ↦ A·P + b`.
@@ -1379,5 +1417,17 @@ mod tests {
             ctx.geom(Source::Piece(0), f64::NAN).unwrap_err().code,
             RefusalCode::InvalidDocument
         );
+
+        // `bbox()` uses f64::min/max which absorb NaN; `has_non_finite()` must catch NaN anywhere.
+        assert!(!g.has_non_finite());
+        let mut bad_cut = g.clone();
+        bad_cut.cut.push(Vec2::new(f64::NAN, 10.0));
+        let (x0, y0, x1, y1) = bad_cut.bbox();
+        assert!([x0, y0, x1, y1].iter().all(|v| v.is_finite()));
+        assert!(bad_cut.has_non_finite());
+
+        let mut bad_drill = g.clone();
+        bad_drill.drills.push((Vec2::new(10.0, f64::INFINITY), 3.0));
+        assert!(bad_drill.has_non_finite());
     }
 }

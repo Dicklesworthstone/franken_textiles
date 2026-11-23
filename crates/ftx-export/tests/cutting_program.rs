@@ -803,8 +803,6 @@ fn drill_source_geometry_and_process_failures_preserve_the_ordinary_roll_marker(
     for drills in [
         json!([{"p":[10,10]}]),
         json!([{"p":[10,10],"d":null}]),
-        json!([{"p":[10,10],"d":"unknown"}]),
-        json!([{"p":[10,10],"d":0}]),
         json!([{"p":[10,10],"d":3}]),
         json!([{"p":[1,10],"d":2}]), // Whole hole touches the exterior, although its centre is inside.
         json!([{"p":[10,10],"d":2},{"p":[11,10],"d":2}]),
@@ -816,6 +814,23 @@ fn drill_source_geometry_and_process_failures_preserve_the_ordinary_roll_marker(
             process_refusal(&Pattern::new(raw), &opts).code,
             ftx_core::RefusalCode::InvalidDocument
         );
+    }
+    // Explicitly invalid drill diameters are refused by piece geometry itself, even on an ordinary
+    // roll marker without a cutting program.
+    for drills in [
+        json!([{"p":[10,10],"d":"unknown"}]),
+        json!([{"p":[10,10],"d":0}]),
+    ] {
+        let mut raw = p.raw().clone();
+        raw["pieces"][0]["drills"] = drills;
+        let pat = Pattern::new(raw);
+        let mut ordinary_opts = opts.clone();
+        ordinary_opts.program = None;
+        for o in [&opts, &ordinary_opts] {
+            let err = CutPlan::build(&pat, o).unwrap_err();
+            assert_eq!(err.code, ftx_core::RefusalCode::InvalidDocument);
+            assert!(err.message.contains("drill diameter"), "{err}");
+        }
     }
     for internal in [
         json!([{"kind":"cut","closed":false,"pts":[[5,10],[15,10]]}]),
