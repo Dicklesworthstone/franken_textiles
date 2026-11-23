@@ -246,6 +246,9 @@ pub(super) fn image_jacobian(
     let result = std::array::from_fn(|r| {
         std::array::from_fn(|c| j[r][0] * lens[0][c] + j[r][1] * lens[1][c])
     });
+    if !result.iter().flatten().all(|v| v.is_finite()) {
+        return Err(degenerate("image Jacobian overflow"));
+    }
     Ok(result)
 }
 
@@ -259,12 +262,21 @@ pub(super) fn plane_scale_in_image(
     size: Point,
     intrinsics: Option<&Intrinsics>,
 ) -> Result<PlaneScale, Refusal> {
+    if !size.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return Err(degenerate(
+            "reference sheet dimensions must be finite and positive",
+        ));
+    }
     let inv = h.inverse()?;
     let image_point = |q| distort_point(inv.map(q)?, intrinsics);
     let centre = image_point([size[0] / 2.0, size[1] / 2.0])?;
     let scale = |p| -> Result<f64, Refusal> {
         let j = image_jacobian(h, p, intrinsics)?;
-        Ok((j[0][0] * j[1][1] - j[0][1] * j[1][0]).abs().sqrt())
+        let s = (j[0][0] * j[1][1] - j[0][1] * j[1][0]).abs().sqrt();
+        if !s.is_finite() || s <= 0.0 {
+            return Err(degenerate("sheet is edge-on or has unusable scale"));
+        }
+        Ok(s)
     };
     let j = image_jacobian(h, centre, intrinsics)?;
     let a = j[0][0] * j[0][0] + j[0][1] * j[0][1];
@@ -311,6 +323,14 @@ pub(super) fn rectangle_residual(
     size: Point,
     image: Point,
 ) -> Result<(f64, f64), Refusal> {
+    if !image.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return Err(degenerate("image dimensions must be finite and positive"));
+    }
+    if !size.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return Err(degenerate(
+            "reference sheet dimensions must be finite and positive",
+        ));
+    }
     let centred: Vec<Point> = corners
         .iter()
         .map(|p| [p[0] - (image[0] - 1.0) / 2.0, p[1] - (image[1] - 1.0) / 2.0])
@@ -411,5 +431,11 @@ mod tests {
         assert!(s.variation < 1e-12 && s.tilt < 1e-5);
         let (rr, _) = rectangle_residual(&p, [210.0, 297.0], [1500.0, 2000.0]).unwrap();
         assert!((rr - 0.088796).abs() < 1e-6, "{rr}");
+
+        assert!(plane_scale(&h, [0.0, 279.4]).is_err());
+        assert!(plane_scale(&h, [-215.9, 279.4]).is_err());
+        assert!(plane_scale(&h, [f64::NAN, 279.4]).is_err());
+        assert!(rectangle_residual(&p, [210.0, 297.0], [0.0, 2000.0]).is_err());
+        assert!(rectangle_residual(&p, [210.0, 297.0], [-1500.0, 2000.0]).is_err());
     }
 }

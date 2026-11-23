@@ -415,6 +415,9 @@ fn weighted_line(points: &[Point], weights: &[f64]) -> Option<Line> {
         return None;
     }
     let sum: f64 = weights.iter().sum();
+    if !sum.is_finite() || sum <= 0.0 {
+        return None;
+    }
     let p: Point = std::array::from_fn(|k| {
         points
             .iter()
@@ -422,6 +425,9 @@ fn weighted_line(points: &[Point], weights: &[f64]) -> Option<Line> {
             .map(|(p, w)| p[k] * w / sum)
             .sum()
     });
+    if !p[0].is_finite() || !p[1].is_finite() {
+        return None;
+    }
     let (mut xx, mut xy, mut yy) = (0.0, 0.0, 0.0);
     for (&q, &w) in points.iter().zip(weights) {
         let d = sub(q, p);
@@ -429,7 +435,7 @@ fn weighted_line(points: &[Point], weights: &[f64]) -> Option<Line> {
         xy += w * d[0] * d[1];
         yy += w * d[1] * d[1];
     }
-    if xx + yy <= 1e-12 {
+    if !xx.is_finite() || !xy.is_finite() || !yy.is_finite() || xx + yy <= 1e-12 {
         return None;
     }
     let (s, c) = det::sin_cos(0.5 * det::atan2(2.0 * xy, xx - yy));
@@ -492,19 +498,27 @@ fn refine(g: &Raster, q: [Point; 4], half: usize) -> Option<Refined> {
                 continue;
             }
             let offset = (k + 1) as f64 - half as f64 + 0.5 * (g0 - g2) / den;
-            let width = step
-                / ((2.0 * std::f64::consts::PI).sqrt() * (g1 - (g0 - g2).powi(2) / (8.0 * den)));
+            let peak = g1 - (g0 - g2).powi(2) / (8.0 * den);
             rows.push((
                 [base[0] + offset * n[0], base[1] + offset * n[1]],
                 g1,
-                width,
+                step,
+                peak,
             ));
         }
         if rows.len() < need {
             return None;
         }
-        let threshold = 0.35 * percentile(&rows.iter().map(|r| r.1).collect::<Vec<_>>(), 0.75);
-        rows.retain(|r| r.1 > threshold);
+        // Spec 02 A.11: keep rows with g1 > 0.35 * max(P75(g1), 0) so non-positive interior
+        // bumps can never pass or produce negative/infinite blur widths.
+        let threshold =
+            0.35 * percentile(&rows.iter().map(|r| r.1).collect::<Vec<_>>(), 0.75).max(0.0);
+        rows.retain(|r| {
+            r.1 > threshold
+                && r.3.is_finite()
+                && r.3 > 0.0
+                && (r.2 / ((2.0 * std::f64::consts::PI).sqrt() * r.3)).is_finite()
+        });
         let points: Vec<_> = rows.iter().map(|r| r.0).collect();
         let mut line = line_fit(&points)?;
         for _ in 0..20 {
@@ -527,8 +541,9 @@ fn refine(g: &Raster, q: [Point; 4], half: usize) -> Option<Refined> {
         }
         for (row, r) in rows.iter().zip(residuals) {
             if r <= (3.0 * scatter).max(0.5) {
+                let width = row.2 / ((2.0 * std::f64::consts::PI).sqrt() * row.3);
                 edges[i].push(row.0);
-                widths.push(row.2);
+                widths.push(width);
             }
         }
         if edges[i].len() < need {
@@ -681,4 +696,42 @@ pub fn analyze_plain_sheet(
         };
     }
     Ok(scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refine_rejects_negative_interior_gradient_bumps_with_boundary_step() {
+        // Construct a synthetic raster where all four edges of a quad see a sharp bright-to-dark
+        // drop only at the inner profile boundary (offset <= -half + 1), followed by a gently
+        // rising dark exterior whose interior central differences are negative with a tiny local
+        // bump (g0 < g1 < 0, g2 < g1). Spec 02 A.11 requires g1 > 0.35 * max(P75(g1), 0), so
+        // such non-positive bumps must be rejected instead of producing negative/infinite widths.
+        let (w, h) = (120usize, 120usize);
+        let mut data = vec![0.0_f64; w * h];
+        // Profile along outward normal from box [30..90]x[30..90] with half = 8:
+        // Distance d = max(|x-60|, |y-60|) - 30 in [-8..+8]:
+        //   d <= -7: 220 (bright interior -> step >= 20)
+        //   d in -6..=8: rising gently from 0 to 28 with a small dip/bump at d=0 so g1 < 0
+        for y in 0..h {
+            for x in 0..w {
+                let d = (x as f64 - 60.0).abs().max((y as f64 - 60.0).abs()) - 30.0;
+                data[y * w + x] = if d <= -7.0 {
+                    220.0
+                } else if d <= 0.0 {
+                    2.0 * (d + 7.0)
+                } else {
+                    14.0 + 0.5 * d + 0.25 * d * d
+                };
+            }
+        }
+        let g = Raster { w, h, data };
+        let q = [[30.0, 30.0], [90.0, 30.0], [90.0, 90.0], [30.0, 90.0]];
+        assert!(
+            refine(&g, q, 8).is_none(),
+            "negative interior gradient bumps must not pass refine"
+        );
+    }
 }
