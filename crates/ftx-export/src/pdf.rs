@@ -796,8 +796,22 @@ fn poly_rect_distance(poly: &[Vec2], lo: Vec2, hi: Vec2) -> f64 {
 /// 0.01 mm).
 #[must_use]
 pub fn tile_grid(lay: &Layout, paper: &Paper) -> (usize, usize, Vec<Tile>) {
-    let cols = ((lay.width / paper.fw - 1e-9).ceil() as usize).max(1);
-    let rows = ((lay.height / paper.fh - 1e-9).ceil() as usize).max(1);
+    if !lay.width.is_finite()
+        || !lay.height.is_finite()
+        || !paper.fw.is_finite()
+        || !paper.fh.is_finite()
+        || paper.fw <= 0.0
+        || paper.fh <= 0.0
+    {
+        return (0, 0, Vec::new());
+    }
+    let cols_f = (lay.width / paper.fw - 1e-9).ceil();
+    let rows_f = (lay.height / paper.fh - 1e-9).ceil();
+    if !cols_f.is_finite() || !rows_f.is_finite() {
+        return (0, 0, Vec::new());
+    }
+    let cols = (cols_f as usize).max(1);
+    let rows = (rows_f as usize).max(1);
     let mut tiles = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
@@ -832,7 +846,13 @@ fn tile_map(
     (x, y, bw, bh): (f64, f64, f64, f64),
     ts: f64,
 ) {
+    if cols == 0 || rows == 0 || !paper.fw.is_finite() || paper.fw <= 0.0 || !paper.fh.is_finite() || paper.fh <= 0.0 {
+        return;
+    }
     let s = (bw / (cols as f64 * paper.fw)).min(bh / (rows as f64 * paper.fh));
+    if !s.is_finite() || s <= 0.0 {
+        return;
+    }
     cv.save();
     cv.raw(format!("1 0 0 1 {} {} cm", fnum(x, 3), fnum(y, 3)));
     cv.width(0.25);
@@ -1219,28 +1239,30 @@ fn tiles_doc(
             let (fx, fy, fw, fh) = (paper.fx, paper.fy, paper.fw, paper.fh);
             let sides = [
                 (
-                    (c + 1, Some(r)),
+                    (c.checked_add(1), Some(r)),
                     Vec2::new(fx + fw, fy + fh / 2.0),
                     Vec2::new(-1.0, 0.0),
                 ),
                 (
-                    (c.wrapping_sub(1), Some(r)),
+                    (c.checked_sub(1), Some(r)),
                     Vec2::new(fx, fy + fh / 2.0),
                     Vec2::new(1.0, 0.0),
                 ),
                 (
-                    (c, r.checked_sub(1)),
+                    (Some(c), r.checked_sub(1)),
                     Vec2::new(fx + fw / 2.0, fy),
                     Vec2::new(0.0, 1.0),
                 ),
                 (
-                    (c, Some(r + 1)),
+                    (Some(c), r.checked_add(1)),
                     Vec2::new(fx + fw / 2.0, fy + fh),
                     Vec2::new(0.0, -1.0),
                 ),
             ];
             for ((nc, nr), mid, inward) in sides {
-                let Some(nr) = nr else { continue };
+                let (Some(nc), Some(nr)) = (nc, nr) else {
+                    continue;
+                };
                 if !exists.contains(&(nc, nr)) {
                     continue;
                 }
@@ -1336,7 +1358,12 @@ fn entry(kind: &str, file: &str, paper_mm: [f64; 2], meta: &Value) -> Value {
 /// As [`Ctx::master`].
 pub fn export_tiled(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
     let lay = ctx.master()?;
-    if lay.items.is_empty() {
+    if lay.items.is_empty()
+        || !lay.width.is_finite()
+        || !lay.height.is_finite()
+        || lay.width <= 0.0
+        || lay.height <= 0.0
+    {
         return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
             "tiled PDF layout has no cut geometry",
@@ -1364,7 +1391,12 @@ pub fn export_tiled(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
 /// As [`Ctx::master`].
 pub fn export_copyshop(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
     let lay = ctx.master()?;
-    if lay.items.is_empty() {
+    if lay.items.is_empty()
+        || !lay.width.is_finite()
+        || !lay.height.is_finite()
+        || lay.width <= 0.0
+        || lay.height <= 0.0
+    {
         return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
             "copy-shop PDF layout has no cut geometry",
@@ -1473,8 +1505,16 @@ pub fn export_projector(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
         })?;
         let mut g = ctx.geom(Source::Instance(inst), 17.0)?;
         g.labels.retain(|lb| lb.kind != "internal");
-        let lines = &g.labels[0].lines;
-        g.labels[0].lines = vec![lines[0].clone(), lines[2].clone()];
+        if let Some(first) = g.labels.first_mut() {
+            let mut kept = Vec::new();
+            if let Some(l0) = first.lines.first() {
+                kept.push(l0.clone());
+            }
+            if let Some(l2) = first.lines.get(2) {
+                kept.push(l2.clone());
+            }
+            first.lines = kept;
+        }
         geoms.push(g);
     }
     let mut lay = shelf_layout(&geoms, 50.0, 0.0, Some(width - 2.0 * side), true, true, 0.0);
@@ -1484,7 +1524,7 @@ pub fn export_projector(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
     };
     lay.items = lay.items.iter().map(|g| g.transform(&shift)).collect();
     let h = head + lay.height + foot;
-    if h >= 200.0 * INCH || width >= 200.0 * INCH {
+    if !h.is_finite() || h >= 200.0 * INCH || width >= 200.0 * INCH {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
             format!(
@@ -1666,5 +1706,32 @@ mod tests {
             export_projector(&empty_ctx).unwrap_err().code,
             RefusalCode::DegenerateGeometry
         );
+
+        let non_finite_width = Ctx::new(
+            &pat,
+            ExportOptions {
+                projector_width: f64::NAN,
+                ..ExportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            export_projector(&non_finite_width).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+
+        let lay = ctx.master().unwrap();
+        let zero_paper = Paper {
+            fw: 0.0,
+            ..Paper::a4()
+        };
+        assert_eq!(tile_grid(lay, &zero_paper), (0, 0, Vec::new()));
+        let bad_lay = Layout {
+            items: Vec::new(),
+            width: f64::INFINITY,
+            height: 100.0,
+            model: Vec::new(),
+        };
+        assert_eq!(tile_grid(&bad_lay, &Paper::a4()), (0, 0, Vec::new()));
     }
 }
