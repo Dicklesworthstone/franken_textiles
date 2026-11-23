@@ -89,13 +89,21 @@ pub struct PosableBody {
     display: Surface,
 }
 
-fn bytes_of<'a>(header: &Header, data: &'a [u8], name: &str, dtype: &str) -> Result<&'a [u8], String> {
+fn bytes_of<'a>(
+    header: &Header,
+    data: &'a [u8],
+    name: &str,
+    dtype: &str,
+) -> Result<&'a [u8], String> {
     let entry = header
         .arrays
         .get(name)
         .ok_or_else(|| format!("posable body: array {name} is missing"))?;
     if entry.dtype != dtype {
-        return Err(format!("posable body: array {name} is {}, not {dtype}", entry.dtype));
+        return Err(format!(
+            "posable body: array {name} is {}, not {dtype}",
+            entry.dtype
+        ));
     }
     entry
         .count
@@ -107,39 +115,55 @@ fn bytes_of<'a>(header: &Header, data: &'a [u8], name: &str, dtype: &str) -> Res
 
 fn floats(header: &Header, data: &[u8], name: &str) -> Result<Vec<f64>, String> {
     let values: Vec<f64> = bytes_of(header, data, name, "f32")?
-        .chunks_exact(4)
-        .map(|b| f64::from(f32::from_le_bytes([b[0], b[1], b[2], b[3]])))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&b| f64::from(f32::from_le_bytes(b)))
         .collect();
     if values.iter().all(|v| v.is_finite()) {
         Ok(values)
     } else {
-        Err(format!("posable body: array {name} holds a non-finite value"))
+        Err(format!(
+            "posable body: array {name} holds a non-finite value"
+        ))
     }
 }
 
 fn indices(header: &Header, data: &[u8], name: &str, below: usize) -> Result<Vec<usize>, String> {
     bytes_of(header, data, name, "u32")?
-        .chunks_exact(4)
-        .map(|b| {
-            let index = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
-            (index < below)
-                .then_some(index)
-                .ok_or_else(|| format!("posable body: array {name} indexes vertex {index} of {below}"))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&b| {
+            let index = u32::from_le_bytes(b) as usize;
+            (index < below).then_some(index).ok_or_else(|| {
+                format!("posable body: array {name} indexes vertex {index} of {below}")
+            })
         })
         .collect()
 }
 
 fn points(values: &[f64], name: &str) -> Result<Vec<Vec3>, String> {
-    if values.len() % 3 != 0 {
-        return Err(format!("posable body: array {name} is not a list of xyz triples"));
+    if !values.len().is_multiple_of(3) {
+        return Err(format!(
+            "posable body: array {name} is not a list of xyz triples"
+        ));
     }
     Ok(values
-        .chunks_exact(3)
-        .map(|p| Vec3::new(p[0], p[1], p[2]))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|&[x, y, z]| Vec3::new(x, y, z))
         .collect())
 }
 
-fn arm(header: &Header, data: &[u8], stem: &str, vertices: usize, samples: usize) -> Result<Arm, String> {
+fn arm(
+    header: &Header,
+    data: &[u8],
+    stem: &str,
+    vertices: usize,
+    samples: usize,
+) -> Result<Arm, String> {
     let moved = indices(header, data, &format!("{stem}_indices"), vertices)?;
     let name = format!("{stem}_offsets");
     let all = points(&floats(header, data, &name)?, &name)?;
@@ -153,7 +177,9 @@ fn arm(header: &Header, data: &[u8], stem: &str, vertices: usize, samples: usize
     let offsets = if moved.is_empty() {
         vec![Vec::new(); samples]
     } else {
-        all.chunks_exact(moved.len()).map(<[Vec3]>::to_vec).collect()
+        all.chunks_exact(moved.len())
+            .map(<[Vec3]>::to_vec)
+            .collect()
     };
     Ok(Arm {
         indices: moved,
@@ -166,11 +192,13 @@ fn surface(header: &Header, data: &[u8], stem: &str, samples: usize) -> Result<S
     let base = points(&floats(header, data, &name)?, &name)?;
     let name = format!("{stem}_triangles");
     let corners = indices(header, data, &name, base.len())?;
-    if base.is_empty() || corners.is_empty() || corners.len() % 3 != 0 {
-        return Err(format!("posable body: the {stem} surface is empty or its triangles are incomplete"));
+    if base.is_empty() || corners.is_empty() || !corners.len().is_multiple_of(3) {
+        return Err(format!(
+            "posable body: the {stem} surface is empty or its triangles are incomplete"
+        ));
     }
     Ok(Surface {
-        triangles: corners.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
+        triangles: corners.as_chunks::<3>().0.to_vec(),
         left: arm(header, data, &format!("left_{stem}"), base.len(), samples)?,
         right: arm(header, data, &format!("right_{stem}"), base.len(), samples)?,
         base,
@@ -184,9 +212,13 @@ impl PosableBody {
     /// Another schema, a missing or misdeclared array, an index out of range, a non-finite number, or arm
     /// angles that are not increasing or do not include the base angle.
     pub fn parse(header: &str, data: &[u8]) -> Result<Self, String> {
-        let header: Header = serde_json::from_str(header).map_err(|e| format!("posable body header: {e}"))?;
+        let header: Header =
+            serde_json::from_str(header).map_err(|e| format!("posable body header: {e}"))?;
         if header.schema != SCHEMA {
-            return Err(format!("posable body: schema {} is not {SCHEMA}", header.schema));
+            return Err(format!(
+                "posable body: schema {} is not {SCHEMA}",
+                header.schema
+            ));
         }
         let angles = header.arm_angles_deg.clone();
         let increasing = angles.windows(2).all(|pair| pair[0] < pair[1]);
@@ -195,7 +227,10 @@ impl PosableBody {
             || angles.iter().any(|a| !(0.0..=180.0).contains(a))
             || !angles.contains(&header.base_arm_deg)
         {
-            return Err("posable body: arm angles must increase within 0–180° and include the base angle".into());
+            return Err(
+                "posable body: arm angles must increase within 0–180° and include the base angle"
+                    .into(),
+            );
         }
         let vector = |v: [f64; 3]| Vec3::new(v[0], v[1], v[2]);
         let mut frames = BTreeMap::new();
@@ -214,7 +249,10 @@ impl PosableBody {
                 return Err(format!("posable body: the {part} frame is not finite"));
             }
             frames.insert(part.clone(), frame);
-            radius.insert(part.clone(), floats(&header, data, &format!("radius_{part}"))?);
+            radius.insert(
+                part.clone(),
+                floats(&header, data, &format!("radius_{part}"))?,
+            );
         }
         if !header.radius_h0_mm.is_finite()
             || header
@@ -368,7 +406,9 @@ pub struct Session {
 }
 
 fn flat(points: &[Vec3]) -> impl Iterator<Item = f32> + '_ {
-    points.iter().flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+    points
+        .iter()
+        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
 }
 
 impl Session {
@@ -470,7 +510,12 @@ impl Session {
             "arm_range_deg": [low, high],
             "report": run.report,
         });
-        let replay = run.fold.frames.iter().flat_map(|frame| flat(frame)).collect();
+        let replay = run
+            .fold
+            .frames
+            .iter()
+            .flat_map(|frame| flat(frame))
+            .collect();
         Ok(Self {
             body,
             scene: run.scene,
@@ -557,12 +602,19 @@ impl Session {
     /// # Errors
     /// Non-finite angles, a duration outside (0, 2] s, and every refusal of the moving-body step. On any
     /// error the session is exactly where it was.
-    pub fn advance(&mut self, left_deg: f64, right_deg: f64, seconds: f64) -> Result<Vec<f32>, String> {
+    pub fn advance(
+        &mut self,
+        left_deg: f64,
+        right_deg: f64,
+        seconds: f64,
+    ) -> Result<Vec<f32>, String> {
         if !left_deg.is_finite() || !right_deg.is_finite() {
             return Err("arm angles must be finite".into());
         }
         if !seconds.is_finite() || seconds <= 0.0 || seconds > MAX_MOVE_S {
-            return Err(format!("a move lasts more than 0 and at most {MAX_MOVE_S} s"));
+            return Err(format!(
+                "a move lasts more than 0 and at most {MAX_MOVE_S} s"
+            ));
         }
         let (low, high) = self.body.arm_range();
         let (left, right) = (left_deg.clamp(low, high), right_deg.clamp(low, high));
@@ -570,7 +622,8 @@ impl Session {
         let report = advance_body(&mut self.scene.solver, &target, seconds, self.motion)
             .map_err(|refusal| refusal.to_string())?;
         self.arms = [left, right];
-        let mut samples = Vec::with_capacity(report.samples.len() * (1 + 3 * self.scene.weld.len()));
+        let mut samples =
+            Vec::with_capacity(report.samples.len() * (1 + 3 * self.scene.weld.len()));
         for sample in &report.samples {
             samples.push(sample.time_s as f32);
             for &welded in &self.scene.weld {
@@ -587,7 +640,8 @@ mod tests {
     use super::*;
     use ftx_core::det;
 
-    const PATTERN: &str = include_str!("../../../tests/fixtures/materials/synthetic-scenario-pattern.json");
+    const PATTERN: &str =
+        include_str!("../../../tests/fixtures/materials/synthetic-scenario-pattern.json");
     const RING: usize = 16;
 
     // A cylinder of radius 30 mm for a body. Its "left arm" is the whole cylinder, carried `shift_m` along x
@@ -608,7 +662,10 @@ mod tests {
         let mut data = Vec::new();
         let mut arrays = serde_json::Map::new();
         let mut put_floats = |name: &str, values: &[f64], data: &mut Vec<u8>| {
-            arrays.insert(name.into(), json!({"dtype": "f32", "offset": data.len(), "count": values.len()}));
+            arrays.insert(
+                name.into(),
+                json!({"dtype": "f32", "offset": data.len(), "count": values.len()}),
+            );
             for &v in values {
                 data.extend((v as f32).to_le_bytes());
             }
@@ -624,7 +681,10 @@ mod tests {
         }
         put_floats("radius_torso", &[30.0; 400], &mut data);
         let mut put_indices = |name: &str, values: &[usize], data: &mut Vec<u8>| {
-            arrays.insert(name.into(), json!({"dtype": "u32", "offset": data.len(), "count": values.len()}));
+            arrays.insert(
+                name.into(),
+                json!({"dtype": "u32", "offset": data.len(), "count": values.len()}),
+            );
             for &v in values {
                 data.extend((v as u32).to_le_bytes());
             }
@@ -671,8 +731,16 @@ mod tests {
         assert!((half[RING].x - base[RING].x - 0.002).abs() < 1e-7);
         assert!((full[RING].x - base[RING].x - 0.004).abs() < 1e-7);
         assert!((full[0].y - base[0].y).abs() < 1e-12 && (full[0].z - base[0].z).abs() < 1e-12);
-        assert_eq!(body.collision_at(35.0, 45.0), base, "the right arm moves nothing here");
-        assert_eq!(body.display_at(40.0, 35.0), half, "both surfaces are baked alike here");
+        assert_eq!(
+            body.collision_at(35.0, 45.0),
+            base,
+            "the right arm moves nothing here"
+        );
+        assert_eq!(
+            body.display_at(40.0, 35.0),
+            half,
+            "both surfaces are baked alike here"
+        );
         assert_eq!(
             body.display_at(f64::NAN, 35.0),
             base,
@@ -684,11 +752,22 @@ mod tests {
         assert_eq!(body.landmark_h("torso", "waist"), Some(20.0));
         assert_eq!(body.landmark_h("torso", "knee"), None);
 
-        assert!(PosableBody::parse(&header, &data[..data.len() - 8]).is_err(), "truncated data");
+        assert!(
+            PosableBody::parse(&header, &data[..data.len() - 8]).is_err(),
+            "truncated data"
+        );
         let other = header.replace(SCHEMA, "ftx-posable-body/2");
-        assert!(PosableBody::parse(&other, &data).unwrap_err().contains("schema"));
+        assert!(
+            PosableBody::parse(&other, &data)
+                .unwrap_err()
+                .contains("schema")
+        );
         let unordered = header.replace("[35.0,45.0]", "[45.0,35.0]");
-        assert!(PosableBody::parse(&unordered, &data).unwrap_err().contains("arm angles"));
+        assert!(
+            PosableBody::parse(&unordered, &data)
+                .unwrap_err()
+                .contains("arm angles")
+        );
     }
 
     #[test]
@@ -704,7 +783,10 @@ mod tests {
         assert_eq!(session.cloth_pattern_mm().len(), count * 2);
         let before = session.cloth();
         assert_eq!(before.len(), count * 3);
-        assert_eq!(&session.replay()[(frames - 1) * count * 3..], before.as_slice());
+        assert_eq!(
+            &session.replay()[(frames - 1) * count * 3..],
+            before.as_slice()
+        );
 
         // A refused request leaves the session exactly where it was.
         assert!(session.advance(f64::NAN, 35.0, 0.1).is_err());
@@ -714,19 +796,35 @@ mod tests {
 
         let samples = session.advance(45.0, 35.0, 0.25).unwrap();
         let stride = 1 + count * 3;
-        assert!(!samples.is_empty() && samples.len() % stride == 0);
+        assert!(!samples.is_empty() && samples.len().is_multiple_of(stride));
         let last = &samples[samples.len() - stride..];
-        assert!((last[0] - 0.25).abs() < 1e-6, "the last accepted substep ends the move");
+        assert!(
+            (last[0] - 0.25).abs() < 1e-6,
+            "the last accepted substep ends the move"
+        );
         assert_eq!(&last[1..], session.cloth().as_slice());
         assert_eq!(session.arms(), [45.0, 35.0]);
-        let mean_x = |cloth: &[f32]| cloth.chunks_exact(3).map(|p| f64::from(p[0])).sum::<f64>() / count as f64;
+        let mean_x = |cloth: &[f32]| {
+            cloth
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|p| f64::from(p[0]))
+                .sum::<f64>()
+                / count as f64
+        };
         let pushed = mean_x(&session.cloth()) - mean_x(&before);
-        assert!(pushed > 0.003, "the cylinder carried the band with it: {pushed} m");
+        assert!(
+            pushed > 0.003,
+            "the cylinder carried the band with it: {pushed} m"
+        );
         // The cloth stays outside the moved cylinder (a 16-sided prism: its faces lie inside the circle).
         let inradius = 0.03 * det::cos(std::f64::consts::PI / RING as f64);
         let outside = session
             .cloth()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .all(|p| (f64::from(p[0]) - 0.015).hypot(f64::from(p[1])) > inradius);
         assert!(outside);
     }
