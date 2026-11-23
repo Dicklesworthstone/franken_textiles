@@ -243,3 +243,63 @@ fn fixed_liquid_refuses_wrong_mass_bases_unqualified_retention_and_stale_wet_pro
             .is_err()
     );
 }
+
+#[test]
+fn fixed_liquid_refuses_stale_wet_membrane_damage_properties() {
+    let mut base = retained_liquid();
+    let wet = json!({"specimen_id":"synthetic-wet-coupon", "conditioning":"closed synthetic retained liquid",
+        "retained_liquid_kg_m2":"0.1"});
+    base["record"]
+        .as_object_mut()
+        .unwrap()
+        .remove("membrane_relaxation");
+    base["record"]["structure"]["membrane_plasticity_model"] =
+        json!(ftx_pattern::material_membrane_plasticity::MODEL);
+    base["record"]["structure"]["membrane_damage_model"] =
+        json!(ftx_pattern::material_membrane_plasticity::DAMAGE_MODEL);
+    let props = base["record"]["properties"].as_object_mut().unwrap();
+    for (key, value, unit) in [
+        ("membrane_yield_warp", 40.0, "N/m"),
+        ("membrane_yield_weft", 40.0, "N/m"),
+        ("membrane_yield_shear", 20.0, "N/m"),
+        ("membrane_hardening_warp", 10.0, "N/m"),
+        ("membrane_hardening_weft", 10.0, "N/m"),
+        ("membrane_hardening_shear", 5.0, "N/m"),
+        ("membrane_strain_limit_warp", 0.2, "1"),
+        ("membrane_strain_limit_weft", 0.2, "1"),
+        ("membrane_strain_limit_shear", 0.2, "1"),
+        ("membrane_accumulation_limit_warp", 0.5, "1"),
+        ("membrane_accumulation_limit_weft", 0.5, "1"),
+        ("membrane_accumulation_limit_shear", 0.5, "1"),
+        ("membrane_damage_threshold", 0.01, "1"),
+        ("membrane_damage_rate", 4.0, "1"),
+        ("membrane_damage_limit", 0.5, "1"),
+    ] {
+        props.insert(
+            key.into(),
+            json!({"value": value, "unit": unit, "evidence": "estimate", "source": "test",
+                "method": "Synthetic wet plasticity/damage observation", "conditions": wet}),
+        );
+    }
+    let valid = resolve_liquid(base.clone());
+    assert!(valid.mechanics().is_ok());
+    assert!(valid.membrane_plasticity().unwrap().is_some());
+
+    for key in [
+        "membrane_damage_threshold",
+        "membrane_damage_rate",
+        "membrane_damage_limit",
+    ] {
+        let mut stale = base.clone();
+        stale["record"]["properties"][key]["conditions"]["retained_liquid_kg_m2"] = json!("0");
+        let resolved = resolve_liquid(stale);
+        assert!(
+            resolved
+                .mechanics()
+                .unwrap_err()
+                .message
+                .contains("wet mechanics"),
+            "{key} with dry retained_liquid_kg_m2 must be refused"
+        );
+    }
+}

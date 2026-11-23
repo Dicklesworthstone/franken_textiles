@@ -207,6 +207,7 @@ impl Material {
                 || key.starts_with("membrane_hardening_")
                 || key.starts_with("membrane_strain_limit_")
                 || key.starts_with("membrane_accumulation_limit_")
+                || key.starts_with("membrane_damage_")
             {
                 check(&q.conditions)?;
             }
