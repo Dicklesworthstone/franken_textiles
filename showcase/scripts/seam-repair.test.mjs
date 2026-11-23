@@ -105,18 +105,16 @@ test("seam repair studio matches native CLI for original, broken, and repaired s
     await page.locator('[data-metric="flat-status"]').filter({ hasText: /^CONVERGED/ }).waitFor({ timeout: 30000 });
     assert.equal(await flatStatus(), cli30.rep.status);
 
-    // Responsive check + WAI-ARIA tab keyboard check on homepage #visual-fitting
+    // Responsive check
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
 
+    // The two visual-fitting cases are told on the how-it-works page, each under its own anchor.
     await page.setViewportSize({ width: 1120, height: 820 });
-    await page.goto(site);
-    const firstTab = page.locator("#fit-tab-sleeve");
-    await firstTab.focus();
-    await page.keyboard.press("ArrowRight");
-    await page.locator('#fit-tab-raised[aria-selected="true"]:focus').waitFor();
-    assert.ok((await page.locator("#fit-case-panel").innerText()).includes("532,219"));
+    await page.goto(new URL("/how-it-works/", site).href, { waitUntil: "domcontentloaded" });
+    for (const anchor of ["visual-fitting", "full-hand-bolero", "raised-arm-start"])
+      assert.equal(await page.locator(`#${anchor}`).count(), 1, anchor);
     assert.deepEqual(errors, []);
   } finally {
     await page.close();

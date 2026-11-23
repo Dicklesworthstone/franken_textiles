@@ -314,6 +314,235 @@ def native_source(args, layout):
     return "fold.pc2 " + layout["sourcePc2Sha256"]
 
 
+# ---------------------------------------------------------------------------------------------------
+# The studio look of the construction films. The shaders above are the earlier look, which
+# render-native-trouser-films.py still draws its comparison films with.
+#
+# The studio is one flat paper colour (#ece7df), in display values. A first version had a soft pool of
+# light behind the subject; H.264 turned that gradient into visible rings, dither or no dither, so the
+# sweep is flat and the subject's own shadow does the grounding. The ground under the subject is drawn
+# with the same function, so its shadows sit on the backdrop with no edge.
+# components/construction/construction.css frames the films with this colour: change both.
+STUDIO = """
+vec3 studio() {
+    return vec3(0.925, 0.906, 0.875);
+}
+"""
+# Key light, in the camera's frame (right, up, towards the camera): high and a little to the left. It
+# turns with the camera, as a product on a turntable under fixed lamps, so the floor shadow stays a short
+# pool behind the subject and the modelling on the cloth does not swing as the view orbits.
+KEY_VIEW = np.array([-.26, .78, .57]) / np.linalg.norm([-.26, .78, .57])
+MANNEQUIN = (.58, .55, .51)
+WALNUT = (.085, .055, .040)
+INK = "0x202c33"
+
+STUDIO_VERTEX = """
+#version 330
+in vec3 position;
+in vec3 normal;
+in vec2 uv;
+in vec3 colour;
+uniform mat3 axes;
+uniform vec3 centre;
+uniform vec2 half_extent;
+uniform mat3 light_axes;
+uniform vec3 light_centre;
+uniform float light_extent;
+out vec3 n;
+out vec3 view_n;
+out vec2 surface_uv;
+out vec3 base;
+out vec3 shadow_uv;
+void main() {
+    vec3 local = axes * (position - centre);
+    gl_Position = vec4(local.xy / half_extent, -local.z / (8.0 * half_extent.x), 1.0);
+    n = normal;
+    view_n = axes * normal;
+    surface_uv = uv;
+    base = colour;
+    vec3 lit = light_axes * (position - light_centre) / light_extent;
+    shadow_uv = vec3(lit.xy, -lit.z) * 0.5 + 0.5;
+}
+"""
+
+STUDIO_FRAGMENT = """
+#version 330
+uniform sampler2D cloth_image;
+uniform sampler2DShadow shadow_image;
+uniform float fabric_pitch;
+uniform float fabric_mix;
+uniform bool ground;
+uniform float ground_shadow;
+uniform bool cloth;
+uniform vec3 key;
+in vec3 n;
+in vec3 view_n;
+in vec2 surface_uv;
+in vec3 base;
+in vec3 shadow_uv;
+layout(location = 0) out vec4 pixel;
+layout(location = 1) out vec4 surface;
+""" + STUDIO + """
+// Sixteen taps on a disc turned by a different angle at every pixel: a soft edge with no banding.
+float shade(float radius, float bias) {
+    vec2 texel = 1.0 / vec2(textureSize(shadow_image, 0));
+    float turn = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float lit = 0.0;
+    for (int k = 0; k < 16; k++) {
+        float r = sqrt((float(k) + 0.5) / 16.0) * radius;
+        float a = turn + float(k) * 2.39996323;
+        lit += texture(shadow_image, vec3(shadow_uv.xy + texel * r * vec2(cos(a), sin(a)), shadow_uv.z - bias));
+    }
+    return lit / 16.0;
+}
+void main() {
+    vec3 normal = normalize(n);
+    vec3 facing = normalize(view_n);
+    // every surface is seen from its lit side, whichever way its triangles wind
+    if (facing.z < 0.0) { normal = -normal; facing = -facing; }
+    surface = vec4(facing * 0.5 + 0.5, 1.0);
+    if (ground) {
+        // The backdrop itself, darkened where the subject keeps the key light off it. Most of it is far
+        // from any shadow: five taps at the full radius settle that before the sixteen are spent, and
+        // such a pixel is marked as needing no occlusion pass either.
+        vec2 texel = 30.0 / vec2(textureSize(shadow_image, 0));
+        float z = shadow_uv.z - 0.0016;
+        float near = texture(shadow_image, vec3(shadow_uv.xy, z))
+                   + texture(shadow_image, vec3(shadow_uv.xy + texel * vec2(1.0, 0.0), z))
+                   + texture(shadow_image, vec3(shadow_uv.xy - texel * vec2(1.0, 0.0), z))
+                   + texture(shadow_image, vec3(shadow_uv.xy + texel * vec2(0.0, 1.0), z))
+                   + texture(shadow_image, vec3(shadow_uv.xy - texel * vec2(0.0, 1.0), z));
+        float open = near > 4.999 ? 1.0 : mix(1.0, shade(30.0, 0.0016), ground_shadow);
+        // 0.75 tells the finishing pass this is ground: its cast shadow already darkens it
+        surface.a = near > 4.999 ? 0.0 : 0.75;
+        pixel = vec4(studio() * mix(vec3(0.74, 0.72, 0.71), vec3(1.0), open), 1.0);
+        return;
+    }
+    float visibility = shade(3.5, 0.0022);
+    // a wrapped key so cloth turns away from the light gradually, a sky and floor bounce, a low fill from
+    // the camera and a rim from behind
+    float wrapped = clamp((dot(normal, key) + 0.28) / 1.28, 0.0, 1.0);
+    float light = mix(0.30, 0.56, normal.z * 0.5 + 0.5)
+                + 0.74 * visibility * wrapped
+                + 0.16 * max(facing.z, 0.0)
+                + 0.20 * max(dot(normal, normalize(vec3(0.50, 0.72, 0.30))), 0.0);
+    vec3 colour = base;
+    if (fabric_mix > 0.0) {
+        vec3 swatch = pow(texture(cloth_image, surface_uv / fabric_pitch).rgb, vec3(2.2));
+        colour = fabric_mix >= 1.0 ? swatch : mix(base, base * swatch, fabric_mix);
+    }
+    vec3 lit = colour * light;
+    if (cloth) {
+        // woven cloth catches light at a glancing view; a drawing constant, not a measured fabric
+        float glance = pow(1.0 - clamp(facing.z, 0.0, 1.0), 3.0);
+        lit += (0.5 * colour + 0.5) * 0.085 * glance * (0.45 + 0.55 * visibility);
+    }
+    // a soft shoulder instead of a hard clip, then display encoding
+    lit = mix(lit, 0.82 + 0.18 * tanh((lit - 0.82) / 0.18), step(0.82, lit));
+    pixel = vec4(pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+}
+"""
+
+STUDIO_BACKDROP_FRAGMENT = """
+#version 330
+in vec2 position;
+layout(location = 0) out vec4 pixel;
+layout(location = 1) out vec4 surface;
+""" + STUDIO + """
+void main() {
+    pixel = vec4(studio(), 1.0);
+    surface = vec4(0.0);
+}
+"""
+
+# The finishing pass: ambient occlusion from the scene's own depth and normals (scalable ambient
+# obscurance, McGuire et al. 2012, in an orthographic view), so that gathers, folds and the cloth's
+# contact with the form read as depth. Pixels with no surface (bare backdrop, drawn marks) pass through.
+FINISH_FRAGMENT = """
+#version 330
+uniform sampler2D colour_image;
+uniform sampler2D surface_image;
+uniform sampler2D depth_image;
+uniform vec2 half_extent;
+in vec2 position;
+out vec4 pixel;
+vec3 place(vec2 ndc) {
+    float depth = texture(depth_image, ndc * 0.5 + 0.5).r;
+    return vec3(ndc * half_extent, -(depth * 2.0 - 1.0) * 8.0 * half_extent.x);
+}
+void main() {
+    vec2 uv = position * 0.5 + 0.5;
+    vec3 colour = texture(colour_image, uv).rgb;
+    vec4 found = texture(surface_image, uv);
+    float grain = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    if (found.a > 0.5) {
+        vec3 normal = normalize(found.xyz * 2.0 - 1.0);
+        vec3 here = place(position);
+        float turn = 6.2831853 * grain;
+        float blocked = 0.0;
+        for (int k = 0; k < 14; k++) {
+            float reach = 0.075 * sqrt((float(k) + 0.5) / 14.0);
+            float a = turn + float(k) * 2.39996323;
+            vec2 there = position + reach * vec2(cos(a), sin(a)) / half_extent;
+            // nothing is known beyond the frame: a sample there neither blocks nor opens
+            if (any(greaterThan(abs(there), vec2(1.0)))) continue;
+            vec3 to = place(there) - here;
+            float away = dot(to, to);
+            blocked += max(dot(to, normal) - 0.0025, 0.0) / (away + 0.00004) * step(away, 0.0225);
+        }
+        float open = clamp(1.0 - 0.022 * blocked, 0.0, 1.0);
+        // the ground takes half the occlusion: it lies in the subject's cast shadow as well
+        colour *= mix(found.a > 0.9 ? vec3(0.46, 0.43, 0.42) : vec3(0.74, 0.72, 0.71), vec3(1.0), open);
+    }
+    // Half a level of interleaved-gradient noise before quantisation, so the soft edge of the cast
+    // shadow does not step.
+    pixel = vec4(colour + (grain - 0.5) / 255.0, 1.0);
+}
+"""
+
+STUDIO_MARK_FRAGMENT = """
+#version 330
+uniform vec3 colour;
+uniform bool round_point;
+layout(location = 0) out vec4 pixel;
+layout(location = 1) out vec4 surface;
+void main() {
+    if (round_point && length(gl_PointCoord - vec2(0.5)) > 0.48) discard;
+    pixel = vec4(colour, 1.0);
+    surface = vec4(0.0);
+}
+"""
+
+
+def neck_cap(points, height):
+    """A turned cap over the plane where the form is cut, as a dress form or shop mannequin has."""
+    ring = points[np.abs(points[:, 2] - height) < 1e-5]
+    # the torso's own loop, not an arm that crosses the plane
+    ring = ring[np.abs(ring[:, 0]) < max(.04, np.ptp(points[:, 0])*.21)]
+    if len(ring) < 3:
+        return None
+    low, high = ring.min(axis=0), ring.max(axis=0)
+    centre, across, deep = (low + high)/2, (high[0] - low[0])/2, (high[1] - low[1])/2
+    turn = np.linspace(0, 2*np.pi, 65)[:-1]
+    profile = [(-.004, 1.03), (.006, 1.05), (.011, 1.01), (.015, .84), (.017, 0.)]
+    xyz = np.concatenate([np.column_stack((centre[0] + across*r*np.cos(turn), centre[1] + deep*r*np.sin(turn),
+        np.full(len(turn), height + z))) for z, r in profile])
+    n, faces = len(turn), []
+    for row in range(len(profile)-1):
+        for col in range(n):
+            a, b = row*n+col, row*n+(col+1) % n
+            faces.extend(((a, b, a+n), (b, b+n, a+n)))
+    return xyz, np.array(faces)
+
+
+def light_for(points, key):
+    right = np.cross([0, 0, 1], key)
+    right /= np.linalg.norm(right)
+    basis = np.stack((right, np.cross(key, right), key))
+    low, high = points.min(axis=0), points.max(axis=0)
+    return basis, (low + high) / 2, max(0.4, np.linalg.norm(high - low) * .75)
+
+
 def render(args):
     recorded, ids, faces, panels, body, body_faces, layout, phases = SOURCE["load"](args.garment, args.native)
     bolero = args.garment == "bolero"
@@ -323,18 +552,24 @@ def render(args):
         for name, (start, end) in panels.items():
             if name.startswith("trousers::"):
                 cloth_colours[start:end] = (.23, .084, .047)
-    pattern_colours = np.tile((.65, .46, .245), (len(recorded[0]), 1))
-    for index, (start, end) in enumerate(panels.values()):
-        pattern_colours[start:end] *= (0.84, .91, 1.0)[index % 3]
 
     ctx = moderngl.create_standalone_context(backend="egl")
     target = ctx.simple_framebuffer((WIDTH, HEIGHT), components=3)
-    target.use()
-    background = ctx.program(vertex_shader=BACKGROUND_VERTEX, fragment_shader=BACKGROUND_FRAGMENT)
+    # the scene is drawn into textures first: colour, each pixel's surface normal, and depth
+    scene_colour, scene_surface = ctx.texture((WIDTH, HEIGHT), 4), ctx.texture((WIDTH, HEIGHT), 4)
+    scene_depth = ctx.depth_texture((WIDTH, HEIGHT))
+    scene_depth.compare_func = ""
+    for image in (scene_colour, scene_surface, scene_depth):
+        image.filter = moderngl.NEAREST, moderngl.NEAREST
+        image.repeat_x = image.repeat_y = False
+    scene = ctx.framebuffer([scene_colour, scene_surface], scene_depth)
+    background = ctx.program(vertex_shader=BACKGROUND_VERTEX, fragment_shader=STUDIO_BACKDROP_FRAGMENT)
     backdrop = ctx.vertex_array(background, [])
-    shading = ctx.program(vertex_shader=VERTEX, fragment_shader=FRAGMENT)
+    finish = ctx.program(vertex_shader=BACKGROUND_VERTEX, fragment_shader=FINISH_FRAGMENT)
+    finishing = ctx.vertex_array(finish, [])
+    shading = ctx.program(vertex_shader=STUDIO_VERTEX, fragment_shader=STUDIO_FRAGMENT)
     depth = ctx.program(vertex_shader=DEPTH_VERTEX, fragment_shader="#version 330\nvoid main() {}")
-    shadow_texture = ctx.depth_texture((1536, 1536))
+    shadow_texture = ctx.depth_texture((2048, 2048))
     shadow_texture.repeat_x = shadow_texture.repeat_y = False
     shadow_texture.compare_func = "<="
     shadow_texture.filter = moderngl.LINEAR, moderngl.LINEAR
@@ -342,12 +577,18 @@ def render(args):
     swatch, pitch, cloth_mix = fabric_texture(ctx, args.garment)
     swatch.use(location=0)
     shadow_texture.use(location=1)
+    scene_colour.use(location=2)
+    scene_surface.use(location=3)
+    scene_depth.use(location=4)
     shading["cloth_image"].value = 0
     shading["shadow_image"].value = 1
     shading["fabric_pitch"].value = pitch
-    shading["fabric_sheen"].value = .32 if garment_only else 0
-    cloth = Surface(ctx, shading, recorded[0], faces, recorded[0][:, [0, 2]], pattern_colours, depth)
-    marks = ctx.program(vertex_shader=MARK_VERTEX, fragment_shader=MARK_FRAGMENT)
+    finish["colour_image"].value = 2
+    finish["surface_image"].value = 3
+    finish["depth_image"].value = 4
+    # the cut pieces are shown in their own cloth from the first frame
+    cloth = Surface(ctx, shading, recorded[0], faces, recorded[0][:, [0, 2]], cloth_colours, depth)
+    marks = ctx.program(vertex_shader=MARK_VERTEX, fragment_shader=STUDIO_MARK_FRAGMENT)
     mark_buffer = ctx.buffer(reserve=max(1, len(faces))*6*12, dynamic=True)
     marks_vao = ctx.vertex_array(marks, [(mark_buffer, "3f", "position")])
     edges = np.sort(np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]), axis=1)
@@ -387,7 +628,7 @@ def render(args):
         head = body[:, 2].max() - np.ptp(body[:, 2])*head_fraction
         lower_body = args.garment in ("column", "flare", "trousers")
         if lower_body:
-            head = min(head, recorded[-1, :, 2].max() + .14)
+            head = min(head, recorded[-1, :, 2].max() + .07)
         visible = np.ones(len(body), dtype=bool)
         if bolero or args.garment in ("blue", "yellow"):
             hem = min(recorded[-1][start:end, 2].min() for piece, (start, end) in panels.items() if "back" in piece)
@@ -409,23 +650,34 @@ def render(args):
             body_faces = main_component(body_faces, len(body))
         dressed_form = body[np.unique(body_faces)]
         bounds.append(dressed_form)
-        models.append(Surface(ctx, shading, body, body_faces, body[:, [0, 2]], np.tile((.46,.34,.235), (len(body),1)), depth))
+        models.append(Surface(ctx, shading, body, body_faces, body[:, [0, 2]], np.tile(MANNEQUIN, (len(body), 1)), depth))
+        cap = neck_cap(body, head)
+        if cap:
+            models.append(Surface(ctx, shading, cap[0], cap[1], cap[0][:, [0, 2]], np.tile(WALNUT, (len(cap[0]), 1)), depth))
         if mount:
             hip, drop, center, radius = mount
             if bolero:
                 floor = min(hip-drop, dressed_form[:, 2].min()-.027)
             stand, triangles = turned_stand(center, floor, hip, radius)
-            models.append(Surface(ctx, shading, stand, triangles, stand[:, [0, 2]], np.tile((.093, .052, .030), (len(stand), 1)), depth))
+            models.append(Surface(ctx, shading, stand, triangles, stand[:, [0, 2]], np.tile(WALNUT, (len(stand), 1)), depth))
             bounds.append(stand)
     bounds = np.concatenate(bounds)
-    ground = np.asarray([(-20,-20,floor), (20,-20,floor), (20,20,floor), (-20,20,floor)])
-    platform = Surface(ctx, shading, ground, np.array([(0,1,2),(0,2,3)]), ground[:, :2],
-                       np.tile((.15,.124,.092), (4,1)))
-    light_axes, light_centre, light_extent = orthogonal_light(bounds)
-    for program in (shading, depth):
-        program["light_axes"].write(light_axes.T.astype("f").tobytes())
-        program["light_centre"].value = tuple(light_centre)
-        program["light_extent"].value = light_extent
+    # The ground is the studio itself: the floor under the sewn garment, and an upright board just
+    # behind the flat pieces while they are laid out.
+    square = np.array([(0, 1, 2), (0, 2, 3)])
+    level = np.asarray([(-20, -20, floor), (20, -20, floor), (20, 20, floor), (-20, 20, floor)], dtype="f")
+    ground = Surface(ctx, shading, level, square, level[:, :2], np.ones((4, 3)))
+    upright = np.asarray([(-20, 0, -20), (20, 0, -20), (20, 0, 20), (-20, 0, 20)], dtype="f")
+    board_behind = Surface(ctx, shading, upright, square, upright[:, [0, 2]], np.ones((4, 3)))
+
+    def lamp(points, axes):
+        key = KEY_VIEW @ axes
+        shading["key"].value = tuple(key)
+        light_axes, light_centre, light_extent = light_for(points, key)
+        for program in (shading, depth):
+            program["light_axes"].write(light_axes.T.astype("f").tobytes())
+            program["light_centre"].value = tuple(light_centre)
+            program["light_extent"].value = light_extent
 
     initial_centre = (recorded[-1, :, 2].min() + recorded[-1, :, 2].max()) / 2
     gap = .045*np.ptp(recorded[-1],axis=0).max()
@@ -437,12 +689,15 @@ def render(args):
         mid = (panel.min(axis=0) + panel.max(axis=0))/2
         x, y = int((mid[0]/extent[0]+1)*WIDTH/2), int((1-mid[1]/extent[1])*HEIGHT/2)
         label = re.sub(r"[^A-Za-z0-9 ]+", " ", name.split("::")[-1].replace("dolman_", "")).strip().upper()
-        font = min(40, max(16, round(np.ptp(panel[:, 0])/extent[0]*WIDTH/max(9,len(label)*2.7))))
-        labels.append(f"drawtext=font=monospace:text={label}:fontsize={font}:fontcolor=0x30251d:x={x}-tw/2:y={y}-th/2:enable='lt(t,0.75)'")
+        font = min(40, max(18, round(np.ptp(panel[:, 0])/extent[0]*WIDTH/max(9,len(label)*2.7))))
+        # each piece's name on a paper chip, legible over any cloth
+        labels.append(f"drawtext=font=monospace:text={label}:fontsize={font}:fontcolor={INK}:box=1:boxcolor=0xf7f4ed@0.92:"
+                      f"boxborderw={round(font*.42)}:x={x}-tw/2:y={y}-th/2:enable='lt(t,0.75)'")
+    caption = f"drawtext=font=monospace:fontsize=44:fontcolor={INK}@0.78:x=160:y=h-150"
     visual_phase = (
-        "drawtext=font=monospace:text=FLAT PATTERN:fontsize=44:fontcolor=0xdfd2ae:x=160:y=h-150:enable='lt(t,3.3125)',"
-        "drawtext=font=monospace:text=MATCH THE EDGES:fontsize=44:fontcolor=0xdfd2ae:x=160:y=h-150:enable='between(t,3.3125,3.8125)',"
-        "drawtext=font=monospace:text=SEWN GARMENT:fontsize=44:fontcolor=0xdfd2ae:x=160:y=h-150:enable='gt(t,3.8125)'"
+        f"{caption}:text=FLAT PATTERN:enable='lt(t,3.3125)',"
+        f"{caption}:text=MATCH THE EDGES:enable='between(t,3.3125,3.8125)',"
+        f"{caption}:text=SEWN GARMENT:enable='gt(t,3.8125)'"
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with subprocess.Popen([
@@ -463,45 +718,53 @@ def render(args):
             else:
                 points, staging = SOURCE["film_pose"](i,args.garment,recorded,ids,phases,panels,gap,initial_centre)
                 axes, centre, extent = view(points if staging else bounds, i, not staging, crown=args.garment == "fez")
-                cloth.colour(pattern_colours if i <= 12 else cloth_colours)
                 cloth.update(points)
+                if staging:
+                    behind = float(points[:, 1].max()) + .008
+                    board_behind.update(np.column_stack((upright[:, 0], np.full(4, behind), upright[:, 2])))
+                lamp(points if staging else bounds, axes)
+                shadow_map.use()
+                ctx.enable(moderngl.DEPTH_TEST)
+                shadow_map.clear(depth=1)
                 if not staging:
-                    shadow_map.use()
-                    ctx.enable(moderngl.DEPTH_TEST)
-                    shadow_map.clear(depth=1)
                     for model in models:
                         model.depth.render()
-                    cloth.depth.render()
-                target.use()
-                target.clear(depth=1)
+                cloth.depth.render()
+                scene.use()
+                scene.clear(0.0, 0.0, 0.0, 0.0, depth=1.0)
                 ctx.disable(moderngl.DEPTH_TEST)
                 backdrop.render(vertices=3)
                 ctx.enable(moderngl.DEPTH_TEST)
                 projection(shading, axes, centre, extent)
                 projection(marks, axes, centre, extent)
-                shading["shadows"].value = not staging
                 shading["fabric_mix"].value = 0
+                shading["cloth"].value = False
+                shading["ground"].value = True
+                # pieces lying on the board cast onto it; as they lift and roll, that shadow fades out
+                shading["ground_shadow"].value = float(1 - SOURCE["ease"]((i - 12) / 14)) if staging else 1.0
+                (board_behind if staging else ground).vao.render()
+                shading["ground"].value = False
                 if not staging:
-                    shading["shadow_only"].value = True
-                    ctx.enable(moderngl.BLEND)
-                    ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-                    platform.vao.render()
-                    ctx.disable(moderngl.BLEND)
-                    shading["shadow_only"].value = False
                     for model in models:
                         model.vao.render()
-                shading["fabric_mix"].value = 0 if i <= 12 else cloth_mix
+                shading["fabric_mix"].value = cloth_mix
+                shading["cloth"].value = True
                 cloth.vao.render()
                 if i <= 12:
-                    mark(points[boundary], (.24, .18, .12), width=2)
+                    mark(points[boundary], (.19, .16, .14), width=2)
                 if joins and 46 <= i <= 68:
-                    mark(points[joins], (.90, .65, .28), width=4)
+                    mark(points[joins], (.64, .27, .15), width=4)
                 if not staging:
                     for cord in cords:
                         mark(attached_points(points, faces, cord, .0016), brass, moderngl.LINE_STRIP, 5)
                     if len(buttons):
                         diameter = max(4., .004 / extent[0] * WIDTH)
                         mark(attached_points(points, faces, buttons, .003), brass, moderngl.POINTS, diameter)
+                # the finishing pass reads the scene's textures and writes the frame
+                target.use()
+                ctx.disable(moderngl.DEPTH_TEST)
+                finish["half_extent"].value = extent
+                finishing.render(vertices=3)
                 pixels = target.read(components=3, alignment=1)
                 if i <= 12:
                     initial = pixels
@@ -525,6 +788,6 @@ if __name__ == "__main__":
         parser.error("choose a new .png path for a still or .mp4 path for a film")
     if args.out.exists():
         parser.error(f"{args.out} already exists")
-    if args.native is None and args.garment in ("bolero","bolero-full-hand","trousers","column","flare","ensemble"):
+    if args.native is None and args.garment in ("bolero","bolero-full-hand","column","flare","ensemble"):
         parser.error("this garment needs its original native drape directory")
     render(args)

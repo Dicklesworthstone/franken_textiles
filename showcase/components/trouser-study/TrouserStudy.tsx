@@ -89,7 +89,7 @@ export default function TrouserStudy({study}:{study:Study}){
   const choices=study.cases.filter(r=>!!r.surface&&!r.refusal&&(station==="Elastic"?r.posture==="standing":!r.id.startsWith("elastic-")));
   if(station==="Elastic")choices.sort((a,b)=>a.stiffness-b.stiffness);
   return <><SiteHeader/><main id="main" className="ts-page">
-    <Crumbs trail={[["Exhibition","/"],["Drape gallery","/#studies"],["Room to move"]]}/>
+    <Crumbs trail={[["Exhibition","/"],["Drape gallery","/sections/studies/"],["Room to move"]]}/>
     <div className="ts-wrap">
       <header className="ts-heading"><div><p className="ts-kicker">The trouser study</p><h1>Room to <em>move.</em></h1></div>
         <p>One pattern, seven cut pieces. Bend the form, change the elastic, or take a section through the folds.</p></header>

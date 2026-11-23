@@ -1,0 +1,100 @@
+/* The home page below its opening film (components/site/Home.tsx). Paper and ink throughout, one dark band for
+   the assistant loop. Tokens (--paper, --ink, --rust, --serif, --sans, --mono) come from app/style.css. */
+.hm-steps,.hm-garments,.hm-tools,.hm-limits{background:var(--paper);color:var(--ink);padding-block:clamp(56px,7vw,108px)}
+.hm-garments{background:#f1ede4;border-block:1px solid #ddd6c8}
+.hm-head{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:14px clamp(28px,5vw,80px);align-items:end;margin-bottom:clamp(30px,3.6vw,52px)}
+.hm-head h2,.hm-loop h2,.hm-limits h2{margin:0;font:400 clamp(34px,3.7vw,58px)/1.02 var(--serif);letter-spacing:-.032em;text-wrap:balance}
+.hm-head p{margin:0 0 6px;max-width:46ch;font-size:clamp(15.5px,1.1vw,17px);line-height:1.6;color:#4c585c;text-wrap:pretty}
+.hm-link{display:inline-flex;align-items:center;gap:8px;font:600 14.5px/1.3 var(--sans);color:var(--ink);text-decoration:underline;text-decoration-color:#b9b2a1;text-underline-offset:5px;transition:color .15s,text-decoration-color .15s}
+.hm-link:hover{color:var(--rust);text-decoration-color:currentColor}
+.hm-link .arrow{transition:transform .2s}.hm-link:hover .arrow{transform:translateX(3px)}
+
+/* 1. Three steps */
+.hm-step-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(22px,3vw,44px)}
+.hm-step-list li{display:grid;grid-template-columns:auto 1fr;column-gap:14px;align-content:start}
+.hm-step-picture{grid-column:1/-1;display:block;margin-bottom:22px;border:1px solid #ddd6c8;border-radius:6px;overflow:hidden;background:#fbf8f1}
+.hm-step-picture img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover;transition:transform .5s cubic-bezier(.2,.7,.2,1)}
+.hm-step-list li:hover .hm-step-picture img{transform:scale(1.025)}
+.hm-step-number{grid-row:span 3;font:400 clamp(38px,3.4vw,54px)/.9 var(--serif);color:var(--rust);min-width:.75em}
+.hm-step-list h3{margin:2px 0 9px;font:400 clamp(23px,1.9vw,29px)/1.12 var(--serif);letter-spacing:-.02em}
+.hm-step-list p{margin:0 0 14px;font-size:15.5px;line-height:1.62;color:#4c585c;text-wrap:pretty}
+.hm-step-list .hm-link{justify-self:start}
+
+/* 2. Garments */
+.hm-garment-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(20px,2.6vw,38px) clamp(18px,2.4vw,34px)}
+.hm-garment-list li{display:grid;align-content:start}
+.hm-garment{display:grid;color:var(--ink)}
+.hm-garment img{display:block;width:100%;height:auto;aspect-ratio:4/5;object-fit:cover;border-radius:6px;background:#ece7df;border:1px solid #d9d2c4;transition:transform .5s cubic-bezier(.2,.7,.2,1),box-shadow .3s}
+.hm-garment:hover img{transform:translateY(-4px);box-shadow:0 26px 44px -30px #2e281f66}
+.hm-garment-name{margin-top:16px;font:400 clamp(22px,1.8vw,28px)/1.12 var(--serif);letter-spacing:-.02em}
+.hm-garment:hover .hm-garment-name{color:var(--rust)}
+.hm-garment-note{margin-top:5px;font-size:14.5px;line-height:1.5;color:#4c585c}
+.hm-pattern{justify-self:start;margin-top:10px;font:600 13px/1.3 var(--sans);color:var(--ink);text-decoration:underline;text-decoration-color:#b9b2a1;text-underline-offset:4px}
+.hm-pattern::after{content:" ↓"}
+.hm-pattern:hover{color:var(--rust);text-decoration-color:currentColor}
+.hm-after{margin:clamp(30px,3.4vw,48px) 0 0}
+
+/* 3. The assistant loop: the one dark band */
+.hm-loop{background:var(--dark);color:#f3efe3;padding-block:clamp(60px,7.4vw,116px)}
+.hm-loop>.wrap{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(30px,5vw,84px);align-items:center}
+.hm-kicker{margin:0 0 16px;font:500 11px/1.4 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--lime)}
+.hm-loop h2{color:#fbf6ea}
+.hm-loop-copy>p:not(.hm-kicker){margin:20px 0 0;max-width:50ch;font-size:clamp(15.5px,1.1vw,17px);line-height:1.62;color:#d3d6d2;text-wrap:pretty}
+.hm-loop-steps{list-style:none;margin:26px 0 26px;padding:0;display:grid;gap:0;counter-reset:loop;border-top:1px solid #33424b}
+.hm-loop-steps li{display:grid;grid-template-columns:7.5ch 1fr;gap:14px;padding:14px 0;border-bottom:1px solid #33424b;counter-increment:loop}
+.hm-loop-steps strong{font:400 22px/1.2 var(--serif);color:var(--lime)}
+.hm-loop-steps span{font-size:15px;line-height:1.56;color:#d3d6d2}
+.hm-loop .hm-link{color:#fbf6ea;text-decoration-color:#6f7f86}.hm-loop .hm-link:hover{color:var(--lime)}
+.hm-loop-figure{display:grid;grid-template-columns:repeat(2,minmax(0,310px));gap:clamp(14px,2vw,28px);justify-content:center}
+.hm-loop-figure figure{margin:0}
+.hm-loop-figure img{display:block;width:100%;height:auto;border-radius:6px;background:#a9a9ab;border:1px solid #3b4a53}
+.hm-loop-figure figcaption{margin-top:13px;font-size:14.5px;line-height:1.5;color:#c3c9c6}
+.hm-loop-figure figcaption strong{display:block;margin-bottom:3px;font:500 11px/1.4 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--lime)}
+
+/* 4. Tools */
+.hm-tool-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:clamp(16px,2vw,28px)}
+.hm-tool-list a{display:grid;align-content:start;height:100%;color:var(--ink);border:1px solid #ddd6c8;border-radius:6px;background:#fffdf8;overflow:hidden;transition:border-color .2s,transform .25s,box-shadow .25s}
+.hm-tool-list a:hover{border-color:var(--ink);transform:translateY(-3px);box-shadow:0 22px 40px -30px #2e281f66}
+.hm-tool-list img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover;border-bottom:1px solid #e6dfd1;background:#f1ede4}
+.hm-tool-name{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:16px 18px 6px;font:400 22px/1.15 var(--serif);letter-spacing:-.015em}
+.hm-tool-text{margin:0 18px 20px;font-size:14.5px;line-height:1.55;color:#4c585c}
+
+/* 5. Limits and the rest of the site */
+.hm-limits{background:#f1ede4;border-top:1px solid #ddd6c8}
+.hm-limits>.wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(30px,5vw,88px);align-items:start}
+.hm-limits p{margin:18px 0 0;max-width:52ch;font-size:clamp(15.5px,1.1vw,17px);line-height:1.62;color:#3f4a4e;text-wrap:pretty}
+.hm-limit-links{display:grid;gap:10px;justify-items:start;margin-top:24px!important}
+.hm-more h2{font:500 11px/1.4 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:#6c6657;margin:8px 0 0;padding-bottom:12px;border-bottom:1px solid #cfc7b7}
+.hm-more ul{list-style:none;margin:0;padding:0}
+.hm-more a{display:grid;grid-template-columns:minmax(9ch,.42fr) 1fr;gap:16px;align-items:baseline;padding:13px 0;border-bottom:1px solid #ddd6c8;color:var(--ink);transition:color .15s,padding-left .2s}
+.hm-more a:hover{color:var(--rust);padding-left:6px}
+.hm-more strong{font:400 21px/1.2 var(--serif);letter-spacing:-.01em}
+.hm-more span{font-size:14.5px;line-height:1.5;color:#4c585c}
+
+.hm-steps :focus-visible,.hm-garments :focus-visible,.hm-tools :focus-visible,.hm-limits :focus-visible{outline:2px solid var(--rust);outline-offset:3px;border-radius:2px}
+.hm-loop :focus-visible{outline:2px solid var(--lime);outline-offset:3px;border-radius:2px}
+
+@media(max-width:1000px){
+  .hm-head{grid-template-columns:1fr;align-items:start}
+  .hm-garment-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hm-tool-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hm-loop>.wrap,.hm-limits>.wrap{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  .hm-step-list{grid-template-columns:1fr;gap:38px}
+  .hm-step-picture{margin-bottom:18px}
+}
+@media(max-width:520px){
+  .hm-garment-list{gap:26px 14px}
+  .hm-garment-name{font-size:20px;margin-top:12px}
+  .hm-garment-note{font-size:13.5px}
+  .hm-pattern{min-height:40px;display:inline-flex;align-items:center;margin-top:2px}
+  .hm-tool-list{grid-template-columns:1fr}
+  .hm-loop-steps li{grid-template-columns:1fr;gap:4px}
+  .hm-more a{grid-template-columns:1fr;gap:3px}
+  .hm-link{min-height:40px}
+}
+@media(prefers-reduced-motion:reduce){
+  .hm-step-picture img,.hm-garment img,.hm-tool-list a,.hm-link .arrow,.hm-more a{transition:none}
+  .hm-step-list li:hover .hm-step-picture img,.hm-garment:hover img,.hm-tool-list a:hover{transform:none}
+}

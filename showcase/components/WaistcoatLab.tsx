@@ -421,7 +421,7 @@ export default function WaistcoatLab() {
     <>
       <SiteHeader />
       <main id="main" className="wc-page">
-        <Crumbs trail={[["Exhibition", "/"], ["Wardrobe", "/#wardrobe"], ["1780s Waistcoat (V&A 256-1880)"]]} />
+        <Crumbs trail={[["Exhibition", "/"], ["Wardrobe", "/sections/wardrobe/"], ["1780s Waistcoat (V&A 256-1880)"]]} />
         <div className="wrap wc-wrap">
           <div className="wc-heading">
             <div>

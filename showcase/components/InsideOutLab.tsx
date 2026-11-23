@@ -166,7 +166,7 @@ export default function InsideOutLab() {
         <Crumbs
           trail={[
             ["Exhibition", "/"],
-            ["Wardrobe", "/#wardrobe"],
+            ["Wardrobe", "/sections/wardrobe/"],
             ["1780s Waistcoat", "/wardrobe/waistcoat/"],
             ["Turn inside out"],
           ]}

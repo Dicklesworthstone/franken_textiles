@@ -2,6 +2,7 @@
 
 import {useEffect, useId, useRef, useState} from "react";
 import {filmFile, filmSource, PlaybackMark, watchFilm} from "../InlineFilm";
+import {workbench} from "../site/links";
 import "./construction.css";
 
 const studies = {
@@ -11,7 +12,7 @@ const studies = {
   flare: {name:"Flared skirt", cut:"Six gores · 68 cm form", text:"Each gore widens from the waist to the hem. Joined edge to edge, the six pieces give the hem 168 cm of sweep.",pdf:"/atelier/flare.pdf", href:"/studies/skirt/?cut=flare&waist=680#skirt-atelier"},
   blue: {name:"Blue Hussar dolman", cut:"1761 · jacket shell", text:"The paired fronts carry the cord from the cutting table onto the chest. The back, side pieces and two-part sleeves close around the form.",pdf:"/patterns/hussar-blue.pdf", href:"/wardrobe/hussar/#native-dolman"},
   yellow: {name:"Yellow Hussar dolman", cut:"1765 · jacket shell", text:"Pale cord follows the same jacket front into the sewn shape. This color study uses the Blue dolman’s recorded drape. The Yellow uniform has its own full pattern.",pdf:"/patterns/hussar-yellow.pdf", href:"/wardrobe/hussar/#native-dolman"},
-  "bolero-full-hand": {name:"355 mm Zouave bolero", cut:"355 mm sleeve · 201.7 mm cuff", text:"All 49 physical frames passed the full-hand contact check. Turn on the fitted form in the 3D replay to inspect the clearance.", pdf:"/fittings/bolero-full-hand-A4.pdf", href:"/fittings/bolero-full-hand-replay"},
+  "bolero-full-hand": {name:"355 mm Zouave bolero", cut:"355 mm sleeve · 201.7 mm cuff", text:"A cropped jacket whose sleeve was shortened until the cuff cleared the hand in all 49 recorded frames of the simulation. The replay shows it on the fitted form.", pdf:"/fittings/bolero-full-hand-A4.pdf", href:"/fittings/bolero-full-hand-replay"},
   bolero: {name:"Zouave bolero", cut:"Five pieces · 52 cm chest", text:"Two fronts meet the back at the shoulders. Each sleeve rolls into a tube before its cap joins the armhole.",pdf:"/patterns/bolero.pdf", href:"/sections/studies/#drape-room"},
   trousers: {name:"Gathered trousers", cut:"Seven pieces · standing form", text:"The legs close along their inseams. Shorter cuffs and an elastic waistband gather the fullness at both ends.",pdf:"/patterns/trousers.pdf", href:"/studies/trousers/#trouser-fit"},
   ensemble: {name:"Bolero and trousers", cut:"Twelve pieces · coupled drape", text:"Follow both cuts into one outfit. The final sewing and gravity steps include contact between the jacket and trousers.",pdf:"/patterns/bolero.pdf", href:"/sections/studies/?outfit=joint#drape-room"},
@@ -21,6 +22,9 @@ export type Garment = keyof typeof studies;
 const all:readonly Garment[] = ["flare","column","sundress","eased","blue","yellow","bolero","trousers","ensemble","fez"];
 const homepage:readonly Garment[] = ["bolero-full-hand", "sundress", "eased", "flare", "column", "bolero", "trousers", "ensemble", "blue", "yellow", "fez"];
 export const constructionFilms=homepage.map(id=>({id:"construction-"+id,title:studies[id].name+" · from cut to cloth",detail:studies[id].cut}));
+// The home page opens on five of them, each named in a word or two on its button.
+const leading = {sundress:"Sundress", blue:"Hussar jacket", flare:"Flared skirt", ensemble:"Bolero & trousers", "bolero-full-hand":"Zouave bolero"} as const;
+const opening = Object.keys(leading) as (keyof typeof leading)[];
 const chapters = [
   {name:"Flat pattern", image:"cut", frame:0},
   {name:"Match the edges", image:"join", frame:53},
@@ -87,7 +91,7 @@ export function ConstructionMotion({garment, hero=false}:{garment:Garment;hero?:
   </div>;
 }
 
-export default function ConstructionStudy({hero=false,choices=hero?homepage:all,value,onSelect}:{choices?:readonly Garment[];hero?:boolean;value?:Garment;onSelect?:(garment:Garment)=>void}) {
+export default function ConstructionStudy({hero=false,choices=hero?opening:all,value,onSelect}:{choices?:readonly Garment[];hero?:boolean;value?:Garment;onSelect?:(garment:Garment)=>void}) {
   const [local,select]=useState<Garment>(choices[0]),id=useId();
   const selected=value??local,study=studies[selected];
   useEffect(()=>{
@@ -108,25 +112,33 @@ export default function ConstructionStudy({hero=false,choices=hero?homepage:all,
     const fullHand = selected === "bolero-full-hand";
     return <section id="construction" className="construction-study construction-hero" aria-labelledby={id}>
       <div className="construction-copy">
-        <h1 id={id}>Sewing patterns <em>in motion</em></h1>
-        <p className="construction-pitch">Draft to measurements, see how the pieces sew and drape, and print the same cut at full size.</p>
+        <p className="construction-eyebrow">Made-to-measure pattern making</p>
+        <h1 id={id}>From flat pattern <em>to sewn garment.</em></h1>
+        <p className="construction-pitch">FrankenTextiles drafts a sewing pattern to your measurements, sews it on a body in simulation so you can see how it hangs, and prints the pieces at full size.</p>
         <div className="construction-cta">
-          <a className="construction-primary" href={study.href}>{fullHand ? "Turn the bolero in 3D" : "Open garment study"} <span aria-hidden="true" className="arrow"/></a>
-          <a className="construction-secondary" href={fullHand ? "/workbench/?sample=full-hand-bolero" : "/#workbenches"}>{fullHand ? "Edit the draft" : "Open a workbench"}</a>
+          <a className="construction-primary" href={workbench("index")}>Draft a pattern <span aria-hidden="true" className="arrow arrow-diagonal"/></a>
+          <a className="construction-secondary" href="/how-it-works/">See how it works</a>
         </div>
+        <ul className="construction-facts">
+          <li>Free to use, with public source code</li>
+          <li>Runs in your browser, nothing uploaded</li>
+          <li>Prints on A4, Letter or one large sheet</li>
+        </ul>
       </div>
       <div className="construction-exhibit">
-        <div className="construction-exhibit-bar">
-          <span>Construction study</span>
-          {selector}
-        </div>
         <ConstructionMotion key={selected} garment={selected} hero/>
+        <div className="construction-picker" role="group" aria-label="Choose a garment">
+          {choices.map(k=><button key={k} type="button" aria-pressed={k===selected} onClick={()=>(onSelect??select)(k)}>
+            {k in leading ? leading[k as keyof typeof leading] : studies[k].name}</button>)}
+        </div>
         <div className="construction-exhibit-note">
-          <div>
-            <p className="construction-spec">{study.cut}</p>
-            <p className="construction-description">{study.text}</p>
+          <p className="construction-description"><strong>{study.name}.</strong> {study.text}</p>
+          <div className="construction-links">
+            <a href={study.href}>{fullHand ? "Turn it in 3D" : "Open this garment"}</a>
+            <a href={study.pdf} download>{selected==="ensemble"?"Jacket pattern (PDF)":"Pattern (PDF)"}</a>
+            {selected==="ensemble"&&<a href="/patterns/trousers.pdf" download>Trouser pattern (PDF)</a>}
+            {fullHand&&<a href="/workbench/?sample=full-hand-bolero">Edit the draft</a>}
           </div>
-          {patterns}
         </div>
       </div>
     </section>;

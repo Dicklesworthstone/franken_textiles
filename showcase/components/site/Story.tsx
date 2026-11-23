@@ -23,19 +23,19 @@ const steps = [
     title: "Draft or trace",
     text: "Draft a garment to the measurements, alter a pattern you already have, or trace a drawn or scanned sheet. Every seam is walked and every fit point is checked on the flat pattern.",
     gives: "A pattern whose seams match",
-    link: ["/#studio", "Draft a bolero"],
+    link: ["/sections/studio/", "Draft a bolero"],
   },
   {
     title: "Sew and drape",
     text: "A cloth solver sews the pieces together around the fitted body, with contact and friction. It reports whether the seams close, where the cloth runs tight, and whether an elastic holds.",
     gives: "A draped garment and its flags",
-    link: ["/#drape-room", "Watch it sew"],
+    link: ["/sections/studies/#drape-room", "Watch it sew"],
   },
   {
     title: "Cut and stitch",
     text: "Print tiled pages at home, send one large sheet to a copy shop, or hand a cutting service its DXF. Plotters, cutting machines and embroidery machines each get their own file, and every file is checked before it is written.",
     gives: "Files for people and machines",
-    link: ["/#studio", "Lay out the roll"],
+    link: ["/sections/cut/", "Lay out the roll"],
   },
 ] as const;
 

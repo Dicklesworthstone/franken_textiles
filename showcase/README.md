@@ -215,14 +215,29 @@ without a desktop, run the same command under `xvfb-run -a` with `LIBGL_ALWAYS_S
 
 For the construction films, use Blender or the EGL recorder with NumPy, ModernGL 5.13 and
 glcontext 3.1. Both use the same source frames and chapter timings. The EGL renderer uses the
-actual pattern boundaries, seam pairs and garment meshes with direct lighting.
+actual pattern boundaries, seam pairs and garment meshes.
+
+The EGL recorder draws the films' studio look: a flat paper backdrop that is also the floor, a key
+light fixed to the camera with soft shadows, ambient occlusion from the scene's depth and normals, a
+matte mannequin with a turned cap where the form is cut, and the cut pieces in their own cloth from the
+first frame. The grazing highlight on the cloth is a drawing constant, not a measured fabric. The
+construction player's frame (`components/construction/construction.css`) has the backdrop's colour.
 
 ```sh
 python3 scripts/render-native-film.py sundress /path/to/new-media/construction-sundress.mp4
+python3 scripts/render-native-film.py trousers /path/to/new-media/construction-trousers.mp4
 python3 scripts/render-native-film.py bolero /path/to/new-media/construction-bolero.mp4 /path/to/native-solve
 python3 scripts/render-native-film.py bolero-full-hand /path/to/new-media/construction-bolero-full-hand.mp4 /path/to/full-hand-solve
 node --test scripts/films.test.mjs
 ```
+
+The sundresses, the dolmans, the fez and the trousers render from the files the site publishes. The
+trousers use the published replay (every third recorded frame) and the trouser study's form. The
+bolero, the two skirts and the coupled outfit need their original drape directory; the script checks
+its point cache against the published hash. On a machine whose GPU device is not open to you, set
+`GLCONTEXT_DEVICE_INDEX=1` to use Mesa's software device. A film took 70 to 100 s that way on 8 cores.
+The posters and chapter stills are frames 338 (327 for the fez), 0 and 199 of each film; the home
+page's pictures come from them with `node scripts/render-exhibit-cards.mjs NEW_DIR home`.
 
 The `bolero-full-hand` film uses the same audited point cache as the homepage's full-hand replay.
 The film isolates the cloth for a clear view of the seams and hems. The replay shows it on the fitted Anny form.

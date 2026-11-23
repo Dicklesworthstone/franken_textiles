@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import CodeBlock from "../../components/site/CodeBlock";
 import SitePage from "../../components/site/SitePage";
-import { Claims, Pipeline } from "../../components/site/Story";
+import { Claims, Deliverables, Pipeline, PlatformCapabilities } from "../../components/site/Story";
 import { repo } from "../../components/site/links";
 
 export const metadata: Metadata = {
@@ -65,7 +65,7 @@ export default function HowItWorks() {
         pattern and tries another cut. FrankenTextiles sews each version in simulation and keeps the views, seam checks
         and files that let you decide what to make.</p>
         <div className="ft-hero-actions"><a className="primary" href="/get-started/">Get started <span aria-hidden="true" className="arrow"/></a>
-          <a className="ft-text-link" href="/#drape-room">See a garment sewn <span aria-hidden="true" className="arrow"/></a></div></div>
+          <a className="ft-text-link" href="/sections/studies/#drape-room">See a garment sewn <span aria-hidden="true" className="arrow"/></a></div></div>
     </div></section>
     <div className="ft-tape" aria-hidden="true"/>
 
@@ -139,6 +139,8 @@ export default function HowItWorks() {
     </div></section>
 
     <Pipeline more={false}/>
+    <Deliverables/>
+    <PlatformCapabilities/>
 
     <section className="ft-block"><div className="wrap ft-block-grid">
       <div className="ft-block-head"><p className="kicker">The body</p><h2>A body, not a dress form.</h2>
@@ -241,7 +243,7 @@ export default function HowItWorks() {
     <section className="ft-block"><div className="wrap ft-next">
       <a href="/get-started/"><span className="mono">Next</span><strong>Get started</strong>
         <span>Open a workbench in your browser, or build the command-line tool and draft a first pattern.</span></a>
-      <a href="/#drape-room"><span className="mono">Or look around</span><strong>The exhibition</strong>
+      <a href="/sections/studies/#drape-room"><span className="mono">Or look around</span><strong>The exhibition</strong>
         <span>Sew a bolero onto a fitted body, pose a sundress, and pull cloth on the bias.</span></a>
     </div></section>
   </SitePage>;

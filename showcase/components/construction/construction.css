@@ -18,107 +18,78 @@
 .construction-study .construction-description{font:400 14px/1.54 var(--sans);max-width:44ch;margin:0;color:#454c48}
 .construction-links{display:flex;gap:8px 18px;flex-wrap:wrap;margin-top:14px}.construction-links a{font:600 12.5px var(--sans);color:#202c33;text-decoration:underline;text-decoration-color:#b6aa94;text-underline-offset:4px;transition:color .15s,text-decoration-color .15s}
 .construction-links a:hover{color:#87402f;text-decoration-color:currentColor}
-.construction-motion{min-width:0;background:#2b2b23;align-self:stretch;display:flex;flex-direction:column;justify-content:center}
 /* The box takes its height from the text beside it, so it is taller than its 16:9 film on most screens and wider on
-   very wide ones. Its background continues the film's own backdrop round the film, so no bar shows on either side:
-   an SVG whose 16 by 9 view box is fitted to the box exactly as the film is (xMidYMid meet) and whose gradient is
-   the vignette of BACKGROUND_FRAGMENT in scripts/render-native-film.py (centre 36 % across and 32 % down the frame,
-   sampled every 0.3 of the frame's half-width), painted far beyond the view box. Change the two together. */
-.construction-image{position:relative;aspect-ratio:16/9;flex:1;min-height:0;overflow:hidden;background:#2b2721 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9' preserveAspectRatio='xMidYMid meet'%3E%3CradialGradient id='g' gradientUnits='userSpaceOnUse' cx='0' cy='0' r='1' gradientTransform='translate(5.76 2.88) scale(19.2 10.8)'%3E%3Cstop offset='0' stop-color='%235e5444'/%3E%3Cstop offset='.125' stop-color='%235b5142'/%3E%3Cstop offset='.25' stop-color='%23534a3d'/%3E%3Cstop offset='.375' stop-color='%23494136'/%3E%3Cstop offset='.5' stop-color='%233e382f'/%3E%3Cstop offset='.625' stop-color='%23363029'/%3E%3Cstop offset='.75' stop-color='%23302b25'/%3E%3Cstop offset='.875' stop-color='%232d2822'/%3E%3Cstop offset='1' stop-color='%232b2721'/%3E%3C/radialGradient%3E%3Crect x='-160' y='-90' width='336' height='189' fill='url(%23g)'/%3E%3C/svg%3E") center/100% 100% no-repeat}
+   very wide ones. The film's studio is one flat colour, studio() in scripts/render-native-film.py, and the box has
+   the same one, so no bar shows on either side of the film. Change the two together. */
+.construction-motion{min-width:0;background:#ece7df;align-self:stretch;display:flex;flex-direction:column;justify-content:center}
+.construction-image{position:relative;aspect-ratio:16/9;flex:1;min-height:0;overflow:hidden;background:#ece7df}
 .construction-image video,.construction-image .construction-still{width:100%;height:100%;position:absolute;inset:0;object-fit:contain;background:transparent}
-.construction-motion .construction-transport{position:absolute;bottom:14px;right:14px;left:auto;border:1px solid #f2e5cb55;border-radius:30px;display:inline-flex;gap:9px;align-items:center;background:#1a221ee6;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:#fff8e8;padding:9px 15px;min-height:38px;font:600 12px var(--sans);cursor:pointer;transition:background-color .2s,border-color .2s}
-.construction-motion .construction-transport:hover{background:#87402f;border-color:#ffba8c}
-.construction-chapters{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#3e453e;border-top:1px solid #3e453e}
-.construction-motion .construction-chapters button{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#242925;color:#dedad0;font:500 12px var(--sans);border:0;border-bottom:3px solid transparent;cursor:pointer;text-align:left;min-width:0;transition:background-color .18s,color .18s,border-color .18s}
-.construction-motion .construction-chapters button:hover{background:#313731;color:#fff8ea}
-.construction-chapters img{width:clamp(46px,5.2vw,78px);border-radius:2px;aspect-ratio:16/10;object-fit:cover;flex-shrink:0}.construction-motion .construction-chapters button[aria-pressed=true]{border-color:#ffba8c;background:#353b34;color:#fff9eb;font-weight:600}
-.construction-study :focus-visible{outline:2px solid #eb7848;outline-offset:-2px}
+.construction-motion .construction-transport{position:absolute;bottom:14px;right:14px;left:auto;border:1px solid #202c3326;border-radius:30px;display:inline-flex;gap:9px;align-items:center;background:#fffdf8e6;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:#202c33;padding:9px 15px;min-height:38px;font:600 12px var(--sans);cursor:pointer;box-shadow:0 1px 2px #202c3314;transition:background-color .2s,border-color .2s,color .2s}
+.construction-motion .construction-transport:hover{background:#202c33;border-color:#202c33;color:#f7f4ed}
+.construction-chapters{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#d3ccbe;border-top:1px solid #d3ccbe}
+.construction-motion .construction-chapters button{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f3efe6;color:#4c585c;font:500 12.5px var(--sans);border:0;border-bottom:3px solid transparent;cursor:pointer;text-align:left;min-width:0;transition:background-color .18s,color .18s,border-color .18s}
+.construction-motion .construction-chapters button:hover{background:#faf7f0;color:#202c33}
+.construction-chapters img{width:clamp(46px,5.2vw,78px);border-radius:2px;aspect-ratio:16/10;object-fit:cover;flex-shrink:0}.construction-motion .construction-chapters button[aria-pressed=true]{border-color:#a24628;background:#fffdf8;color:#202c33;font-weight:600}
+.construction-study :focus-visible{outline:2px solid #a24628;outline-offset:-2px}
 #exhibition>.construction-study{margin-bottom:0}
 
+/* The home page's opening: the words on paper, the film in a frame of its own studio colour. */
 .construction-hero {
-  grid-template-columns: minmax(290px, .73fr) minmax(0, 1.27fr);
+  grid-template-columns: minmax(300px, .78fr) minmax(0, 1.22fr);
   align-items: center;
-  gap: clamp(28px, 4vw, 66px);
-  padding: clamp(32px, 5vw, 78px) max(clamp(22px, 4.5vw, 72px), calc((100% - 1320px) / 2));
-  background: radial-gradient(ellipse at 28% 0%, #373b2d, #242820 58%);
-  border-color: #4f5041;
-  color: #f8f0de;
+  gap: clamp(28px, 4.4vw, 76px);
+  padding: clamp(30px, 4.4vw, 68px) max(clamp(22px, 4.5vw, 72px), calc((100% - 1320px) / 2)) clamp(34px, 4.8vw, 76px);
+  background: var(--paper);
+  border-bottom: 1px solid #ddd6c8;
 }
 .construction-hero .construction-copy { padding: 0; }
+.construction-hero .construction-eyebrow { font-size: 11px; margin-bottom: 20px; }
 .construction-hero h1 {
-  font-size: clamp(54px, 6.2vw, 110px);
-  line-height: .9;
-  letter-spacing: -.047em;
-  color: #f8f0de;
-  text-wrap: wrap;
-  margin-bottom: 21px;
+  font-size: clamp(50px, 5.6vw, 98px);
+  line-height: .92;
+  letter-spacing: -.045em;
+  text-wrap: balance;
+  margin-bottom: 22px;
 }
-.construction-hero h1 em { color: #ffbd91; display: block; }
-.construction-hero .construction-pitch { color: #e3dfd1; max-width: 34ch; margin-bottom: 25px; }
-.construction-hero .construction-cta { margin: 0; gap: 12px 18px; }
-.construction-hero .construction-primary { color: #2e231d; background: #ffc39c; min-height: 46px; }
-.construction-hero .construction-primary:hover { background: #ffdab8; }
-.construction-hero .construction-secondary { color: #f8f0de; text-decoration-color: #9b917d; min-height: 44px; }
-.construction-hero .construction-secondary:hover { color: #ffc39c; }
+.construction-hero h1 em { display: block; }
+.construction-hero .construction-pitch { font-size: clamp(16px, 1.25vw, 19px); line-height: 1.55; max-width: 38ch; margin-bottom: 26px; }
+.construction-hero .construction-cta { margin: 0 0 26px; gap: 12px 22px; }
+.construction-hero .construction-primary { min-height: 48px; padding: 0 22px; font-size: 14.5px; }
+.construction-hero .construction-secondary { min-height: 44px; font-size: 14.5px; }
+.construction-facts { list-style: none; margin: 0; padding: 18px 0 0; border-top: 1px solid #ddd6c8; display: grid; gap: 7px; max-width: 38ch; }
+.construction-facts li { position: relative; padding-left: 20px; font: 400 14px/1.45 var(--sans); color: #4c585c; }
+.construction-facts li::before { content: ""; position: absolute; left: 2px; top: .45em; width: 9px; height: 5px; border-left: 1.6px solid #a24628; border-bottom: 1.6px solid #a24628; transform: rotate(-45deg); }
 
 .construction-exhibit {
   min-width: 0;
-  border: 1px solid #9d90744d;
-  border-radius: 6px;
+  border: 1px solid #d3ccbe;
+  border-radius: 8px;
   overflow: hidden;
-  background: #201f1a;
-}
-.construction-exhibit-bar {
-  background: #302f25;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 16px;
-}
-.construction-exhibit-bar>span {
-  font: 500 11px/1.35 var(--mono);
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  color: #ded1b7;
-}
-.construction-hero .construction-select {
-  width: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #d8cbae;
-}
-.construction-hero .construction-select>span { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
-.construction-hero .construction-select select {
-  padding: 7px 10px;
-  min-height: 38px;
-  border: 1px solid #7c705b;
-  border-radius: 3px;
-  font: 600 13px/1.4 var(--sans);
-  color: #f8f0de;
-  background: #24231b;
+  background: #fffdf8;
+  box-shadow: 0 1px 0 #fff inset, 0 24px 48px -30px #2e281f40;
 }
 .construction-hero .construction-image { flex: none; }
 .construction-hero .construction-chapters button { justify-content: center; min-height: 44px; text-align: center; padding: 8px; }
-.construction-exhibit-note {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 16px 17px;
+.construction-picker { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 16px 2px; }
+.construction-picker button {
+  min-height: 36px; padding: 0 14px; border: 1px solid #d3ccbe; border-radius: 30px; background: transparent;
+  font: 500 13px/1 var(--sans); color: #4c585c; cursor: pointer; transition: background-color .15s, border-color .15s, color .15s;
 }
-.construction-hero .construction-spec { color: #efba99; margin: 0 0 5px; }
-.construction-hero .construction-description { color: #dfd6c4; font-size: 13px; }
-.construction-hero .construction-links { margin: 0; gap: 6px; flex-direction: column; }
-.construction-hero .construction-links a { color: #fff0d9; text-decoration-color: #b6987a; }
+.construction-picker button:hover { border-color: #202c33; color: #202c33; }
+.construction-picker button[aria-pressed=true] { background: #202c33; border-color: #202c33; color: #f7f4ed; font-weight: 600; }
+.construction-exhibit-note { display: grid; gap: 10px; padding: 12px 16px 17px; }
+.construction-hero .construction-description { font-size: 14px; line-height: 1.55; max-width: 62ch; color: #4c585c; }
+.construction-hero .construction-description strong { color: #202c33; font-weight: 600; }
+.construction-hero .construction-links { margin: 0; gap: 6px 20px; }
+.construction-hero .construction-links a { font-size: 13px; }
 
 @media(max-width:960px) {
   .construction-study { grid-template-columns: 1fr; }
   .construction-image { flex: none; }
-  .construction-hero { gap: 22px; }
-  .construction-hero h1 { font-size: clamp(52px, 10vw, 82px); margin-bottom: 13px; }
-  .construction-hero .construction-pitch { max-width: 45ch; margin-bottom: 16px; }
+  .construction-hero { gap: 26px; }
+  .construction-hero h1 { font-size: clamp(46px, 9.4vw, 78px); margin-bottom: 16px; }
+  .construction-hero .construction-pitch { max-width: 46ch; margin-bottom: 20px; }
+  .construction-facts { max-width: none; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 }
 @media(max-width:720px) {
   .construction-study .construction-copy { padding: 24px 20px 20px; }
@@ -126,18 +97,14 @@
   .construction-study h2 { margin-bottom: 12px; }
   .construction-study .construction-description { max-width: none; }
   .construction-motion .construction-transport { bottom: 10px; right: 10px; min-height: 40px; }
-  .construction-motion .construction-chapters button { font-size: 11px; padding: 7px 4px; justify-content: center; gap: 5px; flex-direction: column; }
+  .construction-motion .construction-chapters button { font-size: 11.5px; padding: 7px 4px; justify-content: center; gap: 5px; flex-direction: column; }
   .construction-chapters img { width: 64px; }
   .construction-hero .construction-copy { padding: 0; }
-  .construction-hero { padding: 24px 20px 26px; gap: 18px; }
-  .construction-exhibit-bar { padding: 8px 10px; gap: 8px; }
-  .construction-exhibit-bar>span { font-size: 9px; }
-  .construction-hero .construction-select select { max-width: 185px; min-height: 44px; font-size: 12px; }
-  .construction-exhibit-note { grid-template-columns: 1fr; gap: 6px; padding: 12px; }
-  .construction-hero .construction-links a { display: inline-flex; align-items: center; min-height: 36px; }
+  .construction-hero { padding: 26px 20px 30px; gap: 22px; }
+  .construction-hero .construction-cta { margin-bottom: 20px; }
+  .construction-picker { padding: 12px 12px 0; gap: 6px; }
+  .construction-picker button { min-height: 40px; padding: 0 13px; }
+  .construction-exhibit-note { padding: 10px 12px 14px; }
+  .construction-hero .construction-links a { display: inline-flex; align-items: center; min-height: 40px; }
 }
-@media(max-width:360px) {
-  .construction-exhibit-bar>span { max-width: 11ch; }
-  .construction-hero .construction-select select { max-width: 172px; }
-}
-@media(prefers-reduced-motion:reduce){.construction-primary,.construction-motion .construction-transport,.construction-motion .construction-chapters button{transition:none;transform:none}}
+@media(prefers-reduced-motion:reduce){.construction-primary,.construction-motion .construction-transport,.construction-motion .construction-chapters button,.construction-picker button{transition:none;transform:none}}

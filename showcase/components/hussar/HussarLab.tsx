@@ -39,7 +39,7 @@ export default function HussarLab() {
   const [failed, setFailed] = useState(false);
   const onFailure = useCallback(() => setFailed(true), []);
   const blue = regiment === "Blue";
-  return <><SiteHeader /><main id="main" className="hu-page"><Crumbs trail={[["Exhibition", "/"], ["Wardrobe", "/#wardrobe"], ["The hussar’s cabinet"]]} />
+  return <><SiteHeader /><main id="main" className="hu-page"><Crumbs trail={[["Exhibition", "/"], ["Wardrobe", "/sections/wardrobe/"], ["The hussar’s cabinet"]]} />
     <div className="wrap hu-wrap"><div className="hu-heading"><div><p className="kicker">Swedish uniforms / pattern of 1761</p><h1>The hussar’s cabinet<em>.</em></h1></div>
       <p>Turn two Swedish hussars in regimental dress, inspect the jacket cuts, then replay the dolman sewn on its fitted form. <a className="hu-compare-link" href="#regimental-plates">Read the museum plate ↓</a></p></div>
     <ConstructionStudy choices={["blue","yellow"]}/>

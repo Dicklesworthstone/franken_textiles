@@ -59,7 +59,7 @@ export default function MaterialLab({ kind }: {kind: Rig}) {
   const stages=cylinder ? [[0,"Mounted"],[1.5,"Twisted"],[2.5,"Compressed"],[3.5,"Final pull"]] as const :
     [[0,"Relaxed"],[4,"4% pull"],[8,"8% pull"]] as const;
   return <><SiteHeader/><main id="main" className="rig-page">
-    <Crumbs trail={[["Exhibition","/"],["Material studies","/#materials"],[meta.title]]}/>
+    <Crumbs trail={[["Exhibition","/"],["Material studies","/sections/materials/"],[meta.title]]}/>
     <div className="wrap rig-wrap">
       <div className="rig-heading"><div><p className="kicker">Material studies / Fig. {meta.figure}</p><h1>{meta.title}<em>.</em></h1></div><p>{meta.subtitle}</p></div>
       <div className="rig-desk">

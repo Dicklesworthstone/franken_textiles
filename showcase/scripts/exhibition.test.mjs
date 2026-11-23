@@ -18,16 +18,20 @@ test("every construction study pairs a full-size cut with its three film chapter
   const page=await browser.newPage({...opts,reducedMotion:"reduce",viewport:{width:390,height:844}});
   try{
     await page.goto(site);
-    const stage=page.locator("#construction"),select=stage.getByRole("combobox");
-    const choices=await select.locator("option").evaluateAll(options=>options.map(o=>o.value));
-    assert.equal(choices.length,11);
-    assert.equal(await select.inputValue(),"bolero-full-hand");
+    // The opening offers five garments by name; the others are on the wardrobe and drape-room pages.
+    const stage=page.locator("#construction"),picker=stage.getByRole("group",{name:"Choose a garment"});
+    const names=await picker.getByRole("button").allTextContents();
+    assert.deepEqual(names,["Sundress","Hussar jacket","Flared skirt","Bolero & trousers","Zouave bolero"]);
+    assert.equal(await picker.getByRole("button",{name:"Sundress"}).getAttribute("aria-pressed"),"true");
     assert.equal(await stage.getByRole("button",{name:"Sewn article",exact:true}).getAttribute("aria-pressed"),"true");
-    assert.equal(await stage.getByRole("link",{name:"Turn the bolero in 3D"}).getAttribute("href"),"/fittings/bolero-full-hand-replay");
+    assert.equal(await stage.getByRole("link",{name:"Open this garment"}).getAttribute("href"),"/wardrobe/sundress/#sewn");
+    await picker.getByRole("button",{name:"Zouave bolero"}).click();
+    assert.equal(await stage.getByRole("link",{name:"Turn it in 3D"}).getAttribute("href"),"/fittings/bolero-full-hand-replay");
     assert.equal(await stage.getByRole("link",{name:"Edit the draft"}).getAttribute("href"),"/workbench/?sample=full-hand-bolero");
-    assert.equal(await stage.getByRole("link",{name:"Full-scale A4 pattern"}).getAttribute("href"),"/fittings/bolero-full-hand-A4.pdf");
-    for(const garment of choices){
-      await select.selectOption(garment);
+    assert.equal(await stage.getByRole("link",{name:"Pattern (PDF)"}).getAttribute("href"),"/fittings/bolero-full-hand-A4.pdf");
+    const choices=[["Sundress","sundress"],["Hussar jacket","blue"],["Flared skirt","flare"],["Bolero & trousers","ensemble"],["Zouave bolero","bolero-full-hand"]];
+    for(const [name,garment] of choices){
+      await picker.getByRole("button",{name,exact:true}).click();
       const motion=stage.locator(`[data-garment="${garment}"]`);
       for(const chapter of ["Flat pattern","Match the edges","Sewn article"]){
         await motion.getByRole("button",{name:chapter,exact:true}).click();
@@ -88,7 +92,7 @@ test("the skirt atelier displays the selected native trajectory and its matching
 test("the drape room pairs each body and pose with its native cloth and endpoint loads", async () => {
   const page=await browser.newPage({...opts,reducedMotion:"reduce"});
   try {
-    await page.goto(site);
+    await page.goto(new URL("/sections/studies/",site).href);
     const reports=await (await page.request.get(new URL("/exhibits/poses/runs.json",site).href)).json();
     for(const chest of [48,52,54])for(const angle of [35,75,90]){
       const id=chest*10+"-"+angle,run=reports.cases[id];
@@ -269,29 +273,31 @@ test("the full-hand preset sews and drapes on the pinned Anny model", {
 test("visible preview plays, preserves a deliberate pause, and leaves the screen quiet", async () => {
   const p = await browser.newPage({ ...opts, reducedMotion:"no-preference" });
   try {
-    await p.goto(site);
-    await p.locator(".hero-screen").scrollIntoViewIfNeeded();
-    await p.waitForFunction(()=>document.querySelector(".hero-screen video")?.currentTime>.1);
-    await p.getByRole("button",{name:"Pause Inside the wardrobe preview"}).click();
-    await p.locator("#tracing").scrollIntoViewIfNeeded();
-    await p.locator(".hero-screen").scrollIntoViewIfNeeded();
-    assert.equal(await p.locator(".hero-screen video").evaluate(v=>v.paused),true);
-    await p.getByRole("button",{name:"Play Inside the wardrobe preview"}).click();
-    await p.waitForFunction(()=>document.querySelector(".hero-screen video")?.paused===false);
-    await p.locator("#materials").scrollIntoViewIfNeeded();
-    await p.waitForFunction(()=>document.querySelector(".hero-screen video")?.paused===true);
-    await p.waitForFunction(()=>Array.from(document.querySelectorAll("#materials video")).some(v=>v.currentTime>.1));
+    // The materials page shows two preview films side by side, above a long run of cards.
+    await p.goto(new URL("/sections/materials/",site).href);
+    await p.locator(".material-cover").first().scrollIntoViewIfNeeded();
+    await p.waitForFunction(()=>document.querySelector(".material-cover video")?.currentTime>.1);
+    await p.getByRole("button",{name:"Pause The torsion rig preview"}).click();
+    await p.locator(".ft-foot").scrollIntoViewIfNeeded();
+    await p.locator(".material-cover").first().scrollIntoViewIfNeeded();
+    assert.equal(await p.evaluate(()=>document.querySelector(".material-cover video").paused),true);
+    await p.getByRole("button",{name:"Play The torsion rig preview"}).click();
+    await p.waitForFunction(()=>document.querySelector(".material-cover video")?.paused===false);
+    // the film beside it plays on its own while it is on screen
+    await p.waitForFunction(()=>Array.from(document.querySelectorAll(".material-cover video")).slice(1).some(v=>v.currentTime>.1));
+    await p.locator(".ft-foot").scrollIntoViewIfNeeded();
+    await p.waitForFunction(()=>Array.from(document.querySelectorAll(".material-cover video")).every(v=>v.paused));
   } finally { await p.close(); }
 });
 
 test("reduced motion leaves the film paused until requested", async () => {
   const p=await browser.newPage({...opts,reducedMotion:"reduce",viewport:{width:390,height:844}});
   try {
-    await p.goto(site);await p.getByRole("button",{name:"Play Inside the wardrobe preview"}).waitFor();
-    const hero=p.locator(".hero-screen video");
-    assert.equal(await hero.evaluate(v=>v.paused && v.getAttribute("src")===null),true);
-    await p.getByRole("button",{name:"Play Inside the wardrobe preview"}).click();
-    await p.waitForFunction(()=>document.querySelector(".hero-screen video")?.currentTime>.1);
+    await p.goto(new URL("/sections/materials/",site).href);await p.getByRole("button",{name:"Play The torsion rig preview"}).waitFor();
+    const film=p.locator(".material-cover video").first();
+    assert.equal(await film.evaluate(v=>v.paused && v.getAttribute("src")===null),true);
+    await p.getByRole("button",{name:"Play The torsion rig preview"}).click();
+    await p.waitForFunction(()=>document.querySelector(".material-cover video")?.currentTime>.1);
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth),390);
   } finally {await p.close();}
 });
@@ -705,7 +711,7 @@ test("the hussar wardrobe connects the dressed figure, pattern front and native 
   } finally {await p.close();}
 });
 
-test("the menu lands the keyboard on a section, a closed rail names its links, and the atelier's form spans a phone", async () => {
+test("the menu lands the keyboard on a section of the home page, and the atelier's form spans a phone", async () => {
   const phone = await browser.newPage({ ...opts, viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   try {
     await phone.goto(site);
@@ -713,29 +719,25 @@ test("the menu lands the keyboard on a section, a closed rail names its links, a
     const settled = id => phone.waitForFunction(target =>
       !document.querySelector("dialog.ft-sheet[open]") && document.activeElement?.id === target, id);
     await phone.getByRole("button", { name: "Menu" }).click();
-    await sheet.getByRole("navigation", { name: "On this page" }).getByRole("link", { name: "Wardrobe" }).press("Enter");
-    await settled("wardrobe");
+    await sheet.getByRole("navigation", { name: "On this page" }).getByRole("link", { name: "Garments made this way" }).press("Enter");
+    await settled("garments");
     await phone.keyboard.press("Tab");
-    assert.equal(await phone.evaluate(() => !!document.activeElement?.closest("#wardrobe")), true,
+    assert.equal(await phone.evaluate(() => !!document.activeElement?.closest("#garments")), true,
       "After an entry that points into this page, the next Tab continues inside that section");
     // The click usually lands on a child of the link, which once left the sheet open over the scrolled page.
     await phone.getByRole("button", { name: "Menu" }).click();
-    await sheet.locator('a[href="/#materials"] strong').click();
-    await settled("materials");
+    await sheet.getByRole("navigation", { name: "On this page" }).getByRole("link", { name: "Three steps" }).click();
+    await settled("steps");
+    // The home page is a short introduction: every part of the catalogue is reached from it by a link.
+    const sections = await phone.locator("main > section").count();
+    assert.ok(sections <= 7, `${sections} sections on the home page`);
+    for (const route of ["/sections/wardrobe/", "/sections/studies/", "/sections/studio/", "/sections/materials/",
+      "/sections/tracing/", "/sections/films/", "/how-it-works/", "/get-started/"])
+      assert.ok(await phone.locator(`main a[href="${route}"]`).count() >= 1, `the home page links to ${route}`);
     // The form once shared a grid row with three control groups and was squeezed to 135 px.
     await phone.goto(new URL("/studies/skirt/", site).href);
     await phone.locator(".sa-display").waitFor();
     const form = await phone.locator(".sa-display").boundingBox();
     assert.ok(form.width >= 380, `The fitted form spans the phone (${form.width} px)`);
   } finally { await phone.close(); }
-  const wide = await browser.newPage({ ...opts, viewport: { width: 1440, height: 900 } });
-  try {
-    await wide.goto(site);
-    // Its labels are not displayed until it is opened, so each link carries its name another way.
-    const rail = wide.getByRole("navigation", { name: "On this page" });
-    const marks = await rail.getByRole("link").count();
-    assert.ok(marks > 0, "The rail is drawn on a wide screen with a pointer");
-    assert.equal(await rail.getByRole("link", { name: /\S/ }).count(), marks, "Every mark has a name");
-    assert.equal(await rail.getByRole("link", { name: "Wardrobe", exact: true }).count(), 1);
-  } finally { await wide.close(); }
 });

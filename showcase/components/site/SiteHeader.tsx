@@ -10,8 +10,11 @@ export function Mark() {
 }
 
 function current(pathname: string, href: string, inSheet = false) {
-  if (href.startsWith("/#")) {
-    const anchor = href.slice(2);
+  // An entry for a part of the catalogue points at that part's page (/sections/<id>/), or at a place on it
+  // (/sections/<id>/#<anchor>); `anchor` names the part either way.
+  const section = /^\/sections\/([a-z-]+)\/(?:#([a-z-]+))?$/.exec(href);
+  if (section) {
+    const anchor = section[2] ?? section[1];
     // In the full menu sheet, Skirt atelier, Trouser study, A4 tile assembly, Jacket sewing order and Drape gallery each have their own exact entries.
     if (anchor === "drape-room") return !inSheet && pathname !== "/studies/tiling/" && pathname !== "/studies/sewing/" && (pathname.startsWith("/studies/") || pathname === "/sections/studies/");
     if (anchor === "wardrobe") {
@@ -28,7 +31,7 @@ function current(pathname: string, href: string, inSheet = false) {
       return ["studio", "draft", "cut", "stitch", "repair"].some(id => pathname === `/sections/${id}/`) ||
         (!inSheet && (pathname === "/studies/tiling/" || pathname === "/studies/sewing/"));
     }
-    return pathname === `/sections/${anchor}/`;
+    return pathname === `/sections/${section[1]}/`;
   }
   return pathname === href;
 }

@@ -6,6 +6,7 @@
 // film still cut down. Pass a new output directory; review the files, then copy cards/ and index/ into
 // public/media/.
 //   FTX_STUDIO_URL=http://127.0.0.1:3000 CHROMIUM_EXECUTABLE=... node scripts/render-exhibit-cards.mjs OUT_DIR
+//   node scripts/render-exhibit-cards.mjs OUT_DIR home      only home/NAME.webp, from files in public/
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -47,12 +48,27 @@ const strips = [
   ["strip-trouser-posture", "public/media/trouser-posture.jpg"],
   ["strip-rig", "public/media/rig-strip.jpg"],
 ];
+// The home page's pictures (home/NAME.webp), 3:2 at 1440 x 960.
+// A pattern drawing: an exported master SVG, the part of it to show (in its own millimetres), drawn in ink on
+// paper with its hairlines thickened so they survive the reduction.
+const drawings = [
+  ["pattern", "public/sundress/master.svg", { left: 2, top: 640, width: 1380, height: 920 }],
+];
+// The two sleeve pictures of the visual-fitting review sheet, at their own size and without its captions.
+const details = [
+  ["sleeve-before", "public/fittings/sleeve-contact-review.png", { left: 233, top: 70, width: 310, height: 500 }],
+  ["sleeve-after", "public/fittings/sleeve-contact-review.png", { left: 977, top: 70, width: 310, height: 500 }],
+];
+// Portraits of the sewn garments: the middle of each construction film's poster, where the form stands.
+const portraits = ["sundress", "blue", "flare", "ensemble", "trousers", "bolero"];
 const card = { width: 840, height: 560 }, thumb = { width: 330, height: 220 }; // both 3:2
+const plate = { width: 1440, height: 960 }, portrait = { width: 960, height: 1200 };
 
 const destination = resolve(process.argv[2]);
 await mkdir(destination);
 await mkdir(resolve(destination, "cards"));
 await mkdir(resolve(destination, "index"));
+await mkdir(resolve(destination, "home"));
 const save = async (folder, name, image, quality) => {
   const bytes = await image.webp({ quality }).toBuffer();
   await writeFile(resolve(destination, folder, `${name}.webp`), bytes);
@@ -60,6 +76,30 @@ const save = async (folder, name, image, quality) => {
 };
 const source = file => resolve(import.meta.dirname, "..", file);
 
+for (const [name, file, part] of drawings) {
+  // At 72 dpi a millimetre is 72/25.4 px. Lines are dark on white, so thicken them on the negative.
+  const scale = 72 / 25.4;
+  const region = Object.fromEntries(Object.entries(part).map(([key, value]) => [key, Math.round(value * scale)]));
+  // (sharp runs each operation at a fixed place in its pipeline whatever the call order, so each step that
+  // depends on the one before is a pipeline of its own)
+  const drawn = await sharp(source(file), { density: 72 }).flatten({ background: "#ffffff" }).extract(region)
+    .greyscale().negate().png().toBuffer();
+  const thick = await sharp(drawn).blur(3.4).linear(6.5, 0).png().toBuffer();
+  const lines = await sharp(thick).negate().resize(plate.width, plate.height).toColourspace("srgb").png().toBuffer();
+  // white becomes paper (#fbf8f1) and black becomes ink (#202c33)
+  const paper = [251, 248, 241], ink = [32, 44, 51];
+  await save("home", name, sharp(lines).linear(paper.map((p, k) => (p - ink[k]) / 255), ink), 84);
+}
+for (const [name, file, part] of details) await save("home", name, sharp(source(file)).extract(part), 92);
+for (const name of portraits) {
+  const poster = sharp(source(`public/media/construction-${name}.jpg`));
+  const { width, height } = await poster.metadata();
+  const cut = Math.round(height * portrait.width / portrait.height);
+  await save("home", name, poster.extract({ left: Math.round((width - cut) / 2), top: 0, width: cut, height })
+    .resize(portrait.width, portrait.height), 82);
+}
+// `home` as a second argument stops here: those pictures need no served site.
+if (process.argv[3] === "home") process.exit(0);
 for (const [name, file] of strips) await save("cards", name, sharp(source(file)).resize(416), 80);
 for (const [name, file, part] of stills) {
   const picture = part ? sharp(source(file)).extract(part) : sharp(source(file));

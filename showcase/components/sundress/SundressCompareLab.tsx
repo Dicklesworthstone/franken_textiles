@@ -382,7 +382,7 @@ export default function SundressCompareLab() {
         <Crumbs
           trail={[
             ["Exhibition", "/"],
-            ["Wardrobe", "/#wardrobe"],
+            ["Wardrobe", "/sections/wardrobe/"],
             ["Garden sundress", "/wardrobe/sundress/"],
             ["Compare two drapes"],
           ]}

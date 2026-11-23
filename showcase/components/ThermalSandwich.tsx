@@ -510,7 +510,7 @@ ftx materials thermal-steady stack-request.json --json`;
     <>
       <SiteHeader />
       <main id="main" className="th-page">
-        <Crumbs trail={[["Exhibition", "/"], ["Material studies", "/#materials"], ["Thermal sandwich"]]} />
+        <Crumbs trail={[["Exhibition", "/"], ["Material studies", "/sections/materials/"], ["Thermal sandwich"]]} />
         <div className="wrap th-wrap">
           <div className="th-heading">
             <div>

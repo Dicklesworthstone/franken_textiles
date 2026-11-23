@@ -10,12 +10,11 @@ import InlineFilm, { PlaybackMark, filmFile } from "../components/InlineFilm";
 import GarmentPatterns from "./GarmentPatterns";
 import DrapeRoom from "./DrapeRoom";
 import ConstructionStudy,{constructionFilms} from "./construction/ConstructionStudy";
-import {ExhibitionCover,ExhibitionFeatures} from "./site/ExhibitionCover";
+import {ExhibitionCover} from "./site/ExhibitionCover";
+import Home from "./site/Home";
 import SiteHeader from "./site/SiteHeader";
 import SiteFooter from "./site/SiteFooter";
 import Reveal from "./site/Reveal";
-import { Claims, Deliverables, Pipeline, PlatformCapabilities, StartHere } from "./site/Story";
-import VisualFitting from "./site/VisualFitting";
 import { workbench } from "./site/links";
 import type { PanelOutline } from "../components/garmentMesh";
 
@@ -199,8 +198,10 @@ function Player({ item, close }: { item: Exhibit; close: () => void }) {
   </dialog>;
 }
 
+// With no `section` this is the home page: the opening film and components/site/Home.tsx. Each part of the
+// catalogue below is a page of its own (/sections/<id>/).
 export default function Exhibition({section}: {section?: string}) {
-  const show = (id: string) => !section || section === id;
+  const show = (id: string) => section === id;
   const Heading = section ? "h1" : "h2";
   const studio = section === "draft" || section === "cut" || section === "stitch" || section === "repair" ? section : undefined;
   const [filter, setFilter] = useState("All studies");
@@ -243,17 +244,10 @@ export default function Exhibition({section}: {section?: string}) {
   return <>
     <SiteHeader skipTo="#exhibition"/>
     <main id="exhibition">
-      {!section && <><ExhibitionCover/><ExhibitionFeatures/></>}
+      {!section && <><ExhibitionCover/><Home/></>}
       {section==="wardrobe"&&<ConstructionStudy choices={["sundress","eased","blue","yellow","column","flare","fez"]}/>}
       {section==="studies"&&<ConstructionStudy choices={["bolero","trousers","ensemble"]}/>}
       {show("studies") && <DrapeRoom/>}
-      {!section && <section className="dr-index" aria-label="Explore more of the studio"><div className="wrap">
-        <a href="/studies/trousers/?bench=posture&amp;run=squat-25"><img src="/media/cards/strip-trouser-posture.webp" alt="" loading="lazy" decoding="async"/><div><small>Body &amp; cloth</small><strong>Bend the knees in trousers</strong></div><Arrow diagonal/></a>
-        <a href="/experiments/strip/"><img src="/media/cards/strip-rig.webp" alt="" loading="lazy" decoding="async"/><div><small>Textile mechanics</small><strong>Pull cloth on the bias</strong></div><Arrow diagonal/></a>
-        <div className="dr-reel"><figure className="hero-screen"><div><InlineFilm id="wardrobe-reel" title="Inside the wardrobe"/></div></figure>
-          <button onClick={()=>setItem({reel:true})}><span><small>Studio film</small><strong>Inside the wardrobe</strong></span><Arrow diagonal/></button></div>
-      </div></section>}
-      {!section && <><VisualFitting/><Pipeline/></>}
       {show("wardrobe") && <section id="wardrobe" className="paper wardrobe-gallery"><div className="wrap collection">
         <div className="section-top"><div><p className="kicker">Interactive garments</p><Heading className="section-title"><a href="/sections/wardrobe/">The wardrobe<span>.</span></a></Heading></div>
           <p>Take a garment off the rail. Turn it around, change the figure, or look beneath a layer.</p></div>
@@ -374,7 +368,6 @@ export default function Exhibition({section}: {section?: string}) {
         </div>
       </div></section>}
       {show("tracing") && <TraceReveal heading={Heading}/>}
-      {!section && <PlatformCapabilities/>}
       {show("films") && <section id="films" className="films"><div className="wrap film-grid">
         <div className="screening" ref={projection}><p className="kicker">Films · 4K 60 fps</p><Heading className="section-title"><a href="/sections/films/">Screening room<span>.</span></a></Heading>
           <p className="screening-lead">Source-rendered captures from the native cloth solver, historical wardrobe studies, and live WASM workbenches.</p>
@@ -403,7 +396,6 @@ export default function Exhibition({section}: {section?: string}) {
             <img src={`/media/${f.id}.jpg`} alt="" loading="lazy"/><span><small className="mono">{f.detail}</small><strong>{f.title}</strong></span><span className="play-ring"><PlaybackMark/></span></button>)}</div>
         </div>
       </div></section>}
-      {!section && <Deliverables/>}
       {show("tools") && <section id="workbenches" className="paper workbench-band"><div className="wrap workbench-library"><div className="section-top"><div><p className="kicker">Run FrankenTextiles in your browser</p><Heading className="section-title"><a href="/sections/tools/">The workbenches<span>.</span></a></Heading></div>
         <p>Four local WebAssembly tools (4.4 MiB gzipped). Each opens with a working example and runs bit-identically to the native CLI with zero uploads.</p></div>
         <div className="workbench-shelves">{[
@@ -416,7 +408,6 @@ export default function Exhibition({section}: {section?: string}) {
           <div><h3>{title}</h3><p>{description}</p></div><Arrow diagonal/>
         </a>)}</div>
       </div></section>}
-      {!section && <><Claims/><StartHere/></>}
     </main>
     <SiteFooter/>
     <Reveal/>

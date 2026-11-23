@@ -7,7 +7,7 @@ import "@fontsource/instrument-serif/latin-400-italic.css";
 import "./style.css";
 import { repo, siteOrigin } from "../components/site/links";
 
-const description = "Deterministic sewing patterns, parametric Anny bodies, and contact-correct cloth draping in Rust and WebAssembly. Inspect pixel-to-pattern fits, test fabrics, and print full-size patterns locally.";
+const description = "FrankenTextiles drafts a sewing pattern to your measurements, sews it on a body in simulation so you can see how it hangs, and prints the pieces at full size. Free to use, and it runs in your browser.";
 
 export const metadata: Metadata = {
   title: "FrankenTextiles — The Pattern Room",

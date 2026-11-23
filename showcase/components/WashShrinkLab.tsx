@@ -466,7 +466,7 @@ export default function WashShrinkLab() {
     <>
       <SiteHeader />
       <main id="main" className="ws-page">
-        <Crumbs trail={[["Exhibition", "/"], ["Material studies", "/#materials"], ["Wash, shrink & recut"]]} />
+        <Crumbs trail={[["Exhibition", "/"], ["Material studies", "/sections/materials/"], ["Wash, shrink & recut"]]} />
         <div className="wrap ws-wrap">
           <div className="ws-heading">
             <div>

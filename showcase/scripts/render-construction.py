@@ -99,9 +99,28 @@ def fez():
     return np.array(frames),np.arange(71),np.array(faces),{"crown":(0,lid),"tip":(lid,lid+98)},None,None,{},{}
 
 
+def published_trousers():
+    """The standing trouser run as the site publishes it: every third recorded frame of the replay, and
+    the form from the trouser study's surface of the same run (stored to 0.1 mm)."""
+    layout = document(PUBLIC/"exhibits/trousers.json")
+    study = document(PUBLIC/"exhibits/trouser-study/study.json")
+    case = next(c for c in study["cases"] if c["id"]=="standing")
+    if case["pc2Sha256"] != layout["sourcePc2Sha256"]:
+        raise ValueError("The trouser replay and the trouser study must come from one run")
+    frames = np.frombuffer((PUBLIC/"exhibits/trousers.bin").read_bytes(),"<f4").reshape(len(layout["frames"]),layout["vertices"],3)
+    nb = study["bodyVertices"]
+    surface = gzip.decompress((PUBLIC/"exhibits/trouser-study"/case["surface"]).read_bytes())
+    body = np.frombuffer(surface,"<i2",nb*3).reshape(-1,3).astype("f")/10000
+    mesh = gzip.decompress((PUBLIC/"exhibits/trouser-study/mesh.gz").read_bytes())
+    indices = np.frombuffer(mesh,"<u2",study["bodyIndices"]).reshape(-1,3).astype(np.int64)
+    return frames,np.array(layout["frames"]),np.array(layout["triangles"]).reshape(-1,3),layout["panels"],body,indices,layout,layout["phases"]
+
+
 def load(name, native):
     if name == "fez":
         return fez()
+    if name == "trousers" and native is None:
+        return published_trousers()
     packed = {"sundress":"sundress/dress", "eased":"sundress/light", "blue":"hussar/dolman", "yellow":"hussar/dolman"}
     if name in packed:
         source = PUBLIC / "exhibits" / packed[name]
