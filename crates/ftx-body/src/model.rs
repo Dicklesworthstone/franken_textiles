@@ -80,6 +80,9 @@ pub fn anchor_weights(x: f64, anchors: &[f64]) -> Vec<f64> {
     if n == 0 {
         return w;
     }
+    if x.is_nan() {
+        return vec![f64::NAN; n];
+    }
     if n == 1 {
         w[0] = 1.0;
         return w;
@@ -270,49 +273,90 @@ impl AnnyModel {
                 ),
             ));
         }
+        Refusal::finite("fixed_value", ph.fixed_value)?;
         for f in &ph.exposed {
             Refusal::finite(f, p.phenotype.value(f).unwrap_or(ph.fixed_value))?;
         }
         for (j, v) in p.local_changes.iter().enumerate() {
-            Refusal::finite(&h.labels.local_changes[j], *v)?;
+            let label = h
+                .labels
+                .local_changes
+                .get(j)
+                .map_or("local_change", String::as_str);
+            Refusal::finite(label, *v)?;
         }
         // Weight of every feature's anchors; race splits its fixed values evenly (v / Σv).
-        let feature_weights: Vec<Vec<f64>> = ph
-            .features
-            .iter()
-            .map(|f| {
-                if f == "race" {
-                    let v = ph.fixed_value;
-                    let n = ph.components.iter().filter(|(g, _)| g == "race").count();
-                    let sum = (0..n).fold(0.0, |acc, _| acc + v);
-                    vec![v / sum; n]
+        let mut feature_weights: Vec<Vec<f64>> = Vec::with_capacity(ph.features.len());
+        for f in &ph.features {
+            if f == "race" {
+                let v = ph.fixed_value;
+                let n = ph.components.iter().filter(|(g, _)| g == "race").count();
+                if n == 0 {
+                    feature_weights.push(Vec::new());
                 } else {
-                    let x = if ph.exposed.contains(f) {
-                        p.phenotype.value(f).unwrap_or(ph.fixed_value)
-                    } else {
-                        ph.fixed_value
-                    };
-                    anchor_weights(x, &ph.anchors[f])
+                    let sum = (0..n).fold(0.0, |acc, _| acc + v);
+                    if !sum.is_finite() || sum == 0.0 {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "race phenotype fixed_value cannot be normalized",
+                        ));
+                    }
+                    feature_weights.push(vec![v / sum; n]);
                 }
-            })
-            .collect();
-        let w: Vec<f64> = self
-            .components
-            .iter()
-            .map(|&(f, k)| feature_weights[f][k])
-            .collect();
+            } else {
+                let anchors = ph.anchors.get(f).ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("phenotype feature '{f}' has no anchors"),
+                    )
+                })?;
+                let x = if ph.exposed.contains(f) {
+                    p.phenotype.value(f).unwrap_or(ph.fixed_value)
+                } else {
+                    ph.fixed_value
+                };
+                feature_weights.push(anchor_weights(x, anchors));
+            }
+        }
+        let mut w: Vec<f64> = Vec::with_capacity(self.components.len());
+        for &(f, k) in &self.components {
+            let weight = feature_weights
+                .get(f)
+                .and_then(|weights| weights.get(k))
+                .copied()
+                .ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        "phenotype component index exceeds feature anchor count",
+                    )
+                })?;
+            w.push(weight);
+        }
         let ncomp = w.len();
         let mut coef = Vec::with_capacity(c.blendshapes);
-        for row in self.data.phenotype_mask.chunks_exact(ncomp) {
-            let mut prod = 1.0;
-            for (m, &mask) in row.iter().enumerate() {
-                prod *= if mask == 1 { w[m] } else { 1.0 };
+        if ncomp > 0 {
+            for row in self.data.phenotype_mask.chunks_exact(ncomp) {
+                let mut prod = 1.0;
+                for (m, &mask) in row.iter().enumerate() {
+                    prod *= if mask == 1 { w[m] } else { 1.0 };
+                }
+                coef.push(prod);
             }
-            coef.push(prod);
+        } else if c.phenotype_blendshapes != 0 || !self.data.phenotype_mask.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "phenotype blendshapes require at least one phenotype component",
+            ));
         }
         for &v in &p.local_changes {
             coef.push(if v >= 0.0 { v } else { 0.0 });
             coef.push(if -v >= 0.0 { -v } else { 0.0 });
+        }
+        if coef.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "blendshape coefficients contain a non-finite value",
+            ));
         }
         Ok(coef)
     }
@@ -325,6 +369,22 @@ impl AnnyModel {
         let d = &self.data;
         let c = &d.header.counts;
         let coef = self.coefficients(p)?;
+        let expected_bone_bs = coef.len().checked_mul(c.bones);
+        if d.template_vertices.len() != c.vertices
+            || d.template_bone_heads.len() != c.bones
+            || d.template_bone_tails.len() != c.bones
+            || d.bone_rolls.len() != c.bones
+            || d.blendshape_row_ptr.len() < coef.len() + 1
+            || self.dense_rows.len() < coef.len()
+            || expected_bone_bs.is_none_or(|n| {
+                d.bone_heads_blendshapes.len() < n || d.bone_tails_blendshapes.len() < n
+            })
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "body model template or blendshape tables do not match header counts",
+            ));
+        }
         // Σ c_k·B_k first, then the template (the package's `template + einsum`).
         let mut sum = vec![Vec3::ZERO; c.vertices];
         let mut head_sum = vec![Vec3::ZERO; c.bones];
@@ -337,6 +397,12 @@ impl AnnyModel {
                 d.blendshape_row_ptr[k] as usize,
                 d.blendshape_row_ptr[k + 1] as usize,
             );
+            if a > b || b > d.blendshape_delta.len() || b > d.blendshape_vertex.len() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "blendshape row pointer exceeds table bounds",
+                ));
+            }
             if self.dense_rows[k] {
                 // Identity indices preserve the sparse path's accumulation order exactly.
                 for (value, &delta) in sum.iter_mut().zip(&d.blendshape_delta[a..b]) {
@@ -347,7 +413,13 @@ impl AnnyModel {
                     .iter()
                     .zip(&d.blendshape_delta[a..b])
                 {
-                    sum[vi as usize] += delta * ck;
+                    let slot = sum.get_mut(vi as usize).ok_or_else(|| {
+                        Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "blendshape vertex index exceeds vertex count",
+                        )
+                    })?;
+                    *slot += delta * ck;
                 }
             }
             for j in 0..c.bones {
@@ -381,6 +453,20 @@ impl AnnyModel {
             Vec3::from(d.header.y_axis),
             degenerate,
         );
+        if vertices
+            .iter()
+            .chain(&bone_heads)
+            .chain(&bone_tails)
+            .any(|v| !v.is_finite())
+            || bone_frames
+                .iter()
+                .any(|a| !a.t.is_finite() || a.m.rows.iter().flatten().any(|v| !v.is_finite()))
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "rest body evaluation produced a non-finite vertex or bone frame",
+            ));
+        }
         Ok(RestBody {
             vertices,
             bone_heads,
@@ -422,23 +508,46 @@ impl AnnyModel {
         mode: SkinningMode,
     ) -> Result<PosedBody, Refusal> {
         let d = &self.data;
-        if deltas.len() != d.header.counts.bones {
+        let c = &d.header.counts;
+        if deltas.len() != c.bones {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 format!(
                     "{} bone deltas given; the model has {} bones",
                     deltas.len(),
-                    d.header.counts.bones
+                    c.bones
                 ),
             ));
         }
-        if deltas
-            .iter()
-            .any(|a| !a.t.is_finite() || a.m.rows.iter().flatten().any(|v| !v.is_finite()))
+        let width = c.vertices.checked_mul(c.influences);
+        if rest.vertices.len() != c.vertices
+            || rest.bone_frames.len() != c.bones
+            || d.header.labels.bone_parents.len() != c.bones
+            || width != Some(d.vertex_bone_indices.len())
+            || width != Some(d.vertex_bone_weights.len())
+            || d.header
+                .labels
+                .bone_parents
+                .iter()
+                .enumerate()
+                .any(|(j, &p)| p >= 0 && p as u64 >= j as u64)
+            || d.vertex_bone_indices.iter().any(|&b| b as usize >= c.bones)
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "rest body dimensions, bone hierarchy, or skinning tables do not match the body model",
+            ));
+        }
+        let affine_finite =
+            |a: &Affine| a.t.is_finite() && a.m.rows.iter().flatten().all(|v| v.is_finite());
+        if deltas.iter().any(|a| !affine_finite(a))
+            || rest.bone_frames.iter().any(|a| !affine_finite(a))
+            || rest.vertices.iter().any(|v| !v.is_finite())
+            || d.vertex_bone_weights.iter().any(|w| !w.is_finite())
         {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
-                "a bone delta holds a non-finite number",
+                "pose input holds a non-finite number",
             ));
         }
         let (bone_poses, transforms) =
@@ -448,21 +557,29 @@ impl AnnyModel {
                 &rest.vertices,
                 &d.vertex_bone_indices,
                 &d.vertex_bone_weights,
-                d.header.counts.influences,
+                c.influences,
                 &transforms,
             ),
             SkinningMode::DualQuaternion => dual_quaternion_skinning(
                 &rest.vertices,
                 &d.vertex_bone_indices,
                 &d.vertex_bone_weights,
-                d.header.counts.influences,
+                c.influences,
                 &transforms,
             ),
         };
-        if vertices.iter().any(|v| !v.is_finite()) {
+        if vertices.iter().any(|v| !v.is_finite())
+            || bone_poses
+                .iter()
+                .chain(&transforms)
+                .any(|a| !affine_finite(a))
+        {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
-                format!("{} skinning produced a non-finite vertex", mode.as_str()),
+                format!(
+                    "{} skinning produced a non-finite vertex or bone transform",
+                    mode.as_str()
+                ),
             ));
         }
         Ok(PosedBody {
@@ -561,6 +678,86 @@ mod tests {
         assert!(
             age_parameter_for_years(-1.0) < 0.0,
             "extrapolates below birth"
+        );
+    }
+
+    #[test]
+    fn anchor_weights_propagates_nan_instead_of_clamping() {
+        let w = anchor_weights(f64::NAN, &[0.0, 0.5, 1.0]);
+        assert_eq!(w.len(), 3);
+        assert!(w.iter().all(|v| v.is_nan()));
+    }
+
+    #[test]
+    fn zero_component_model_rest_and_pose_validate_and_fail_closed() {
+        let data = AnnyData {
+            header: serde_json::from_value(serde_json::json!({
+                "schema":"ftxbody/1", "model":"anny", "anny_version":"0.6.1",
+                "configuration":"synthetic", "licence":"synthetic", "package_sha256":{},
+                "counts":{"vertices":2,"faces":0,"bones":2,"blendshapes":2,
+                    "phenotype_blendshapes":0,"local_changes":1,"influences":1},
+                "phenotype":{"features":[],"components":[],"anchors":{},"exposed":[],"fixed_value":0.5},
+                "labels":{"blendshapes":["lc_pos","lc_neg"],"bones":["root","child"],
+                    "bone_parents":[-1,0],"local_changes":["lc"]},
+                "y_axis":[0,1,0], "degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],
+                "waist_loop_final":[], "arrays":{}
+            }))
+            .unwrap(),
+            template_vertices: vec![Vec3::ZERO, Vec3::new(0.1, 0.2, 0.3)],
+            faces: vec![],
+            blendshape_row_ptr: vec![0, 1, 1],
+            blendshape_vertex: vec![1],
+            blendshape_delta: vec![Vec3::new(1e300, 0.0, 0.0)],
+            phenotype_mask: vec![],
+            template_bone_heads: vec![Vec3::ZERO, Vec3::new(0.0, 0.0, 0.5)],
+            template_bone_tails: vec![Vec3::new(0.0, 0.0, 0.5), Vec3::new(0.0, 0.0, 1.0)],
+            bone_heads_blendshapes: vec![Vec3::ZERO; 4],
+            bone_tails_blendshapes: vec![Vec3::ZERO; 4],
+            bone_rolls: vec![Mat3::IDENTITY; 2],
+            vertex_bone_indices: vec![0, 0],
+            vertex_bone_weights: vec![1.0, 1.0],
+            base_mesh_vertex_indices: vec![0, 1],
+        };
+        let model = AnnyModel::from_data(data).unwrap();
+        // Zero phenotype components must not panic in chunks_exact(0).
+        let zero_params = model.params(Phenotype::default());
+        let rest = model.rest(&zero_params).unwrap();
+        assert_eq!(rest.vertices.len(), 2);
+
+        // Overflowing local_change refuses NonFinite instead of returning INF vertices.
+        let mut big = zero_params;
+        big.local_changes[0] = 1e20;
+        assert_eq!(model.rest(&big).unwrap_err().code, RefusalCode::NonFinite);
+
+        // Mismatched RestBody refuses InvalidDocument instead of panicking.
+        let mut short_rest = rest.clone();
+        short_rest.bone_frames.pop();
+        assert_eq!(
+            model
+                .pose(&short_rest, &[Affine::IDENTITY; 2])
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Non-finite rest bone frame refuses NonFinite even on an unweighted child bone.
+        let mut nan_rest = rest.clone();
+        nan_rest.bone_frames[1].t.x = f64::NAN;
+        assert_eq!(
+            model
+                .pose(&nan_rest, &[Affine::IDENTITY; 2])
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+
+        // Overflowing bone transform on an unweighted child bone refuses NonFinite.
+        let mut huge_deltas = [Affine::IDENTITY; 2];
+        huge_deltas[1].t = Vec3::new(1e308, 0.0, 0.0);
+        huge_deltas[0].t = Vec3::new(1e308, 0.0, 0.0);
+        assert_eq!(
+            model.pose(&rest, &huge_deltas).unwrap_err().code,
+            RefusalCode::NonFinite
         );
     }
 }

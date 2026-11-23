@@ -209,6 +209,12 @@ impl BodyFrames {
             (descendants(parents, bone("upperleg01.L")?), Region::LegL),
         ];
         let mm: Vec<Vec3> = posed.vertices.iter().map(|v| *v * 1000.0).collect();
+        if mm.iter().any(|p| !p.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "posed body vertices overflow millimetre coordinates",
+            ));
+        }
         let region: Vec<Region> = (0..mm.len())
             .map(|v| {
                 let row = &data.vertex_bone_weights[v * k..(v + 1) * k];
@@ -221,7 +227,14 @@ impl BodyFrames {
             })
             .collect();
         let head = |label: &str| -> Result<Vec3, Refusal> {
-            Ok(posed.bone_poses[bone(label)?].t * 1000.0)
+            let p = posed.bone_poses[bone(label)?].t * 1000.0;
+            if !p.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    format!("bone '{label}' position overflows millimetre coordinates"),
+                ));
+            }
+            Ok(p)
         };
         let floor_z = mm.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
         let top_z = mm.iter().map(|p| p.z).fold(f64::NEG_INFINITY, f64::max);
@@ -369,6 +382,33 @@ impl BodyFrames {
                 .map(|(p, _)| *p)
                 .collect()
         };
+        let leg_landmarks_l = [
+            ankle_l.z - floor_z,
+            ankle_l.z + 0.6 * (knee_l.z - ankle_l.z) - floor_z,
+            knee_l.z - floor_z,
+        ];
+        if ![
+            floor_z,
+            top_z,
+            waist_z,
+            y_c,
+            tip_h,
+            tip_h_l,
+            upper_arm_radius,
+            upper_arm_radius_l,
+            arm_length,
+            arm_length_l,
+        ]
+        .into_iter()
+        .chain(landmarks.values().copied())
+        .chain(leg_landmarks_l)
+        .all(f64::is_finite)
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "derived body landmarks or frame spans overflow finite millimetres",
+            ));
+        }
         Ok(Self {
             torso,
             arm_r: arm,
@@ -389,11 +429,7 @@ impl BodyFrames {
             torso_points: pick(Region::Torso),
             leg_points: pick(Region::LegR),
             leg_points_l: pick(Region::LegL),
-            leg_landmarks_l: [
-                ankle_l.z - floor_z,
-                ankle_l.z + 0.6 * (knee_l.z - ankle_l.z) - floor_z,
-                knee_l.z - floor_z,
-            ],
+            leg_landmarks_l,
         })
     }
 
@@ -669,5 +705,16 @@ mod tests {
         // Zero-length neck axis -> DegenerateGeometry
         let err = BodyFrames::new(&make_model(vec![0], 1), &posed).unwrap_err();
         assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+
+        // Finite metres that overflow after * 1000.0 mm scaling -> NonFinite
+        let mut huge_posed = posed.clone();
+        huge_posed.vertices[0].z = 1e306;
+        let err = BodyFrames::new(&make_model(vec![0], 1), &huge_posed).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
+
+        let mut huge_bone = posed;
+        huge_bone.bone_poses[3].t.x = 1e306;
+        let err = BodyFrames::new(&make_model(vec![0], 1), &huge_bone).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
     }
 }

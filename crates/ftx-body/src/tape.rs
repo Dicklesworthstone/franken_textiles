@@ -68,17 +68,29 @@ impl<'a> Slicer<'a> {
             0
         };
         // the slabs each triangle reaches; counted, then filled in triangle order (one allocation each)
-        let spans: Vec<(usize, usize)> = triangles
-            .iter()
-            .map(|t| {
-                let (lo, hi) = t
-                    .iter()
-                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| {
-                        (a.min(vertices[v].z), b.max(vertices[v].z))
-                    });
-                (slab(lo), slab(hi))
-            })
-            .collect();
+        let mut spans: Vec<(usize, usize)> = Vec::with_capacity(triangles.len());
+        for t in triangles {
+            let mut lo = f64::INFINITY;
+            let mut hi = f64::NEG_INFINITY;
+            for &v in t {
+                let Some(p) = vertices.get(v) else {
+                    return direct();
+                };
+                if !p.z.is_finite() {
+                    return direct();
+                }
+                lo = lo.min(p.z);
+                hi = hi.max(p.z);
+            }
+            if lo < z0 || hi > z1 {
+                return direct();
+            }
+            let (slo, shi) = (slab(lo), slab(hi));
+            if slo > shi || shi >= n {
+                return direct();
+            }
+            spans.push((slo, shi));
+        }
         let memberships = spans.iter().try_fold(0usize, |total, &(lo, hi)| {
             hi.checked_sub(lo)?.checked_add(1)?.checked_add(total)
         });
@@ -156,10 +168,21 @@ fn loops_of(
     faces: impl IntoIterator<Item = usize>,
     z: f64,
 ) -> Vec<Vec<[f64; 2]>> {
+    if !z.is_finite() {
+        return Vec::new();
+    }
     let above = |i: usize| vertices[i].z >= z;
     // Each cut triangle gives one segment between two cut edges (an edge is keyed by its sorted ends).
     let mut segments: Vec<[(usize, usize); 2]> = Vec::new();
-    for t in faces.into_iter().map(|f| &triangles[f]) {
+    for f in faces {
+        let Some(t) = triangles.get(f) else {
+            continue;
+        };
+        if t.iter()
+            .any(|&i| vertices.get(i).is_none_or(|p| !p.is_finite()))
+        {
+            continue;
+        }
         let mut cut = [(0, 0); 2];
         let mut n = 0;
         for k in 0..3 {
@@ -174,6 +197,9 @@ fn loops_of(
         if n == 2 {
             segments.push(cut);
         }
+    }
+    if segments.is_empty() {
+        return Vec::new();
     }
     // the segments at each cut edge: (edge, segment) pairs in an open-addressed table at most half
     // full; an edge's pairs all lie in the probe run from its hash, and the walk takes the lowest
@@ -232,7 +258,7 @@ fn loops_of(
                 break true;
             }
         };
-        if closed && poly.len() >= 3 {
+        if closed && poly.len() >= 3 && poly.iter().all(|p| p[0].is_finite() && p[1].is_finite()) {
             loops.push(poly);
         }
     }
@@ -288,7 +314,11 @@ pub fn hull_perimeter(points: &[[f64; 2]]) -> f64 {
 /// points dropped).
 #[must_use]
 pub fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
-    let mut p = points.to_vec();
+    let mut p: Vec<[f64; 2]> = points
+        .iter()
+        .copied()
+        .filter(|q| q[0].is_finite() && q[1].is_finite())
+        .collect();
     p.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
     p.dedup();
     if p.len() < 2 {
@@ -324,6 +354,9 @@ fn path_length(points: &[[f64; 2]]) -> f64 {
 /// The arc of a counter-clockwise `hull` from vertex `a` to vertex `b`, going forward (`true`) or back.
 fn hull_arc(hull: &[[f64; 2]], a: usize, b: usize, forward: bool) -> Vec<[f64; 2]> {
     let n = hull.len();
+    if n == 0 || a >= n || b >= n {
+        return Vec::new();
+    }
     let mut out = vec![hull[a]];
     let mut i = a;
     while i != b {
@@ -378,12 +411,25 @@ pub fn head_girth(torso: &Slicer, frames: &BodyFrames) -> Option<f64> {
     let top = *frames.landmarks.get("head_top")?;
     let hh = top - frames.landmarks.get("c7")?;
     let axis = [frames.head_bone.x, frames.head_bone.y];
+    if !(top.is_finite()
+        && hh.is_finite()
+        && hh > 0.0
+        && frames.floor_z.is_finite()
+        && axis[0].is_finite()
+        && axis[1].is_finite())
+    {
+        return None;
+    }
     let mut best: Option<f64> = None;
     let mut d = 0.15 * hh;
     while d <= 0.5 * hh {
         let g = torso.girth_near(frames.floor_z + top - d, axis)?;
         best = Some(best.map_or(g, |b: f64| b.max(g)));
-        d += 2.0;
+        let next = d + 2.0;
+        if !next.is_finite() || next <= d {
+            return None;
+        }
+        d = next;
     }
     best
 }
@@ -415,6 +461,9 @@ pub(crate) fn shoulder_and_optional_back(
     snp: Vec3,
 ) -> Option<(f64, Option<f64>)> {
     let j = frames.shoulder_joint_r;
+    if !snp.is_finite() || !j.is_finite() {
+        return None;
+    }
     // coronal section through the joint: (x, z) in world millimetres
     let coronal = in_frame(
         mm,
@@ -438,7 +487,11 @@ pub(crate) fn shoulder_and_optional_back(
     let mut x = snp.x - 2.0;
     while x > j.x {
         line.push([x, top_at(x)?]);
-        x -= 2.0;
+        let next = x - 2.0;
+        if !next.is_finite() || next >= x {
+            return None;
+        }
+        x = next;
     }
     line.push([j.x, acromion_z]);
     let shoulder = path_length(&line);
@@ -630,11 +683,36 @@ fn near_of(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<f64> {
                 .map(|i| {
                     let (a, b) = (l[i], l[(i + 1) % l.len()]);
                     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    if !dx.is_finite() || !dy.is_finite() {
+                        return det::hypot(a[0] - around[0], a[1] - around[1])
+                            .min(det::hypot(b[0] - around[0], b[1] - around[1]));
+                    }
                     let length2 = dx * dx + dy * dy;
                     // Closest point on the closed segment; cuts through vertices can repeat a point.
-                    let t = if length2 > 0.0 {
-                        (((around[0] - a[0]) * dx + (around[1] - a[1]) * dy) / length2)
-                            .clamp(0.0, 1.0)
+                    let t = if length2 > 0.0 && length2.is_finite() {
+                        let raw = ((around[0] - a[0]) * dx + (around[1] - a[1]) * dy) / length2;
+                        if raw.is_finite() {
+                            raw.clamp(0.0, 1.0)
+                        } else {
+                            let scale = det::hypot(dx, dy);
+                            if scale > 0.0 && scale.is_finite() {
+                                let (ux, uy) = (dx / scale, dy / scale);
+                                (((around[0] - a[0]) / scale) * ux
+                                    + ((around[1] - a[1]) / scale) * uy)
+                                    .clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            }
+                        }
+                    } else if length2.is_infinite() {
+                        let scale = det::hypot(dx, dy);
+                        if scale > 0.0 && scale.is_finite() {
+                            let (ux, uy) = (dx / scale, dy / scale);
+                            (((around[0] - a[0]) / scale) * ux + ((around[1] - a[1]) / scale) * uy)
+                                .clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        }
                     } else {
                         0.0
                     };
@@ -1419,5 +1497,62 @@ mod tests {
         assert_eq!(hull_perimeter(&[[1.0, 1.0], [1.0, 1.0]]), 0.0);
         let line = hull_perimeter(&[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]]);
         assert!((line - 4.0).abs() < 1e-12, "{line}");
+    }
+
+    #[test]
+    fn slicer_hull_and_walks_handle_oob_nan_and_huge_scales_safely() {
+        let (mut v, mut t) = prism(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]);
+        // Out-of-bounds triangle index and NaN vertex do not panic in Slicer::new or section_loops.
+        let oob_idx = v.len() + 10;
+        t.push([0, 1, oob_idx]);
+        v.push(Vec3::new(0.0, 0.0, f64::NAN));
+        t.push([v.len() - 1, 0, 1]);
+        let s = Slicer::new(&v, &t, 0.25);
+        assert_eq!(s.loops(0.5), section_loops(&v, &t, 0.5));
+        assert_eq!(s.girth(0.5, [1.0, 0.5]), Some(6.0));
+
+        // Non-finite points are filtered out of convex_hull; hull_arc rejects OOB safely.
+        let hull = convex_hull(&[
+            [0.0, 0.0],
+            [f64::NAN, 1.0],
+            [2.0, 0.0],
+            [2.0, 1.0],
+            [0.0, 1.0],
+            [f64::INFINITY, 0.0],
+        ]);
+        assert_eq!(hull.len(), 4);
+        assert!(hull_arc(&[], 0, 0, true).is_empty());
+        assert!(hull_arc(&hull, 0, 99, true).is_empty());
+
+        // Huge head height or shoulder span where +/- 2.0 stagnates terminates cleanly with None.
+        let (v_big, t_big) = prism(&[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]);
+        let v_big: Vec<Vec3> = v_big
+            .into_iter()
+            .map(|p| Vec3::new(p.x * 1e20, p.y * 1e20, p.z * 1e20))
+            .collect();
+        let s_big = Slicer::new(&v_big, &t_big, 5.0);
+        let mut frames = waist_frames();
+        frames.landmarks.insert("head_top".into(), 1e20);
+        frames.landmarks.insert("c7".into(), 0.0);
+        assert_eq!(head_girth(&s_big, &frames), None);
+        frames.shoulder_joint_r = Vec3::new(0.0, 0.0, 0.5e20);
+        assert_eq!(
+            shoulder_and_optional_back(
+                &v_big,
+                &t_big,
+                &s_big,
+                &frames,
+                Vec3::new(1e20, 0.0, 0.5e20)
+            ),
+            None
+        );
+
+        // Extreme coordinates in near_of rescale without length2 -> INF/INF = NaN corruption.
+        let loops = vec![
+            vec![[0.0, 0.0], [1e200, 0.0], [1e200, 1e200], [0.0, 1e200]],
+            vec![[3e200, 0.0], [5e200, 0.0], [5e200, 1e200], [3e200, 1e200]],
+        ];
+        let near = near_of(&loops, [0.5e200, -1e199]).unwrap();
+        assert!((near - 4e200).abs() / 4e200 < 1e-12, "near={near}");
     }
 }
