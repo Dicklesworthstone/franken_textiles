@@ -1436,27 +1436,39 @@ fn norms<const N: usize>(j: &[[f64; N]]) -> [f64; N] {
     std::array::from_fn(|k| j.iter().map(|row| row[k] * row[k]).sum::<f64>().sqrt())
 }
 
+/// Nonnegative maximum over an iterator that propagates any `NaN` rather than absorbing it into `0.0`.
+fn max_or_nan(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut best = 0.0_f64;
+    for v in values {
+        if v.is_nan() {
+            return f64::NAN;
+        }
+        if v > best {
+            best = v;
+        }
+    }
+    best
+}
+
 fn gradient<const N: usize>(p: [f64; N], j: &[[f64; N]], e: &Evaluation) -> f64 {
     let scales = norms(j);
-    (0..N)
-        .map(|k| {
-            let value = j
-                .iter()
-                .zip(&e.residuals)
-                .map(|(row, r)| row[k] * r)
-                .sum::<f64>();
-            let projected = if (p[k] <= 0.0 && value > 0.0) || (p[k] >= 1.0 && value < 0.0) {
-                0.0
-            } else {
-                value
-            };
-            if scales[k] == 0.0 {
-                0.0
-            } else {
-                projected.abs() / (scales[k] * (1.0 + e.sse.sqrt()))
-            }
-        })
-        .fold(0.0, f64::max)
+    max_or_nan((0..N).map(|k| {
+        let value = j
+            .iter()
+            .zip(&e.residuals)
+            .map(|(row, r)| row[k] * r)
+            .sum::<f64>();
+        let projected = if (p[k] <= 0.0 && value > 0.0) || (p[k] >= 1.0 && value < 0.0) {
+            0.0
+        } else {
+            value
+        };
+        if scales[k] == 0.0 {
+            0.0
+        } else {
+            projected.abs() / (scales[k] * (1.0 + e.sse.sqrt()))
+        }
+    }))
 }
 
 fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
@@ -1552,7 +1564,7 @@ fn search<const N: usize>(
                     scaled[k] / scales[k]
                 }
             });
-            let max = step.iter().map(|v| v.abs()).fold(0.0, f64::max);
+            let max = max_or_nan(step.iter().map(|v| v.abs()));
             if !max.is_finite() {
                 return Err(invalid("cylinder inverse step overflow"));
             }
@@ -1560,9 +1572,10 @@ fn search<const N: usize>(
                 step.iter_mut().for_each(|v| *v *= 0.25 / max);
             }
             let candidate = std::array::from_fn(|k| (p[k] + step[k]).clamp(0.0, 1.0));
-            let moved = (0..N)
-                .map(|k| (candidate[k] - p[k]).abs())
-                .fold(0.0, f64::max);
+            let moved = max_or_nan((0..N).map(|k| (candidate[k] - p[k]).abs()));
+            if !moved.is_finite() {
+                return Err(invalid("cylinder inverse candidate is not finite"));
+            }
             if moved < 1e-11 {
                 converged = gradient(p, &j, &e) < 1e-4;
                 break;
@@ -1609,7 +1622,7 @@ fn quality(values: &[f64]) -> Quality {
     Quality {
         components: values.len(),
         rms_scaled: (values.iter().map(|v| v * v).sum::<f64>() / values.len() as f64).sqrt(),
-        peak_scaled: values.iter().map(|v| v.abs()).fold(0.0, f64::max),
+        peak_scaled: max_or_nan(values.iter().map(|v| v.abs())),
     }
 }
 
@@ -3361,5 +3374,14 @@ mod tests {
             "unexpected message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn max_or_nan_propagates_nan_in_cylinder_fit_norms() {
+        assert_eq!(max_or_nan([]), 0.0);
+        assert_eq!(max_or_nan([1.5, 4.0, 2.0]), 4.0);
+        assert!(max_or_nan([f64::NAN, 1.0]).is_nan());
+        assert!(max_or_nan([1.0, f64::NAN]).is_nan());
+        assert!(quality(&[1.0, f64::NAN]).peak_scaled.is_nan());
     }
 }

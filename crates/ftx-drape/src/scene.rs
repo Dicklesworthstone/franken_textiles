@@ -1583,6 +1583,20 @@ pub fn run_phase(
     run_phase_with_subdivision(scene, steps, h, gravity, None, &mut 0, frame)
 }
 
+fn max_speed_or_nan(velocities: &[Vec3]) -> f64 {
+    let mut best = 0.0_f64;
+    for v in velocities {
+        let s = v.norm();
+        if s.is_nan() {
+            return f64::NAN;
+        }
+        if s > best {
+            best = s;
+        }
+    }
+    best
+}
+
 /// Ordinary drape phases share one explicit attempted-step allowance, including a settling tail.
 /// The old path remains unchanged when the policy is absent. With subdivision, the thickness ramp,
 /// solver caches, friction and material memory commit only after the whole nominal interval succeeds.
@@ -1631,7 +1645,7 @@ pub(crate) fn run_phase_with_subdivision(
                 },
                 |solver| {
                     (
-                        solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max),
+                        max_speed_or_nan(&solver.v),
                         solver
                             .contact
                             .as_ref()
@@ -1646,25 +1660,27 @@ pub(crate) fn run_phase_with_subdivision(
                 .expect("complete nonempty interval")
                 .solve;
             let mut max_speed_m_s = 0.0_f64;
-            let accepted: Vec<_> = partition
-                .accepted
-                .into_iter()
-                .zip(observations)
-                .map(|(step, (speed, contact))| {
-                    rep.iterations += step.solve.iterations;
-                    rep.factorizations += step.solve.factorizations;
-                    rep.ccd_limited += step.solve.ccd_limited;
-                    rep.halvings += step.solve.halvings;
-                    rep.projected_iterations += step.solve.projected_iterations;
-                    rep.pcg_iterations += step.solve.pcg_iterations;
-                    max_speed_m_s = max_speed_m_s.max(speed);
-                    PhaseSubstep {
-                        step,
-                        max_speed_m_s: speed,
-                        contact,
-                    }
-                })
-                .collect();
+            let mut accepted = Vec::with_capacity(partition.accepted.len());
+            for (step, (speed, contact)) in partition.accepted.into_iter().zip(observations) {
+                if !speed.is_finite() {
+                    return Err(Refusal::new(
+                        RefusalCode::NonFinite,
+                        "cloth velocity became non-finite during subdivided drape step",
+                    ));
+                }
+                rep.iterations += step.solve.iterations;
+                rep.factorizations += step.solve.factorizations;
+                rep.ccd_limited += step.solve.ccd_limited;
+                rep.halvings += step.solve.halvings;
+                rep.projected_iterations += step.solve.projected_iterations;
+                rep.pcg_iterations += step.solve.pcg_iterations;
+                max_speed_m_s = max_speed_m_s.max(speed);
+                accepted.push(PhaseSubstep {
+                    step,
+                    max_speed_m_s: speed,
+                    contact,
+                });
+            }
             rep.steps += 1;
             rep.samples.push(PhaseStep {
                 solve,
@@ -1705,9 +1721,16 @@ pub(crate) fn run_phase_with_subdivision(
         rep.halvings += r.halvings;
         rep.projected_iterations += r.projected_iterations;
         rep.pcg_iterations += r.pcg_iterations;
+        let step_speed = max_speed_or_nan(&scene.solver.v);
+        if !step_speed.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "cloth velocity became non-finite during drape step",
+            ));
+        }
         rep.samples.push(PhaseStep {
             solve: r,
-            max_speed_m_s: scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max),
+            max_speed_m_s: step_speed,
             contact: scene
                 .solver
                 .contact
@@ -1717,7 +1740,14 @@ pub(crate) fn run_phase_with_subdivision(
         });
         frame(k, &scene.positions());
     }
-    rep.max_speed = scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max);
+    let final_speed = max_speed_or_nan(&scene.solver.v);
+    if !final_speed.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "cloth velocity is non-finite at end of drape phase",
+        ));
+    }
+    rep.max_speed = final_speed;
     rep.thickness = scene
         .solver
         .contact
@@ -3127,5 +3157,15 @@ mod grain_tests {
         let err = elastic_ring(&mesh, &weld, &casing, "top edge", &[&path]).unwrap_err();
         assert_eq!(err.code, RefusalCode::InvalidDocument);
         assert!(err.message.contains("zero or non-finite perimeter"));
+    }
+
+    #[test]
+    fn max_speed_or_nan_propagates_nan_instead_of_reporting_zero() {
+        assert_eq!(max_speed_or_nan(&[]), 0.0);
+        assert!((max_speed_or_nan(&[Vec3::new(3.0, 4.0, 0.0)]) - 5.0).abs() < 1e-12);
+        assert!(
+            max_speed_or_nan(&[Vec3::new(1.0, 0.0, 0.0), Vec3::new(f64::NAN, 0.0, 0.0)]).is_nan()
+        );
+        assert!(max_speed_or_nan(&[Vec3::new(f64::INFINITY, 0.0, 0.0)]).is_infinite());
     }
 }

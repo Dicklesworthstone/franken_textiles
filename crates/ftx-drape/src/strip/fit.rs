@@ -1091,22 +1091,34 @@ fn norms<const N: usize>(j: &[[f64; N]]) -> [f64; N] {
     std::array::from_fn(|k| j.iter().map(|row| row[k] * row[k]).sum::<f64>().sqrt())
 }
 
+/// Nonnegative maximum over an iterator that propagates any `NaN` rather than absorbing it into `0.0`.
+fn max_or_nan(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut best = 0.0_f64;
+    for v in values {
+        if v.is_nan() {
+            return f64::NAN;
+        }
+        if v > best {
+            best = v;
+        }
+    }
+    best
+}
+
 fn gradient<const N: usize>(j: &[[f64; N]], e: &Evaluation) -> f64 {
     let scales = norms(j);
-    (0..N)
-        .map(|k| {
-            let value = j
-                .iter()
-                .zip(&e.residuals)
-                .map(|(row, r)| row[k] * r)
-                .sum::<f64>();
-            if scales[k] == 0.0 {
-                0.0
-            } else {
-                value.abs() / (scales[k] * (1.0 + e.sse.sqrt()))
-            }
-        })
-        .fold(0.0, f64::max)
+    max_or_nan((0..N).map(|k| {
+        let value = j
+            .iter()
+            .zip(&e.residuals)
+            .map(|(row, r)| row[k] * r)
+            .sum::<f64>();
+        if scales[k] == 0.0 {
+            0.0
+        } else {
+            value.abs() / (scales[k] * (1.0 + e.sse.sqrt()))
+        }
+    }))
 }
 
 fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
@@ -1185,7 +1197,7 @@ fn search<const N: usize>(
             }
             let scaled = lstsq(&rows, &target);
             let mut step: [f64; N] = std::array::from_fn(|k| scaled[k] / scales[k]);
-            let max = step.iter().map(|v| v.abs()).fold(0.0, f64::max);
+            let max = max_or_nan(step.iter().map(|v| v.abs()));
             if !max.is_finite() {
                 return Err(invalid("strip inverse step overflow"));
             }
@@ -1236,7 +1248,7 @@ fn quality(values: &[f64]) -> Quality {
     Quality {
         components: values.len(),
         rms_scaled: (values.iter().map(|v| v * v).sum::<f64>() / values.len() as f64).sqrt(),
-        peak_scaled: values.iter().map(|v| v.abs()).fold(0.0, f64::max),
+        peak_scaled: max_or_nan(values.iter().map(|v| v.abs())),
     }
 }
 
@@ -2040,5 +2052,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn max_or_nan_propagates_nan_in_strip_fit_norms() {
+        assert_eq!(max_or_nan([]), 0.0);
+        assert_eq!(max_or_nan([1.5, 4.0, 2.0]), 4.0);
+        assert!(max_or_nan([f64::NAN, 1.0]).is_nan());
+        assert!(max_or_nan([1.0, f64::NAN]).is_nan());
+        assert!(quality(&[1.0, f64::NAN]).peak_scaled.is_nan());
     }
 }
