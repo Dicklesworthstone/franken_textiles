@@ -45,8 +45,14 @@ pub fn load_capture_image_with_limit(bytes: &[u8], max_pixels: usize) -> Result<
         ));
     }
     check_oriented_png_chunks(bytes)?;
-    load_png_with_limit(bytes, max_pixels)
-        .map_err(|message| Refusal::new(RefusalCode::InvalidDocument, message))
+    load_png_with_limit(bytes, max_pixels).map_err(|message| {
+        let code = if message.contains("pixel decoding budget") {
+            RefusalCode::BudgetExceeded
+        } else {
+            RefusalCode::InvalidDocument
+        };
+        Refusal::new(code, message)
+    })
 }
 
 // Both photographs and masks describe stored pixels. Metadata must never turn an image into a
@@ -145,7 +151,14 @@ pub fn load_binary_mask_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Gr
             return Err(bad("indexed mask has no palette"));
         }
     }
-    let image = decode_png_with_limit(bytes, max_pixels, true).map_err(|message| bad(&message))?;
+    let image = decode_png_with_limit(bytes, max_pixels, true).map_err(|message| {
+        let code = if message.contains("pixel decoding budget") {
+            RefusalCode::BudgetExceeded
+        } else {
+            RefusalCode::InvalidDocument
+        };
+        Refusal::new(code, message)
+    })?;
     let mut data = Vec::with_capacity(image.w * image.h);
     for pixel in image.data.as_chunks::<3>().0 {
         // Never use luminance conversion: a near-black colored pixel can round to gray zero.
@@ -695,7 +708,11 @@ fn decode_png_with_limit(
             }
         }
     };
-    let mut data = Vec::with_capacity(3 * w * h);
+    let mut data = Vec::with_capacity(
+        pixels
+            .checked_mul(3)
+            .ok_or("PNG RGB buffer size overflow")?,
+    );
     for i in 0..w * h {
         let s = &px[i * ch..(i + 1) * ch];
         let [r, g, b] = match color {
@@ -885,7 +902,15 @@ mod decode_budget_tests {
             assert!(load_binary_mask_with_limit(&bytes, 4).is_err());
         }
         let valid = mask_png(1, 3, Some(&palette), &[], &[0, 0x40, 0, 0x80]);
-        assert!(load_binary_mask_with_limit(&valid, 3).is_err());
+        assert_eq!(
+            load_binary_mask_with_limit(&valid, 3).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+        let cap_png = encode_png_gray(&Gray::filled(2, 2, 128));
+        assert_eq!(
+            load_capture_image_with_limit(&cap_png, 3).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
         assert!(
             load_binary_mask_with_limit(&mask_png(1, 3, Some(&palette), &[], &[0; 4096]), 4)
                 .is_err()

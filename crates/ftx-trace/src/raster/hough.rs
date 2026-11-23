@@ -41,7 +41,24 @@ pub fn hough_lines_p(
     min_len: f64,
     max_gap: f64,
 ) -> Vec<[i32; 4]> {
+    const MAX_ACCUM_CELLS: usize = 64_000_000;
+    if img.w == 0
+        || img.h == 0
+        || img.w.checked_mul(img.h) != Some(img.data.len())
+        || !rho.is_finite()
+        || rho <= 0.0
+        || !theta.is_finite()
+        || theta <= 0.0
+        || !min_len.is_finite()
+        || !max_gap.is_finite()
+        || threshold <= 0
+    {
+        return Vec::new();
+    }
     let (rho, theta) = (rho as f32, theta as f32);
+    if !rho.is_finite() || rho <= 0.0 || !theta.is_finite() || theta <= 0.0 {
+        return Vec::new();
+    }
     let (line_length, line_gap) = (
         min_len.round_ties_even() as i64,
         max_gap.round_ties_even() as i64,
@@ -49,12 +66,27 @@ pub fn hough_lines_p(
     let irho = 1.0f32 / rho;
     let (width, height) = (img.w as i64, img.h as i64);
     let th = f64::from(theta);
-    let mut numangle = ((std::f64::consts::PI - 0.0) / th).floor() as i64 + 1;
+    let numangle_f = ((std::f64::consts::PI - 0.0) / th).floor();
+    if !numangle_f.is_finite() || numangle_f < 0.0 || numangle_f >= MAX_ACCUM_CELLS as f64 {
+        return Vec::new();
+    }
+    let mut numangle = numangle_f as i64 + 1;
     if numangle > 1 && (std::f64::consts::PI - (numangle - 1) as f64 * th).abs() < th / 2.0 {
         numangle -= 1;
     }
-    let numrho = ((((width + height) * 2 + 1) as f32) / rho).round_ties_even() as i64;
-    let mut accum = vec![0i32; (numangle * numrho) as usize];
+    let numrho_f = ((((width + height) * 2 + 1) as f32) / rho).round_ties_even();
+    if !numrho_f.is_finite() || numrho_f <= 0.0 || numrho_f > MAX_ACCUM_CELLS as f32 {
+        return Vec::new();
+    }
+    let numrho = numrho_f as i64;
+    let Some(accum_len) = usize::try_from(numangle)
+        .ok()
+        .and_then(|a| usize::try_from(numrho).ok().and_then(|r| a.checked_mul(r)))
+        .filter(|&len| len > 0 && len <= MAX_ACCUM_CELLS)
+    else {
+        return Vec::new();
+    };
+    let mut accum = vec![0i32; accum_len];
     let trig: Vec<(f32, f32)> = (0..numangle)
         .map(|n| {
             let a = n as f64 * th;
@@ -89,6 +121,9 @@ pub fn hough_lines_p(
         let (mut max_val, mut max_n) = (threshold - 1, 0usize);
         for (n, &(c, s)) in trig.iter().enumerate() {
             let r = i64::from(rho_bin(j, i, c, s)) + half_rho;
+            if !(0..numrho).contains(&r) {
+                continue;
+            }
             let cell = &mut accum[n * numrho as usize + r as usize];
             *cell += 1;
             if max_val < *cell {
@@ -157,7 +192,9 @@ pub fn hough_lines_p(
                     if good {
                         for (n, &(c, s)) in trig.iter().enumerate() {
                             let r = i64::from(rho_bin(j1, i1, c, s)) + half_rho;
-                            accum[n * numrho as usize + r as usize] -= 1;
+                            if (0..numrho).contains(&r) {
+                                accum[n * numrho as usize + r as usize] -= 1;
+                            }
                         }
                     }
                     mask[cell] = 0;
@@ -179,4 +216,43 @@ pub fn hough_lines_p(
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hough_lines_p_rejects_degenerate_parameters_and_rasters_without_panic() {
+        let empty = Gray {
+            w: 0,
+            h: 0,
+            data: Vec::new(),
+        };
+        assert!(hough_lines_p(&empty, 1.0, 0.01, 5, 1.0, 1.0).is_empty());
+
+        let bad_len = Gray {
+            w: 4,
+            h: 4,
+            data: vec![255; 3],
+        };
+        assert!(hough_lines_p(&bad_len, 1.0, 0.01, 5, 1.0, 1.0).is_empty());
+
+        let img = Gray::filled(8, 8, 255);
+        for (rho, theta, threshold) in [
+            (0.0, 0.01, 5),
+            (-1.0, 0.01, 5),
+            (f64::NAN, 0.01, 5),
+            (1.0, 0.0, 5),
+            (1.0, 1e-50, 5),
+            (1.0, f64::NAN, 5),
+            (1.0, 0.01, 0),
+            (1e-9, 1e-6, 5),
+        ] {
+            assert!(
+                hough_lines_p(&img, rho, theta, threshold, 1.0, 1.0).is_empty(),
+                "rho={rho}, theta={theta}, threshold={threshold}"
+            );
+        }
+    }
 }

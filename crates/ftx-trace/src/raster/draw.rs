@@ -177,7 +177,7 @@ pub fn fill_poly(img: &mut Gray, polys: &[Vec<(i64, i64)>], v: u8) {
     }
     let delta = XY_ONE - 1;
     let mut xs: Vec<i64> = Vec::new();
-    for y in y_min..y_max.min(h) {
+    for y in y_min.max(0)..y_max.min(h) {
         xs.clear();
         xs.extend(
             edges
@@ -185,9 +185,6 @@ pub fn fill_poly(img: &mut Gray, polys: &[Vec<(i64, i64)>], v: u8) {
                 .filter(|e| e.y0 <= y && y < e.y1)
                 .map(|e| e.x + (y - e.y0) * e.dx),
         );
-        if y < 0 {
-            continue;
-        }
         xs.sort_unstable();
         for &[left, right] in xs.as_chunks::<2>().0 {
             let (x1, x2) = ((left + delta) >> XY_SHIFT, right >> XY_SHIFT);
@@ -430,5 +427,20 @@ pub fn line(img: &mut Gray, p0: (i64, i64), p1: (i64, i64), v: u8, thickness: i6
             (q.1 + (XY_ONE >> 1)) >> XY_SHIFT,
         );
         circle_filled(img, c, (t + (XY_ONE >> 1)) >> XY_SHIFT, v);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fill_poly_clips_large_negative_y_without_iterating_above_image() {
+        let mut img = Gray::filled(8, 8, 0);
+        let poly = vec![(2, -1_000_000_000), (6, -1_000_000_000), (6, 4), (2, 4)];
+        fill_poly(&mut img, &[poly], 255);
+        assert_eq!(img.at(4, 2), 255);
+        assert_eq!(img.at(0, 2), 0);
+        assert_eq!(img.at(4, 6), 0);
     }
 }

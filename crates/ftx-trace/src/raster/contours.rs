@@ -558,20 +558,27 @@ fn sklansky(
 /// shifted so its source indices run monotonically when they can).
 #[must_use]
 pub fn convex_hull(p: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let total = p.len();
-    if total == 0 {
+    let finite: Vec<(f32, f32)> = p
+        .iter()
+        .copied()
+        .filter(|&(x, y)| x.is_finite() && y.is_finite())
+        .collect();
+    if finite.is_empty() {
         return Vec::new();
     }
+    let p = finite.as_slice();
+    let total = p.len();
+    let cmp = |u: f32, v: f32| {
+        if u == v {
+            std::cmp::Ordering::Equal
+        } else {
+            u.total_cmp(&v)
+        }
+    };
     let mut ord: Vec<usize> = (0..total).collect();
     ord.sort_by(|&a, &b| {
-        p[a].0
-            .partial_cmp(&p[b].0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(
-                p[a].1
-                    .partial_cmp(&p[b].1)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
+        cmp(p[a].0, p[b].0)
+            .then(cmp(p[a].1, p[b].1))
             .then(a.cmp(&b))
     });
     let (mut miny, mut maxy) = (0usize, 0usize);
@@ -671,7 +678,10 @@ pub trait DpPoint: Copy + PartialEq {
 
 impl DpPoint for Pt {
     fn sub(self, o: Self) -> (f64, f64) {
-        (f64::from(self.0 - o.0), f64::from(self.1 - o.1))
+        (
+            f64::from(self.0) - f64::from(o.0),
+            f64::from(self.1) - f64::from(o.1),
+        )
     }
 }
 
@@ -687,7 +697,7 @@ impl DpPoint for (f32, f32) {
 #[allow(clippy::too_many_lines)]
 pub fn approx_poly_dp<P: DpPoint>(src: &[P], eps: f64, closed: bool) -> Vec<P> {
     let count0 = src.len();
-    if count0 == 0 {
+    if count0 == 0 || eps.is_nan() || eps < 0.0 {
         return Vec::new();
     }
     let count = count0;
@@ -737,7 +747,7 @@ pub fn approx_poly_dp<P: DpPoint>(src: &[P], eps: f64, closed: bool) -> Vec<P> {
             }
             le_eps = max_dist <= eps;
         }
-        if le_eps {
+        if le_eps || right_slice.0 == 0 {
             dst.push(start_pt);
         } else {
             slice.0 = pos % count;
@@ -753,6 +763,7 @@ pub fn approx_poly_dp<P: DpPoint>(src: &[P], eps: f64, closed: bool) -> Vec<P> {
         let end_pt = src[slice.1];
         pos = slice.0;
         start_pt = read(&mut pos);
+        right_slice.0 = slice.0;
         if pos != slice.1 {
             let (dx, dy) = end_pt.sub(start_pt);
             let seg2 = dx * dx + dy * dy;
@@ -780,7 +791,7 @@ pub fn approx_poly_dp<P: DpPoint>(src: &[P], eps: f64, closed: bool) -> Vec<P> {
             le_eps = true;
             start_pt = src[slice.0];
         }
-        if le_eps {
+        if le_eps || right_slice.0 == slice.0 || right_slice.0 == slice.1 {
             dst.push(start_pt);
         } else {
             right_slice.1 = slice.1;
@@ -844,4 +855,40 @@ pub fn approx_poly_dp<P: DpPoint>(src: &[P], eps: f64, closed: bool) -> Vec<P> {
     }
     dst.truncate(new_count);
     dst
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn convex_hull_ignores_non_finite_points_without_sorting_panic() {
+        let pts = [
+            (0.0_f32, 0.0),
+            (f32::NAN, 1.0),
+            (2.0, 0.0),
+            (2.0, 2.0),
+            (0.0, 2.0),
+            (f32::INFINITY, 0.0),
+        ];
+        let hull = convex_hull(&pts);
+        assert_eq!(hull.len(), 4);
+        assert!(hull.iter().all(|&(x, y)| x.is_finite() && y.is_finite()));
+        assert!(convex_hull(&[(f32::NAN, f32::NAN)]).is_empty());
+    }
+
+    #[test]
+    fn approx_poly_dp_terminates_on_nan_eps_nan_points_and_extreme_i32() {
+        let sq = [(0, 0), (10, 0), (10, 10), (0, 10)];
+        assert!(approx_poly_dp(&sq, f64::NAN, true).is_empty());
+        assert!(approx_poly_dp(&sq, -1.0, true).is_empty());
+
+        let nan_pts = [(0.0_f32, 0.0), (f32::NAN, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let approx = approx_poly_dp(&nan_pts, 0.5, true);
+        assert!(!approx.is_empty());
+
+        // Extreme i32 coordinates subtract in f64 without overflow panic.
+        let extreme = [(i32::MIN, 0), (i32::MAX, 0), (0, i32::MAX)];
+        assert_eq!(approx_poly_dp(&extreme, 1.0, true).len(), 3);
+    }
 }
