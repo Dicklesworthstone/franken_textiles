@@ -4708,6 +4708,15 @@ test('saved study accepted-fit pose metadata validates, freezes and refuses inva
   assert.equal(fullAccepted.request.measurementAcceptedPose.hand_collider,'full');
   const fullPreview=parse(build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,hand_collider:'full'}},workbenchModel()));
   assert.equal(fullPreview.request.measurementPose.hand_collider,'full');
+  const thumbPose={left_rotation_vector_rad:[0,-0.35,0],right_rotation_vector_rad:[0,0.35,0]};
+  const thumbAccepted=parse(build({...base,measurementAcceptedPose:{hand_collider:'full',thumb_pose:thumbPose}},workbenchModel()));
+  assert.deepEqual(JSON.parse(JSON.stringify(thumbAccepted.request.measurementAcceptedPose.thumb_pose)),thumbPose);
+  assert.equal(Object.isFrozen(thumbAccepted.request.measurementAcceptedPose.thumb_pose),true);
+  assert.equal(Object.isFrozen(thumbAccepted.request.measurementAcceptedPose.thumb_pose.left_rotation_vector_rad),true);
+  thumbPose.left_rotation_vector_rad[1]=0.99;
+  assert.equal(thumbAccepted.request.measurementAcceptedPose.thumb_pose.left_rotation_vector_rad[1],-0.35);
+  const thumbPreview=parse(build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,thumb_pose:{left_rotation_vector_rad:[0,-0.2,0],right_rotation_vector_rad:[0,0.2,0]}}},workbenchModel()));
+  assert.deepEqual(JSON.parse(JSON.stringify(thumbPreview.request.measurementPose.thumb_pose)),{left_rotation_vector_rad:[0,-0.2,0],right_rotation_vector_rad:[0,0.2,0]});
   for(const bad of [
     {...base,measurementAcceptedPose:{}},
     {...base,measurementAcceptedPose:{legs:'kneeling'}},
@@ -4715,6 +4724,12 @@ test('saved study accepted-fit pose metadata validates, freezes and refuses inva
     {...base,measurementAcceptedPose:{skinning:'hybrid'}},
     {...base,measurementAcceptedPose:{hand_collider:'mitten'}},
     {...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,hand_collider:'mitten'}},
+    {...base,measurementAcceptedPose:{thumb_pose:null}},
+    {...base,measurementAcceptedPose:{thumb_pose:{left_rotation_vector_rad:[0,0,0]}}},
+    {...base,measurementAcceptedPose:{thumb_pose:{left_rotation_vector_rad:[0,0,0],right_rotation_vector_rad:[0,0,0],extra:1}}},
+    {...base,measurementAcceptedPose:{thumb_pose:{left_rotation_vector_rad:[0,0],right_rotation_vector_rad:[0,0,0]}}},
+    {...base,measurementAcceptedPose:{thumb_pose:{left_rotation_vector_rad:[4,0,0],right_rotation_vector_rad:[0,0,0]}}},
+    {...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,thumb_pose:{left_rotation_vector_rad:[2,2,2],right_rotation_vector_rad:[0,0,0]}}},
     {...base,measurementAcceptedPose:{legs:'seated',arm_abduction_deg:35}},
     {...base,measurementAcceptedPose:{skinning:'dqs'},measurementPose:{arm_abduction_deg:35,legs:'seated',leg_fraction:0.5}},
   ]) assert.throws(()=>build(bad,workbenchModel()));

@@ -24607,3 +24607,175 @@ test('scenario moving transient heat renders opt-in microclimate_convection and 
     ['2', 'Churchill-Chu vertical plate natural convection']
   ]);
 });
+
+test('opt-in thumb_pose wires fail-closed across both workbenches, workers, study body modes, and bidirectional handoffs', async () => {
+  const validThumb = { left_rotation_vector_rad: [0, -0.35, 0], right_rotation_vector_rad: [0, 0.35, 0] };
+  const validThumbJson = JSON.stringify(validThumb);
+
+  // 1. Material workbench fold: omitted by default, opt-in sends thumbPose, renders summary, invalidates on edit, refuses malformed/out-of-range.
+  const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
+  p.e.body.files = [new Blob([new Uint8Array([1])])];
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).thumbPose, undefined);
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  p.e.drapeThumbPose.value = validThumbJson; p.e.drapeThumbPose.handlers.input();
+  const fSec = section(p, 'fold');
+  assert.equal(fSec.hidden, true, 'editing drapeThumbPose must invalidate prior fold');
+  await p.e.fold.onclick();
+  assert.deepEqual(plain(p.current().messages.at(-1).thumbPose), validThumb);
+  const thumbRep = { settled: true, body: { legs: 'standing', leg_fraction: 1, thumb_pose: validThumb, authored_hand_surface_pairs_tested: 120 } };
+  p.emit(thumbRep, [{ name: 'sim_report.json', text: JSON.stringify(thumbRep), mime: 'application/json' }]);
+  const fSummary = JSON.parse(fSec.children[1].textContent);
+  assert.deepEqual(fSummary.thumb_pose, validThumb);
+  assert.equal(fSummary.authored_hand_surface_pairs_tested, 120);
+  for (const bad of ['{bad', 'null', '{"left_rotation_vector_rad":[0,0,0]}', '{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[0,0,0],"x":1}',
+    '{"left_rotation_vector_rad":[3.5,0,0],"right_rotation_vector_rad":[0,0,0]}', '{"left_rotation_vector_rad":[2,2,2],"right_rotation_vector_rad":[0,0,0]}']) {
+    p.e.drapeThumbPose.value = bad;
+    const before = p.current().messages.length;
+    await p.e.fold.onclick();
+    assert.equal(p.current().messages.length, before, `malformed thumb_pose ${bad} must be refused before worker dispatch`);
+    assert.match(p.e.error.textContent, /Thumb/);
+  }
+  p.e.drapeThumbPose.value = validThumbJson;
+
+  // 2. Study body preview & accepted modes carry thumb_pose into ftx-scenario-body/1 and supplemental replay metadata, and invalidate on edit.
+  const st = await pageModule(); await st.load(); scenarioInputs(st);
+  st.e.studyBodySource.value = 'preview'; st.e.studyBodySource.handlers.change();
+  st.e.drapeThumbPose.value = validThumbJson; st.e.drapeThumbPose.handlers.input();
+  await st.e.scenario.onclick();
+  const previewBody = JSON.parse(st.current().messages.at(-1).measurements);
+  assert.deepEqual(previewBody.thumb_pose, validThumb);
+  st.emit(scenarioReport());
+  const scenSec = section(st, 'Fresh drape and heat alternatives');
+  assert.equal(scenSec.hidden, false);
+  st.e.drapeThumbPose.value = ''; st.e.drapeThumbPose.handlers.input();
+  assert.equal(scenSec.hidden, true, 'clearing drapeThumbPose must invalidate preview-mode scenario');
+
+  st.e.studyBodySource.value = 'accepted'; st.e.studyBodySource.handlers.change();
+  st.e.bodyFitFile.files = [new Blob(['{"schema":"ftx-body-fit/1"}'])];
+  st.e.bodyFitConsent.checked = true;
+  st.e.drapeThumbPose.value = validThumbJson; st.e.drapeThumbPose.handlers.change();
+  await st.e.scenario.onclick();
+  const acceptedBody = JSON.parse(st.current().messages.at(-1).measurements);
+  assert.deepEqual(acceptedBody.thumb_pose, validThumb);
+
+  // 3. Both workers route thumbPose through fold_up_configured, validate measurementPose/measurementAcceptedPose, and refuse bad values.
+  const mCalls = [];
+  const mw = await workerModule({ bindings: {
+    default: () => Promise.resolve(),
+    WebBody: class { free() {} },
+    measurement_file: () => '{"schema":"fabric-measurements/1"}',
+    fold_up: () => { mCalls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      mCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
+    },
+    evaluate_material_scenario: (_b, _p, _r, measurements) => {
+      mCalls.push({ path: 'scenario', measurements: JSON.parse(measurements) });
+      return JSON.stringify(scenarioReport());
+    }
+  } });
+  const baseFold = { type: 'fold', request: 1, bytes: new Uint8Array([1]).buffer, pattern: '{}', measurements: '{}', fit: '{}', selfContactMm: 2, twoStart: false, armDeg: 35 };
+  assert.equal((await mw.send(baseFold)).type, 'result');
+  assert.equal(mCalls.at(-1).path, 'legacy');
+  assert.equal((await mw.send({ ...baseFold, request: 2, bytes: new Uint8Array([1]).buffer, thumbPose: validThumb })).type, 'result');
+  assert.equal(mCalls.at(-1).path, 'configured');
+  assert.deepEqual(plain(mCalls.at(-1).settings.thumb_pose), validThumb);
+  for (const bad of [null, {}, { left_rotation_vector_rad: [0, 0, 0], right_rotation_vector_rad: [0, 0, 0], extra: 1 },
+    { left_rotation_vector_rad: [4, 0, 0], right_rotation_vector_rad: [0, 0, 0] },
+    { left_rotation_vector_rad: [NaN, 0, 0], right_rotation_vector_rad: [0, 0, 0] }]) {
+    assert.equal((await mw.send({ ...baseFold, request: 3, bytes: new Uint8Array([1]).buffer, thumbPose: bad })).type, 'error');
+  }
+  const suppBase = { type: 'scenario', request: 4, bytes: new Uint8Array([1]).buffer, pattern: '{}', studyRequest: '{}', scenarioRequest: '{}',
+    measurements: '{}', measurementPrimary: '{}', measurementSources: '["{}"]', measurementConsent: true };
+  assert.equal((await mw.send({ ...suppBase, measurementPose: { arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, thumb_pose: validThumb } })).type, 'result');
+  assert.deepEqual(plain(mCalls.at(-1).measurements.thumb_pose), validThumb);
+  assert.equal((await mw.send({ ...suppBase, request: 5, bytes: new Uint8Array([1]).buffer, measurementAcceptedFit: '{"schema":"ftx-body-fit/1"}', measurementArmDeg: 35, measurementAcceptedPose: { thumb_pose: validThumb } })).type, 'result');
+  assert.deepEqual(plain(mCalls.at(-1).measurements.thumb_pose), validThumb);
+  assert.equal((await mw.send({ ...suppBase, request: 6, bytes: new Uint8Array([1]).buffer, measurementPose: { arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, thumb_pose: null } })).type, 'error');
+  assert.equal((await mw.send({ ...suppBase, request: 7, bytes: new Uint8Array([1]).buffer, measurementAcceptedFit: '{"schema":"ftx-body-fit/1"}', measurementArmDeg: 35, measurementAcceptedPose: { thumb_pose: { left_rotation_vector_rad: [4, 0, 0], right_rotation_vector_rad: [0, 0, 0] } } })).type, 'error');
+
+  const dCalls = [];
+  const dw = await draftingWorkerModule({
+    WebBody: class { free() {} },
+    run_round: () => ({ json: () => JSON.stringify({ title: 'Bolero', status: 'CONVERGED', basis: {}, files: { 'pattern.json': '{}', 'measurements.json': '{}', 'fit_spec.json': '{}' } }), files: () => '{}', free() {} }),
+    fold_up: () => { dCalls.push({ path: 'legacy' }); return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} }; },
+    fold_up_configured: (_b, _p, _m, _f, settings) => {
+      dCalls.push({ path: 'configured', settings: JSON.parse(settings) });
+      return { report: () => '{"settled":true}', viewer: () => '<html/>', free() {} };
+    }
+  });
+  await dw.send({ type: 'body', request: 1, bytes: new Uint8Array([1]).buffer });
+  await dw.send({ type: 'run', request: 2, args: { program: 'zouave_bolero' } });
+  assert.equal((await dw.send({ type: 'fold', request: 3, selfContactMm: 2, twoStart: false, armDeg: 35 })).type, 'folded');
+  assert.equal(dCalls.at(-1).path, 'legacy');
+  assert.equal((await dw.send({ type: 'fold', request: 4, selfContactMm: 2, twoStart: false, armDeg: 35, thumbPose: validThumb })).type, 'folded');
+  assert.equal(dCalls.at(-1).path, 'configured');
+  assert.deepEqual(plain(dCalls.at(-1).settings.thumb_pose), validThumb);
+  assert.equal((await dw.send({ type: 'fold', request: 5, selfContactMm: 2, twoStart: false, armDeg: 35, thumbPose: { left_rotation_vector_rad: [4, 0, 0], right_rotation_vector_rad: [0, 0, 0] } })).type, 'error');
+
+  // 4. Pattern workbench (index.html): dispatch, summary display, invalidation, bidirectional handoffs.
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: idx.messages.findLast(m => m.type === 'body').request } });
+  await idx.e.go.handlers.click();
+  idx.worker.onmessage({ data: { type: 'result', request: idx.messages.findLast(m => m.type === 'run').request,
+    res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+  idx.e.drapeThumbPose.value = validThumbJson; idx.e.drapeThumbPose.handlers.input();
+  idx.e.foldGo.handlers.click();
+  const idxFold = idx.messages.findLast(m => m.type === 'fold');
+  assert.deepEqual(plain(idxFold.thumbPose), validThumb);
+  const idxRep = { settled: true, gating: [], body: { legs: 'standing', leg_fraction: 1, thumb_pose: validThumb, authored_hand_surface_pairs_tested: 88 } };
+  idx.worker.onmessage({ data: { type: 'folded', request: idxFold.request, report: idxRep, reportText: JSON.stringify(idxRep), viewer: '<html/>' } });
+  assert.match(idx.e.foldSummary.innerHTML, /Thumb pose \(rad\): L \[0, -0\.35, 0\], R \[0, 0\.35, 0\] \(88 full-hand surface pairs checked\)/);
+  idx.e.drapeThumbPose.value = ''; idx.e.drapeThumbPose.handlers.input();
+  assert.equal(idx.e.foldSummary.textContent, '', 'editing drapeThumbPose on index.html must invalidate prior fold summary');
+
+  // Round handoff -> materials.html preserves thumb_pose and refuses invalid thumb_pose.
+  const tToken = '9'.repeat(32);
+  const hq = await pageModule({ roundToken: tToken });
+  const hFiles = { pattern: new Blob(['{"pieces":[{"id":"front"}]}']), measurements: new Blob(['{}']), fit: new Blob(['{}']) };
+  await hq.windowEvents.message({ origin: 'https://unit.invalid', source: hq.opener, data: { type: 'ftx-round-sources', token: tToken, files: hFiles,
+    bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      thumb_pose: validThumb } } });
+  assert.deepEqual(JSON.parse(hq.e.drapeThumbPose.value), validThumb);
+
+  const badRoundToken = 'a'.repeat(32);
+  const hqBad = await pageModule({ roundToken: badRoundToken });
+  await hqBad.windowEvents.message({ origin: 'https://unit.invalid', source: hqBad.opener, data: { type: 'ftx-round-sources', token: badRoundToken, files: hFiles,
+    bodySource: { model: new Blob([new Uint8Array([1])]) },
+    drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+      thumb_pose: null } } });
+  assert.match(hqBad.e.roundImportText.textContent, /Thumb pose/);
+
+  // Checked garment handoff -> index.html preserves thumb_pose and refuses invalid thumb_pose.
+  const revToken = 'b'.repeat(32);
+  const rev = draftingPage({ materialToken: revToken });
+  rev.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await rev.windowEvents.message({ origin: 'https://unit.invalid', source: rev.opener, data: {
+    type: 'ftx-material-pattern', token: revToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '4'.repeat(64),
+    evaluatedInputs: {
+      fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        thumb_pose: validThumb }
+    }
+  } });
+  assert.deepEqual(JSON.parse(rev.e.drapeThumbPose.value), validThumb);
+
+  const badRevToken = 'c'.repeat(32);
+  const badRev = draftingPage({ materialToken: badRevToken });
+  badRev.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  await badRev.windowEvents.message({ origin: 'https://unit.invalid', source: badRev.opener, data: {
+    type: 'ftx-material-pattern', token: badRevToken, pattern: new Blob(['{"pieces":[]}']), source_sha256: '5'.repeat(64),
+    evaluatedInputs: {
+      fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]),
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        thumb_pose: { left_rotation_vector_rad: [4, 0, 0], right_rotation_vector_rad: [0, 0, 0] } }
+    }
+  } });
+  assert.match(badRev.e.traceImportText.textContent, /Thumb rotation magnitude/);
+});

@@ -2,6 +2,23 @@
 export const MAX_GUIDED_STUDY_CANDIDATES = 7;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const own = (value, key) => Object.hasOwn(value, key);
+function checkedThumbPose(value) {
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+  if (!keys || keys.length !== 2 || !own(value, "left_rotation_vector_rad") || !own(value, "right_rotation_vector_rad")) {
+    throw Error("Thumb pose must be an object with only left_rotation_vector_rad and right_rotation_vector_rad.");
+  }
+  for (const key of ["left_rotation_vector_rad", "right_rotation_vector_rad"]) {
+    const vec = value[key];
+    if (!Array.isArray(vec) || vec.length !== 3 || vec.some(v => typeof v !== "number" || !Number.isFinite(v))) {
+      throw Error("Each thumb rotation vector must contain 3 finite radian numbers.");
+    }
+    const scale = Math.max(Math.abs(vec[0]), Math.abs(vec[1]), Math.abs(vec[2]));
+    const angle = scale === 0 ? 0 : scale * Math.sqrt((vec[0] / scale) ** 2 + (vec[1] / scale) ** 2 + (vec[2] / scale) ** 2);
+    if (angle > Math.PI) {
+      throw Error(`Thumb rotation magnitude ${angle} exceeds π radians.`);
+    }
+  }
+}
 
 // Presence enables guided criteria; the native consumer admits the complete source policy.
 export function hasTextileWaterPolicy(surface) {
@@ -2074,20 +2091,21 @@ function workbenchStudyBundle(value) {
         throw Error("Supplemental accepted-fit replay requires original primary measurements and a valid arm angle.");
       }
       if (own(request, "measurementAcceptedPose")) {
-        const pose = object(request.measurementAcceptedPose, ["legs", "leg_fraction", "skinning", "hand_collider"], [], "Supplemental accepted-fit pose");
+        const pose = object(request.measurementAcceptedPose, ["legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"], [], "Supplemental accepted-fit pose");
         if (!Object.keys(pose).length
           || (own(pose, "legs") && !["standing", "seated", "squat"].includes(pose.legs))
           || (own(pose, "leg_fraction") && (!Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1))
           || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))
           || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle", "full"].includes(pose.hand_collider))) {
-          throw Error("Supplemental accepted-fit pose needs valid leg, skinning and hand-collider settings.");
+          throw Error("Supplemental accepted-fit pose needs valid leg, skinning, hand-collider and thumb-pose settings.");
         }
+        if (own(pose, "thumb_pose")) checkedThumbPose(pose.thumb_pose);
       }
     } else if (own(request, "measurementArmDeg") || own(request, "measurementAcceptedPose")) {
       throw Error("Supplemental accepted-fit pose metadata requires an accepted body-fit source.");
     }
     if (own(request, "measurementPose")) {
-      const pose = object(request.measurementPose, ["arm_abduction_deg", "legs", "leg_fraction", "skinning", "hand_collider"],
+      const pose = object(request.measurementPose, ["arm_abduction_deg", "legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"],
         ["arm_abduction_deg", "legs", "leg_fraction"], "Supplemental preview pose");
       if (!own(request, "measurementPrimary") || own(request, "measurementAcceptedFit")
         || !Number.isFinite(pose.arm_abduction_deg) || pose.arm_abduction_deg < 0 || pose.arm_abduction_deg > 180
@@ -2095,8 +2113,9 @@ function workbenchStudyBundle(value) {
         || pose.leg_fraction < 0 || pose.leg_fraction > 1
         || (own(pose, "skinning") && !["lbs", "dqs"].includes(pose.skinning))
         || (own(pose, "hand_collider") && !["wrist", "palm", "knuckle", "full"].includes(pose.hand_collider))) {
-        throw Error("Supplemental preview pose needs original primary measurements, valid arm, leg, skinning and hand-collider settings, and no accepted fit.");
+        throw Error("Supplemental preview pose needs original primary measurements, valid arm, leg, skinning, hand-collider and thumb-pose settings, and no accepted fit.");
       }
+      if (own(pose, "thumb_pose")) checkedThumbPose(pose.thumb_pose);
     }
   } else if (["measurementConsent", "measurementPrimary", "measurementAcceptedFit", "measurementArmDeg", "measurementAcceptedPose", "measurementPose"].some(key => own(request, key))) {
     throw Error("Supplemental replay metadata requires original additional measurement sources.");
@@ -2105,9 +2124,21 @@ function workbenchStudyBundle(value) {
     workbenchSource(request.outfit.request_json, "Original outfit request", ["ftx-outfit-drape/1"]);
     workbenchSource(request.outfit.composition_json, "Original outfit composition", ["ftx-outfit-composition/1"]);
   }
+  const freezeThumbPose = tp => Object.freeze({
+    left_rotation_vector_rad: Object.freeze([...tp.left_rotation_vector_rad]),
+    right_rotation_vector_rad: Object.freeze([...tp.right_rotation_vector_rad]),
+  });
   const frozenRequest = { ...request };
-  if (request.measurementPose) frozenRequest.measurementPose = Object.freeze({ ...request.measurementPose });
-  if (request.measurementAcceptedPose) frozenRequest.measurementAcceptedPose = Object.freeze({ ...request.measurementAcceptedPose });
+  if (request.measurementPose) {
+    const mp = { ...request.measurementPose };
+    if (own(mp, "thumb_pose")) mp.thumb_pose = freezeThumbPose(mp.thumb_pose);
+    frozenRequest.measurementPose = Object.freeze(mp);
+  }
+  if (request.measurementAcceptedPose) {
+    const map = { ...request.measurementAcceptedPose };
+    if (own(map, "thumb_pose")) map.thumb_pose = freezeThumbPose(map.thumb_pose);
+    frozenRequest.measurementAcceptedPose = Object.freeze(map);
+  }
   if (request.outfit) frozenRequest.outfit = Object.freeze({ ...request.outfit });
   return Object.freeze({ schema: value.schema, request: Object.freeze(frozenRequest),
     ...(onBody ? { body_model: Object.freeze({ ...value.body_model }) } : {}) });
