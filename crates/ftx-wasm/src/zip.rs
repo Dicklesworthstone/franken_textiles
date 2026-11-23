@@ -21,11 +21,22 @@ fn crc32(data: &[u8]) -> u32 {
     c ^ 0xffff_ffff
 }
 
-/// MS-DOS time and date of `YYYY-MM-DDTHH:MM` (1980-01-01 00:00 when it does not parse).
+/// MS-DOS time and date of `YYYY-MM-DDTHH:MM` (1980-01-01 00:00 when it does not parse or is out of range).
 fn dos_time(stamp: &str) -> (u16, u16) {
-    let num = |a: usize, b: usize| stamp.get(a..b).and_then(|s| s.parse::<u16>().ok());
+    let num = |a: usize, b: usize| {
+        stamp
+            .get(a..b)
+            .filter(|s| s.bytes().all(|c| c.is_ascii_digit()))
+            .and_then(|s| s.parse::<u16>().ok())
+    };
     match (num(0, 4), num(5, 7), num(8, 10), num(11, 13), num(14, 16)) {
-        (Some(y), Some(mo), Some(d), Some(h), Some(mi)) if y >= 1980 => {
+        (Some(y), Some(mo), Some(d), Some(h), Some(mi))
+            if (1980..=2107).contains(&y)
+                && (1..=12).contains(&mo)
+                && (1..=31).contains(&d)
+                && h <= 23
+                && mi <= 59 =>
+        {
             ((h << 11) | (mi << 5), ((y - 1980) << 9) | (mo << 5) | d)
         }
         _ => (0, (1 << 5) | 1),
@@ -50,6 +61,8 @@ pub fn zip(files: &[(String, Vec<u8>)], stamp: &str) -> Vec<u8> {
         let crc = crc32(data);
         let packed = miniz_oxide::deflate::compress_to_vec(data, 6);
         let offset = out.len();
+        let name_end = name.floor_char_boundary(u16::MAX as usize);
+        let name_bytes = &name.as_bytes()[..name_end];
         for (header, sig) in [(&mut out, 0x0403_4b50usize), (&mut central, 0x0201_4b50)] {
             u32le(header, sig);
             if sig == 0x0201_4b50 {
@@ -63,7 +76,7 @@ pub fn zip(files: &[(String, Vec<u8>)], stamp: &str) -> Vec<u8> {
             u32le(header, crc as usize);
             u32le(header, packed.len());
             u32le(header, data.len());
-            u16le(header, u16::try_from(name.len()).unwrap_or(u16::MAX));
+            u16le(header, name_bytes.len() as u16);
             u16le(header, 0); // extra
             if sig == 0x0201_4b50 {
                 u16le(header, 0); // comment
@@ -72,7 +85,7 @@ pub fn zip(files: &[(String, Vec<u8>)], stamp: &str) -> Vec<u8> {
                 u32le(header, 0); // external attributes
                 u32le(header, offset);
             }
-            header.extend_from_slice(name.as_bytes());
+            header.extend_from_slice(name_bytes);
         }
         out.extend_from_slice(&packed);
     }
@@ -105,5 +118,14 @@ mod tests {
         let (t, d) = dos_time("2026-10-13T12:00");
         assert_eq!((t >> 11, (t >> 5) & 63), (12, 0));
         assert_eq!((1980 + (d >> 9), (d >> 5) & 15, d & 31), (2026, 10, 13));
+        for bad in [
+            "2200-01-01T00:00",
+            "2026-13-01T00:00",
+            "2026-01-32T00:00",
+            "2026-01-01T25:00",
+            "1970-01-01T00:00",
+        ] {
+            assert_eq!(dos_time(bad), (0, (1 << 5) | 1), "{bad}");
+        }
     }
 }
