@@ -67,8 +67,9 @@ function checkedPointPairs(text) {
 function checkedOptions(text) {
   if(typeof text!=="string" || new Blob([text]).size>256*1024) throw Error("Options JSON must be at most 256 KiB.");
   const value=JSON.parse(text), keys=["depth_offset_mm","camera_distance_mm","click_px","sheet_level_sigma_deg","bootstrap","seed"];
-  if(!value || typeof value!=="object" || Array.isArray(value) || Object.keys(value).some(key=>!keys.includes(key))) {
-    throw Error("Choose a photo-options.json object containing only measurement settings.");
+  if(!value || typeof value!=="object" || Array.isArray(value) ||
+      Object.entries(value).some(([key,entry])=>!keys.includes(key) || typeof entry!=="number" || !Number.isFinite(entry))) {
+    throw Error("Choose a photo-options.json object containing only finite measurement settings.");
   }
 }
 function controls() {
@@ -266,8 +267,9 @@ function draw() {
 }
 function options() {
   if(importedOptions!==null) return importedOptions;
-  return JSON.stringify({depth_offset_mm:Number($("depth").value),camera_distance_mm:Number($("distance").value),
-    click_px:Number($("click").value),sheet_level_sigma_deg:Number($("level").value),bootstrap:Number($("bootstrap").value),seed:0});
+  const num=(id)=>{const raw=$(id).value.trim();return raw===""?null:Number(raw);};
+  return JSON.stringify({depth_offset_mm:num("depth"),camera_distance_mm:num("distance"),
+    click_px:num("click"),sheet_level_sigma_deg:num("level"),bootstrap:num("bootstrap"),seed:0});
 }
 async function readJsonFile(file) {
   if(!file) return "";

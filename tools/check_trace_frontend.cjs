@@ -353,3 +353,16 @@ test('all four browser workers reject missing or mismatched wasm_interface_stamp
     }
   }
 });
+
+test('blank crop slots and empty area fraction are refused instead of coercing to zero', async () => {
+  const p = await pageModule(); p.select();
+  p.e.crop.value = '10,,200,200';
+  await p.e.trace.onclick();
+  assert.equal(p.current().messages.length, 0);
+  assert.match(p.e.error.textContent, /four nonnegative integers/);
+  p.e.crop.value = '';
+  p.e.area.value = '   ';
+  await p.e.trace.onclick();
+  assert.equal(p.current().messages.length, 0);
+  assert.match(p.e.error.textContent, /Area fraction must be finite/);
+});

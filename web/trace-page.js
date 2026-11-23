@@ -127,19 +127,21 @@ function begin() {
 function imageOptions() {
   const crop = $("crop").value.trim();
   const stroke = $("stroke").value.trim();
+  const area = $("area").value.trim();
   const polarity = $("invert").value;
   const options = {
     channel: $("channel").value,
     threshold: $("threshold").value,
     invert: polarity === "auto" ? null : polarity === "yes",
     dashes: $("dashes").checked,
-    min_area_frac: Number($("area").value),
+    min_area_frac: area ? Number(area) : Number.NaN,
   };
   if (crop) {
-    options.crop = crop.split(",").map(Number);
-    if (options.crop.length !== 4 || options.crop.some((n) => !Number.isSafeInteger(n) || n < 0)) {
+    const parts = crop.split(",").map((s) => s.trim());
+    if (parts.length !== 4 || parts.some((s) => !s || !Number.isSafeInteger(Number(s)) || Number(s) < 0)) {
       throw new Error("Crop must be four nonnegative integers: x,y,width,height.");
     }
+    options.crop = parts.map(Number);
   }
   if (stroke) {
     options.stroke = Number(stroke);

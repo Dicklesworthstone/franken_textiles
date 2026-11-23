@@ -3985,3 +3985,16 @@ test('still-photo tape choices follow the checked catalogue and bound distinct d
     assert.equal(p.e.bodyCaptureEditor.hidden,true);
   }
 });
+test('blank photo uncertainty inputs serialize as null rather than zero and refuse draft save',async()=>{
+  const p=await photoPage();p.select();await p.analyze();
+  p.e.points.value='{"across_back":[[30,40],[80,40]]}';
+  p.e.depth.value='';p.e.level.value='  ';
+  await p.e.measure.onclick();
+  const sent=JSON.parse(p.current().messages[0].options);
+  assert.equal(sent.depth_offset_mm,null);
+  assert.equal(sent.sheet_level_sigma_deg,null);
+  p.e.cancel.onclick();
+  p.e.saveDraft.onclick();
+  assert.equal(p.e.draftDownloads.children.length,0);
+  assert.match(p.e.error.textContent,/finite measurement settings/);
+});
