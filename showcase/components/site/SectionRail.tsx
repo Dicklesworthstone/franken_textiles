@@ -37,9 +37,11 @@ export default function SectionRail() {
     addEventListener("scroll", schedule, { passive: true });
     return () => { resized.disconnect(); removeEventListener("scroll", schedule); cancelAnimationFrame(frame); };
   }, []);
+  // Until the rail is opened its labels are not displayed, and text that is not displayed gives a link no
+  // name; aria-label names each mark for a screen reader whatever the rail's state.
   return <nav className="ft-rail" aria-label="On this page">
     <ol>{stops.map(([id, label], index) => <li key={id}>
-      <a href={`#${id}`} aria-current={index === current ? "location" : undefined}>
+      <a href={`#${id}`} aria-label={label} aria-current={index === current ? "location" : undefined}>
         <i aria-hidden="true"/><span><b>{number(index)}</b>{label}</span>
       </a></li>)}</ol>
     <p className="ft-rail-now" aria-hidden="true"><b>{number(current)}</b> / {stops.length}</p>

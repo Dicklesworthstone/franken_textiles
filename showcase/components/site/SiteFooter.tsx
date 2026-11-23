@@ -12,7 +12,7 @@ export default function SiteFooter() {
           Whether a garment fits a person is settled by a sewn sample.</p>
       </div>
       <nav className="ft-foot-nav" aria-label="Site map">
-        <div className="ft-foot-index"><h2 className="mono">The exhibition · {exhibits.length} rooms</h2>
+        <div className="ft-foot-index"><h2 className="mono">All {exhibits.length} exhibits</h2>
           <ul>{exhibits.map(item => <li key={item.href}><a href={item.href}>{item.label}</a></li>)}</ul></div>
         <div><h2 className="mono">Workbenches</h2>
           <ul>{workbenches.map(item => <li key={item.href}><a href={item.href}>{item.label}</a></li>)}

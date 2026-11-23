@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { exhibits, homeSections, primary, project, repo, workbenches } from "./links";
 import "./site.css";
@@ -38,6 +38,8 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
   const [stuck, setStuck] = useState(false);
   const [open, setOpen] = useState(false);
   const sheet = useRef<HTMLDialogElement>(null);
+  // The id of a section on this page that a sheet entry was just followed to; focus goes there on close.
+  const landing = useRef<string | null>(null);
 
   useEffect(() => {
     const onScroll = () => setStuck(window.scrollY > 6);
@@ -50,8 +52,35 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
     const el = sheet.current;
     if (!el) return;
     if (open && !el.open) el.showModal();
-    if (!open && el.open) el.close();
+    if (!open && el.open) {
+      el.close();
+      // Closing hands focus back to the button that opened the sheet. After an entry that points into this
+      // page, the reader is at that section, so the keyboard should be too.
+      const target = landing.current ? document.getElementById(landing.current) : null;
+      landing.current = null;
+      if (target) {
+        // A section is not focusable by itself. `data-landing` marks the ones made focusable here, so the
+        // style sheet can leave them unringed without touching elements that manage their own focus.
+        if (!target.hasAttribute("tabindex")) {
+          target.setAttribute("tabindex", "-1");
+          target.setAttribute("data-landing", "");
+        }
+        target.focus({ preventScroll: true });
+      }
+    }
   }, [open]);
+
+  // Following an entry closes the sheet. One that points into the page being read does not leave it, so
+  // without this the sheet would stay open over the scrolled page. The click usually lands on the entry's
+  // label or picture, a child of the link. A click that opens a new tab or window leaves the sheet as it is.
+  const followed = (event: ReactMouseEvent<HTMLDialogElement>) => {
+    const link = event.target instanceof Element ? event.target.closest("a") : null;
+    if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const to = new URL(link.href, location.href);
+    const here = to.origin === location.origin && to.pathname === location.pathname && to.search === location.search;
+    if (here && to.hash) landing.current = to.hash.slice(1); // the section ids are plain ASCII
+    setOpen(false);
+  };
 
   const mark = (href: string, inSheet = false) => current(pathname, href, inSheet) ? "page" as const : undefined;
   return <>
@@ -81,10 +110,7 @@ export default function SiteHeader({ skipTo = "#main" }: { skipTo?: string }) {
       </div>
       <span className="ft-thread" aria-hidden="true"/>
     </header>
-    {/* A link's label is a child element, so the click usually lands on that child, not on the anchor. An entry
-        that points into the page being read does not leave it, so the sheet has to be closed here. */}
-    <dialog ref={sheet} className="ft-sheet" aria-label="Site menu" onClose={() => setOpen(false)}
-      onClick={event => { if (event.target instanceof Element && event.target.closest("a")) setOpen(false); }}>
+    <dialog ref={sheet} className="ft-sheet" aria-label="Site menu" onClose={() => setOpen(false)} onClick={followed}>
       <div className="ft-sheet-top wrap">
         <a className="wordmark" href="/"><Mark/>Franken<span>Textiles</span></a>
         <button type="button" className="ft-close" onClick={() => setOpen(false)}>Close <span aria-hidden="true">×</span></button>

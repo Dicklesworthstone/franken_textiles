@@ -375,7 +375,7 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 }
 @media print{.ft-head,.ft-foot,.skip,.ft-rail{display:none}}
 
-/* ---------- surface: paper fibre, cloth weave, depth ---------- */
+/* ---------- surface: paper fibre, cloth nap, depth ---------- */
 :root{
   /* Fibres in the paper: fractal noise in a warm brown at a few percent, tiled. */
   --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .24 0 0 0 0 .19 0 0 0 0 .13 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23g)'/%3E%3C/svg%3E");
@@ -384,9 +384,10 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
   --lift:0 1px 2px #1b262c12,0 16px 30px -20px #1b262c5c,0 34px 60px -44px #1b262c4d;
 }
 .paper,.ft-page,.ft-manifesto,.ft-files,.ft-platform,.ft-pipeline,.ft-start,.ft-lost,#studies{background-image:var(--grain)}
-.ft-fitting,.films,.material-gallery,.ft-claims,.ft-foot,.ft-sheet{background-image:linear-gradient(180deg,#ffffff0a,#fff0 260px),var(--nap)}
+.ft-foot,.ft-sheet{background-image:linear-gradient(180deg,#ffffff0a,#fff0 260px),var(--nap)}
 .ft-pillar:hover,.ft-next a:hover,.ft-shelf a:hover,.workbench-shelves>a:hover{box-shadow:var(--lift)}
-/* Each dark band on the home page is hemmed: a line of topstitching just inside its upper and lower edge. */
+/* Each dark band on the home page has the same nap and is hemmed as well: a line of topstitching just inside
+   its upper and lower edge. */
 .ft-fitting,.films,.material-gallery,.ft-claims{
   --hem:repeating-linear-gradient(90deg,#f6dcbf52 0 9px,transparent 9px 15px);
   background-image:var(--hem),var(--hem),linear-gradient(180deg,#ffffff0a,#fff0 260px),var(--nap);
@@ -403,12 +404,14 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 .ft-index-dots i{width:3px;height:3px;border-radius:50%;background:var(--rust)}
 .ft-index small{font:500 11px/1 var(--mono);color:#6d6558}
 @media(max-width:1279px){.ft-nav-extra{display:none}}
-/* A running stitch sewn along the header's lower edge as the page is read. */
-.ft-thread{position:absolute;inset:auto auto -1.5px 0;width:0;height:2px;pointer-events:none;
+/* A running stitch sewn along the header's lower edge as the page is read. It is revealed by a clip, not by
+   growing its width, so scrolling does not lay anything out again; where scroll timelines are missing it
+   stays clipped. */
+.ft-thread{position:absolute;inset:auto 0 -1.5px 0;height:2px;pointer-events:none;clip-path:inset(0 100% 0 0);
   background:repeating-linear-gradient(90deg,var(--rust) 0 9px,transparent 9px 14px)}
 @supports (animation-timeline:scroll()){
   .ft-thread{animation:ft-thread linear both;animation-timeline:scroll(root block)}
-  @keyframes ft-thread{to{width:100%}}
+  @keyframes ft-thread{to{clip-path:inset(0)}}
 }
 
 /* ---------- the index, on a wide screen ---------- */
@@ -421,14 +424,10 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
   .ft-sheet-body{grid-template-columns:minmax(0,3fr) minmax(0,1fr);grid-template-rows:auto 1fr;column-gap:clamp(36px,5vw,88px);row-gap:34px;
     align-items:start;padding-top:clamp(22px,3.4vh,44px)}
   .ft-sheet-body>section:first-child{grid-row:1/span 2}
-  .ft-sheet-body>section:first-child ul{columns:2;column-gap:clamp(26px,3.2vw,52px)}
-  .ft-sheet li{break-inside:avoid}
   .ft-sheet li a{padding:10px 0 11px}
   .ft-sheet li strong{font-size:clamp(22px,1.75vw,27px)}
   .ft-sheet li small{font-size:13.5px}
 }
-/* Three columns of seven hold the whole catalogue on one screen. */
-@media(min-width:1280px){.ft-sheet-body>section:first-child ul{columns:3}}
 @media(prefers-reduced-motion:reduce){.ft-sheet li a,.ft-rail i,.primary,.primary .arrow{transition:none}.ft-sheet li a:hover{padding-left:0}}
 /* On the home page the sheet opens with that page's own sections, as a compact numbered list. */
 .ft-sheet-here{padding-top:24px}
@@ -453,7 +452,7 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 @media(min-width:1081px){
   /* Wide: a contact sheet. Each picture carries its number and name; the one-line note is kept for screen
      readers and shown in the list on narrower screens. */
-  .ft-sheet-body>section:first-child ul{columns:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:20px 14px;margin-top:10px}
+  .ft-sheet-body>section:first-child ul{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:20px 14px;margin-top:10px}
   .ft-sheet-body>section:first-child li a{position:relative;grid-template-columns:minmax(0,1fr);gap:0;padding:0;border:0}
   .ft-sheet-body>section:first-child li a>img{grid-column:1;grid-row:1;width:100%;margin:0 0 8px}
   .ft-sheet-body>section:first-child li a::before{grid-column:1;grid-row:2}
@@ -480,8 +479,8 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
   /* It keeps to the window's edge on every width: the opening and the drape room run full bleed, so a rail
      set against the centred column would land on their copy on a very wide screen. */
   .ft-rail{display:block;position:fixed;z-index:30;top:50%;left:clamp(16px,1.1vw,28px);translate:0 -50%;color:#d5cfc2;mix-blend-mode:difference}
-  .ft-rail ol{list-style:none;margin:0;padding:4px 0;border-left:1.5px solid currentColor;transition:background-color .2s}
-  .ft-rail a{display:flex;align-items:center;gap:10px;height:21px;color:inherit}
+  .ft-rail ol{list-style:none;margin:0;padding:4px 0;border-left:1.5px solid currentColor}
+  .ft-rail a{display:flex;align-items:center;gap:10px;height:24px;color:inherit}
   /* Each mark sits in a box of one width, so the labels beside them line up. */
   .ft-rail i{flex:none;width:24px;height:3px;background:linear-gradient(currentColor,currentColor) 0 50%/8px 1.5px no-repeat;transition:background-size .3s var(--ease-out)}
   .ft-rail li:nth-child(5n+1) i{background-size:13px 1.5px}
@@ -513,14 +512,20 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
    never stretched into an oval; a group that is not named simply keeps its own size. */
 @media(pointer:coarse){
   main :is(.cut-mode-bar,.cut-quantity,.dl-compare,.dl-garments,.dl-pieces,.dr-options,.filters,.fs-group,.fs-step-pair,.fs-transport,
-    .hs-3d-controls,.hs-cam-bar,.hs-source-group,.hs-step-pair,.hs-transport,.io-cam-pills,.io-quick-actions,.io-toggles,.is-done,.is-now,
+    .hs-3d-controls,.hs-cam-bar,.hs-source-group,.hs-step-pair,.hs-transport,.io-cam-pills,.io-quick-actions,.io-toggles,
     .regimental-items,.rig-console,.rig-presets,.rl-offset-row,.sa-view-controls,.sc-btn-group,.sc-swap-actions,.sd-poses,.sd-toile-sheet,
     .so-3d-tools,.so-cli-head,.so-dep-chips,.so-transport-btns,.sr-action-row,.sr-group,.sr-piece-tabs,.stitch-buttons,.stitch-field,
     .tf-field,.tf-quick-snap,.th-field,.th-presets,.ts-cameras,.ts-options,.ts-tabs,.wc-side-group,.wc-stage-pills,.wc-welt-shortcuts,
     .ws-field,.ws-group,.ws-piece-pick,.ws-preset-row,.ws-presets,.ws-slice-tabs)>:is(button,select){min-height:40px}
   main .film-filters>button{min-height:40px;border-radius:20px;padding-inline:14px}
   main .ft-copy{min-height:36px;padding-inline:12px}
+  /* The sewing-stage pills set their own 32 px minimum with two classes, so they need a rule of their own. */
+  main .mk .mk-steps button{min-height:40px}
 }
+
+/* A section reached from the menu takes the keyboard focus, so that the next Tab continues from there
+   (SiteHeader marks it). It is a landing place, not a control, and is not ringed. */
+[data-landing]:focus{outline:none}
 
 /* ---------- home: the opening settles into place ---------- */
 @media(prefers-reduced-motion:no-preference){
