@@ -302,6 +302,11 @@ fn optimize(
                 })
                 .collect();
         let g: Vec<_> = s.g.iter().zip(&norms).map(|(v, n)| v / n).collect();
+        if g.iter().any(|v| !v.is_finite()) || !s.cost.is_finite() {
+            return Err(invalid(
+                "NOT_CONVERGED: Brown calibration gradient or cost became non-finite",
+            ));
+        }
         telemetry.scaled_gradient_inf = Some(g.iter().map(|v| v.abs()).fold(0.0, f64::max));
         if cholesky(&h, 0.0, PIVOT_FLOOR).is_none() {
             return Err(invalid(
@@ -420,7 +425,10 @@ pub(super) fn calibrate(report: &mut CalibrationReport, mut k: Intrinsics) -> Re
         .iter()
         .map(|p| (p.sheet_xz_m - first).norm())
         .fold(0.0, f64::max);
-    if extent <= 0.0 || !extent.is_finite() {
+    if input.controls.iter().any(|p| !p.sheet_xz_m.is_finite())
+        || extent <= 0.0
+        || !extent.is_finite()
+    {
         return Err(invalid("invalid calibration sheet extent"));
     }
     let observations: Vec<Vec<_>> = input
@@ -598,6 +606,12 @@ pub(super) fn covariance(
         .iter()
         .map(|p| (p.sheet_xz_m - first).norm())
         .fold(0.0, f64::max);
+    if input.controls.iter().any(|p| !p.sheet_xz_m.is_finite())
+        || extent <= 0.0
+        || !extent.is_finite()
+    {
+        return Err(invalid("invalid calibration sheet extent"));
+    }
     let mut state = State {
         k: solution.intrinsics,
         poses: Vec::new(),
