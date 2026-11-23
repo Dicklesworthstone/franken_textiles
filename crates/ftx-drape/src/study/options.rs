@@ -4,8 +4,10 @@ use crate::{
     contact::{AdaptiveBarrierPolicy, ContactParams, StickSlipFriction},
     damping::DampingOptions,
     elements::{BendingModel, CompressionModel},
+    garment::{ConstructionMechanicsOptions, MeshOptions},
     integrator::TimeIntegrator,
     run::{DrapeOptions, StaticEquilibriumOptions},
+    start::SelfRepulsionOptions,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -76,6 +78,15 @@ struct Options {
     stick_slip: Option<StickSlipFriction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     self_stick_slip: Option<StickSlipFriction>,
+    #[serde(default, skip_serializing_if = "MeshOptions::is_default")]
+    mesh: MeshOptions,
+    #[serde(
+        default,
+        skip_serializing_if = "ConstructionMechanicsOptions::is_default"
+    )]
+    construction: ConstructionMechanicsOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_self_repulsion: Option<SelfRepulsionOptions>,
 }
 
 impl Serialize for DrapeOptions {
@@ -276,6 +287,56 @@ mod tests {
                 .adaptive_barrier
                 .is_none()
         );
+    }
+
+    #[test]
+    fn mesh_construction_and_self_repulsion_are_opt_in_and_round_trip() {
+        let ordinary = serde_json::to_value(DrapeOptions::default()).unwrap();
+        assert!(ordinary.get("mesh").is_none());
+        assert!(ordinary.get("construction").is_none());
+        assert!(ordinary.get("start_self_repulsion").is_none());
+
+        let mut declared = ordinary.clone();
+        declared["mesh"] = serde_json::to_value(MeshOptions::adaptive(6.0)).unwrap();
+        declared["construction"] =
+            serde_json::to_value(ConstructionMechanicsOptions::standard()).unwrap();
+        declared["start_self_repulsion"] =
+            serde_json::to_value(SelfRepulsionOptions::default()).unwrap();
+        let options: DrapeOptions = serde_json::from_value(declared.clone()).unwrap();
+        options.validate().unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), declared);
+
+        // min_spacing_mm > spacing must refuse fail-closed.
+        let mut bad_mesh = declared.clone();
+        bad_mesh["mesh"]["min_spacing_mm"] = serde_json::json!(20.0);
+        let bad_mesh_opts: DrapeOptions = serde_json::from_value(bad_mesh).unwrap();
+        assert!(bad_mesh_opts.validate().is_err());
+
+        // hem_mass_multiplier > 1 with hem_width_mm == 0 must refuse fail-closed.
+        let mut bad_constr = declared.clone();
+        bad_constr["construction"]["hem_width_mm"] = serde_json::json!(0.0);
+        let bad_constr_opts: DrapeOptions = serde_json::from_value(bad_constr).unwrap();
+        assert!(bad_constr_opts.validate().is_err());
+
+        // period == 0 in start_self_repulsion must refuse fail-closed.
+        let mut bad_rep = declared.clone();
+        bad_rep["start_self_repulsion"]["period"] = serde_json::json!(0);
+        let bad_rep_opts: DrapeOptions = serde_json::from_value(bad_rep).unwrap();
+        assert!(bad_rep_opts.validate().is_err());
+
+        // Unknown fields must be rejected fail-closed.
+        for key in ["mesh", "construction", "start_self_repulsion"] {
+            let mut extra = declared.clone();
+            extra[key]["unknown_field"] = serde_json::json!(1);
+            assert!(
+                serde_json::from_value::<DrapeOptions>(extra).is_err(),
+                "{key} must reject unknown fields"
+            );
+        }
+        let round_default: DrapeOptions = serde_json::from_value(ordinary).unwrap();
+        assert!(round_default.mesh.is_default());
+        assert!(round_default.construction.is_default());
+        assert!(round_default.start_self_repulsion.is_none());
     }
 
     #[test]

@@ -280,6 +280,18 @@ pub struct FoldSettings {
     /// Opt-in smooth static/kinetic stick-slip friction for cloth–cloth self-contact (omitted when legacy Coulomb `mu`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub self_stick_slip: Option<ftx_drape::StickSlipFriction>,
+    /// Opt-in curvature/gather-adaptive meshing and bounded interior Lloyd CVT smoothing (omitted when legacy uniform).
+    #[serde(default, skip_serializing_if = "ftx_drape::MeshOptions::is_default")]
+    pub mesh: ftx_drape::MeshOptions,
+    /// Opt-in folded-hem and sewn seam-allowance mass and bending multipliers (omitted when legacy single-ply).
+    #[serde(
+        default,
+        skip_serializing_if = "ftx_drape::ConstructionMechanicsOptions::is_default"
+    )]
+    pub construction: ftx_drape::ConstructionMechanicsOptions,
+    /// Opt-in spatial-hash cloth–cloth self-repulsion during start-state relaxation (omitted when legacy relaxation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_self_repulsion: Option<ftx_drape::SelfRepulsionOptions>,
 }
 
 impl Default for FoldSettings {
@@ -308,6 +320,9 @@ impl Default for FoldSettings {
             adaptive_barrier: None,
             stick_slip: None,
             self_stick_slip: None,
+            mesh: ftx_drape::MeshOptions::default(),
+            construction: ftx_drape::ConstructionMechanicsOptions::default(),
+            start_self_repulsion: None,
         }
     }
 }
@@ -436,6 +451,9 @@ fn fold_on_source(
         adaptive_barrier,
         stick_slip,
         self_stick_slip,
+        mesh,
+        construction,
+        start_self_repulsion,
     } = options;
     let m = |r: ftx_core::Refusal| r.to_string();
     let mut pose = Pose::drape();
@@ -471,6 +489,9 @@ fn fold_on_source(
         adaptive_barrier,
         stick_slip,
         self_stick_slip,
+        mesh,
+        construction,
+        start_self_repulsion,
         ..defaults
     };
     opts.self_contact = Some(ftx_drape::contact::ContactParams {
@@ -1025,6 +1046,9 @@ mod tests {
         assert!(def_val.get("adaptive_barrier").is_none());
         assert!(def_val.get("stick_slip").is_none());
         assert!(def_val.get("self_stick_slip").is_none());
+        assert!(def_val.get("mesh").is_none());
+        assert!(def_val.get("construction").is_none());
+        assert!(def_val.get("start_self_repulsion").is_none());
         assert!(def_val.get("step_s").is_none());
         assert!(def_val.get("sew_steps").is_none());
         assert!(def_val.get("drape_steps").is_none());
@@ -1042,6 +1066,11 @@ mod tests {
             serde_json::to_value(ftx_drape::AdaptiveBarrierPolicy::default()).unwrap();
         custom["stick_slip"] = json!({"mu_s": 0.6, "mu_k": 0.3, "transition_v_m_s": 0.02});
         custom["self_stick_slip"] = json!({"mu_s": 0.5, "mu_k": 0.25, "transition_v_m_s": 0.015});
+        custom["mesh"] = serde_json::to_value(ftx_drape::MeshOptions::adaptive(6.0)).unwrap();
+        custom["construction"] =
+            serde_json::to_value(ftx_drape::ConstructionMechanicsOptions::standard()).unwrap();
+        custom["start_self_repulsion"] =
+            serde_json::to_value(ftx_drape::SelfRepulsionOptions::default()).unwrap();
         let parsed: FoldSettings = serde_json::from_value(custom.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), custom);
         assert_eq!(

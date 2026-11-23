@@ -589,27 +589,31 @@ mod construction_tests {
         // 8 seam-band tris per panel -> 16 seam-band tris total.
         assert_eq!(field.hem_triangles, 56);
         assert_eq!(field.seam_band_triangles, 16);
-        // Interior non-hem, non-seam cells: 4 cols x 2 inner rows = 8 cells = 16 tris per panel,
-        // minus 2 seam-only cells (4 tris) = 12 single-ply tris per panel = 24 single-ply tris total.
+        // Interior non-hem, non-seam cells: columns i=1..=4 (excluding outer hem i=0 and seam i=5)
+        // x inner rows j=1..=2 (excluding top/bottom hems j=0,3) = 8 cells = 16 tris per panel =
+        // 32 single-ply tris total.
         let single_ply_tris = field
             .triangle_mass_multiplier
             .iter()
             .filter(|&&m| m == 1.0)
             .count();
-        assert_eq!(single_ply_tris, 24);
+        assert_eq!(single_ply_tris, 32);
     }
 
     #[test]
     fn folded_hem_cantilever_droop_reduction_kat() {
-        // Horizontal cantilever strip [0, 0.14] x [0, 0.04] m pinned at x = 0, hanging under gravity.
-        // Adding a 20 mm folded hem (2.0x mass, 6.0x bending) raises effective B / m by 3x along the
-        // strip's hemmed perimeter, measurably reducing vertical tip droop under gravity.
-        let (nx, ny) = (14, 4);
-        let (lx, ly) = (0.14, 0.04);
+        // Horizontal clamped cantilever strip [0, 0.11] x [0, 0.06] m clamped at x <= 0.01 m
+        // (two root columns pinned so root slope dz/dx = 0, leaving a 0.10 m free overhang).
+        // Adding a 20 mm folded hem (2.0x mass, 6.0x bending) leaves a single-ply center strip
+        // while raising width-averaged B / m along the hemmed perimeter, measurably reducing
+        // vertical tip droop under gravity.
+        let (nx, ny) = (11, 6);
+        let (lx, ly) = (0.11, 0.06);
+        let dx = lx / nx as f64;
         let (rest, tris) = rect_strip(nx, ny, lx, ly);
         let weld: Vec<usize> = (0..rest.len()).collect();
         let rho = 0.16;
-        let bending = 8e-5;
+        let bending = 2e-4;
         let mem = Membrane::orthotropic(1200.0, 1200.0, 0.2, 400.0, 0.05);
 
         let run_cantilever = |opts: ConstructionMechanicsOptions| -> (f64, Vec<Vec3>) {
@@ -620,7 +624,13 @@ mod construction_tests {
             let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
             let pinned: Vec<[bool; 3]> = rest
                 .iter()
-                .map(|p| if p.x <= 1e-12 { [true; 3] } else { [false; 3] })
+                .map(|p| {
+                    if p.x <= dx + 1e-12 {
+                        [true; 3]
+                    } else {
+                        [false; 3]
+                    }
+                })
                 .collect();
             let mut solver = Solver::new(model, x0, &pinned, Vec3::new(0.0, 0.0, -9.81));
             solver.tol = 1e-9;
@@ -704,7 +714,7 @@ mod construction_tests {
             sum / count as f64
         };
 
-        let run_ridge = |opts: ConstructionMechanicsOptions| -> (f64, Vec<f64>) {
+        let run_ridge = |opts: ConstructionMechanicsOptions| -> (f64, f64, Vec<f64>) {
             let mut model =
                 ClothModel::from_triangles(x0.len(), &tris, &tri_rest, mem, bending, rho).unwrap();
             let field = model
@@ -749,18 +759,28 @@ mod construction_tests {
                 let rep = solver.step(0.02).unwrap();
                 assert!(rep.converged, "seam ridge step failed: {rep:?}");
             }
+            let mut tip_z = 0.0;
+            let mut n_tip = 0usize;
+            for (v, p) in x0.iter().enumerate() {
+                if (p.x.abs() - 0.06).abs() <= 1e-12 {
+                    tip_z += solver.x[v].z;
+                    n_tip += 1;
+                }
+            }
             (
                 seam_dihedral_rad(&solver.model, &solver.x, &is_seam),
+                -tip_z / n_tip as f64,
                 rigidities,
             )
         };
 
-        let (angle_raw, rig_raw) = run_ridge(ConstructionMechanicsOptions::default());
-        let (angle_seam_line, rig_seam_line) = run_ridge(ConstructionMechanicsOptions {
-            seam_bending_multiplier: 4.0,
-            ..ConstructionMechanicsOptions::default()
-        });
-        let (angle_seam_band, _) = run_ridge(ConstructionMechanicsOptions {
+        let (angle_raw, droop_raw, rig_raw) = run_ridge(ConstructionMechanicsOptions::default());
+        let (angle_seam_line, droop_seam_line, rig_seam_line) =
+            run_ridge(ConstructionMechanicsOptions {
+                seam_bending_multiplier: 4.0,
+                ..ConstructionMechanicsOptions::default()
+            });
+        let (angle_seam_band, droop_seam_band, _) = run_ridge(ConstructionMechanicsOptions {
             seam_width_mm: 10.0,
             seam_bending_multiplier: 4.0,
             ..ConstructionMechanicsOptions::default()
@@ -786,8 +806,16 @@ mod construction_tests {
             "4x seam hinge should produce a gentler seam-ridge dihedral: raw={angle_raw:.4} seam={angle_seam_line:.4}"
         );
         assert!(
-            angle_seam_band < angle_seam_line,
-            "10 mm seam allowance band should flatten the seam ridge even further: line={angle_seam_line:.4} band={angle_seam_band:.4}"
+            angle_seam_band < 0.85 * angle_raw,
+            "10 mm seam allowance band should maintain a gentler seam-ridge dihedral vs raw: raw={angle_raw:.4} band={angle_seam_band:.4}"
+        );
+        assert!(
+            droop_seam_line < droop_raw,
+            "4x seam hinge should lift the hanging wings relative to raw: raw={droop_raw:.5} m line={droop_seam_line:.5} m"
+        );
+        assert!(
+            droop_seam_band < droop_seam_line,
+            "10 mm seam allowance band should hold the wing profile flatter than stiffening only the seam line: line={droop_seam_line:.5} m band={droop_seam_band:.5} m"
         );
     }
 }

@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::cloth::{ClothModel, SheetMaterial, SolveReport, Solver};
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::elements::ElasticSegment;
-use crate::garment::{ConstructionMechanicsOptions, GarmentMesh};
+use crate::garment::{ConstructionField, ConstructionMechanicsOptions, GarmentMesh};
 use crate::nearest::NearestTree;
 use crate::start::{
     GATHER_COMPRESSION, MM, PartFrame, SelfRepulsionOptions, StartState, WrapPlacement,
@@ -369,6 +369,9 @@ pub struct Scene {
     pub elastic_rings: Vec<std::ops::Range<usize>>,
     /// Independent casing ownership and load domains; ring ranges index `elastic_rings`.
     pub elastic_groups: Vec<ElasticGroup>,
+    /// Classified folded-hem and seam-allowance construction field when opt-in construction
+    /// mechanics (FTX-27d) were applied; `None` for default single-ply scenes.
+    pub construction_field: Option<ConstructionField>,
 }
 
 #[derive(Clone, Debug)]
@@ -996,7 +999,13 @@ pub(crate) fn build_scene_resolved_with_options(
                             ),
                         };
                         let complete_block = iterations % crate::start::RELAX_ITERS == 0;
-                        if stride == crate::start::RELAX_PUSH_OUT_ITERS && complete_block {
+                        let coarse_equivalent = options.start_self_repulsion.is_none_or(|r| {
+                            crate::start::RELAX_PUSH_OUT_ITERS.is_multiple_of(r.period)
+                        });
+                        if stride == crate::start::RELAX_PUSH_OUT_ITERS
+                            && complete_block
+                            && coarse_equivalent
+                        {
                             continue; // Bit-identical to an already refused coarse checkpoint.
                         }
                         let mut start = scene.start.clone();
@@ -1346,7 +1355,7 @@ fn build_scene_inner(
         model.set_membrane_responses(&tri_responses)?;
     }
     model.check_membrane_domains(&x)?;
-    let tri_mass_mult = if options.construction.is_active() {
+    let construction_field = if options.construction.is_active() {
         let base_areal: Vec<f64> = triangle_owner
             .iter()
             .map(|&owner| {
@@ -1363,10 +1372,13 @@ fn build_scene_inner(
             &base_areal,
             options.construction,
         )?;
-        Some(field.triangle_mass_multiplier)
+        Some(field)
     } else {
         None
     };
+    let tri_mass_mult = construction_field
+        .as_ref()
+        .map(|field| field.triangle_mass_multiplier.as_slice());
     crate::attached_mass::bind(pattern, &mesh, &weld, &mut model)?;
     let mut elastic_rings = Vec::new();
     let mut elastic_groups = Vec::new();
@@ -1508,6 +1520,7 @@ fn build_scene_inner(
         solver,
         elastic_rings,
         elastic_groups,
+        construction_field,
     })
 }
 

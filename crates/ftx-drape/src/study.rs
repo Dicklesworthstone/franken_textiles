@@ -370,7 +370,11 @@ impl<'a, 'body> Session<'a, 'body> {
         let simulated = (!casings.is_empty()).then(|| casings_at_cut_length(pattern, &casings));
         let points = mesh_bound(
             simulated.as_ref().unwrap_or(pattern),
-            self.scenario.options.spacing,
+            self.scenario
+                .options
+                .mesh
+                .min_spacing_mm
+                .unwrap_or(self.scenario.options.spacing),
             self.scenario.max_mesh_points,
         )?;
         let nominal_frames = self.scenario.options.sew_steps

@@ -17,15 +17,18 @@ use crate::cloth::NewtonStrategy;
 use crate::contact::{AdaptiveBarrierPolicy, Contact, ContactParams, StickSlipFriction};
 use crate::damping::DampingOptions;
 use crate::elements::{BendingModel, CompressionModel};
-use crate::garment::{GarmentMesh, build_garment, simulation_scope};
+use crate::garment::{
+    ConstructionMechanicsOptions, GarmentMesh, MeshOptions, build_garment,
+    build_garment_with_options, mesh_quality, simulation_scope,
+};
 use crate::integrator::TimeIntegrator;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
-    Fabric, PartFrames, PhaseReport, Scene, casings_at_cut_length, elastic_casings,
-    run_phase_with_subdivision,
+    Fabric, PartFrames, PhaseReport, Scene, SceneBuildOptions, casings_at_cut_length,
+    elastic_casings, run_phase_with_subdivision,
 };
-use crate::start::{edge_strain, face_edges};
+use crate::start::{SelfRepulsionOptions, edge_strain, face_edges};
 use crate::stepping::SubdivisionOptions;
 
 /// Standard gravity (m/s²) of the drape phase.
@@ -160,6 +163,12 @@ pub struct DrapeOptions {
     pub stick_slip: Option<StickSlipFriction>,
     /// Opt-in smooth static/kinetic stick-slip friction for cloth–cloth self-contact (`None` preserves legacy Coulomb `mu`).
     pub self_stick_slip: Option<StickSlipFriction>,
+    /// Opt-in curvature/gather-adaptive meshing and bounded interior Lloyd CVT smoothing (default: uniform spacing, 0 CVT passes).
+    pub mesh: MeshOptions,
+    /// Opt-in folded-hem and sewn seam-allowance mass and bending multipliers (default: 1.0× everywhere, 0 mm bands).
+    pub construction: ConstructionMechanicsOptions,
+    /// Opt-in spatial-hash cloth–cloth self-repulsion during start-state relaxation (`None` preserves legacy reference relaxation).
+    pub start_self_repulsion: Option<SelfRepulsionOptions>,
 }
 
 impl Default for DrapeOptions {
@@ -198,6 +207,9 @@ impl Default for DrapeOptions {
             adaptive_barrier: None,
             stick_slip: None,
             self_stick_slip: None,
+            mesh: MeshOptions::default(),
+            construction: ConstructionMechanicsOptions::default(),
+            start_self_repulsion: None,
         }
     }
 }
@@ -236,6 +248,11 @@ impl DrapeOptions {
                     "cloth-cloth stick-slip friction requires self-contact to be enabled",
                 ));
             }
+        }
+        self.mesh.validate(self.spacing)?;
+        self.construction.validate()?;
+        if let Some(repulsion) = self.start_self_repulsion {
+            repulsion.validate()?;
         }
         for (name, value) in [
             ("mesh spacing", self.spacing),
@@ -506,7 +523,11 @@ pub fn drape_observed(
         simulated = casings_at_cut_length(pattern, &elastics);
         &simulated
     };
-    let mesh = build_garment(pattern, opts.spacing)?;
+    let mesh = if opts.mesh.is_default() {
+        build_garment(pattern, opts.spacing)?
+    } else {
+        build_garment_with_options(pattern, opts.spacing, opts.mesh)?
+    };
     if mesh.verts2d.is_empty() {
         // a cone (fez) or a pattern whose pieces have no placement is judged flat, as `fab round` says
         return Err(Refusal::new(
@@ -518,7 +539,11 @@ pub fn drape_observed(
         .self_contact
         .map(|_| crate::animation::ReplayContact::new(body.display.0, body.display.1))
         .transpose()?;
-    let mut scene = crate::scene::build_scene_resolved(
+    let scene_options = SceneBuildOptions {
+        construction: opts.construction,
+        start_self_repulsion: opts.start_self_repulsion,
+    };
+    let mut scene = crate::scene::build_scene_resolved_with_options(
         pattern,
         mesh,
         body.frames,
@@ -526,6 +551,7 @@ pub fn drape_observed(
         &material,
         &elastics,
         display_contact.as_mut(),
+        scene_options,
     )?;
     if let Some(p) = opts.self_contact {
         let mut crossing = None;
@@ -807,6 +833,7 @@ pub fn drape_observed(
     );
     add_numerical_report(
         &mut report,
+        &scene,
         &sew,
         &drape,
         opts,
@@ -1037,6 +1064,7 @@ fn consecutive_quiet_steps(phase: &PhaseReport) -> usize {
 
 fn add_numerical_report(
     report: &mut Value,
+    scene: &Scene,
     sew: &PhaseReport,
     drape: &PhaseReport,
     opts: &DrapeOptions,
@@ -1082,6 +1110,28 @@ fn add_numerical_report(
     }
     if let Some(friction) = opts.self_stick_slip {
         report["numerical"]["self_stick_slip"] = json!(friction);
+    }
+    if !opts.mesh.is_default() {
+        report["numerical"]["mesh"] = json!({
+            "options": opts.mesh,
+            "quality": mesh_quality(&scene.mesh),
+        });
+    }
+    if !opts.construction.is_default() {
+        let mut entry = json!({
+            "options": opts.construction,
+            "basis": "uncalibrated structural multipliers on flat hem and seam-allowance bands; not measured laminate or stitch-class properties and not a fit claim",
+        });
+        if let Some(field) = &scene.construction_field {
+            entry["hem_edges"] = json!(field.hem_edges);
+            entry["hem_triangles"] = json!(field.hem_triangles);
+            entry["seam_band_triangles"] = json!(field.seam_band_triangles);
+            entry["seam_hinges"] = json!(field.seam_hinges);
+        }
+        report["numerical"]["construction"] = entry;
+    }
+    if let Some(repulsion) = opts.start_self_repulsion {
+        report["numerical"]["start_self_repulsion"] = json!(repulsion);
     }
     if let Some(policy) = opts.time_subdivision {
         let intervals: Vec<_> = sew

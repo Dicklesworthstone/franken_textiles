@@ -243,6 +243,11 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
             "uniform stick-slip friction cannot override a characterized material record's friction evidence",
         ));
     }
+    if inputs.report["basis"] != "legacy_uncertain" && inputs.options.construction.is_active() {
+        return Err(invalid(
+            "uncalibrated construction mass/bending multipliers cannot override a characterized material record",
+        ));
+    }
     Ok(inputs)
 }
 

@@ -60,7 +60,14 @@ pub use contact::{
 };
 pub use damping::{AirDrag, DampingOptions};
 pub use elements::{BendingModel, CompressionModel, Hinge, Membrane, MembraneElement};
-pub use garment::{GarmentMesh, GatherRelief, SeamRecord, build_garment};
+pub use garment::{
+    ConstructionField, ConstructionMechanicsOptions, GarmentMesh, GatherRelief, MeshOptions,
+    MeshQuality, SeamRecord, build_garment, build_garment_with_options, mesh_quality,
+};
 pub use integrator::TimeIntegrator;
 pub use nearest::{Nearest, NearestTree};
-pub use start::{PartFrame, StartState, WrapPlacement, start_state, wrap_points};
+pub use scene::SceneBuildOptions;
+pub use start::{
+    PartFrame, SelfRepulsionOptions, StartState, WrapPlacement, relax_with_repulsion, start_state,
+    start_state_with_repulsion, wrap_points,
+};

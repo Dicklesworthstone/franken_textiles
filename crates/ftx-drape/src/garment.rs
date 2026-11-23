@@ -1188,10 +1188,28 @@ impl ConstructionMechanicsOptions {
                 "hem mass/bending multipliers > 1 require hem_width_mm > 0",
             ));
         }
+        if self.hem_width_mm > 0.0
+            && self.hem_mass_multiplier == 1.0
+            && self.hem_bending_multiplier == 1.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "hem_width_mm > 0 requires hem_mass_multiplier > 1 or hem_bending_multiplier > 1",
+            ));
+        }
         if self.seam_mass_multiplier > 1.0 && self.seam_width_mm <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "seam_mass_multiplier > 1 requires seam_width_mm > 0",
+            ));
+        }
+        if self.seam_width_mm > 0.0
+            && self.seam_mass_multiplier == 1.0
+            && self.seam_bending_multiplier == 1.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "seam_width_mm > 0 requires seam_mass_multiplier > 1 or seam_bending_multiplier > 1",
             ));
         }
         Ok(())

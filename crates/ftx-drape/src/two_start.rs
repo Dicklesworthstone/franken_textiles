@@ -324,6 +324,15 @@ fn attach(
     if let Some(friction) = opts.self_stick_slip {
         comparison["shared_settings"]["self_stick_slip"] = json!(friction);
     }
+    if !opts.mesh.is_default() {
+        comparison["shared_settings"]["mesh"] = json!(opts.mesh);
+    }
+    if !opts.construction.is_default() {
+        comparison["shared_settings"]["construction"] = json!(opts.construction);
+    }
+    if let Some(repulsion) = opts.start_self_repulsion {
+        comparison["shared_settings"]["start_self_repulsion"] = json!(repulsion);
+    }
     for f in &flags {
         flag(&mut primary.report, f)?;
     }
