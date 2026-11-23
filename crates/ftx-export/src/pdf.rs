@@ -845,7 +845,9 @@ pub fn tile_grid(lay: &Layout, paper: &Paper) -> (usize, usize, Vec<Tile>) {
     (cols, rows, tiles)
 }
 
-fn checked_tile_grid(lay: &Layout, paper: &Paper) -> Result<(usize, usize, Vec<Tile>), Refusal> {
+type TileGrid = (usize, usize, Vec<Tile>);
+
+fn checked_tile_grid(lay: &Layout, paper: &Paper) -> Result<TileGrid, Refusal> {
     let (cols, rows, tiles) = tile_grid(lay, paper);
     if cols == 0 || rows == 0 || tiles.is_empty() {
         return Err(Refusal::new(
@@ -1161,7 +1163,7 @@ fn tiles_doc(
     ctx: &Ctx,
     lay: &Layout,
     paper: &Paper,
-    grid: (usize, usize, Vec<Tile>),
+    grid: TileGrid,
     kind: &str,
     title: String,
     with_info: bool,
@@ -1440,7 +1442,7 @@ pub fn export_copyshop(ctx: &Ctx) -> Result<Vec<PdfFile>, Refusal> {
         ("A0", (841.0, 1189.0)),
         ("36x48in", (36.0 * INCH, 48.0 * INCH)),
     ] {
-        let mut best: Option<(usize, Paper, (usize, usize, Vec<Tile>))> = None;
+        let mut best: Option<(usize, Paper, TileGrid)> = None;
         let mut last_err = None;
         for (ww, hh) in [(w, h), (h, w)] {
             let paper = Paper::copyshop(label, ww, hh);

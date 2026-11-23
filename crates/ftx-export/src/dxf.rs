@@ -59,19 +59,13 @@ fn unit(v: Vec2) -> Vec2 {
     }
 }
 
-/// Turn points (vertices turning more than `thresh` degrees; the ends of an open line) and curve points (every
-/// `spacing` mm along the runs between turns, and each run's farthest point from its chord when over 0.5 mm) for
-/// grading software.
-#[must_use]
-pub fn turn_and_curve_points(
-    pts: &[Vec2],
-    closed: bool,
-    thresh: f64,
-    spacing: f64,
-) -> (Vec<Vec2>, Vec<Vec2>) {
+/// Upper bound on sampled DXF curve points per polyline (caps memory on pathological scales).
+const MAX_CURVE_POINTS: usize = 100_000;
+
+fn turn_indices(pts: &[Vec2], closed: bool, thresh: f64) -> Vec<usize> {
     let n = pts.len();
     if n < 2 {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
     let mut turns = Vec::new();
     for i in 0..n {
@@ -89,6 +83,26 @@ pub fn turn_and_curve_points(
     if turns.is_empty() {
         turns.push(0);
     }
+    turns
+}
+
+fn checked_turn_and_curve_points(
+    pts: &[Vec2],
+    closed: bool,
+    thresh: f64,
+    spacing: f64,
+) -> Result<(Vec<Vec2>, Vec<Vec2>), Refusal> {
+    if pts.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "DXF polyline contains non-finite coordinates",
+        ));
+    }
+    let n = pts.len();
+    if n < 2 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let turns = turn_indices(pts, closed, thresh);
     let mut curves = Vec::new();
     let mut cyc = turns.clone();
     if closed {
@@ -102,18 +116,42 @@ pub fn turn_and_curve_points(
         let run: Vec<Vec2> = idx.iter().map(|&k| pts[k]).collect();
         let cum = ftx_core::polyline::cumulative(&run);
         let total = cum[cum.len() - 1];
+        if !total.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "DXF curve run length overflowed finite bounds",
+            ));
+        }
         if total <= 0.0 {
             continue;
         }
         if spacing.is_finite() && spacing > 0.0 {
-            for s in ftx_core::np::arange(spacing, total - spacing * 0.5, spacing) {
-                curves.push(ftx_core::polyline::at_fractions(&run, &[s / total])[0]);
+            let stop = total - spacing * 0.5;
+            let count = ((stop - spacing) / spacing).ceil();
+            if !count.is_finite() || count > MAX_CURVE_POINTS as f64 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "DXF curve run ({total} mm) exceeds the {MAX_CURVE_POINTS}-point limit at {spacing} mm spacing"
+                    ),
+                ));
+            }
+            if count > 0.0 {
+                if curves.len().saturating_add(count as usize) > MAX_CURVE_POINTS {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("DXF curve points exceed the {MAX_CURVE_POINTS}-point limit"),
+                    ));
+                }
+                for s in ftx_core::np::arange(spacing, stop, spacing) {
+                    curves.push(ftx_core::polyline::at_fractions(&run, &[s / total])[0]);
+                }
             }
         }
         let (a, b) = (run[0], run[run.len() - 1]);
         let d = b - a;
         let len = (d.x * d.x + d.y * d.y).sqrt();
-        if len > 0.0 {
+        if len.is_finite() && len > 0.0 {
             let (mut k, mut best) = (0, f64::NEG_INFINITY);
             for (j, p) in run.iter().enumerate() {
                 let dist = ((p.x - a.x) * d.y - (p.y - a.y) * d.x).abs() / len;
@@ -127,7 +165,23 @@ pub fn turn_and_curve_points(
             }
         }
     }
-    (turns.iter().map(|&i| pts[i]).collect(), curves)
+    Ok((turns.iter().map(|&i| pts[i]).collect(), curves))
+}
+
+/// Turn points (vertices turning more than `thresh` degrees; the ends of an open line) and curve points (every
+/// `spacing` mm along the runs between turns, and each run's farthest point from its chord when over 0.5 mm) for
+/// grading software.
+#[must_use]
+pub fn turn_and_curve_points(
+    pts: &[Vec2],
+    closed: bool,
+    thresh: f64,
+    spacing: f64,
+) -> (Vec<Vec2>, Vec<Vec2>) {
+    checked_turn_and_curve_points(pts, closed, thresh, spacing).unwrap_or_else(|_| {
+        let turns = turn_indices(pts, closed, thresh);
+        (turns.iter().map(|&i| pts[i]).collect(), Vec::new())
+    })
 }
 
 fn astm_notch_layer(kind: &str) -> &'static str {
@@ -272,12 +326,12 @@ pub fn export_dxf_astm(
         }
         let (mut tp, mut cp) = (Vec::new(), Vec::new());
         for ring in [&g.cut, &g.sew] {
-            let (t, c) = turn_and_curve_points(ring, true, 15.0, 10.0);
+            let (t, c) = checked_turn_and_curve_points(ring, true, 15.0, 10.0)?;
             tp.extend(t);
             cp.extend(c);
         }
         for (p, cl) in g.internal_draw.iter().chain(&g.internal_cut) {
-            let (t, c) = turn_and_curve_points(p, *cl, 15.0, 10.0);
+            let (t, c) = checked_turn_and_curve_points(p, *cl, 15.0, 10.0)?;
             tp.extend(t);
             cp.extend(c);
         }
@@ -894,6 +948,23 @@ mod tests {
             assert!(!turns.is_empty());
             assert!(curves.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
         }
+
+        // Tiny spacing or huge scale must refuse / stay bounded instead of OOMing in np::arange.
+        let err = checked_turn_and_curve_points(&ring, true, 15.0, 1e-9).unwrap_err();
+        assert_eq!(err.code, RefusalCode::OutOfRange);
+        let (turns, curves) = turn_and_curve_points(&ring, true, 15.0, 1e-9);
+        assert!(!turns.is_empty());
+        assert!(curves.is_empty());
+
+        let huge_ring = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1e10, 0.0),
+            Vec2::new(2e10, 1e7),
+            Vec2::new(2e10, 2e10),
+            Vec2::new(0.0, 2e10),
+        ];
+        let err = checked_turn_and_curve_points(&huge_ring, true, 15.0, 10.0).unwrap_err();
+        assert_eq!(err.code, RefusalCode::OutOfRange);
 
         let empty = serde_json::json!({
             "schema": "fabric-pattern/1",
