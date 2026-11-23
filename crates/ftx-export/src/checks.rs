@@ -408,18 +408,24 @@ fn content_scan(stream: &[u8]) -> Scan {
 fn nearest_max(pts: &[(f64, f64)], reference: &[(f64, f64)]) -> f64 {
     let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
     for (i, &(x, y)) in reference.iter().enumerate() {
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
         grid.entry((x.floor() as i64, y.floor() as i64))
             .or_default()
             .push(i);
     }
     let mut worst = 0.0f64;
     for &(x, y) in pts {
+        if !x.is_finite() || !y.is_finite() {
+            return f64::INFINITY;
+        }
         let (cx, cy) = (x.floor() as i64, y.floor() as i64);
         let mut best = f64::INFINITY;
         for r in 0..4i64 {
-            for gx in cx - r..=cx + r {
-                for gy in cy - r..=cy + r {
-                    if (gx - cx).abs().max((gy - cy).abs()) != r {
+            for gx in cx.saturating_sub(r)..=cx.saturating_add(r) {
+                for gy in cy.saturating_sub(r)..=cy.saturating_add(r) {
+                    if gx.abs_diff(cx).max(gy.abs_diff(cy)) != r as u64 {
                         continue;
                     }
                     for &i in grid.get(&(gx, gy)).map_or(&[][..], Vec::as_slice) {
@@ -710,7 +716,9 @@ pub fn check_pdf(
             out.push(CheckItem::new(
                 "pdf.projector_under_200in",
                 file,
-                expect_mm[0].max(expect_mm[1]) < 200.0 * 25.4,
+                expect_mm[0].is_finite()
+                    && expect_mm[1].is_finite()
+                    && expect_mm[0].max(expect_mm[1]) < 200.0 * 25.4,
                 "",
             ));
         }
@@ -722,6 +730,7 @@ pub fn check_pdf(
         let mut worst = 0.0f64;
         let mut covered = vec![false; master.len()];
         let mut all_tile_streams_ok = true;
+        let mut saw_cut_pts = false;
         for (_, fr, org, blank, stream_ok, pts) in &tiles_info {
             let (fw, fh) = (fr[2], fr[3]);
             if !*stream_ok {
@@ -736,17 +745,22 @@ pub fn check_pdf(
                 }
             }
             if !pts.is_empty() {
+                saw_cut_pts = true;
                 worst = worst.max(nearest_max(pts, master));
             }
         }
         out.push(CheckItem::new(
             "pdf.restitch_matches_master",
             file,
-            worst <= 0.2 && all_tile_streams_ok,
-            format!(
-                "max deviation {worst:.4} mm over {} tiles",
-                tiles_info.len()
-            ),
+            saw_cut_pts && worst <= 0.2 && all_tile_streams_ok,
+            if saw_cut_pts {
+                format!(
+                    "max deviation {worst:.4} mm over {} tiles",
+                    tiles_info.len()
+                )
+            } else {
+                format!("no cut points over {} tiles", tiles_info.len())
+            },
         ));
         let n = covered.iter().filter(|c| **c).count();
         out.push(CheckItem::new(
@@ -797,10 +811,10 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
     };
     let (mut pen, mut xs, mut ys) = (0i64, Vec::new(), Vec::new());
     for cmd in text.replace('\n', "").split(';') {
-        if cmd.len() < 2 {
+        let Some(op) = cmd.get(..2) else {
             continue;
-        }
-        let (op, args) = cmd.split_at(2);
+        };
+        let args = &cmd[2..];
         if op == "SP" {
             pen = args.parse().unwrap_or(0);
         } else if (op == "PU" || op == "PD") && !args.is_empty() && pen == 2 {
@@ -1788,5 +1802,46 @@ mod tests {
                     .any(|c| c.check == "dst.on_braid_lines" && !c.ok)
             );
         }
+    }
+
+    #[test]
+    fn check_pdf_and_hpgl_handle_extreme_coords_missing_cut_paths_and_utf8() {
+        assert!(nearest_max(&[(1e25, -1e25)], &[(0.0, 0.0)]).is_infinite());
+        assert!(nearest_max(&[(f64::NAN, 0.0)], &[(0.0, 0.0)]).is_infinite());
+
+        let proj_nan = check_pdf(b"", "proj.pdf", [100.0, f64::NAN], "projector", None);
+        assert!(
+            proj_nan
+                .iter()
+                .any(|c| c.check == "pdf.projector_under_200in" && !c.ok)
+        );
+
+        let no_cuts_pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /PrintScaling /None >>\nendobj\n\
+2 0 obj\n<< /Type /Pages /Count 1 >>\nendobj\n\
+3 0 obj\n<< /Type /Page /MediaBox [0 0 595.2756 841.8898] /FPTile << /Name (A1) /Frame [10 10 190 277] /Origin [0 0] >> /Contents 4 0 R >>\nendobj\n\
+4 0 obj\n<< /Length 0 >>\nstream\n\nendstream\nendobj\n";
+        let master = [(50.0, 50.0), (100.0, 50.0)];
+        let items = check_pdf(
+            no_cuts_pdf,
+            "nocut.pdf",
+            [210.0, 297.0],
+            "tiled",
+            Some(&master),
+        );
+        assert!(
+            items
+                .iter()
+                .any(|c| c.check == "pdf.restitch_matches_master" && !c.ok),
+            "tiled PDF with zero FPCut points must fail restitch check: {items:?}"
+        );
+
+        let master_hpgl = json!({"cut_bbox": [0.0, 0.0, 100.0, 50.0], "height_mm": 100.0});
+        let utf8 = check_hpgl(
+            "\u{00e9};a\u{00e9};",
+            "utf8.plt",
+            Some(&master_hpgl),
+            &json!({}),
+        );
+        assert!(utf8.iter().any(|c| c.check == "hpgl.bbox" && !c.ok));
     }
 }

@@ -338,7 +338,7 @@ pub fn read_dst(data: &[u8]) -> DstRead {
     DstRead {
         head,
         moves,
-        ended: ended && !trailing,
+        ended: ended && !trailing && i == data.len(),
         size: data.len(),
     }
 }
@@ -677,5 +677,10 @@ mod tests {
         assert!(parsed.ended);
         assert_eq!(parsed.moves.len(), info.records);
         assert_eq!(info.extent_mm, [20.0, 15.0]);
+
+        // Trailing partial bytes after END invalidate `ended`.
+        let mut with_tail = bytes;
+        with_tail.push(0x99);
+        assert!(!read_dst(&with_tail).ended);
     }
 }

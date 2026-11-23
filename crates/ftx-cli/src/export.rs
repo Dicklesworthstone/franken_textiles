@@ -63,6 +63,25 @@ fn number(args: &Args, key: &str) -> Result<Option<f64>, Refusal> {
         .transpose()
 }
 
+fn nonnegative_number(args: &Args, key: &str) -> Result<Option<f64>, Refusal> {
+    args.options
+        .get(key)
+        .map(|v| {
+            let x: f64 = v
+                .parse()
+                .map_err(|_| bad_input(format!("--{key} must be a number")))?;
+            if x.is_finite() && x >= 0.0 {
+                Ok(x)
+            } else {
+                Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("--{key} must be a finite non-negative number, got {v}"),
+                ))
+            }
+        })
+        .transpose()
+}
+
 fn load_pattern(path: &str) -> Result<Pattern, Refusal> {
     Ok(Pattern::new(read_json(path)?.0))
 }
@@ -162,7 +181,7 @@ pub(super) fn cmd_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
         projector_width: number(args, "projector-width")?.unwrap_or(1500.0),
         layout_width: number(args, "layout-width")?,
         keep_blank: flag("keep-blank-pages"),
-        sa: number(args, "sa")?,
+        sa: nonnegative_number(args, "sa")?,
         hpgl_rotate90: flag("hpgl-rotate90"),
         hpgl_mirror: flag("hpgl-mirror"),
         created: args.options.get("created").cloned(),
@@ -225,6 +244,8 @@ pub(super) fn cmd_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn utc_minute_is_a_minute() {
         let s = super::utc_minute().unwrap();
@@ -232,5 +253,19 @@ mod tests {
         assert_eq!(&s[4..5], "-");
         assert_eq!(&s[10..11], "T");
         assert!(s.as_str() >= "2026-01-01T00:00");
+    }
+
+    #[test]
+    fn sa_option_accepts_zero_and_refuses_negative_or_non_finite() {
+        for (raw, expected) in [("0", Some(0.0)), ("12.5", Some(12.5))] {
+            let args =
+                crate::parse(&["export", "svg", "p.json", "--sa", raw].map(String::from)).unwrap();
+            assert_eq!(nonnegative_number(&args, "sa").unwrap(), expected);
+        }
+        for raw in ["-1", "-0.01", "NaN", "inf", "-inf", "abc"] {
+            let args =
+                crate::parse(&["export", "svg", "p.json", "--sa", raw].map(String::from)).unwrap();
+            assert!(nonnegative_number(&args, "sa").is_err(), "--sa {raw}");
+        }
     }
 }

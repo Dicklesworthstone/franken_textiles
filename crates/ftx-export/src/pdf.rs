@@ -1713,14 +1713,21 @@ mod tests {
             RefusalCode::DegenerateGeometry
         );
 
-        let non_finite_width = Ctx::new(
-            &pat,
-            ExportOptions {
-                projector_width: f64::NAN,
-                ..ExportOptions::default()
-            },
-        )
-        .unwrap();
+        assert_eq!(
+            Ctx::new(
+                &pat,
+                ExportOptions {
+                    projector_width: f64::NAN,
+                    ..ExportOptions::default()
+                },
+            )
+            .err()
+            .expect("non-finite projector_width must be refused")
+            .code,
+            RefusalCode::OutOfRange
+        );
+        let mut non_finite_width = Ctx::new(&pat, ExportOptions::default()).unwrap();
+        non_finite_width.opts.projector_width = f64::NAN;
         assert_eq!(
             export_projector(&non_finite_width).unwrap_err().code,
             RefusalCode::OutOfRange
