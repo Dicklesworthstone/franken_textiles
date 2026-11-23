@@ -563,6 +563,9 @@ pub fn ilu0(a: &Csr) -> Result<Ilu0, IluBreakdown> {
     let mut diag_pos = Vec::with_capacity(n);
     for i in 0..n {
         let (c, v) = a.row(i);
+        if v.iter().any(|x| !x.is_finite()) {
+            return Err(IluBreakdown { row: i });
+        }
         let Ok(dpos) = c.binary_search(&i) else {
             return Err(IluBreakdown { row: i });
         };
@@ -602,6 +605,9 @@ pub fn ilu0(a: &Csr) -> Result<Ilu0, IluBreakdown> {
                 if cols[i][pi] == j {
                     let ukj = vals[k][pk];
                     vals[i][pi] -= lik * ukj;
+                    if !vals[i][pi].is_finite() {
+                        return Err(IluBreakdown { row: i });
+                    }
                 }
             }
         }
@@ -691,6 +697,9 @@ fn ilu0_shifted_impl(
     let mut factor = 1e-8f64;
     for _ in 0..max_shifts {
         let shift = factor * scale;
+        if !shift.is_finite() {
+            break;
+        }
         let mut shifted = a.clone();
         let vals = shifted.values_mut();
         for &slot in &diag_slots {
@@ -925,12 +934,15 @@ pub fn mixed_cg_refine(
                 escalate: false,
             };
         }
-        if !rel.is_finite() || step == max_refines {
-            escalate |= !rel.is_finite();
+        if !rel.is_finite() {
+            escalate = true;
             break;
         }
         if history.len() >= 2 && rel > history[history.len() - 2] * 0.5 {
             escalate = true;
+            break;
+        }
+        if step == max_refines {
             break;
         }
         let scale = rnorm.max(f64::MIN_POSITIVE);
@@ -1921,5 +1933,44 @@ mod tests {
                 "scale={scale:e}: xs={xs:?}"
             );
         }
+    }
+
+    #[test]
+    fn ilu0_rejects_non_finite_off_diagonals_and_mixed_cg_escalates_on_final_step_stall() {
+        for bad in [f64::NAN, f64::INFINITY] {
+            let mut coo = Coo::new(2, 2);
+            coo.push(0, 0, 4.0);
+            coo.push(0, 1, bad);
+            coo.push(1, 1, 4.0);
+            let a = coo.assemble();
+            assert_eq!(ilu0(&a).unwrap_err(), IluBreakdown { row: 0 });
+            assert_eq!(ilu0_shifted(&a, 4).unwrap_err(), IluBreakdown { row: 0 });
+        }
+
+        // Elimination update overflow must also report breakdown instead of storing +/-inf.
+        let mut coo_ovf = Coo::new(3, 3);
+        coo_ovf.push(0, 0, 1.0);
+        coo_ovf.push(0, 2, 1e200);
+        coo_ovf.push(1, 0, 1e200);
+        coo_ovf.push(1, 1, 4.0);
+        coo_ovf.push(1, 2, 1.0);
+        coo_ovf.push(2, 2, 4.0);
+        assert_eq!(
+            ilu0(&coo_ovf.assemble()).unwrap_err(),
+            IluBreakdown { row: 1 }
+        );
+
+        // Stalling on the final refinement step (e.g. max_refines == 1, max_inner == 0) must
+        // set `escalate = true` rather than returning silent non-convergence.
+        let mut coo_spd = Coo::new(2, 2);
+        coo_spd.push(0, 0, 4.0);
+        coo_spd.push(1, 1, 4.0);
+        let a64 = coo_spd.assemble();
+        let a32 = CsrF32::from_csr(&a64);
+        let b = [4.0, 8.0];
+        let mut x = [0.0, 0.0];
+        let rep = mixed_cg_refine(&a64, &a32, &b, &mut x, 1e-12, 1, 0);
+        assert!(!rep.converged);
+        assert!(rep.escalate, "final-step stall must escalate: {rep:?}");
     }
 }

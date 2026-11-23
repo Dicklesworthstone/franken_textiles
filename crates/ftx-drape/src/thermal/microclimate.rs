@@ -206,6 +206,25 @@ impl MoistAirState {
         let prandtl = dynamic_viscosity * specific_heat_cp / thermal_conductivity;
         let kinematic_viscosity = dynamic_viscosity / density;
         let thermal_diffusivity = thermal_conductivity / (density * specific_heat_cp);
+        if ![
+            r_spec,
+            density,
+            sound_speed,
+            dynamic_viscosity,
+            kinematic_viscosity,
+            thermal_conductivity,
+            thermal_diffusivity,
+            specific_heat_cp,
+            prandtl,
+        ]
+        .iter()
+        .all(|v| v.is_finite() && *v > 0.0)
+        {
+            return Err(refusal(
+                RefusalCode::NonFinite,
+                "gas thermophysical state overflowed or underflowed",
+            ));
+        }
         Ok(Self {
             temperature_k,
             pressure_pa,
@@ -1924,5 +1943,40 @@ mod tests {
         assert_eq!(air_c.to_bits(), t_c.to_bits());
         let ext: Exterior = serde_json::from_value(rep["convection"]["exterior"].clone()).unwrap();
         ext.validate_convection().unwrap();
+    }
+
+    #[test]
+    fn moist_air_refuses_extreme_pressure_and_gas_spec_underflow_or_overflow() {
+        let err_p = MoistAirState::moist_air(293.15, 1e-308, 0.0).unwrap_err();
+        assert_eq!(err_p.code, RefusalCode::NonFinite);
+
+        let req = serde_json::json!({
+            "schema": MICROCLIMATE_REQUEST_SCHEMA,
+            "air": { "temperature_c": 20.0, "pressure_pa": 1e-308, "relative_humidity": 0.0 }
+        });
+        let err_json = evaluate_json(&req.to_string()).unwrap_err();
+        assert_eq!(err_json.code, RefusalCode::NonFinite);
+
+        let tiny_molar = GasSpec {
+            molar_mass: 1e-308,
+            ..GasSpec::dry_air_ussa1976()
+        };
+        assert_eq!(
+            MoistAirState::try_new(&tiny_molar, 300.0, 101_325.0)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+
+        let huge_visc = GasSpec {
+            sutherland_beta: 1e308,
+            ..GasSpec::dry_air_ussa1976()
+        };
+        assert_eq!(
+            MoistAirState::try_new(&huge_visc, 300.0, 101_325.0)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
     }
 }

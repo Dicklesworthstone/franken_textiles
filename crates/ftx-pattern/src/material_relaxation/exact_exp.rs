@@ -208,9 +208,12 @@ impl ExactPronyModel {
         Ok(Self { e_eq, terms })
     }
 
-    /// Storage and loss moduli `(E′, E″)` at angular frequency `omega` [rad/s].
+    /// Storage and loss moduli `(E′, E″)` at angular frequency `omega ≥ 0` [rad/s].
     #[must_use]
     pub fn modulus(&self, omega: f64) -> (f64, f64) {
+        if omega.is_nan() || omega < 0.0 {
+            return (f64::NAN, f64::NAN);
+        }
         let mut ep = self.e_eq;
         let mut epp = 0.0;
         for &(e, tau) in &self.terms {
@@ -365,7 +368,13 @@ pub fn sup_rel_modulus_error(
         let (ge, gi) = gm.modulus(w);
         let num = det::hypot(ge - fe, gi - fi);
         let den = det::hypot(fe, fi);
-        worst = worst.max(num / den);
+        let rel = num / den;
+        if !rel.is_finite() {
+            return f64::NAN;
+        }
+        if rel > worst {
+            worst = rel;
+        }
     }
     worst
 }
@@ -928,5 +937,21 @@ mod tests {
             im > 0.0 && (im - want_im).abs() <= 1e-12 * want_im,
             "im={im:.12e} want={want_im:.12e}"
         );
+    }
+
+    #[test]
+    fn prony_modulus_rejects_negative_or_nan_omega_and_sup_err_propagates_non_finite() {
+        let empty = ExactPronyModel::new(100.0, vec![]).unwrap();
+        assert_eq!(empty.modulus(0.0), (100.0, 0.0));
+        let (nan_re, nan_im) = empty.modulus(f64::NAN);
+        assert!(nan_re.is_nan() && nan_im.is_nan());
+        let (neg_re, neg_im) = empty.modulus(-1.0);
+        assert!(neg_re.is_nan() && neg_im.is_nan());
+
+        // Overflow in Prony modulus must propagate NaN from sup_rel_modulus_error rather than
+        // being absorbed by `0.0_f64.max(NaN) == 0.0`.
+        let fz = FractionalZener::new(1e307, 1e308, 0.5, 1.0).unwrap();
+        let gm = ExactPronyModel::new(1e308, vec![(1e308, 1.0)]).unwrap();
+        assert!(sup_rel_modulus_error(&fz, &gm, 1.0, 10.0, 8).is_nan());
     }
 }
