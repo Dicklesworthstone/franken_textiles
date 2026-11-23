@@ -336,10 +336,27 @@ impl AcceptedShape {
             }
             for check in checks {
                 let (residual, limit) = (finite(&check["residual"])?, finite(&check["limit"])?);
+                let upper = match check.get("prediction_error_bound_px") {
+                    None => residual,
+                    Some(v) => {
+                        let bound = finite(v)?;
+                        if check["unit"] != "px" || bound < 0.0 {
+                            return Err(bad(
+                                "body-fit contains a failed or invalid residual check",
+                            ));
+                        }
+                        if bound == 0.0 {
+                            residual
+                        } else {
+                            (residual + bound).next_up()
+                        }
+                    }
+                };
                 if check["passed"] != true
                     || residual < 0.0
                     || limit <= 0.0
-                    || residual > limit
+                    || !upper.is_finite()
+                    || upper > limit
                     || !matches!(check["unit"].as_str(), Some("px" | "m"))
                     || (check["unit"] == "px" && limit != 3.0)
                 {
@@ -459,5 +476,29 @@ mod tests {
         v["anny_configuration"]["fixed_shape"]["height"] = json!(0.6);
         assert!(read(&v).is_err());
         assert!(read(&json!({"result":receipt()})).is_err());
+    }
+
+    #[test]
+    fn prediction_error_bound_is_enforced_against_pixel_gate() {
+        let mut ok = receipt();
+        ok["attempts"][0]["checks"][0]["residual"] = json!(2.9);
+        ok["attempts"][0]["checks"][0]["prediction_error_bound_px"] = json!(1e-9);
+        assert!(read(&ok).is_ok());
+
+        let mut exceeds = receipt();
+        exceeds["attempts"][0]["checks"][0]["residual"] = json!(3.0);
+        exceeds["attempts"][0]["checks"][0]["prediction_error_bound_px"] = json!(1e-9);
+        assert!(read(&exceeds).is_err());
+
+        let mut negative = receipt();
+        negative["attempts"][0]["checks"][0]["prediction_error_bound_px"] = json!(-1e-9);
+        assert!(read(&negative).is_err());
+
+        let mut wrong_unit = receipt();
+        wrong_unit["attempts"][0]["checks"][0]["unit"] = json!("m");
+        wrong_unit["attempts"][0]["checks"][0]["limit"] = json!(0.01);
+        wrong_unit["attempts"][0]["checks"][0]["residual"] = json!(0.001);
+        wrong_unit["attempts"][0]["checks"][0]["prediction_error_bound_px"] = json!(0.0);
+        assert!(read(&wrong_unit).is_err());
     }
 }

@@ -392,6 +392,9 @@ impl CorrespondenceModel {
                         .iter()
                         .any(|w| !w.is_finite() || !(0.0..=1.0).contains(w))
                         || (sum - 1.0).abs() > 1e-12
+                        || ids
+                            .iter()
+                            .any(|&i| i >= model.data().header.counts.vertices)
                         || ids[0] == ids[1]
                         || ids[0] == ids[2]
                         || ids[1] == ids[2]
@@ -823,9 +826,30 @@ mod tests {
         bad_parent.header.labels.bone_parents[1] = 1;
         let bad_model = AnnyModel::from_data(bad_parent).unwrap();
         assert_eq!(
-            CorrespondenceModel::new(bad_model, config, &hash)
+            CorrespondenceModel::new(bad_model, config.clone(), &hash)
                 .err()
                 .expect("self-parent bone must refuse")
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Surface correspondence referencing a face with an out-of-range vertex index must refuse.
+        let mut bad_face = synthetic_anny_data();
+        bad_face.header.counts.faces = 1;
+        bad_face.faces = vec![[0, 1, 99]];
+        let bad_face_model = AnnyModel::from_data(bad_face).unwrap();
+        let mut surface_cfg = config;
+        surface_cfg.keypoints.insert(
+            "bad_surface".into(),
+            Target::Surface {
+                face: 0,
+                barycentric: [0.25, 0.25, 0.5],
+            },
+        );
+        assert_eq!(
+            CorrespondenceModel::new(bad_face_model, surface_cfg, &hash)
+                .err()
+                .expect("out-of-range face vertex must refuse")
                 .code,
             RefusalCode::InvalidDocument
         );
