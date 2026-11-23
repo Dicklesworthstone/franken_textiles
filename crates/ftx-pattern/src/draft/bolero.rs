@@ -36,6 +36,16 @@ fn bad(m: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::DegenerateGeometry, m)
 }
 
+fn positive(name: &str, value: f64) -> Result<f64, Refusal> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("{name} must be finite and positive, got {value}"),
+        ));
+    }
+    Ok(value)
+}
+
 /// A drafted pattern's instance edge length.
 fn edge_len(p: &Pattern, inst: &str, edge: &str) -> Result<f64, Refusal> {
     p.instance(inst)
@@ -80,6 +90,9 @@ fn bodice(
     b.line("hem", "cb_hem", "side_hem");
     b.line("side", "side_hem", "ua");
     let sh_dir_b = unit(Vec2::new(neck_w, x.y_snp) - tip_b);
+    if !sh_dir_b.is_finite() {
+        return Err(bad("back shoulder endpoints coincide"));
+    }
     let mut arr_b = Vec2::new(sh_dir_b.y, -sh_dir_b.x);
     if arr_b.y < 0.0 {
         arr_b = -arr_b;
@@ -155,6 +168,9 @@ fn bodice(
         None,
     )?;
     let sh_dir_f = unit(tip_f - snp_f);
+    if !sh_dir_f.is_finite() {
+        return Err(bad("front shoulder endpoints coincide"));
+    }
     let mut into_neck = Vec2::new(sh_dir_f.y, -sh_dir_f.x);
     if into_neck.y < 0.0 {
         into_neck = -into_neck;
@@ -242,27 +258,33 @@ fn chest_width(back: &PieceBuilder, front: &PieceBuilder, y: f64) -> Result<f64,
 
 fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Refusal> {
     let (chest, nb, sl) = (
-        m.get("chest")?,
-        m.get("neck_base")?,
-        m.get("shoulder_length")?,
+        positive("chest", m.get("chest")?)?,
+        positive("neck_base", m.get("neck_base")?)?,
+        positive("shoulder_length", m.get("shoulder_length")?)?,
     );
-    let bnw = m.get("back_neck_to_waist")?;
+    let bnw = positive("back_neck_to_waist", m.get("back_neck_to_waist")?)?;
     let chest_ease = sf(&s, "chest_ease")?;
     let q = (chest + chest_ease) / 4.0;
+    let wb = positive("back panel width", q + 5.0)?;
+    let wf = positive("front panel width", q - 5.0)?;
     let mut x = Fixed {
         nb,
         sl,
-        wb: q + 5.0,
-        wf: q - 5.0,
+        wb,
+        wf,
         y_ua: (m.landmark_h("torso", "chest")? - m.landmark_h("torso", "waist")?)
             - sf(&s, "armhole_drop")?,
         hem: sf(&s, "hem_y")?,
         y_cbn: bnw,
         y_snp: bnw + sf(&s, "back_neck_rise")?,
     };
-    let neck_target = nb + sf(&s, "neckline_ease")?;
+    let _ = positive("back shoulder length", sl + sf(&s, "back_shoulder_ease")?)?;
+    let neck_target = positive("neckline target", nb + sf(&s, "neckline_ease")?)?;
     let y_ab = m.landmark_h("torso", "across_back")? - m.landmark_h("torso", "waist")?;
-    let ab_target = m.get("across_back")? + sf(&s, "across_back_ease")?;
+    let ab_target = positive(
+        "across-back target",
+        m.get("across_back")? + sf(&s, "across_back_ease")?,
+    )?;
     let neckline = |k: f64, scoop: f64| -> Result<f64, Refusal> {
         let (b, f) = bodice(&s, &x, k, scoop)?;
         let t = two_piece(&b, &f);
@@ -335,11 +357,31 @@ fn finish(
     bsl: f64,
     k_neck: f64,
 ) -> Result<Value, Refusal> {
-    let sl = m.get("shoulder_length")?;
-    let bic = m.get("upper_arm")? + sf(s, "bicep_ease")?;
-    let slen = m.get("arm_length")? + sf(s, "sleeve_extra")?;
-    let hem_w = (m.get("hand_pass")? + sf(s, "cuff_ease")?).max(m.get("wrist")? + 60.0);
-    let target = (arm_f + arm_b) * (1.0 + sf(s, "cap_ease")?);
+    let sl = positive("shoulder_length", m.get("shoulder_length")?)?;
+    let bic = positive(
+        "sleeve bicep width",
+        m.get("upper_arm")? + sf(s, "bicep_ease")?,
+    )?;
+    if 0.9 * bic <= 5.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("sleeve bicep width {bic} mm is too small to bracket cap height above 5 mm"),
+        ));
+    }
+    let slen = positive(
+        "sleeve length",
+        m.get("arm_length")? + sf(s, "sleeve_extra")?,
+    )?;
+    let hem_w = positive(
+        "sleeve cuff width",
+        (m.get("hand_pass")? + sf(s, "cuff_ease")?).max(m.get("wrist")? + 60.0),
+    )?;
+    let arm_f = positive("front armhole length", arm_f)?;
+    let arm_b = positive("back armhole length", arm_b)?;
+    let target = positive(
+        "sleeve cap target",
+        (arm_f + arm_b) * (1.0 + sf(s, "cap_ease")?),
+    )?;
     let caps = |hc: f64, xt: f64| -> (Cubic, Cubic) {
         let (uf, ub, top) = (
             Vec2::new(bic / 2.0, -hc),
@@ -390,6 +432,9 @@ fn finish(
         Vec2::new(hem_w / 2.0, -slen),
     );
     let (d_f, d_b) = (unit(uf - hf), unit(ub - hb));
+    if !d_f.is_finite() || !d_b.is_finite() {
+        return Err(bad("sleeve underarm seam collapsed to zero length"));
+    }
     let out_f = Vec2::new(d_f.y, -d_f.x);
     let out_b = Vec2::new(d_b.y, -d_b.x);
     sv.cubic_abs(
@@ -597,7 +642,21 @@ fn soutache(pat: &mut Value, s: &Map<String, Value>, chest: f64) -> Result<(), R
     if !crate::doc::truthy(&s["soutache"]) {
         return Ok(());
     }
-    let (inset, width) = (sf(s, "soutache_inset")?, sf(s, "soutache_width")?);
+    let inset = sf(s, "soutache_inset")?;
+    if !inset.is_finite() || inset < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("soutache_inset must be finite and >= 0, got {inset}"),
+        ));
+    }
+    let width = positive("soutache_width", sf(s, "soutache_width")?)?;
+    let sleeve_band = sf(s, "sleeve_band")?;
+    if !sleeve_band.is_finite() || sleeve_band < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("sleeve_band must be finite and >= 0, got {sleeve_band}"),
+        ));
+    }
     let piece = |pat: &Value, id: &str| -> Result<Value, Refusal> {
         pat["pieces"]
             .as_array()
@@ -618,10 +677,7 @@ fn soutache(pat: &mut Value, s: &Map<String, Value>, chest: f64) -> Result<(), R
             braid_border(&front, &["hem", "front_edge", "neck"], inset)?,
         ),
         ("back", braid_border(&back, &["hem"], inset)?),
-        (
-            "sleeve",
-            braid_border(&sleeve, &["hem"], sf(s, "sleeve_band")?)?,
-        ),
+        ("sleeve", braid_border(&sleeve, &["hem"], sleeve_band)?),
     ];
     let mut motifs: Vec<(&str, Option<Vec<Vec2>>)> = Vec::new();
     let motif = sf(s, "motif")?;
@@ -700,6 +756,34 @@ mod tests {
         // Zero-length leading edge must not produce NaN during end-extension.
         if let Some(pts) = braid_border(&piece, &["zero", "bottom"], 10.0).unwrap() {
             assert!(pts.iter().all(|p| p.is_finite()));
+        }
+    }
+
+    #[test]
+    fn zouave_bolero_refuses_nonpositive_dimensions_and_invalid_soutache_style() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/oracle/draft/body.json"
+        )))
+        .unwrap();
+        let meas = &fixture["cases"][0]["input"]["measurements"];
+        assert!(
+            zouave_bolero(meas, None).is_ok(),
+            "baseline reference measurements must draft cleanly"
+        );
+        for bad_style in [
+            json!({"chest_ease": -2000.0}),
+            json!({"back_shoulder_ease": -500.0}),
+            json!({"bicep_ease": -500.0}),
+            json!({"sleeve_extra": -2000.0}),
+            json!({"cap_ease": -1.5}),
+            json!({"soutache_width": 0.0}),
+            json!({"soutache_width": -2.0}),
+            json!({"soutache_inset": -1.0}),
+            json!({"sleeve_band": -5.0}),
+        ] {
+            let err = zouave_bolero(meas, Some(&bad_style)).unwrap_err();
+            assert_eq!(err.code, RefusalCode::OutOfRange, "style={bad_style}");
         }
     }
 }
