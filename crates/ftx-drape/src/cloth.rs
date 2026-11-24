@@ -1443,11 +1443,25 @@ impl Solver {
         Ok(sol)
     }
 
+    /// At rest a prescribed flow still exerts a load if density and either drag coefficient are positive.
+    pub(crate) fn check_static_air_load(&self) -> Result<(), Refusal> {
+        if self.damping.air_drag.is_some_and(|drag| {
+            drag.has_wind()
+                && drag.rho_air_kg_m3 > 0.0
+                && (drag.c_normal > 0.0 || drag.c_tangent > 0.0)
+        }) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "a conservative static solve omits non-conservative aerodynamic wind loading; use explicit time steps",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
         !self.model.is_heterogeneous()
             && self.model.bending_model.is_default()
             && self.model.hinges.iter().all(|h| h.rest_angle == 0.0)
-            && self.damping.is_default()
             && self.model.element_materials.is_none()
             && self.model.element_responses.is_none()
             && self.model.hinge_bending.is_none()
@@ -3328,12 +3342,7 @@ impl Solver {
                 "a static solve cannot choose a material-history duration or irreversible loading path; use explicit time steps",
             ));
         }
-        if self.damping.air_drag.is_some_and(|d| d.has_wind()) {
-            return Err(Refusal::new(
-                RefusalCode::OutOfRange,
-                "a conservative static solve omits non-conservative aerodynamic wind loading; use explicit time steps",
-            ));
-        }
+        self.check_static_air_load()?;
         let mut trial = self.clone();
         trial.audit_self_contact()?;
         let rep = trial.minimize(None)?;
