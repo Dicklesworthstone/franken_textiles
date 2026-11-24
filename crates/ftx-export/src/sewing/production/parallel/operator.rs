@@ -963,6 +963,7 @@ impl State {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate(
     plan: &SewPlan,
     cell_plans: &[super::CellPlan],
