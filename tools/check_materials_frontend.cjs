@@ -4300,6 +4300,94 @@ test('shared operator timelines preserve resource waits, restricted proof and ce
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('shared operator joint order search preserves actual orders and distinct proofs in every result view', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  const sourcePlan={options:{machine:{id:'qualified-machine'}},seams:[
+    {pass:{id:'join',seam:'side',needle:'N',thread:'A',max_stitch_mm:5,stitches_per_minute:1000}},
+    {pass:{id:'reinforce',seam:'side',needle:'N',thread:'B',max_stitch_mm:5,stitches_per_minute:600}}]};
+  const schedule={feed_seconds:6.4,operations:[
+    {id:'0/join',copy:0,operation_id:'join',seam_index:0,after:[]},
+    {id:'0/reinforce',copy:0,operation_id:'reinforce',seam_index:1,after:[]}],
+    ordering:{selected_order:['0/reinforce','0/join'],optimality_proven:false}};
+  const allocation={makespan_milliseconds:12400,feed_seconds:6.4,scheduled_feed_milliseconds:6400,
+    setup_milliseconds:0,handling_milliseconds:0,cells:[
+      {cell:'cell-a',copies:[0],available_at_milliseconds:0,finish_milliseconds:12400,
+        feed_padding_seconds:0,schedule},
+      {cell:'cell-b',copies:[],available_at_milliseconds:0,feed_padding_seconds:0,schedule:null}]};
+  const calendars={model:'nonpreemptive_resource_windows/1',resources:{
+    'cell-a':[{start_milliseconds:0,end_milliseconds:4000},{start_milliseconds:10000,end_milliseconds:12400}],
+    'cell-b':[{start_milliseconds:0,end_milliseconds:0}]}};
+  const timeline={busy_milliseconds:0,transfer_milliseconds:0,waiting_milliseconds:2400,
+    calendar_delay_milliseconds:6000,steps:[]};
+  const operator={schema:'ftx-sewing-shared-operator/3',operator:'<qualified worker>',
+    serial_order_scope:'bounded_joint_operation_order_search/1',baseline:timeline,selected:timeline,
+    availability_calendars:calendars,baseline_replaced:true,search_nodes:73,search_complete:true,budget_exhausted:false};
+  const parallel={schema:'ftx-sewing-parallel/12',time_basis:'ceil_operation_feed_milliseconds/1',
+    baseline:allocation,selected:allocation,lower_bound_makespan_milliseconds:6400,
+    optimality_proven:false,search_nodes:120,budget_exhausted:false,shared_operator:operator,
+    cell_plans:[{cell:'cell-a',plan:sourcePlan}]};
+  const plan={options:{production:{parallel:{cells:[{id:'cell-a'},{id:'cell-b'}],shared_operator:{}}}},
+    seams:sourcePlan.seams,production:{schema:'ftx-sewing-production/27',production_copies:1,feed_seconds:6.4,parallel}};
+  for(const objective of ['makespan','feed','cost']) {
+    delete parallel.feed_time_search; delete parallel.thread_order_search;
+    if(objective==='feed') parallel.feed_time_search={
+      search_scope:'shared_operator_bounded_joint_operation_order_search/1',selected_feed_milliseconds:6400,
+      lower_bound_feed_milliseconds:6400,lower_bound_attained:true,optimality_proven:true,
+      unresolved_cell_counts:0,baseline_replaced:true};
+    if(objective==='cost') parallel.thread_order_search={
+      search_scope:'shared_operator_bounded_joint_operation_order_search/1',currency:'USD',selected_order_cost:2,
+      search_complete:true,optimality_proven:true,search_nodes:4,order_evaluations:1,
+      unresolved_assignments:0,unresolved_cell_counts:0,assignment_budget_exhausted:false,
+      order_budget_exhausted:false,baseline_replaced:true};
+    for(const op of ['sew','study','scenario']) {
+      const row=studyRow('joint-order'); row.sewing=outcome(plan); row.metrics.sewing_parallel_makespan_seconds=12.4;
+      const study=studyReport([row]);
+      const report=op==='sew'?{plan,stitches:[]}:op==='study'?study:{...scenarioReport(),manufacturing:study};
+      const raw=JSON.stringify(report);
+      await p.e[op].onclick(); p.emit(report,[{name:'joint-order-report.json',text:raw,mime:'application/json'}]);
+      const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+      const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+      assert.deepEqual(plain(table('shared operator work').children[2].children.map(n=>n.textContent)),
+        ['<qualified worker>','0','0','2.4','6','73','true','false']);
+      assert.match(visibleText(table('shared operator work')),/Joint order search nodes.*Joint order search complete/s);
+      assert.equal(table('cell-local sewing order').children[2].children[3].textContent,'reinforce');
+      assert.equal(table('cell-local sewing order').children[3].children[3].textContent,'join');
+      assert.match(visibleText(s),/dependency-ready local operations and cell dispatches together/);
+      assert.match(visibleText(s),/minimum parallel completion time is not proved/);
+      assert.match(visibleText(s),/Minimum completion time remains proved only by attaining the independent global lower bound/);
+      assert.doesNotMatch(visibleText(s),/retained serial operation orders|Retained-order cost minimum proved/);
+      if(objective==='feed') {
+        assert.equal(table('parallel feed-work objective and proof').children[2].children[3].textContent,'true');
+        assert.match(visibleText(s),/independent feed-minimum proof/);
+      }
+      if(objective==='cost') {
+        assert.equal(table('complete thread-order allocation').children[2].children[4].textContent,'true');
+        assert.match(visibleText(s),/complete joint count, operation-order and dispatch exploration/);
+      }
+      const download=descendants(s).find(n=>n.download==='joint-order-report.json');
+      assert.equal(await p.blobs.get(download.href).text(),raw);
+      if(op==='sew') {
+        const summary=JSON.parse(s.children[1].textContent);
+        assert.equal(summary.parallel_operator_order_scope,'bounded_joint_operation_order_search/1');
+        assert.equal(summary.parallel_operator_search_nodes,73);
+        assert.equal(summary.parallel_operator_search_complete,true);
+        assert.equal(summary.parallel_optimality_proven,false);
+      }
+      assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    }
+  }
+  delete parallel.thread_order_search;
+  operator.search_complete=false; operator.budget_exhausted=true; parallel.budget_exhausted=true;
+  await p.e.sew.onclick(); p.emit({plan,stitches:[]});
+  const limited=section(p,'sew');
+  assert.match(visibleText(limited),/unfinished search does not prove that other operation orders are infeasible/);
+  assert.equal(JSON.parse(limited.children[1].textContent).parallel_operator_search_complete,false);
+  p.e.sewOptions.handlers.change(); p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'sew').hidden,true);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('heterogeneous cells display their actual machine recipes and selected thread contributions', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions'); await p.e.sew.onclick();
   const source=(cell,machine,thread,pitch,rate)=>({cell,machine_sha256:machine+'-hash',
@@ -26563,13 +26651,14 @@ test('compiled WASM shared-operator thread orders replay native purchasing and d
     // Native captures serialize parsed Rust values; object key order can differ from typed outputs.
     assert.deepEqual(JSON.parse(sewing.files.find(file=>file.name==='sewing-program.json').text),JSON.parse(input('program.json')));
     const parallel=sewing.result.plan.production.parallel,order=parallel.thread_order_search;
-    assert.equal(sewing.result.plan.schema,'ftx-sewing-plan/38');
-    assert.equal(sewing.result.plan.production.schema,'ftx-sewing-production/26');
-    assert.equal(parallel.schema,'ftx-sewing-parallel/11');
+    assert.equal(sewing.result.plan.schema,'ftx-sewing-plan/39');
+    assert.equal(sewing.result.plan.production.schema,'ftx-sewing-production/27');
+    assert.equal(parallel.schema,'ftx-sewing-parallel/12');
     assert.equal(order.selected_order_cost,10);
-    assert.equal(order.search_scope,'shared_operator_retained_serial_incumbents/1');
-    assert.equal(order.retained_order_optimality_proven,true);
-    assert.equal(order.optimality_proven,false);
+    assert.equal(order.search_scope,'shared_operator_bounded_joint_operation_order_search/1');
+    assert.equal(Object.hasOwn(order,'retained_order_optimality_proven'),false);
+    assert.equal(order.search_complete,true);
+    assert.equal(order.optimality_proven,true);
     assert.equal(parallel.optimality_proven,false);
     assert.equal(sewing.result.stitches.length,200);
 
@@ -26580,7 +26669,7 @@ test('compiled WASM shared-operator thread orders replay native purchasing and d
     assert.equal(selected.files.find(file=>file.name==='sewing-selection-request.json').text,request);
     const report=selected.result.selection.report;
     assert.equal(report.selected_thread_order_cost,14);
-    assert.equal(report.optimality_proven,false);
+    assert.equal(report.optimality_proven,true);
     assert.deepEqual(selected.result.program.plan,report.selected_plan);
     assert.equal(selected.result.program.plan.production.parallel.selected.makespan_milliseconds,
       JSON.parse(request).completion_deadline_milliseconds);
@@ -26594,6 +26683,6 @@ test('compiled WASM shared-operator thread orders replay native purchasing and d
     assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
     assert.deepEqual(study.result.comparison.frontier,['shared-cost']);
     assert.equal(study.result.alternatives[0].metrics.thread_observed_order_cost,14);
-    assert.equal(study.result.alternatives[0].sewing.result.production.parallel.thread_order_search.optimality_proven,false);
-    assert.equal(study.result.alternatives[0].sewing_selection.result.optimality_proven,false);
+    assert.equal(study.result.alternatives[0].sewing.result.production.parallel.thread_order_search.optimality_proven,true);
+    assert.equal(study.result.alternatives[0].sewing_selection.result.optimality_proven,true);
   });

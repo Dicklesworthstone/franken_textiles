@@ -6244,6 +6244,23 @@ without invalidating independently available initial-drape or manufacturing resu
 advances `ftx-ms2.33` by connecting a working solver capability to normal garment studies,
 without another dynamics path, new empirical fabric data or a physical-fit claim.
 
+### 25.226 Choose operation orders jointly with shared-operator dispatch
+
+Whole-garment production with one qualified operator now chooses ready operations within each cell
+while allocating copies and dispatching attendance. Previously retained serial incumbents remain
+complete seeds, but no longer exclude alternative orders that fit resource calendars or overlap
+autonomous feed more effectively. The same setup, handling, prerequisite, finite fixture and
+source-qualified timing authorities determine every choice. All search extensions remain inside
+the existing operator work allowance; a complete feasible incumbent survives exhaustion.
+
+The selected local orders replay into production, fixture, handling and stitch reports, so ordinary
+native, portable and material-study consumers use the actual schedule. Makespan and feed proofs
+retain their independent lower bounds. Complete thread-order cost proof additionally requires
+exhaustive joint allocation/order/dispatch coverage and fully qualified prices. Synthetic alternate
+order cases cover recovered calendar feasibility, improved two-cell overlap and bounded incumbents.
+This advances `ftx-pb2.2`; measured factory timing, physical seam quality and hardware authorization
+remain separate empirical requirements.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

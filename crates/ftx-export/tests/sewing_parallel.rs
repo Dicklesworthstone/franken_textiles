@@ -2118,7 +2118,7 @@ fn shared_operator_overlaps_only_autonomous_feed_and_replays_every_attended_phas
         .parallel
         .as_ref()
         .unwrap();
-    assert_eq!(report.schema, "ftx-sewing-parallel/4");
+    assert_eq!(report.schema, "ftx-sewing-parallel/12");
     assert_eq!(report.time_basis, "ceil_operation_feed_milliseconds/1");
     assert_eq!(report.baseline.makespan_milliseconds, 14300);
     assert_eq!(report.selected.makespan_milliseconds, 6400);
@@ -2127,7 +2127,10 @@ fn shared_operator_overlaps_only_autonomous_feed_and_replays_every_attended_phas
     let labor = report.shared_operator.as_ref().unwrap();
     assert!(labor.search_complete);
     assert!(!labor.budget_exhausted);
-    assert_eq!(labor.serial_order_scope, "retained_serial_incumbents/1");
+    assert_eq!(
+        labor.serial_order_scope,
+        "bounded_joint_operation_order_search/1"
+    );
     assert_eq!(labor.selected.busy_milliseconds, 2600);
     assert_eq!(labor.selected.waiting_milliseconds, 3800);
     assert_eq!(labor.selected.steps.len(), 4);
@@ -2713,6 +2716,338 @@ fn independent_cell_calendars_bind_direct_selected_feed_and_thread_comparisons()
     assert!(build(&pattern, original).is_err());
 }
 
+fn joint_operator_order_fixture(copies: usize, join_handling: u64) -> (Pattern, Value) {
+    let (pattern, mut options) = calendar_order_fixture(12400);
+    options["production"]["production_copies"] = json!(copies);
+    options["production"]["parallel"]
+        .as_object_mut()
+        .unwrap()
+        .remove("availability_calendars");
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["handling"]["initial_milliseconds"]["join"] = json!(join_handling);
+        for transition in cell["handling"]["transitions"].as_array_mut().unwrap() {
+            transition["milliseconds"] = json!(if transition["to"] == "join" {
+                join_handling
+            } else {
+                0
+            });
+        }
+    }
+    shared_operator(&mut options, 40000);
+    (pattern, options)
+}
+
+#[test]
+fn shared_operator_searches_alternative_orders_inside_qualified_calendars() {
+    let (pattern, mut options) = joint_operator_order_fixture(1, 0);
+    operator_calendars(
+        &mut options,
+        json!({
+            "synthetic-person":windows(&[[0,12400]]),
+            "cell-a":windows(&[[0,4000],[10000,12400]]),
+            "cell-b":windows(&[[0,0]])
+        }),
+    );
+    // The uninterrupted tie selects join (2400 ms), then reinforce (4000 ms).
+    // Only reversing those independent operations fits both qualified openings.
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 12400);
+    let labor = report.shared_operator.as_ref().unwrap();
+    assert_eq!(labor.schema, "ftx-sewing-shared-operator/3");
+    assert_eq!(
+        labor.serial_order_scope,
+        "bounded_joint_operation_order_search/1"
+    );
+    assert!(labor.search_complete && !labor.budget_exhausted);
+    assert_eq!(labor.selected.steps.len(), 3);
+    assert_eq!(
+        labor.selected.steps[0].operation.as_deref(),
+        Some("0/reinforce")
+    );
+    assert_eq!(labor.selected.steps[0].handling_start_milliseconds, 0);
+    assert_eq!(labor.selected.steps[0].feed_finish_milliseconds, 4000);
+    assert_eq!(labor.selected.steps[1].operation.as_deref(), Some("0/join"));
+    assert_eq!(labor.selected.steps[1].handling_start_milliseconds, 10000);
+    assert_eq!(labor.selected.steps[1].feed_finish_milliseconds, 12400);
+    assert!(labor.selected.steps[2].operation.is_none());
+    assert_eq!(labor.selected.steps[2].feed_finish_milliseconds, 12400);
+    let schedule = report.selected.cells[0].schedule.as_ref().unwrap();
+    assert_eq!(schedule.ordering.selected_order, ["0/reinforce", "0/join"]);
+    assert_eq!(program.stitches.len(), 80);
+    assert!(
+        program.stitches[..40]
+            .iter()
+            .all(|step| step.operation == 1)
+    );
+    assert!(
+        program.stitches[40..]
+            .iter()
+            .all(|step| step.operation == 0)
+    );
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn shared_operator_feed_objective_recovers_a_calendar_feasible_alternative_order() {
+    let (pattern, mut options) = joint_operator_order_fixture(1, 0);
+    operator_calendars(
+        &mut options,
+        json!({
+            "synthetic-person":windows(&[[0,12400]]),
+            "cell-a":windows(&[[0,4000],[10000,12400]]),
+            "cell-b":windows(&[[0,0]])
+        }),
+    );
+    options["production"]["parallel"]["objective"] = json!("minimize_feed_milliseconds");
+    options["production"]["parallel"]["feed_time_search"] =
+        json!({"completion_deadline_milliseconds":12400});
+    let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    let search = report.feed_time_search.as_ref().unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 12400);
+    assert_eq!(report.selected.scheduled_feed_milliseconds, 6400);
+    assert_eq!(search.selected_feed_milliseconds, 6400);
+    assert_eq!(search.lower_bound_feed_milliseconds, 6400);
+    assert_eq!(search.completion_deadline_milliseconds, Some(12400));
+    assert!(search.optimality_proven && search.lower_bound_attained);
+    assert!(search.baseline_replaced);
+    assert_eq!(search.unresolved_cell_counts, 0);
+    assert!(!report.optimality_proven);
+    assert_eq!(
+        report.selected.cells[0]
+            .schedule
+            .as_ref()
+            .unwrap()
+            .ordering
+            .selected_order,
+        ["0/reinforce", "0/join"]
+    );
+    let labor = report.shared_operator.as_ref().unwrap();
+    assert!(labor.search_complete && !labor.budget_exhausted);
+    assert!(labor.search_nodes <= 40000 && report.search_nodes <= 60000);
+    assert_eq!(program.stitches.len(), 80);
+    assert!(
+        program.stitches[..40]
+            .iter()
+            .all(|step| step.operation == 1)
+    );
+    assert!(
+        program.stitches[40..]
+            .iter()
+            .all(|step| step.operation == 0)
+    );
+    // The final zero-duration unloading still belongs to the complete inclusive deadline.
+    options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
+        json!(12399);
+    let refusal = build(&pattern, options).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::NotConverged);
+    assert!(refusal.message.contains("complete-job deadline"));
+}
+
+#[test]
+fn shared_operator_thread_cost_prices_the_complete_calendar_recovered_order() {
+    let (pattern, mut options) = joint_operator_order_fixture(1, 0);
+    let machine = options["machine"].clone();
+    let qualifications = options["qualifications"].clone();
+    options["production"]["parallel"]["model"] = json!("independent_whole_garment_cells/2");
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["configuration"] =
+            json!({"machine":machine,"qualifications":qualifications,"recipes":{}});
+    }
+    let yarn = thread_inventory(&mut options);
+    refresh_operator_locks(&mut options);
+    operator_calendars(
+        &mut options,
+        json!({
+            "synthetic-person":windows(&[[0,12400]]),
+            "cell-a":windows(&[[0,4000],[10000,12400]]),
+            "cell-b":windows(&[[0,0]])
+        }),
+    );
+    options["production"]["parallel"]["objective"] = json!("minimize_thread_observed_order_cost");
+    options["production"]["parallel"]["thread_order_search"] = json!({
+        "max_search_nodes":1000,"max_order_evaluations":1,
+        "completion_deadline_milliseconds":12400
+    });
+    // Each operation consumes 40 * 0.01 + 0.1 + 0.2 = 0.7 m. The complete
+    // 1.4 m demand buys one observed 2 m order for USD 10. Only cell-a can
+    // finish, so one complete-order evaluation is sufficient to prove the cost.
+    for available in [true, false] {
+        options["consumables"]["purchasing"]["quote_book"]["quotes"][0]["available"] =
+            json!(available);
+        let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+        let program = SewProgram::build(&pattern, &typed).unwrap();
+        let plan = &program.plan;
+        let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+        let search = report.thread_order_search.as_ref().unwrap();
+        assert_eq!(report.selected.makespan_milliseconds, 12400);
+        assert_eq!(search.selected_order_cost, available.then_some(10.0));
+        assert_eq!(search.optimality_proven, available);
+        assert!(search.search_complete && search.baseline_replaced);
+        assert_eq!(search.order_evaluations, 1);
+        assert_eq!(search.unresolved_assignments, usize::from(!available));
+        assert_eq!(search.unresolved_cell_counts, 0);
+        assert_eq!(search.retained_order_optimality_proven, None);
+        assert!(!search.assignment_budget_exhausted && !search.order_budget_exhausted);
+        assert!(search.search_nodes <= 1000 && report.search_nodes <= 60000);
+        assert_eq!(
+            report.selected.cells[0]
+                .schedule
+                .as_ref()
+                .unwrap()
+                .ordering
+                .selected_order,
+            ["0/reinforce", "0/join"]
+        );
+        let consumption = plan.consumables.as_ref().unwrap();
+        assert!(consumption.complete_consumption_coverage && consumption.complete_mass_coverage);
+        assert_eq!(consumption.material_requirements.len(), 1);
+        assert_eq!(
+            consumption.material_requirements[0].material_sha256,
+            yarn.expected_sha256.as_ref().unwrap().as_str()
+        );
+        assert!((consumption.total_required_length_m.unwrap() - 1.4).abs() < 1e-12);
+        let purchasing = consumption.purchasing.as_ref().unwrap();
+        assert_eq!(purchasing.selected_total(), available.then_some(10.0));
+        if available {
+            assert_eq!(
+                purchasing.material_orders[0]
+                    .least_observed_order
+                    .as_ref()
+                    .unwrap()
+                    .order_quantity,
+                2.0
+            );
+        }
+        assert_eq!(program.stitches.len(), 80);
+        assert!(
+            program.stitches[..40]
+                .iter()
+                .all(|step| step.operation == 1)
+        );
+        assert!(
+            program.stitches[40..]
+                .iter()
+                .all(|step| step.operation == 0)
+        );
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &plan.options).unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
+fn shared_operator_joint_orders_improve_actual_two_cell_overlap() {
+    let (pattern, options) = joint_operator_order_fixture(2, 3000);
+    // Each garment requires 3000 ms of attended join handling, 2400 ms of join
+    // feed, and 4000 ms of unattended reinforcement. Either local order costs
+    // 9400 ms, but using the serial join-first tie in both cells finishes no
+    // earlier than 12400 ms. Opposite orders let one cell reinforce from 0 to
+    // 4000 while the other joins from 0 to 5400; that cell then reinforces to
+    // 9400 while the first joins from 5400 to 10800. Enumerating the four local
+    // order pairs and their twenty dispatch interleavings gives 10800 ms;
+    // putting both garments in one cell requires 18800 ms.
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 10800);
+    let labor = report.shared_operator.as_ref().unwrap();
+    assert!(labor.search_complete && !labor.budget_exhausted);
+    assert_eq!(labor.selected.busy_milliseconds, 6000);
+    let mut orders = BTreeSet::new();
+    for cell in &report.selected.cells {
+        assert_eq!(cell.copies.len(), 1);
+        let schedule = cell.schedule.as_ref().unwrap();
+        orders.insert(schedule.ordering.selected_order.clone());
+        let steps: Vec<_> = program
+            .stitches
+            .iter()
+            .filter(|step| step.cell.as_deref() == Some(cell.cell.as_str()))
+            .collect();
+        assert_eq!(steps.len(), 80);
+        let first = usize::from(schedule.ordering.selected_order[0] == "0/reinforce");
+        assert!(steps[..40].iter().all(|step| step.operation == first));
+        assert!(steps[40..].iter().all(|step| step.operation == 1 - first));
+        assert!(steps.iter().all(|step| step.copy == Some(cell.copies[0])));
+    }
+    assert_eq!(
+        orders,
+        BTreeSet::from([
+            vec!["0/join".to_owned(), "0/reinforce".to_owned()],
+            vec!["0/reinforce".to_owned(), "0/join".to_owned()],
+        ])
+    );
+    assert_eq!(program.stitches.len(), 160);
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn shared_operator_joint_order_cap_preserves_a_complete_feasible_seed() {
+    let (pattern, mut options) = joint_operator_order_fixture(2, 3000);
+    options["production"]["parallel"]["shared_operator"]["max_search_nodes"] = json!(5);
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    let labor = report.shared_operator.as_ref().unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 18800);
+    assert!(!report.optimality_proven);
+    assert!(labor.budget_exhausted && !labor.search_complete);
+    assert!(labor.search_nodes <= 5);
+    assert_eq!(labor.selected.steps.len(), 5);
+    assert!(labor.selected.steps.last().unwrap().operation.is_none());
+    assert_eq!(program.stitches.len(), 160);
+    let complete: BTreeSet<_> = program
+        .stitches
+        .iter()
+        .map(|step| (step.copy.unwrap(), step.operation))
+        .collect();
+    assert_eq!(complete, BTreeSet::from([(0, 0), (0, 1), (1, 0), (1, 1)]));
+}
+
 #[test]
 fn shared_operator_calendars_allow_autonomous_feed_during_breaks_and_replay_stitches() {
     for (first_end, finish, delay) in [(1100, 11300, 4900), (1099, 12400, 6000)] {
@@ -2736,8 +3071,8 @@ fn shared_operator_calendars_allow_autonomous_feed_during_breaks_and_replay_stit
             .as_ref()
             .unwrap();
         let labor = report.shared_operator.as_ref().unwrap();
-        assert_eq!(report.schema, "ftx-sewing-parallel/6");
-        assert_eq!(labor.schema, "ftx-sewing-shared-operator/2");
+        assert_eq!(report.schema, "ftx-sewing-parallel/12");
+        assert_eq!(labor.schema, "ftx-sewing-shared-operator/3");
         assert_eq!(report.selected.makespan_milliseconds, finish);
         assert_eq!(labor.selected.calendar_delay_milliseconds, Some(delay));
         assert_eq!(labor.selected.busy_milliseconds, 2600);
@@ -3006,7 +3341,11 @@ fn shared_operator_calendars_refuse_unknown_invalid_or_unqualified_domains() {
     );
     let refusal = build(&pattern, original).unwrap_err();
     assert_eq!(refusal.code, RefusalCode::NotConverged);
-    assert!(refusal.message.contains("infeasibility is not proved"));
+    assert!(
+        refusal
+            .message
+            .contains("joint operation-order and dispatch search")
+    );
 }
 
 #[test]
@@ -3120,7 +3459,7 @@ fn shared_fixture_capacity_controls_actual_feed_overlap_and_replays_complete_sti
             .parallel
             .as_ref()
             .unwrap();
-        assert_eq!(report.schema, "ftx-sewing-parallel/5");
+        assert_eq!(report.schema, "ftx-sewing-parallel/12");
         assert_eq!(report.selected.makespan_milliseconds, finish);
         assert!(report.lower_bound_makespan_milliseconds <= finish);
         let resources = report.shared_workholding.as_ref().unwrap();
@@ -3295,7 +3634,11 @@ fn shared_fixture_waiting_obeys_inclusive_cell_windows_and_final_unloading() {
             Err(refusal) => {
                 assert!(!accepted);
                 assert_eq!(refusal.code, RefusalCode::NotConverged);
-                assert!(refusal.message.contains("infeasibility is not proved"));
+                assert!(
+                    refusal
+                        .message
+                        .contains("joint operation-order and dispatch search")
+                );
             }
         }
     }
@@ -3575,10 +3918,13 @@ fn shared_operator_matches_exhaustive_allocations_travel_waits_and_inclusive_win
                 }
             }
             (None, Err(refusal)) => {
-                // Completing the restricted serial-incumbent search cannot prove that all other
-                // admitted serial orders fail, even when this deliberately simple fixture would.
+                // A bounded joint search without a complete schedule returns no usable result.
                 assert_eq!(refusal.code, RefusalCode::NotConverged);
-                assert!(refusal.message.contains("infeasibility is not proved"));
+                assert!(
+                    refusal
+                        .message
+                        .contains("joint operation-order and dispatch search")
+                );
             }
             (expected, actual) => panic!("expected {expected:?}, got {actual:?}"),
         }
@@ -4558,18 +4904,18 @@ fn parallel_thread_cost_shared_operator_matches_independent_complete_order_enume
             assert_eq!(parallel.selected.makespan_milliseconds, finish);
             assert_eq!(
                 search.search_scope,
-                "shared_operator_retained_serial_incumbents/1"
+                "shared_operator_bounded_joint_operation_order_search/1"
             );
             assert!(search.search_complete);
-            assert_eq!(search.retained_order_optimality_proven, Some(true));
-            assert!(!search.optimality_proven);
+            assert_eq!(search.retained_order_optimality_proven, None);
+            assert!(search.optimality_proven);
             assert_eq!(search.order_evaluations, expected.len());
             assert_eq!(search.unresolved_assignments, 0);
-            assert_eq!(parallel.schema, "ftx-sewing-parallel/11");
-            assert_eq!(plan.schema, "ftx-sewing-plan/38");
+            assert_eq!(parallel.schema, "ftx-sewing-parallel/12");
+            assert_eq!(plan.schema, "ftx-sewing-plan/39");
             assert_eq!(
                 plan.production.as_ref().unwrap().schema,
-                "ftx-sewing-production/26"
+                "ftx-sewing-production/27"
             );
             let a = parallel.selected.cells[0].copies.len();
             assert!(expected.contains(&(price, finish, a)));
@@ -4620,7 +4966,7 @@ fn parallel_thread_cost_shared_operator_retains_complete_incumbents_at_each_cap(
         assert_eq!(search.selected_order_cost, Some(10.0));
         assert_eq!(report.selected.makespan_milliseconds, 23300);
         assert!(!search.search_complete && !search.optimality_proven);
-        assert_eq!(search.retained_order_optimality_proven, Some(false));
+        assert_eq!(search.retained_order_optimality_proven, None);
         assert_eq!(search.assignment_budget_exhausted, cap == "count");
         assert_eq!(search.order_budget_exhausted, cap == "prices");
         assert_eq!(
@@ -4656,7 +5002,7 @@ fn parallel_thread_cost_shared_operator_retains_complete_incumbents_at_each_cap(
     let search = report.thread_order_search.as_ref().unwrap();
     assert_eq!(search.selected_order_cost, None);
     assert!(search.search_complete && report.shared_operator.as_ref().unwrap().search_complete);
-    assert_eq!(search.retained_order_optimality_proven, Some(false));
+    assert_eq!(search.retained_order_optimality_proven, None);
     assert_eq!(search.unresolved_assignments, 4);
     assert_eq!(search.order_evaluations, 4);
     // A loads first; B's two feeds finish at 3034/5368 ms. A unloads at 5100..5300,
@@ -4685,15 +5031,19 @@ fn parallel_thread_cost_shared_operator_deadlines_include_pools_calendars_and_fi
             if deadline < finish {
                 let refusal = actual.unwrap_err();
                 assert_eq!(refusal.code, RefusalCode::NotConverged);
-                assert!(refusal.message.contains("infeasibility is not proved"));
+                assert!(
+                    refusal
+                        .message
+                        .contains("joint operation-order and dispatch search")
+                );
                 continue;
             }
             let plan = actual.unwrap();
             let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
             let search = report.thread_order_search.as_ref().unwrap();
             assert_eq!(search.selected_order_cost, Some(10.0));
-            assert_eq!(search.retained_order_optimality_proven, Some(true));
-            assert!(!search.optimality_proven);
+            assert_eq!(search.retained_order_optimality_proven, None);
+            assert!(search.optimality_proven);
             assert_eq!(report.selected.makespan_milliseconds, finish);
             let pools = report.shared_workholding.as_ref().unwrap();
             assert_eq!(pools.selected.peak_occupancy["common-jigs"], 1);
@@ -4806,11 +5156,11 @@ fn parallel_feed_shared_operator_matches_independent_allocation_and_dispatch_enu
                 .as_ref()
                 .unwrap();
             let feed = parallel.feed_time_search.as_ref().unwrap();
-            assert_eq!(parallel.schema, "ftx-sewing-parallel/9");
+            assert_eq!(parallel.schema, "ftx-sewing-parallel/12");
             assert_eq!(parallel.time_basis, "ceil_operation_feed_milliseconds/1");
             assert_eq!(
                 feed.search_scope,
-                "shared_operator_retained_serial_incumbents/1"
+                "shared_operator_bounded_joint_operation_order_search/1"
             );
             assert_eq!(
                 (
@@ -4962,7 +5312,11 @@ fn parallel_feed_shared_operator_deadlines_include_calendar_delays_pools_and_fin
             if deadline < finish {
                 let refusal = actual.unwrap_err();
                 assert_eq!(refusal.code, RefusalCode::NotConverged);
-                assert!(refusal.message.contains("infeasibility is not proved"));
+                assert!(
+                    refusal
+                        .message
+                        .contains("joint operation-order and dispatch search")
+                );
                 continue;
             }
             let plan = actual.unwrap();

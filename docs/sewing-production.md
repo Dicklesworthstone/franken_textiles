@@ -617,17 +617,17 @@ orders. All reservations remain inside the existing enclosing scheduling and pur
 Reaching any cap preserves a complete feasible incumbent when one has been found. If every examined
 price is unavailable, the best retained complete timeline remains useful with an absent cost.
 
-Plan `/38`, production `/26` and parallel `/11` retain both the actual operator timeline and the
-complete-order result. The cost report uses
-`search_scope: "shared_operator_retained_serial_incumbents/1"`. Its
-`retained_order_optimality_proven` is true only when count/dispatch exploration completed and every
-relevant examined order had a complete proved price. This proves the minimum over the retained
-cell-local serial orders and their dispatch interleavings. Different local operation orders remain
-outside that search, so the unrestricted `optimality_proven` stays false. Makespan proof remains a
-separate claim based on the selected feasible finish and its independent lower bound.
+Production `/27`, parallel `/12` and shared-operator `/3` retain both the actual operator timeline
+and the complete-order result. The cost report uses
+`search_scope: "shared_operator_bounded_joint_operation_order_search/1"`. Each allocation searches
+dependency-ready local operations and cell dispatches together instead of fixing the serial
+incumbent's order. `optimality_proven` requires complete joint count/order/dispatch exploration,
+every relevant complete order to have a proved price, and no unresolved assignments or cell counts.
+The former `retained_order_optimality_proven` field is omitted for this broader scope. Makespan
+proof remains a separate claim based on the selected feasible finish and its independent lower bound.
 
-Recipe selection `/3` retains the selected cost and tightens the inner deadline, while preserving
-the incomplete unrestricted proof. Ordinary stitches, material studies and browser review use the
+Recipe selection `/3` retains the selected cost and tightens the inner deadline, preserving the
+joint search's actual proof status. Ordinary stitches, material studies and browser review use the
 same complete allocation and exact purchasing replay. The browser displays the retained-order
 proof separately and preserves the full original result in downloads. These are source-qualified
 numerical planning results, not observed factory throughput or authorization to purchase or operate
@@ -722,9 +722,9 @@ cell locks, transfer observations, qualified windows and existing independence d
 labor requires `ceil_operation_feed_milliseconds/1`: every positive operation keeps its own
 upward-rounded feed slot, including after setup, waiting or calendar delay.
 
-The bounded search chooses complete cell/count assignments and interleaves the retained serial
-orders through the existing one-person dispatcher. Actual feasibility includes exclusive operator
-travel, waiting, setup, handling and final unloading; autonomous feed, machine calendars, fixture
+The bounded search chooses complete cell/count assignments, dependency-ready local operation
+orders and their interleavings through the existing one-person dispatcher. Actual feasibility
+includes exclusive operator travel, waiting, setup, handling and final unloading; autonomous feed, machine calendars, fixture
 holds and pool capacity remain enforced. The optional feed deadline also includes the last unload.
 For equal total feed, the search prefers earlier completion and retains a complete feasible result
 when its explicit work allowance is exhausted.
@@ -732,12 +732,13 @@ when its explicit work allowance is exhausted.
 A separate count relaxation uses each cell/count's valid completion lower bound and exact
 per-operation feed cost. It deliberately omits shared-resource contention only when computing a
 lower bound; it never supplies a feasible shared schedule. Feed optimality requires the actual
-incumbent to attain that bound. Exhausting the retained-order search alone does not prove a global
-minimum or physical impossibility. A proved feed minimum may still have an unfinished search for
-earlier completion, so feed proof remains independent of makespan proof and the parent budget flag.
+incumbent to attain that bound. Joint operation-order search completion and this independent bound
+are separate receipts; an unfinished search does not prove physical impossibility. A proved feed
+minimum may still have an unfinished search for earlier completion, so feed proof remains
+independent of makespan proof and the parent budget flag.
 
-Plan `/36`, production `/24` and parallel `/9` retain both coupled timelines and
-`feed_time_search.search_scope: "shared_operator_retained_serial_incumbents/1"`.
+Production `/27`, parallel `/12` and shared-operator `/3` retain both coupled timelines and
+`feed_time_search.search_scope: "shared_operator_bounded_joint_operation_order_search/1"`.
 Recipe selection `/9` tightens the same deadline and uses only feed proof for the feed objective.
 Material comparisons verify the shared time convention and complete coupled receipt; browser
 results show per-operation rounding and the distinct proof. Source edits still invalidate cell locks.
@@ -955,15 +956,19 @@ separated by attended work each receive a full 1 ms slot. Raw feed and total num
 separate; padding can exceed 1 ms per cell. Independent-labor mode retains its prior once-per-cell
 rounding and unchanged serialization.
 
-The planner searches whole-garment allocations and all dispatch interleavings of the existing
-cell/count serial incumbents. It retains only compact integer phase durations and operation indices
-for these count trials; full source geometry and fixture histories are not duplicated. Seeds,
-allocation-prefix extensions and dispatch extensions consume the operator's reserved portion of the
-enclosing parallel work limit, alongside all ordinary count solves, lower-bound DPs and exact returned
+The planner searches whole-garment allocations and dependency-ready operations jointly across
+cells. The ordinary cell/count serial incumbent supplies a deterministic seed, but does not fix the
+order of later search candidates. Every chosen next operation uses the actual directed setup and
+handling transition from that cell's preceding operation; original predecessors, copy identity and
+finite fixture lifecycles stay enforced. Complete schedules include every used cell's final unloading.
+No additional request switch is needed: the existing bounded shared-operator policy selects this
+search. Full source geometry is not duplicated across candidates. Seeds, allocation-prefix extensions
+and operation/dispatch extensions consume the operator's reserved portion of the enclosing parallel
+work limit, alongside all ordinary count solves, lower-bound DPs and exact returned
 schedule replays. The operator cap must at least cover every operation plus final unloading of a
 complete first-cell seed. The combined serial-reference and parallel limit remains 200000 units.
 
-`ftx-sewing-parallel/4` includes `shared_operator.baseline` and `.selected` timelines with departure,
+`ftx-sewing-parallel/12` includes `shared_operator.baseline` and `.selected` timelines with departure,
 arrival, handling start, setup start, operator release and feed completion, plus actual global garment
 identities. Travel, busy time and waiting are separate from aggregate machine feed and elapsed
 makespan. If the first-cell seed fails a cell or operator limit, the complete selected feasible
@@ -971,12 +976,16 @@ assignment replaces it and `shared_operator.baseline_replaced` is true. Existing
 `availability` receipts are explicitly a **cell-only relaxation**: a count that fits without
 operator contention need not fit the combined timeline.
 
-The proof scope is `retained_serial_incumbents/1`. Completing that restricted search does not
-establish the unrestricted joint optimum, because another serial operation order may interleave
-better. Independent complete DPs supply valid lower bounds for cell completion and total attended
-work. The parent `optimality_proven` is true only when the actual feasible makespan meets their valid
-global bound. A missing incumbent is unresolved unless one of those independent bounds proves the
-windows impossible; unfinished or restricted search never proves unexamined operation orders fail.
+The `shared_operator.serial_order_scope` is `bounded_joint_operation_order_search/1`.
+Its `search_nodes`, `search_complete` and `budget_exhausted` describe the joint operation and dispatch
+search within the original allowance. The selected cells' `schedule.ordering.selected_order` is the
+actual searched order used by stitch expansion and purchasing, including when it differs from the
+productive-work seed. Independent complete DPs supply valid lower bounds for cell completion and
+total attended work. The parent `optimality_proven` is true only when the actual feasible makespan
+meets their valid global bound. A missing incumbent is unresolved unless an independent bound
+proves the windows impossible; an unfinished search never proves unexamined operation orders fail.
+The workbench displays actual local orders, joint search work and completion, and the separate
+makespan, feed and complete-order-cost proofs in direct, manufacturing and scenario results.
 
 Synthetic one-operation tests give two four-second feeds with 1100 ms initial loading/setup and
 200 ms final unloading. Independent workers finish two cells in 5300 ms; one operator finishes in
@@ -1018,8 +1027,16 @@ finishes at 11300 ms with 4900 ms of unoccupied calendar delay. Moving the first
 1099 ms prevents the 1100 ms attended block from starting there; completion becomes 12400 ms.
 These independently calculated examples test software interval semantics, not factory timing.
 
-Calendar input selects parallel report `/6` and shared-operator report `/2`; omission retains previous
-wire output. The report and workbench retain every declared window and its separate qualification,
+Local order can also determine whether the job fits at all. With two independent operations taking
+2400 ms and 4000 ms, zero qualified setup/handling/travel, and cell openings `[0,4000]` and
+`[10000,12400]`, the short-first serial seed cannot finish. The joint search selects the 4000 ms
+operation first, then the 2400 ms operation in the later opening, completing at 12400 ms. The
+returned local operation order, actual stitch stream and frozen native/portable study replay all
+use that complete schedule. This synthetic case demonstrates the calendar-order capability; it
+does not supply measured zero handling times or physical process qualification.
+
+Shared-operator jobs, with or without calendars, use parallel report `/12` and shared-operator `/3`.
+The report and workbench retain every declared window and its separate qualification,
 including unused resources. Actual stitches, yarn demand, recipe selection and material/design
 comparisons follow the resulting allocation. Feed-only and thread-only comparisons also include
 the complete calendar-constrained production/selection domain in their protocol identity.
@@ -1074,9 +1091,10 @@ interval sweep verifies capacities, processes equal-time releases before acquisi
 zero final occupancy. The workbench displays these histories in sewing, manufacturing and scenario
 results; ordinary report and options downloads preserve exact replay.
 
-The search still considers retained serial incumbents. Shared pools can make an allocation wait or
-fail, but they do not turn the cell-only timing lower bounds into a proof about shared-resource
-feasibility. A restricted search with no complete result remains unresolved unless an independent
+The joint search considers dependency-ready local orders while preserving the complete finite
+fixture lifecycle. Shared pools can make an allocation wait or fail, but they do not turn the
+cell-only timing lower bounds into a proof about shared-resource feasibility. An unfinished search
+with no complete result remains unresolved unless an independent
 bound proves impossibility. Pool accounting does not establish physical access, safe unattended
 operation, garment transfers between cells or hardware permission.
 

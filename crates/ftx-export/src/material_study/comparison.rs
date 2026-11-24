@@ -3103,14 +3103,18 @@ fn scheduled_sewing_feed(row: &Alternative) -> Option<f64> {
                         (Some(policy), Some(search)) => {
                             let execution_matches = if request.shared_operator.is_some() {
                                 request.time_basis == "ceil_operation_feed_milliseconds/1"
-                                    && parallel.shared_operator.is_some()
+                                    && parallel.shared_operator.as_ref().is_some_and(|operator| {
+                                        operator.schema == "ftx-sewing-shared-operator/3"
+                                            && operator.serial_order_scope
+                                                == "bounded_joint_operation_order_search/1"
+                                    })
                                     && request.shared_workholding.is_some()
                                         == parallel.shared_workholding.is_some()
-                                    && parallel.schema == "ftx-sewing-parallel/9"
-                                    && production.schema == "ftx-sewing-production/24"
-                                    && plan.schema == "ftx-sewing-plan/36"
+                                    && parallel.schema == "ftx-sewing-parallel/12"
+                                    && production.schema == "ftx-sewing-production/27"
+                                    && plan.schema == "ftx-sewing-plan/39"
                                     && search.search_scope
-                                        == "shared_operator_retained_serial_incumbents/1"
+                                        == "shared_operator_bounded_joint_operation_order_search/1"
                             } else if request.availability_calendars.is_some() {
                                 request.time_basis == "ceil_operation_feed_milliseconds/1"
                                     && request.shared_workholding.is_none()
@@ -6147,7 +6151,7 @@ mod sewing_feed_tests {
             .scheduled_feed_milliseconds()
             .unwrap();
         assert_eq!(scheduled_sewing_feed(&original), Some(expected as f64));
-        for change in 0..10 {
+        for change in 0..12 {
             let mut row = original.clone();
             let Outcome::Available { result: plan } = &mut row.sewing else {
                 unreachable!()
@@ -6187,6 +6191,14 @@ mod sewing_feed_tests {
                         .as_mut()
                         .unwrap()
                         .completion_deadline_milliseconds = Some(0);
+                }
+                10 => {
+                    report.shared_operator.as_mut().unwrap().serial_order_scope =
+                        "retained_serial_incumbents/1";
+                }
+                11 => {
+                    report.shared_operator.as_mut().unwrap().schema =
+                        "ftx-sewing-shared-operator/2";
                 }
                 _ => unreachable!(),
             }

@@ -1,5 +1,6 @@
 //! One qualified operator attends setup and handling while independently qualified machines feed.
-//! Whole garments and each retained serial operation order stay in their original physical cell.
+//! Whole garments stay in their original physical cell; admitted operation orders and dispatches
+//! are searched jointly within the existing shared-operator work cap.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,7 +12,11 @@ use super::{
     Assignment, Cell, MAX_EXACT_MILLISECONDS, MAX_WORK, Trial, budget, shared_workholding, sum_time,
 };
 use crate::sewing::production::routing::calendars;
-use crate::sewing::{SewOptions, SewPlan, bad, ordering::Setup, qualified_text, sha256_text};
+use crate::sewing::{
+    SewOptions, SewPlan, bad,
+    ordering::{self, Setup},
+    qualified_text, sha256_text,
+};
 
 /// A separately qualified one-person operating protocol. Every operation is handled, set up and
 /// then fed; handling and setup form one nonpreemptive attended interval. Feed releases the person.
@@ -117,7 +122,7 @@ pub struct Timeline {
 /// Bounded operator search, separate from the unrestricted global makespan proof in its parent.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` contiguous availability; `/2` independently qualified resource calendars.
+    /// `/3` bounded joint operation orders and dispatches, including qualified resource calendars.
     pub schema: &'static str,
     /// The one source-qualified operator, never multiplied by the number of cells.
     pub operator: String,
@@ -130,13 +135,13 @@ pub struct Report {
     pub selected: Timeline,
     /// Whether the first-cell seed was unavailable under operator/cell timing and shift constraints.
     pub baseline_replaced: bool,
-    /// `retained_serial_incumbents/1`: allocation and interleaving use each cell/count's admitted
-    /// serial incumbent. Another serial order can improve the unrestricted joint scheduling problem.
+    /// `bounded_joint_operation_order_search/1`: allocation, admitted local operation orders and
+    /// operator dispatches share the declared cap; complete serial incumbents seed the search.
     pub serial_order_scope: &'static str,
     /// Actual seed, allocation-prefix and dispatch extensions charged to the enclosing shared cap.
     pub search_nodes: usize,
-    /// This restricted allocation/interleaving search completed or met the independent global bound.
-    /// This field alone never proves an unrestricted optimum or physical impossibility.
+    /// The joint allocation/order/dispatch search completed or met the independent global bound.
+    /// Objective-specific proof fields remain separate from physical timing validation.
     pub search_complete: bool,
     /// The declared operator cap stopped a search that had not met the independent global bound.
     pub budget_exhausted: bool,
@@ -393,10 +398,187 @@ pub(in crate::sewing::production) fn feed_milliseconds(seconds: f64) -> Result<u
     Ok(rounded as u64)
 }
 
+// Compile once for the largest admitted count in each physical cell, rather than retaining a
+// quadratic transition matrix for every count trial. A smaller count selects exactly its copies;
+// all qualified transitions and per-copy fixture lifecycles use the same bounded indices.
+pub(super) struct LocalOrder {
+    copies: Vec<usize>,
+    operations_per_copy: usize,
+    operation_indices: Vec<usize>,
+    sorted_indices: Vec<usize>,
+    predecessors: Vec<ordering::OperationSet>,
+    setup: Vec<Vec<u64>>,
+    handling: ordering::HandlingCosts,
+    resources: Option<ordering::ResourceLimits>,
+    feed: Vec<u64>,
+    minimum_attended: Vec<u64>,
+    shared: Vec<Option<Box<shared_workholding::Phase>>>,
+    shared_unload: Option<Box<shared_workholding::Phase>>,
+}
+
+impl LocalOrder {
+    pub(super) fn compile(
+        plan: &SewPlan,
+        cell: &Cell,
+        schedule: &super::super::Report,
+        shared: Option<&shared_workholding::Policy>,
+    ) -> Result<Self, Refusal> {
+        let mut operations = schedule.operations.clone();
+        let resources = cell
+            .workholding
+            .as_ref()
+            .map(|policy| super::super::workholding::compile(plan, policy, &mut operations))
+            .transpose()?
+            .map(|compiled| compiled.limits);
+        let handling = super::super::handling::compile(plan, &cell.handling, &operations)?.costs;
+        let mut sorted: Vec<_> = operations.iter().enumerate().collect();
+        sorted.sort_by_key(|(_, operation)| &operation.id);
+        let ids: BTreeMap<_, _> = sorted
+            .iter()
+            .enumerate()
+            .map(|(index, (_, operation))| (operation.id.as_str(), index))
+            .collect();
+        let setups: Vec<_> = sorted
+            .iter()
+            .map(|(_, operation)| {
+                let pass = &plan.seams[operation.seam_index].pass;
+                Setup {
+                    needle: pass.needle.clone(),
+                    thread: pass.thread.clone(),
+                }
+            })
+            .collect();
+        let setup = ordering::setup_matrix(&cell.ordering, &setups)?;
+        let predecessors = sorted
+            .iter()
+            .map(|(_, operation)| {
+                let mut mask = ordering::OperationSet::default();
+                for predecessor in &operation.after {
+                    mask.insert(ids[predecessor.as_str()]);
+                }
+                mask
+            })
+            .collect();
+        let feed = sorted
+            .iter()
+            .map(|(_, operation)| feed_milliseconds(operation.feed_seconds))
+            .collect::<Result<_, _>>()?;
+        let minimum_attended = (0..operations.len())
+            .map(|next| {
+                (0..=operations.len())
+                    .filter(|&from| from != next)
+                    .map(|from| setup[from][next] + handling.transitions[from][next])
+                    .min()
+                    .expect("qualified initial transition")
+            })
+            .collect();
+        let mut shared_phases = vec![None; operations.len()];
+        let mut shared_unload = None;
+        if let Some(policy) = shared {
+            let phases = policy.phases(cell, schedule)?;
+            for (id, phase) in schedule.ordering.selected_order.iter().zip(&phases) {
+                shared_phases[ids[id.as_str()]] = Some(Box::new(phase.clone()));
+            }
+            shared_unload = phases.last().cloned().map(Box::new);
+        }
+        let mut sorted_indices = vec![0; operations.len()];
+        for (index, &(original, _)) in sorted.iter().enumerate() {
+            sorted_indices[original] = index;
+        }
+        Ok(Self {
+            copies: sorted.iter().map(|(_, operation)| operation.copy).collect(),
+            operations_per_copy: plan.seams.len(),
+            operation_indices: sorted.iter().map(|&(index, _)| index).collect(),
+            sorted_indices,
+            predecessors,
+            setup,
+            handling,
+            resources,
+            feed,
+            minimum_attended,
+            shared: shared_phases,
+            shared_unload,
+        })
+    }
+
+    fn remaining(&self, done: ordering::OperationSet, count: usize) -> Vec<usize> {
+        self.copies
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &copy)| (copy < count && !done.contains(index)).then_some(index))
+            .collect()
+    }
+
+    fn next(&self, done: ordering::OperationSet, last: Option<usize>, count: usize) -> Vec<Phase> {
+        let remaining = self.remaining(done, count);
+        if remaining.is_empty() {
+            return vec![Phase {
+                operation: None,
+                handling: self.handling.final_milliseconds[last.expect("nonempty active cell")],
+                setup: 0,
+                feed: 0,
+                shared_workholding: self.shared_unload.clone(),
+            }];
+        }
+        let occupied = self.resources.as_ref().map(|limits| limits.occupied(done));
+        let previous = last.unwrap_or(self.copies.len());
+        let mut next: Vec<_> = remaining
+            .into_iter()
+            .filter(|&next| {
+                done.contains_all(self.predecessors[next])
+                    && self.resources.as_ref().is_none_or(|limits| {
+                        limits.admits(occupied.as_ref().expect("local fixture occupancy"), next)
+                    })
+            })
+            .collect();
+        next.sort_by_key(|&next| {
+            (
+                self.setup[previous][next] + self.handling.transitions[previous][next],
+                std::cmp::Reverse(self.feed[next]),
+                next,
+            )
+        });
+        next.into_iter()
+            .map(|next| Phase {
+                operation: Some(self.operation_indices[next]),
+                handling: self.handling.transitions[previous][next],
+                setup: self.setup[previous][next],
+                feed: self.feed[next],
+                shared_workholding: self.shared[next].clone(),
+            })
+            .collect()
+    }
+
+    // Relax dependencies, inactive/finished possible predecessors and fixture occupancy. Every
+    // real remaining transition costs at least its independently minimal admitted incoming edge.
+    fn remaining_bound(
+        &self,
+        done: ordering::OperationSet,
+        last: Option<usize>,
+        count: usize,
+    ) -> Result<(u64, u64), Refusal> {
+        let remaining = self.remaining(done, count);
+        let mut attended = remaining
+            .iter()
+            .map(|&next| self.handling.final_milliseconds[next])
+            .min()
+            .unwrap_or_else(|| {
+                self.handling.final_milliseconds[last.expect("completed local work")]
+            });
+        let mut feed = 0;
+        for next in remaining {
+            attended = sum_time(attended, self.minimum_attended[next])?;
+            feed = sum_time(feed, self.feed[next])?;
+        }
+        Ok((attended, feed))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct Dispatch {
     cell: usize,
     phase: usize,
+    source: Phase,
     previous: Option<usize>,
     departure: u64,
     arrival: u64,
@@ -467,6 +649,7 @@ struct Search<'a> {
     policy: &'a Policy,
     cells: &'a [&'a Cell],
     trials: &'a [Vec<Trial>],
+    local_orders: &'a [LocalOrder],
     arrivals: Vec<u64>,
     transfers: Vec<Vec<u64>>,
     nodes: usize,
@@ -492,7 +675,7 @@ impl Search<'_> {
 
     fn proved(&self) -> bool {
         // A makespan bound cannot prove a purchasing minimum. Cost mode must inspect every
-        // retained count/order candidate, or explicitly retain an incomplete incumbent.
+        // admitted count/order candidate, or explicitly retain an incomplete incumbent.
         if self.cost.is_some() {
             return false;
         }
@@ -538,10 +721,9 @@ impl Search<'_> {
     fn dispatch(
         &self,
         state: &State,
-        counts: &[usize],
         cell: usize,
+        phase: Phase,
     ) -> Result<Option<Dispatch>, Refusal> {
-        let phase = self.phase(counts, cell, state.positions[cell]);
         let travel = state
             .previous
             .map_or(self.arrivals[cell], |from| self.transfers[from][cell]);
@@ -641,6 +823,7 @@ impl Search<'_> {
         Ok(Some(Dispatch {
             cell,
             phase: state.positions[cell],
+            source: phase,
             previous: state.previous,
             departure,
             arrival,
@@ -653,6 +836,8 @@ impl Search<'_> {
     fn initial(&self) -> State {
         State {
             positions: vec![0; self.cells.len()],
+            done: vec![ordering::OperationSet::default(); self.cells.len()],
+            last: vec![None; self.cells.len()],
             ready: self
                 .cells
                 .iter()
@@ -667,21 +852,26 @@ impl Search<'_> {
         }
     }
 
-    fn push(&self, state: &mut State, counts: &[usize], dispatch: Dispatch) -> Result<(), Refusal> {
+    fn push(&self, state: &mut State, dispatch: Dispatch) -> Result<(), Refusal> {
         if let Some(policy) = self.shared_workholding {
-            let phase = self.phase(counts, dispatch.cell, dispatch.phase);
             policy.acquire(
                 state
                     .shared_workholding
                     .as_mut()
                     .expect("shared pool state"),
-                phase
+                dispatch
+                    .source
                     .shared_workholding
                     .as_ref()
                     .expect("shared pool phase"),
                 dispatch.start,
                 dispatch.finish,
             )?;
+        }
+        if let Some(operation) = dispatch.source.operation {
+            let index = self.local_orders[dispatch.cell].sorted_indices[operation];
+            state.done[dispatch.cell].insert(index);
+            state.last[dispatch.cell] = Some(index);
         }
         state.push(dispatch);
         Ok(())
@@ -767,10 +957,11 @@ impl Search<'_> {
             if !self.tick() {
                 return Ok(None);
             }
-            let Some(dispatch) = self.dispatch(&state, counts, cell)? else {
+            let phase = self.phase(counts, cell, state.positions[cell]).clone();
+            let Some(dispatch) = self.dispatch(&state, cell, phase)? else {
                 return Ok(None);
             };
-            self.push(&mut state, counts, dispatch)?;
+            self.push(&mut state, dispatch)?;
         }
     }
 
@@ -778,18 +969,23 @@ impl Search<'_> {
         let mut finish = 0;
         let mut attended = 0;
         for (cell, &count) in counts.iter().enumerate() {
-            if count == 0 {
+            if count == 0
+                || state.positions[cell] > count * self.local_orders[cell].operations_per_copy
+            {
                 continue;
             }
-            let mut remaining = 0;
-            for phase in &self.trials[cell][count - 1].phases[state.positions[cell]..] {
-                remaining = sum_time(remaining, phase.duration()?)?;
-                attended = sum_time(attended, phase.attended()?)?;
-            }
+            let (local_attended, feed) = self.local_orders[cell].remaining_bound(
+                state.done[cell],
+                state.last[cell],
+                count,
+            )?;
+            let remaining = sum_time(local_attended, feed)?;
+            attended = sum_time(attended, local_attended)?;
             if remaining > MAX_EXACT_MILLISECONDS - state.ready[cell] {
                 return Ok(None);
             }
-            let end = sum_time(state.ready[cell], remaining)?;
+            let end =
+                sum_time(state.ready[cell], remaining)?.max(self.trials[cell][count - 1].lower);
             if self.cells[cell]
                 .available_until_milliseconds
                 .is_some_and(|limit| end > limit)
@@ -850,24 +1046,35 @@ impl Search<'_> {
             return Ok(());
         }
         for cell in choices {
-            if !self.tick() {
-                break;
+            let phases =
+                self.local_orders[cell].next(state.done[cell], state.last[cell], counts[cell]);
+            for phase in phases {
+                if !self.tick() {
+                    break;
+                }
+                let Some(dispatch) = self.dispatch(state, cell, phase)? else {
+                    continue;
+                };
+                let old_ready = state.ready[cell];
+                let old_free = state.free;
+                let old_previous = state.previous;
+                let old_done = state.done[cell];
+                let old_last = state.last[cell];
+                let old_workholding = state.shared_workholding.clone();
+                self.push(state, dispatch)?;
+                self.interleave(state, counts)?;
+                state.steps.pop();
+                state.positions[cell] -= 1;
+                state.ready[cell] = old_ready;
+                state.free = old_free;
+                state.previous = old_previous;
+                state.done[cell] = old_done;
+                state.last[cell] = old_last;
+                state.shared_workholding = old_workholding;
+                if self.stopped() || self.proved() {
+                    break;
+                }
             }
-            let Some(dispatch) = self.dispatch(state, counts, cell)? else {
-                continue;
-            };
-            let old_ready = state.ready[cell];
-            let old_free = state.free;
-            let old_previous = state.previous;
-            let old_workholding = state.shared_workholding.clone();
-            self.push(state, counts, dispatch)?;
-            self.interleave(state, counts)?;
-            state.steps.pop();
-            state.positions[cell] -= 1;
-            state.ready[cell] = old_ready;
-            state.free = old_free;
-            state.previous = old_previous;
-            state.shared_workholding = old_workholding;
             if self.stopped() || self.proved() {
                 break;
             }
@@ -916,9 +1123,9 @@ impl Search<'_> {
             }
             if count > 0 {
                 let trial = &self.trials[cell][count - 1];
-                let finish = trial
-                    .finish
-                    .expect("shared-operator count relaxation is contiguous");
+                // A retained serial incumbent is an upper bound, so it cannot exclude another
+                // local order. Only the independent valid work bound may prune a count here.
+                let finish = trial.lower;
                 if self.cells[cell]
                     .available_until_milliseconds
                     .is_some_and(|end| finish > end)
@@ -946,6 +1153,8 @@ impl Search<'_> {
 
 struct State {
     positions: Vec<usize>,
+    done: Vec<ordering::OperationSet>,
+    last: Vec<Option<usize>>,
     ready: Vec<u64>,
     previous: Option<usize>,
     free: u64,
@@ -970,6 +1179,7 @@ pub(super) fn evaluate(
     parallel: &super::Policy,
     cells: &[&Cell],
     trials: &[Vec<Trial>],
+    local_orders: &[LocalOrder],
     copies: usize,
     independent_counts: &[usize],
     independent_lower: u64,
@@ -1039,6 +1249,7 @@ pub(super) fn evaluate(
         policy,
         cells,
         trials,
+        local_orders,
         arrivals,
         transfers,
         nodes: 0,
@@ -1071,23 +1282,33 @@ pub(super) fn evaluate(
     let proved = search.proved();
     let selected = search.best.ok_or_else(|| Refusal::new(RefusalCode::NotConverged,
         if deadline.is_some() {
-            "no complete shared-operator assignment was found inside the qualified windows and complete-job deadline; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved"
+            "no complete shared-operator assignment was found inside the qualified windows and complete-job deadline; the bounded joint operation-order and dispatch search has no usable incumbent"
         } else {
-            "no complete shared-operator assignment was found inside the qualified cell/operator windows; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved"
+            "no complete shared-operator assignment was found inside the qualified cell/operator windows; the bounded joint operation-order and dispatch search has no usable incumbent"
         })
         .repair("increase the bounded serial and shared-operator search allowances")
         .repair("supply qualified longer availability or a different operator/cell protocol"))?;
     let baseline_replaced = baseline.is_none();
+    let cost_stopped = search
+        .cost
+        .as_ref()
+        .is_some_and(|cost| cost.assignment_exhausted || cost.order_exhausted);
+    let complete = !cost_stopped && (!search.exhausted || proved);
+    let unresolved_cell_counts = if complete {
+        0
+    } else {
+        super::unresolved_cell_counts(cells, trials, deadline)
+    };
     let feed_time_search = parallel.feed_time_search.as_ref().map(|feed| {
         let lower_feed = feed_lower.expect("requested feed bound");
         super::FeedTimeReport {
-            search_scope: "shared_operator_retained_serial_incumbents/1",
+            search_scope: "shared_operator_bounded_joint_operation_order_search/1",
             completion_deadline_milliseconds: feed.completion_deadline_milliseconds,
             selected_feed_milliseconds: selected.feed,
             lower_bound_feed_milliseconds: lower_feed,
             lower_bound_attained: selected.feed == lower_feed,
             optimality_proven: selected.feed == lower_feed,
-            unresolved_cell_counts: super::unresolved_cell_counts(cells, trials, deadline),
+            unresolved_cell_counts,
             baseline_replaced,
         }
     });
@@ -1095,29 +1316,23 @@ pub(super) fn evaluate(
         let complete = !search.exhausted && !cost.assignment_exhausted && !cost.order_exhausted;
         super::ThreadOrderReport {
             currency: cost.currency.clone(),
-            search_scope: "shared_operator_retained_serial_incumbents/1",
+            search_scope: "shared_operator_bounded_joint_operation_order_search/1",
             completion_deadline_milliseconds: deadline,
             selected_order_cost: selected.order_cost,
             search_nodes: cost.nodes,
             search_complete: complete,
             order_evaluations: cost.prices.len(),
             unresolved_assignments: cost.unresolved,
-            unresolved_cell_counts: super::unresolved_cell_counts(cells, trials, deadline),
+            unresolved_cell_counts,
             baseline_replaced,
             assignment_budget_exhausted: cost.assignment_exhausted,
             order_budget_exhausted: cost.order_exhausted,
-            // Feasibility of another local serial order was not searched. Even a complete
-            // retained-order cost search cannot certify the unrestricted coupled problem.
-            optimality_proven: false,
-            retained_order_optimality_proven: Some(
-                complete && selected.order_cost.is_some() && cost.unresolved == 0,
-            ),
+            // Every admitted local order and dispatch is now in scope. Price refusals and either
+            // work cap still prevent a minimum claim, even when a complete schedule survives.
+            optimality_proven: complete && selected.order_cost.is_some() && cost.unresolved == 0,
+            retained_order_optimality_proven: None,
         }
     });
-    let cost_stopped = search
-        .cost
-        .as_ref()
-        .is_some_and(|cost| cost.assignment_exhausted || cost.order_exhausted);
     Ok(Outcome {
         baseline: baseline.unwrap_or_else(|| selected.clone()),
         selected,
@@ -1125,7 +1340,7 @@ pub(super) fn evaluate(
         lower,
         nodes: search.nodes,
         bound_work,
-        complete: !cost_stopped && (!search.exhausted || proved),
+        complete,
         exhausted: search.exhausted && !proved,
         feed_time_search,
         thread_order_search,
@@ -1135,10 +1350,72 @@ pub(super) fn evaluate(
 impl Candidate {
     fn apply(
         &self,
-        policy: &Policy,
+        plan: &SewPlan,
+        cell_plans: &[super::CellPlan],
+        cells: &[&Cell],
         assignment: &mut Assignment,
         trials: &[Vec<Trial>],
     ) -> Result<Timeline, Refusal> {
+        let parallel = plan
+            .options
+            .production
+            .as_ref()
+            .expect("production caller")
+            .parallel
+            .as_ref()
+            .expect("parallel caller");
+        let policy = parallel
+            .shared_operator
+            .as_ref()
+            .expect("shared operator caller");
+        let mut replayed_phases = Vec::with_capacity(cells.len());
+        assignment.setup_milliseconds = 0;
+        assignment.handling_milliseconds = 0;
+        for (index, cell) in cells.iter().enumerate() {
+            let Some(schedule) = assignment.cells[index].schedule.as_mut() else {
+                replayed_phases.push(Vec::new());
+                continue;
+            };
+            let source = cell_plans
+                .iter()
+                .find(|source| source.cell == cell.id)
+                .map_or(plan, |source| source.plan.as_ref());
+            let order: Vec<_> = self
+                .steps
+                .iter()
+                .filter(|step| step.cell == index)
+                .filter_map(|step| step.source.operation)
+                .map(|operation| schedule.operations[operation].id.clone())
+                .collect();
+            if order != schedule.ordering.selected_order {
+                super::super::replay_order(source, cell, schedule, &order)?;
+            }
+            replayed_phases.push(phases(
+                source,
+                cell,
+                schedule,
+                trials[index][self.counts[index] - 1].feed_milliseconds,
+                parallel.shared_workholding.as_ref(),
+            )?);
+            assignment.setup_milliseconds = sum_time(
+                assignment.setup_milliseconds,
+                schedule
+                    .ordering
+                    .timing
+                    .as_ref()
+                    .expect("setup replay")
+                    .selected_setup_milliseconds,
+            )?;
+            assignment.handling_milliseconds = sum_time(
+                assignment.handling_milliseconds,
+                schedule
+                    .handling
+                    .as_ref()
+                    .expect("handling replay")
+                    .selected
+                    .total_milliseconds,
+            )?;
+        }
         let mut timeline = Timeline {
             steps: Vec::with_capacity(self.steps.len()),
             transfer_milliseconds: 0,
@@ -1156,8 +1433,7 @@ impl Candidate {
         let mut positions = vec![0; assignment.cells.len()];
         for dispatch in &self.steps {
             let cell = &assignment.cells[dispatch.cell];
-            let phase =
-                &trials[dispatch.cell][self.counts[dispatch.cell] - 1].phases[dispatch.phase];
+            let phase = &dispatch.source;
             let schedule = cell
                 .schedule
                 .as_ref()
@@ -1183,7 +1459,8 @@ impl Candidate {
                         .milliseconds,
                 ),
             };
-            if dispatch.previous != previous
+            if replayed_phases[dispatch.cell].get(dispatch.phase) != Some(phase)
+                || dispatch.previous != previous
                 || dispatch.phase != positions[dispatch.cell]
                 || dispatch.departure < free
                 || policy.availability_calendars.is_none() && dispatch.departure != free
@@ -1295,23 +1572,36 @@ impl Candidate {
 impl Outcome {
     pub(super) fn report(
         &self,
-        policy: &Policy,
+        plan: &SewPlan,
+        cell_plans: &[super::CellPlan],
+        cells: &[&Cell],
         baseline: &mut Assignment,
         selected: &mut Assignment,
         trials: &[Vec<Trial>],
     ) -> Result<Report, Refusal> {
+        let policy = plan
+            .options
+            .production
+            .as_ref()
+            .expect("production caller")
+            .parallel
+            .as_ref()
+            .expect("parallel caller")
+            .shared_operator
+            .as_ref()
+            .expect("shared operator caller");
         Ok(Report {
-            schema: if policy.availability_calendars.is_some() {
-                "ftx-sewing-shared-operator/2"
-            } else {
-                "ftx-sewing-shared-operator/1"
-            },
+            schema: "ftx-sewing-shared-operator/3",
             operator: policy.operator.clone(),
             availability_calendars: policy.availability_calendars.clone(),
-            baseline: self.baseline.apply(policy, baseline, trials)?,
-            selected: self.selected.apply(policy, selected, trials)?,
+            baseline: self
+                .baseline
+                .apply(plan, cell_plans, cells, baseline, trials)?,
+            selected: self
+                .selected
+                .apply(plan, cell_plans, cells, selected, trials)?,
             baseline_replaced: self.baseline_replaced,
-            serial_order_scope: "retained_serial_incumbents/1",
+            serial_order_scope: "bounded_joint_operation_order_search/1",
             search_nodes: self.nodes,
             search_complete: self.complete,
             budget_exhausted: self.exhausted,

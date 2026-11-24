@@ -289,7 +289,7 @@ impl OperationSet {
         self
     }
 
-    fn contains_all(self, other: Self) -> bool {
+    pub(super) fn contains_all(self, other: Self) -> bool {
         self.0
             .iter()
             .zip(other.0)
@@ -654,6 +654,127 @@ pub(super) fn optimize_operations(
     feed_seconds: f64,
 ) -> Result<Report, Refusal> {
     optimize_operations_with_resources(policy, baseline_passes, feed_seconds, None, None, None)
+}
+
+// Joint cell/operator scheduling uses the same qualified directed setup matrix as serial search.
+pub(super) fn setup_matrix(policy: &Policy, setups: &[Setup]) -> Result<Vec<Vec<u64>>, Refusal> {
+    policy
+        .setup_times
+        .as_ref()
+        .ok_or_else(|| bad("joint operation ordering requires qualified setup times"))?
+        .matrix(
+            setups,
+            policy
+                .initial_setup
+                .as_ref()
+                .ok_or_else(|| bad("joint operation ordering requires an initial setup"))?,
+        )
+}
+
+/// Replay a joint scheduler's complete local order without doing another unbudgeted search.
+/// The serial lower bounds retain their original meaning even when overlapping feed favors a
+/// locally slower order. Every prerequisite and finite fixture capacity is checked again here.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn replay_production_order(
+    policy: &Policy,
+    operations: &[Operation<'_>],
+    resources: Option<&ResourceLimits>,
+    handling: &HandlingCosts,
+    selected: &[String],
+    feed_seconds: f64,
+    report: &mut Report,
+) -> Result<(), Refusal> {
+    let mut operations = operations.to_vec();
+    operations.sort_by_key(|operation| operation.id);
+    let ids: BTreeMap<_, _> = operations
+        .iter()
+        .enumerate()
+        .map(|(index, operation)| (operation.id, index))
+        .collect();
+    if selected.len() != operations.len()
+        || handling
+            .ids
+            .iter()
+            .map(String::as_str)
+            .ne(operations.iter().map(|op| op.id))
+        || resources.is_some_and(|limits| {
+            limits
+                .ids
+                .iter()
+                .map(String::as_str)
+                .ne(operations.iter().map(|op| op.id))
+        })
+    {
+        return Err(bad(
+            "joint operation replay does not match its complete admitted graph",
+        ));
+    }
+    let setups: Vec<_> = operations
+        .iter()
+        .map(|operation| Setup {
+            needle: operation.needle.to_string(),
+            thread: operation.thread.to_string(),
+        })
+        .collect();
+    let setup = setup_matrix(policy, &setups)?;
+    let mut mask = OperationSet::default();
+    let mut last = operations.len();
+    let mut previous = policy
+        .initial_setup
+        .as_ref()
+        .expect("qualified initial setup");
+    let mut changes = Changes::default();
+    let mut setup_milliseconds = 0;
+    let mut handling_milliseconds = 0;
+    for id in selected {
+        let &next = ids
+            .get(id.as_str())
+            .ok_or_else(|| bad("joint operation replay contains an unknown operation"))?;
+        if mask.contains(next)
+            || operations[next].after.iter().any(|id| {
+                ids.get(id.as_str())
+                    .is_none_or(|&index| !mask.contains(index))
+            })
+            || resources.is_some_and(|limits| !limits.admits(&limits.occupied(mask), next))
+        {
+            return Err(bad(
+                "joint operation replay violates dependencies or fixture capacity",
+            ));
+        }
+        changes.needle_changes += usize::from(previous.needle != setups[next].needle);
+        changes.thread_changes += usize::from(previous.thread != setups[next].thread);
+        setup_milliseconds += setup[last][next];
+        handling_milliseconds += handling.transitions[last][next];
+        mask.insert(next);
+        last = next;
+        previous = &setups[next];
+    }
+    if mask != OperationSet::all(operations.len())
+        || resources.is_some_and(|limits| limits.occupied(mask).iter().any(|&held| held != 0))
+    {
+        return Err(bad(
+            "joint operation replay leaves unfinished work or held fixtures",
+        ));
+    }
+    handling_milliseconds += handling.final_milliseconds[last];
+    changes.total_changes = changes.needle_changes + changes.thread_changes;
+    report.selected_order = selected.to_vec();
+    report.selected_changes = changes;
+    let timing = report.timing.as_mut().expect("qualified production timing");
+    timing.selected_setup_milliseconds = setup_milliseconds;
+    timing.feed_and_setup_seconds = feed_seconds + setup_milliseconds as f64 / 1000.0;
+    let timing = report
+        .handling_timing
+        .as_mut()
+        .expect("qualified production handling");
+    timing.selected_handling_milliseconds = handling_milliseconds;
+    timing.selected_modeled_production_seconds =
+        feed_seconds + (setup_milliseconds + handling_milliseconds) as f64 / 1000.0;
+    report.optimality_proven = setup_milliseconds + handling_milliseconds
+        == timing.lower_bound_setup_and_handling_milliseconds;
+    report.search_complete &= report.optimality_proven;
+    report.tie_break = "The complete shared-operator search selects this local order jointly with other cells. Serial productive-work bounds remain independent of shared-worker completion and do not assert that the selected local order minimizes serial work.";
+    Ok(())
 }
 
 // Resource-qualified callers admit the graph and source evidence. A source-order seed can violate

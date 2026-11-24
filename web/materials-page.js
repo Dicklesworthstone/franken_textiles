@@ -3988,6 +3988,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const heterogeneous = Boolean(report.cell_plans?.length);
   const windowed = Boolean(report.availability);
   const operator = report.shared_operator;
+  const jointOrderSearch = operator?.serial_order_scope === "bounded_joint_operation_order_search/1";
   const orderSearch = report.thread_order_search;
   const feedSearch = report.feed_time_search;
   const calendars = operator?.availability_calendars;
@@ -4021,7 +4022,8 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       "The feed minimum is separate from the minimum completion time: a selected allocation can finish later while using less feed work. " +
       "Any declared deadline includes complete cell setup, handling, feed and final unloading. " +
       (operator ? "The selected timeline enforces shared labor, calendars and fixture pools. The feed lower bound relaxes those resources; " +
-        "exhausting the retained-order dispatch search alone cannot prove a global feed minimum. " : "") +
+        (jointOrderSearch ? "joint operation-order search completion alone is separate from the independent feed-minimum proof. " :
+          "exhausting the retained-order dispatch search alone cannot prove a global feed minimum. ") : "") +
       "Unresolved inner schedules cannot supply an unverified feasible allocation; attaining the independent lower bound proves the feed minimum.";
     parent.append(scope);
   }
@@ -4030,13 +4032,13 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       ["Currency", "Selected order cost", "Inclusive deadline (ms)", "Count search complete", "Cost minimum proved",
         "Count search nodes", "Complete order evaluations", "Unresolved orders", "Unresolved cell counts",
         "Count work limit reached", "Order work limit reached",
-        ...(operator ? ["Retained-order cost minimum proved"] : [])]);
+        ...(operator && !jointOrderSearch ? ["Retained-order cost minimum proved"] : [])]);
     cells(orders, [orderSearch.currency, metric(orderSearch.selected_order_cost),
       orderSearch.completion_deadline_milliseconds == null ? "None" : metric(orderSearch.completion_deadline_milliseconds),
       String(orderSearch.search_complete), String(orderSearch.optimality_proven), metric(orderSearch.search_nodes),
       metric(orderSearch.order_evaluations), metric(orderSearch.unresolved_assignments), metric(orderSearch.unresolved_cell_counts),
       String(orderSearch.assignment_budget_exhausted), String(orderSearch.order_budget_exhausted),
-      ...(operator ? [typeof orderSearch.retained_order_optimality_proven === "boolean"
+      ...(operator && !jointOrderSearch ? [typeof orderSearch.retained_order_optimality_proven === "boolean"
         ? String(orderSearch.retained_order_optimality_proven) : "Unknown"] : [])]);
   }
   const machines = table(parent, `${label}: selected physical cells`,
@@ -4129,10 +4131,12 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   if (operator) {
     const labor = table(parent, `${label}: shared operator work`,
       ["Operator", "Busy (s)", "Travel (s)", "Waiting (s)", ...(calendars ? ["Unoccupied calendar delay (s)"] : []),
-        "Restricted search complete", "Operator work limit reached"]);
+        ...(jointOrderSearch ? ["Joint order search nodes"] : []),
+        jointOrderSearch ? "Joint order search complete" : "Restricted search complete", "Operator work limit reached"]);
     cells(labor, [operator.operator, metric(seconds(operator.selected?.busy_milliseconds)),
       metric(seconds(operator.selected?.transfer_milliseconds)), metric(seconds(operator.selected?.waiting_milliseconds)),
       ...(calendars ? [metric(seconds(operator.selected?.calendar_delay_milliseconds))] : []),
+      ...(jointOrderSearch ? [metric(operator.search_nodes)] : []),
       String(operator.search_complete), String(operator.budget_exhausted)]);
     if (calendars) {
       const openings = table(parent, `${label}: qualified operator and cell calendars`,
@@ -4171,7 +4175,12 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       (calendars ? "Each worker trip, destination wait and attended phase fits one qualified opening; each machine phase, including its full feed, fits one cell opening. " +
         "Autonomous feed may continue through an operator break. Calendar delay before departure is unoccupied and separate from destination waiting. " +
         "Existing garment and fixture holds remain active through breaks. " : "") +
-      "The operator search considers the retained serial operation orders; completing that search alone does not prove an unrestricted joint optimum. " +
+      (jointOrderSearch ?
+        "The operator search chooses dependency-ready local operations and cell dispatches together, preserving finite fixture lifecycles. " +
+        "The selected cell orders and complete attended timeline are the actual searched schedule, including final unloading. " +
+        "A work limit retains a complete feasible incumbent; an unfinished search does not prove that other operation orders are infeasible. " +
+        "Minimum completion time remains proved only by attaining the independent global lower bound. " :
+        "The operator search considers the retained serial operation orders; completing that search alone does not prove an unrestricted joint optimum. ") +
       (pools ? "Cell-only window receipts ignore shared operator and fixture contention; the selected timeline enforces cell, operator and pool limits. " :
         "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. ") +
       "Each positive feed operation keeps its own upward-rounded time slot, including after attended work or waiting. " :
@@ -4191,7 +4200,9 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       (orderSearch ? "Complete source-qualified thread orders select the allocation within the explicit deadline. Cost proof is separate from makespan proof; missing orders and unresolved cell/count timing withhold a cost minimum. " +
         "Every supplier minimum, increment and tier applies to the combined order. " +
         (operator ? "Cost candidates must complete the actual shared-operator timeline, including final unloading, calendars and fixture holds. " +
-          "The retained-order cost proof covers the selected serial operation orders and their dispatch interleavings; other serial orders remain outside that proof. " : "") :
+          (jointOrderSearch ?
+            "A cost minimum requires complete joint count, operation-order and dispatch exploration with every relevant order fully priced and proved. " :
+            "The retained-order cost proof covers the selected serial operation orders and their dispatch interleavings; other serial orders remain outside that proof. ") : "") :
         feedSearch ? "The allocation minimizes total scheduled feed work within any declared completion deadline. Thread purchasing cost is a reported consequence, and feed and makespan proofs remain separate. " :
         "The allocation minimizes elapsed completion; its thread purchasing cost and total feed are reported consequences, not separately optimized quantities. ") : "") +
     (operator ? "This calculation does not qualify garment transfers, unmodeled shared resources or hardware execution." :
@@ -4384,6 +4395,9 @@ function sewingResult(parent, r) {
     parallel_feed_optimality_proven: parallel?.feed_time_search?.optimality_proven,
     parallel_calendar_resources: parallel?.availability_calendars ? Object.keys(parallel.availability_calendars.resources).length : undefined,
     parallel_calendar_order_scope: parallel?.calendar_order_scope,
+    parallel_operator_order_scope: parallel?.shared_operator?.serial_order_scope,
+    parallel_operator_search_nodes: parallel?.shared_operator?.search_nodes,
+    parallel_operator_search_complete: parallel?.shared_operator?.search_complete,
     routed_makespan_seconds: routing ? routing.selected.makespan_milliseconds / 1000 : undefined,
     routed_lower_bound_seconds: routing ? routing.lower_bound_makespan_milliseconds / 1000 : undefined,
     routed_optimality_proven: routing?.optimality_proven,

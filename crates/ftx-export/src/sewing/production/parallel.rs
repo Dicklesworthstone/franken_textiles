@@ -154,7 +154,8 @@ pub struct ThreadOrderReport {
     /// Examined orders with missing evidence or unproved supplier allocation.
     pub unresolved_assignments: usize,
     /// Cell/count incumbents missing a window or deadline which their valid lower bound still admits.
-    /// These counts remain possible under another serial order and prevent a global cost proof.
+    /// These counts remain possible under another serial order until the complete joint search
+    /// resolves the objective; a completed joint order/dispatch search reports zero here.
     pub unresolved_cell_counts: usize,
     /// The all-copies-on-first-cell baseline missed availability or the cost-search deadline.
     pub baseline_replaced: bool,
@@ -165,8 +166,8 @@ pub struct ThreadOrderReport {
     /// All feasible counts were covered and every relevant complete order was available and proved.
     /// This is a cost proof, never a minimum makespan or empirical factory claim.
     pub optimality_proven: bool,
-    /// Shared-labor proof restricted to count allocations and interleavings of retained serial
-    /// orders. Even exhaustion cannot exclude cheaper feasibility under another cell-local order.
+    /// Legacy shared-labor proof restricted to retained serial orders. Joint order/dispatch reports
+    /// omit this field and use the ordinary complete-objective proof above.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retained_order_optimality_proven: Option<bool>,
 }
@@ -415,6 +416,7 @@ pub struct Report {
     /// `/6` operator calendars; `/7` configured-cell thread-order allocation;
     /// `/8` independent configured-cell exact feed allocation; `/9` shared-operator feed allocation;
     /// `/10` independently staffed cell calendars, with complete per-operation feed slots.
+    /// `/11` shared-operator purchasing; `/12` joint local operation orders and operator dispatches.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -1481,6 +1483,7 @@ pub(super) fn evaluate(
         }
     }
     let mut trials = Vec::with_capacity(cells.len());
+    let mut local_orders = Vec::with_capacity(cells.len());
     let mut search_nodes = 0;
     let mut search_complete = true;
     let mut budget_exhausted = false;
@@ -1492,7 +1495,15 @@ pub(super) fn evaluate(
         let node_limit = cell.ordering.max_search_nodes.min(reservation.per_trial);
         let mut row = Vec::with_capacity(copies);
         for count in 1..=copies {
-            let (receipt, _) = trial(source, cell, count, node_limit, pattern, policy)?;
+            let (receipt, schedule) = trial(source, cell, count, node_limit, pattern, policy)?;
+            if count == copies && policy.shared_operator.is_some() {
+                local_orders.push(operator::LocalOrder::compile(
+                    source,
+                    cell,
+                    &schedule,
+                    policy.shared_workholding.as_ref(),
+                )?);
+            }
             search_nodes += receipt.search_nodes;
             search_complete &= receipt.search_complete;
             budget_exhausted |= receipt.budget_exhausted;
@@ -1503,9 +1514,18 @@ pub(super) fn evaluate(
     let (incumbent, incumbent_work) = allocate(&trials, &cells, copies, false, None);
     let (bound, bound_work) = allocate(&trials, &cells, copies, true, None);
     search_nodes += incumbent_work + bound_work;
-    let Some((mut cost, mut counts)) = incumbent else {
-        return Err(if bound.is_some() {
-            Refusal::new(
+    let (mut cost, mut counts) = match incumbent {
+        Some(incumbent) => incumbent,
+        None if policy.shared_operator.is_some() && bound.is_some() => {
+            // An unfinished local serial solve cannot exclude a different joint order. Its valid
+            // bound admits continued operator search, but this vector is only a seed, not a receipt.
+            let mut counts = vec![0; cells.len()];
+            counts[0] = copies;
+            (bound.as_ref().expect("available lower bound").0, counts)
+        }
+        None => {
+            return Err(if bound.is_some() {
+                Refusal::new(
                 RefusalCode::NotConverged,
                 if policy.availability_calendars.is_some() {
                     "no complete operation order was found inside the qualified cell calendars; unfinished calendar searches still permit a feasible assignment, so production infeasibility is not proved"
@@ -1515,10 +1535,11 @@ pub(super) fn evaluate(
             )
             .repair("increase the bounded serial and shared parallel search allowances")
             .repair("supply independently qualified longer availability windows or additional cells")
-        } else {
-            bad("qualified cell availability windows cannot accommodate all garment copies: even the complete allocation over valid serial finish lower bounds is infeasible")
+            } else {
+                bad("qualified cell availability windows cannot accommodate all garment copies: even the complete allocation over valid serial finish lower bounds is infeasible")
                 .repair("supply independently qualified longer availability windows or additional cells, or reduce the production quantity")
-        });
+            });
+        }
     };
     let mut lower_bound_makespan_milliseconds =
         bound.expect("a feasible incumbent has a valid bound").0;
@@ -1532,6 +1553,7 @@ pub(super) fn evaluate(
                 policy,
                 &cells,
                 &trials,
+                &local_orders,
                 copies,
                 &counts,
                 lower_bound_makespan_milliseconds,
@@ -1713,10 +1735,9 @@ pub(super) fn evaluate(
         .as_ref()
         .map(|result| {
             result.report(
-                policy
-                    .shared_operator
-                    .as_ref()
-                    .expect("requested shared operator"),
+                plan,
+                &cell_plans,
+                &cells,
                 &mut baseline,
                 &mut selected,
                 &trials,
@@ -1776,8 +1797,8 @@ pub(super) fn evaluate(
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if thread_order_search.is_some() && shared_operator.is_some() {
-            "ftx-sewing-parallel/11"
+        schema: if shared_operator.is_some() {
+            "ftx-sewing-parallel/12"
         } else if policy.availability_calendars.is_some() {
             "ftx-sewing-parallel/10"
         } else if feed_time_search.is_some() && shared_operator.is_some() {

@@ -7,10 +7,10 @@ prices. Exact common-yarn demand is aggregated before supplier rounding, tiers, 
 allocation. Cached complete count prices can prune equivalent dispatches; a faster schedule cannot
 prune an unpriced assignment. Cost ties prefer earlier completion. Separate count, operator and
 pricing caps retain a complete feasible incumbent, with unavailable cost kept distinct from zero.
-Plan `/38`, production `/26` and parallel `/11` retain the full source-bound result. The optional
-`retained_order_optimality_proven` covers only retained cell-local orders and their dispatch
-interleavings after complete exploration and proved prices. Unrestricted cost proof stays false;
-makespan proof remains independently bound. Recipe selection propagates this limitation and its
+Plan `/39`, production `/27` and parallel `/12` retain the full source-bound result. Allocation,
+ready operation choices and dispatch interleavings share the existing bounded search. A cost proof
+requires complete joint exploration and proved prices for every relevant count allocation;
+makespan proof remains independently bound. Recipe selection propagates the search scope and its
 deadline, while native, portable and material-study consumers replay the same selected stitches
 and whole order. Independent enumeration and resource/cap regressions are in `sewing_parallel`;
 native/portable replay is in `sewing_production_workflow`. No factory-performance or machine
@@ -33,10 +33,10 @@ resource calendars and optional shared fixture pools, retaining `ceil_operation_
 Only the coupled dispatcher supplies feasible complete assignments, including the final-unload
 deadline. Count relaxations use valid finish bounds and exact feed costs while relaxing contention
 only for lower bounds. Lexicographic feed/makespan search stops early only when both bounds are
-attained; feed proof itself requires only equality with its independent bound. Restricted-order
-exhaustion cannot prove unrestricted optimality or infeasibility. A proved feed minimum can coexist
-with an exhausted secondary makespan search. Plan `/36`, production `/24` and parallel `/9`
-retain `shared_operator_retained_serial_incumbents/1`, exact sources, schedules and separate proofs.
+attained; feed proof itself requires only equality with its independent bound. Joint operation-order
+search preserves each cell's prerequisite and fixture constraints. A proved feed minimum can coexist
+with an exhausted secondary makespan search. Plan `/39`, production `/27` and parallel `/12`
+retain `shared_operator_bounded_joint_operation_order_search/1`, exact sources and separate proofs.
 Selection, native/portable stitch replay and material comparison preserve that scope; browser output
 names per-operation rounding. Independent enumeration, pool/calendar/deadline and source mutation
 tests are in `sewing_parallel`, `comparison::sewing_feed_tests` and `sewing_production_workflow`.
@@ -525,14 +525,16 @@ cells. Travel, waiting, handling, setup and final unloading hold that one person
 qualified feed releases them. The new `ceil_operation_feed_milliseconds/1` convention reserves every
 positive operation's complete feed ceiling independently, so previous rounding never permits early
 machine reuse after attended work. Each used cell and the operator must finish inside their inclusive
-windows. Parallel `/4` retains both complete exclusive attendance/overlapping-feed timelines and
+windows. Parallel `/12` retains both complete exclusive attendance/overlapping-feed timelines and
 actual global garment mappings; ordinary cell source geometry, stitches and combined purchasing remain
-the same authorities. Allocation and interleaving use retained serial incumbents, with all seeds and
-extensions charged to a reserved portion of the existing whole-job cap. Independent cell-finish and
-complete attended-work DPs supply unrestricted lower bounds; restricted exhaustion alone proves neither
-global optimality nor infeasibility. A cap must cover a complete first-cell seed. The optional compact
-phase cache contains only bounded integer durations and source indices, not duplicated station or
-fixture histories. Omission preserves independent-mode wire output. Synthetic exhaustive, travel,
+the same authorities. Allocation, ready-operation choices and interleaving share a reserved portion
+of the existing whole-job cap. Complete serial incumbents supply deterministic seeds; they do not
+restrict later choices. Qualified setup/handling transitions, prerequisites and finite local/common
+fixtures remain authoritative, and selected cell reports replay the actual chosen orders. Independent
+cell-finish and complete attended-work DPs supply unrestricted lower bounds; exhaustion of a work
+allowance cannot prove infeasibility. A cap must cover a complete first-cell seed. Compact compiled
+transition data is shared across each cell's copy-count choices without duplicating station geometry.
+Omission preserves independent-mode wire output. Synthetic exhaustive, travel,
 deadline, conservative submillisecond feed, source invalidation and native/portable study regressions
 exercise this model. Source timing does not establish safe physical autonomy or hardware permission.
 Tests: exhaustive and bounded `sewing_parallel`, native/portable `sewing_production_workflow`.
@@ -545,8 +547,8 @@ and complete machine handling/setup/feed phases fit one opening; autonomous feed
 through an operator break. Unoccupied delay before departure is reported separately. Qualified
 inactive garment retention, source setup state and persistent fixture holds survive gaps; calendar
 and pool admission are iterated to a bounded fixed point. Exact phase/travel/calendar/occupancy replay
-checks both complete returned schedules. Parallel `/6` and shared-operator `/2` retain the complete
-policy, including idle resources; omitted calendars preserve prior output. Feed and thread comparison
+checks both complete returned schedules. Parallel `/12` and shared-operator `/3` retain the complete
+policy, including idle resources. Feed and thread comparison
 identities retain calendar-constrained allocation and outer recipe domains, even when readings happen
 to match. `sewing_parallel::shared_operator_calendars_*` covers inclusive boundaries, autonomous feed,
 travel, fixture retention, bounded incumbents, invalid sources and actual manufacturing comparisons;
@@ -559,11 +561,11 @@ estimate consent, and the explicit feed-completion/access-in-handling release pr
 The actual search acquires units before handling, retains cross-operation holds through waiting and
 feed, and releases them at their declared release operation's feed completion. It waits for pending
 releases or rejects blocked dispatch branches. All local lifecycles and cell/operator windows remain
-enforced. Parallel `/5` retains baseline and selected global-copy reservation intervals; an independent
+enforced. Parallel `/12` retains baseline and selected global-copy reservation intervals; an independent
 sweep verifies capacities, same-time release-before-acquire ordering and zero final inventory held.
 Unbound local resources remain independent and omission preserves prior output. Ordinary selected
-stitch geometry, consumption, purchasing and study metrics use the constrained assignment. Restricted
-serial-incumbent search never proves unrestricted infeasibility merely because pooled dispatch fails.
+stitch geometry, consumption, purchasing and study metrics use the constrained assignment. Bounded
+joint operation-order search never treats an exhausted allowance as an infeasibility proof.
 No physical pool access, inter-cell garment transport, factory timing or machine permission is inferred.
 Tests: capacity, spanning holds, source invalidation, windows and bounded replay in `sewing_parallel`;
 actual native/portable geometry, inventory, study and replay in `sewing_production_workflow`.

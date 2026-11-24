@@ -204,6 +204,49 @@ pub(super) fn evaluate(
     evaluate_in_calendar(plan, policy, pattern, None)
 }
 
+// Rebuild the ordinary source-qualified receipts for a jointly selected cell-local order. The
+// caller has already charged its order/dispatch search; this is validation and deterministic replay.
+fn replay_order(
+    plan: &SewPlan,
+    cell: &parallel::Cell,
+    schedule: &mut Report,
+    selected: &[String],
+) -> Result<(), Refusal> {
+    let workholding = cell
+        .workholding
+        .as_ref()
+        .map(|policy| workholding::compile(plan, policy, &mut schedule.operations))
+        .transpose()?;
+    let handling = handling::compile(plan, &cell.handling, &schedule.operations)?;
+    let views: Vec<_> = schedule
+        .operations
+        .iter()
+        .map(|operation| {
+            let pass = &plan.seams[operation.seam_index].pass;
+            ordering::Operation {
+                id: &operation.id,
+                after: &operation.after,
+                needle: &pass.needle,
+                thread: &pass.thread,
+            }
+        })
+        .collect();
+    ordering::replay_production_order(
+        &cell.ordering,
+        &views,
+        workholding.as_ref().map(|compiled| &compiled.limits),
+        &handling.costs,
+        selected,
+        schedule.feed_seconds,
+        &mut schedule.ordering,
+    )?;
+    schedule.workholding = workholding
+        .map(|compiled| compiled.report(&schedule.ordering.baseline_order, selected))
+        .transpose()?;
+    schedule.handling = Some(handling.report(&schedule.ordering.baseline_order, selected)?);
+    Ok(())
+}
+
 fn evaluate_in_calendar(
     plan: &SewPlan,
     policy: &Policy,
@@ -341,6 +384,11 @@ fn evaluate_in_calendar(
     };
     Ok(Report {
         schema: if parallel
+            .as_ref()
+            .is_some_and(|parallel| parallel.shared_operator.is_some())
+        {
+            "ftx-sewing-production/27"
+        } else if parallel
             .as_ref()
             .is_some_and(|parallel| parallel.availability_calendars.is_some())
         {
