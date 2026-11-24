@@ -1417,6 +1417,7 @@ impl Solver {
                     e += c.terms(x, false, true).energy;
                 }
                 if let Some(d) = damping {
+                    d.check_bending_rate_domains(&self.model, x)?;
                     e += d.energy(&self.model, x);
                 }
                 let cm = params.mass_coeff(h);
@@ -1474,6 +1475,7 @@ impl Solver {
             e += c.terms(x, false, inertia.is_some()).energy;
         }
         if let Some(d) = damping {
+            d.check_bending_rate_domains(&self.model, x)?;
             e += d.energy(&self.model, x);
         }
         if e.is_finite() {
@@ -1827,30 +1829,38 @@ impl Solver {
     }
 
     fn dihedral_step_bound(&self, p: &[f64], ctx: StepContext<'_>) -> f64 {
-        if self.model.bending_model != BendingModel::DiscreteShells {
+        let discrete = self.model.bending_model == BendingModel::DiscreteShells;
+        let rate_damping = ctx.damping().filter(|d| d.options.rayleigh_bending_s > 0.0);
+        if !discrete && rate_damping.is_none() {
             return 1.0;
         }
         let dx = self.displacement(p);
-        let bound_at = |x: &[Vec3], dx: &[Vec3]| {
-            self.model.hinges.iter().fold(1.0_f64, |bound, hinge| {
-                bound.min(hinge.dihedral_step_bound(x, dx))
-            })
-        };
-        let bound = bound_at(&self.x, &dx);
-        if let StepContext::GeneralizedAlpha { x0, params, .. } = ctx {
-            // Generalized-alpha evaluates elastic forces at an affine midpoint while
-            // publishing the actual endpoint. Both geometric paths must stay admitted.
-            let x_eval: Vec<_> = self
-                .x
-                .iter()
-                .zip(x0)
-                .map(|(&xn, &xo)| params.eval_pos(xn, xo))
-                .collect();
-            let dx_eval: Vec<_> = dx.iter().map(|&d| d * params.elastic_weight()).collect();
-            bound.min(bound_at(&x_eval, &dx_eval))
-        } else {
-            bound
+        let mut bound = 1.0_f64;
+        if discrete {
+            let bound_at = |x: &[Vec3], dx: &[Vec3]| {
+                self.model
+                    .hinges
+                    .iter()
+                    .fold(1.0_f64, |b, hinge| b.min(hinge.dihedral_step_bound(x, dx)))
+            };
+            bound = bound.min(bound_at(&self.x, &dx));
+            if let StepContext::GeneralizedAlpha { x0, params, .. } = ctx {
+                // Generalized-alpha evaluates elastic forces at an affine midpoint while
+                // publishing the actual endpoint. Both geometric paths must stay admitted.
+                let x_eval: Vec<_> = self
+                    .x
+                    .iter()
+                    .zip(x0)
+                    .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                    .collect();
+                let dx_eval: Vec<_> = dx.iter().map(|&d| d * params.elastic_weight()).collect();
+                bound = bound.min(bound_at(&x_eval, &dx_eval));
+            }
         }
+        if let Some(damp) = rate_damping {
+            bound = bound.min(damp.bending_step_bound(&self.model, &self.x, &dx));
+        }
+        bound
     }
 
     /// Projected Newton (or configured [`NewtonStrategy`]) on the potential from the current positions.
@@ -2637,6 +2647,7 @@ impl Solver {
         if guess.is_none()
             || self.contact.is_some()
             || self.model.bending_model == BendingModel::DiscreteShells
+            || self.damping.rayleigh_bending_s > 0.0
         {
             return self.step_at_body(h, None);
         }
@@ -3985,6 +3996,81 @@ mod strategy_and_integrator_tests {
             assert_eq!(guessed_report.iterations, report.iterations);
             assert_eq!(guessed_report.ccd_limited, 0);
         }
+    }
+
+    #[test]
+    fn rayleigh_bending_guards_solver_line_search_and_warm_start() {
+        // Under default Quadratic bending + rayleigh_bending_s > 0, Solver::dihedral_step_bound
+        // must still cap steps that cross the Δθ = ±π rate branch cut (e.g. θ₀ = +120°,
+        // current θ = −50°, trial jumping to θ = −75°).
+        let x0 = creased_hinge(120.0, 0.0).x;
+        let near_cut = creased_hinge(-50.0, 0.0).x;
+        let mut solver = creased_hinge(-50.0, 0.0);
+        solver.model.bending_model = BendingModel::Quadratic;
+        solver.damping = DampingOptions {
+            rayleigh_bending_s: 0.01,
+            ..DampingOptions::default()
+        };
+        let h = 0.01;
+        let damp = DampingStep::build(
+            &solver.model,
+            solver.damping,
+            &x0,
+            h,
+            VelocityMap::ImplicitEuler {
+                x0: &x0,
+                inv_h: 1.0 / h,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        // Only vertex 3's z-coordinate is free in `creased_hinge`; dz = -0.02 moves θ from
+        // -50° across the Δθ = ±180° cut (-60°) to ~-70° while staying far from θ = ±180°.
+        let p = vec![-0.02];
+        // Without damping and under Quadratic bending, bound is unconstrained 1.0.
+        assert_eq!(solver.dihedral_step_bound(&p, StepContext::Static), 1.0);
+        // With Rayleigh bending damping active, bound must strictly cap the branch-crossing step.
+        let ctx = StepContext::ImplicitEuler {
+            xt: &near_cut,
+            h,
+            damping: Some(&damp),
+        };
+        let rate_bound = solver.dihedral_step_bound(&p, ctx);
+        assert!(
+            rate_bound > 0.0 && rate_bound < 1.0,
+            "Quadratic + rayleigh_bending_s must cap Δθ = ±π crossing, got {rate_bound}"
+        );
+        let trial = solver.apply(&solver.x, &p, rate_bound);
+        solver.potential_ctx(&trial, ctx).unwrap();
+
+        // Under DiscreteShells + rayleigh_bending_s, the bound must be at least as tight as the
+        // DiscreteShells-only bound when θ is far from ±π but near θ₀ ± π.
+        solver.model.bending_model = BendingModel::DiscreteShells;
+        let ds_only = solver.dihedral_step_bound(
+            &p,
+            StepContext::ImplicitEuler {
+                xt: &near_cut,
+                h,
+                damping: None,
+            },
+        );
+        let ds_plus_rate = solver.dihedral_step_bound(&p, ctx);
+        assert!(
+            ds_plus_rate > 0.0 && ds_plus_rate < ds_only,
+            "DiscreteShells + rayleigh_bending_s must respect tighter rate cut: ds_plus_rate={ds_plus_rate} vs ds_only={ds_only}"
+        );
+
+        // Warm-start guess crossing the rate branch cut must be ignored under rayleigh_bending_s > 0.
+        let mut plain = creased_hinge(120.0, 0.0);
+        plain.model.bending_model = BendingModel::Quadratic;
+        plain.damping = solver.damping;
+        let mut guessed = plain.clone();
+        let bad_guess = creased_hinge(-60.0, 0.0).x;
+        let r_plain = plain.step(0.005).unwrap();
+        let r_guess = guessed.step_with_guess(0.005, Some(&bad_guess)).unwrap();
+        assert_eq!(guessed.x, plain.x);
+        assert_eq!(guessed.v, plain.v);
+        assert_eq!(r_guess.iterations, r_plain.iterations);
     }
 
     fn hanging_sheet() -> Solver {

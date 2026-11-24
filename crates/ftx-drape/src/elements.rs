@@ -1012,6 +1012,37 @@ impl Hinge {
             return 0.0;
         }
         let margin = std::f64::consts::PI - self.dihedral_angle(x).abs();
+        self.dihedral_cone_bound(x, dx, margin)
+    }
+
+    // Whole-segment face-normal cone bound around the Rayleigh curvature-rate discontinuity
+    // `wrap_angle_diff(θ(x) − θ₀) = ±π`, keeping both adjacent faces non-degenerate and
+    // `|wrap_angle_diff(θ(t) − θ₀)| < π` across `t ∈ [0, bound]`.
+    pub(crate) fn dihedral_rate_step_bound(&self, x: &[Vec3], dx: &[Vec3], theta0: f64) -> f64 {
+        if self.v.iter().any(|&v| {
+            x.get(v).is_none_or(|p| !p.is_finite()) || dx.get(v).is_none_or(|p| !p.is_finite())
+        }) || !theta0.is_finite()
+        {
+            return 0.0;
+        }
+        let theta = self.dihedral_angle(x);
+        if !theta.is_finite() {
+            return 0.0;
+        }
+        let mut d = theta - theta0;
+        if d > std::f64::consts::PI {
+            d -= 2.0 * std::f64::consts::PI;
+        } else if d <= -std::f64::consts::PI {
+            d += 2.0 * std::f64::consts::PI;
+        }
+        let margin = std::f64::consts::PI - d.abs();
+        if !(margin.is_finite() && margin > 0.0) {
+            return 0.0;
+        }
+        self.dihedral_cone_bound(x, dx, margin)
+    }
+
+    fn dihedral_cone_bound(&self, x: &[Vec3], dx: &[Vec3], margin: f64) -> f64 {
         let cone = ftx_core::det::sin(0.25 * margin);
         let [a, b, c, d] = self.v;
         let e = x[b] - x[a];

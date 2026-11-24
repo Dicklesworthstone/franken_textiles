@@ -354,6 +354,9 @@ impl<'a> DampingStep<'a> {
                 }
                 let theta = hinge.dihedral_angle(x);
                 let d = wrap_angle_diff(theta - self.hinge_theta0[i]);
+                if !d.is_finite() || d.abs() >= PI {
+                    return f64::NAN;
+                }
                 total += 0.5 * rate * b * hinge.dihedral_weight() * d * d;
             }
             for (patch, &previous) in model
@@ -365,6 +368,49 @@ impl<'a> DampingStep<'a> {
             }
         }
         total
+    }
+
+    /// Rejects degenerate adjacent faces or exact `±π` curvature-rate branch points before energy
+    /// evaluation so line search / trust-region steps shorten cleanly via [`RefusalCode::OutOfRange`].
+    pub(crate) fn check_bending_rate_domains(
+        &self,
+        model: &ClothModel,
+        x: &[Vec3],
+    ) -> Result<(), Refusal> {
+        if self.options.rayleigh_bending_s <= 0.0 {
+            return Ok(());
+        }
+        for (i, hinge) in model.hinges.iter().enumerate() {
+            if model.hinge_rigidity(i) <= 0.0 {
+                continue;
+            }
+            let theta = hinge.dihedral_angle(x);
+            let d = wrap_angle_diff(theta - self.hinge_theta0[i]);
+            if !d.is_finite() || d.abs() >= PI {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    "Rayleigh bending damping hinge is degenerate or lies on the exact ±pi rate branch",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Maximum straight-line fraction `α ∈ [0, 1]` keeping every active scalar Rayleigh bending
+    /// hinge non-degenerate and strictly away from its `wrap_angle_diff(θ − θ₀) = ±π` branch cut.
+    #[must_use]
+    pub(crate) fn bending_step_bound(&self, model: &ClothModel, x: &[Vec3], dx: &[Vec3]) -> f64 {
+        if self.options.rayleigh_bending_s <= 0.0 {
+            return 1.0;
+        }
+        let mut bound = 1.0_f64;
+        for (i, hinge) in model.hinges.iter().enumerate() {
+            if model.hinge_rigidity(i) <= 0.0 {
+                continue;
+            }
+            bound = bound.min(hinge.dihedral_rate_step_bound(x, dx, self.hinge_theta0[i]));
+        }
+        bound
     }
 
     /// Per-triangle aerodynamic drag local potential (`psd = true`).
@@ -418,8 +464,16 @@ impl<'a> DampingStep<'a> {
         let hinge = &model.hinges[hinge_index];
         let coeff = (self.options.rayleigh_bending_s / self.h) * b * hinge.dihedral_weight();
         let theta_cur = hinge.dihedral_angle(x);
-        // Unwrap reference angle relative to current branch so `theta - target ∈ (−π, π]`.
+        // Unwrap reference angle relative to current branch so `theta - target ∈ (−π, π)`.
         let d = wrap_angle_diff(theta_cur - self.hinge_theta0[hinge_index]);
+        if !d.is_finite() || d.abs() >= PI {
+            return Some(Local {
+                energy: f64::NAN,
+                grad: [f64::NAN; 12],
+                hess: [f64::NAN; 144],
+                psd: false,
+            });
+        }
         let target = theta_cur - d;
         Some(hinge.dihedral_quadratic_local(x, target, coeff))
     }
@@ -968,5 +1022,131 @@ mod tests {
             );
             assert_eq!(step.energy(&model, &x0), 0.0);
         }
+    }
+
+    #[test]
+    fn rayleigh_bending_guards_rate_branch_cut_and_face_collapse() {
+        // Two triangles sharing edge (0, 1) along +y; vertex 3 folds around the edge to angle `deg`.
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.02),
+            Vec2::new(-0.02, 0.01),
+            Vec2::new(0.02, 0.01),
+        ];
+        let tris = [[0, 1, 2], [1, 0, 3]];
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(500.0, 500.0, 0.2, 100.0, 1.0),
+            1e-4,
+            0.2,
+        )
+        .unwrap();
+        let posed = |deg: f64| -> Vec<Vec3> {
+            let (s, c) = ftx_core::det::sin_cos(deg.to_radians());
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.02, 0.0),
+                Vec3::new(-0.02, 0.01, 0.0),
+                Vec3::new(0.02 * c, 0.01, 0.02 * s),
+            ]
+        };
+        let h = 0.01;
+        let opts = DampingOptions {
+            rayleigh_bending_s: 0.01,
+            ..DampingOptions::default()
+        };
+        // Exact Δθ = ±π rate cut (flat start θ₀ = 0° folded exact 180° onto triangle 0) and
+        // collapsed face (vertex 3 collinear with shared edge) both refuse OutOfRange and yield NaN.
+        let flat_x0 = posed(0.0);
+        let flat_step = DampingStep::build(
+            &model,
+            opts,
+            &flat_x0,
+            h,
+            VelocityMap::ImplicitEuler {
+                x0: &flat_x0,
+                inv_h: 1.0 / h,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let mut exact_cut = flat_x0.clone();
+        exact_cut[3] = Vec3::new(-0.02, 0.01, 0.0);
+        assert_eq!(
+            flat_step
+                .check_bending_rate_domains(&model, &exact_cut)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        assert!(flat_step.energy(&model, &exact_cut).is_nan());
+        assert!(
+            flat_step
+                .rayleigh_bending_local(&model, 0, &exact_cut)
+                .unwrap()
+                .energy
+                .is_nan()
+        );
+        let mut collapsed = flat_x0.clone();
+        collapsed[3] = Vec3::new(0.0, 0.01, 0.0);
+        assert_eq!(
+            flat_step
+                .check_bending_rate_domains(&model, &collapsed)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            flat_step.bending_step_bound(&model, &collapsed, &[Vec3::ZERO; 4]),
+            0.0
+        );
+
+        // Start at θ₀ = +120° so the wrap_angle_diff(θ − θ₀) = ±180° cut sits at θ = −60° (far from ±180°).
+        let x0 = posed(120.0);
+        let step = DampingStep::build(
+            &model,
+            opts,
+            &x0,
+            h,
+            VelocityMap::ImplicitEuler {
+                x0: &x0,
+                inv_h: 1.0 / h,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        // A trial step starting at θ = −50° (Δθ = −170°, only 10° from the rate cut) jumping to
+        // θ = −75° (past the cut, where wrap_angle_diff would jump to +165° and spuriously drop E)
+        // must be capped strictly below 1.0 so the endpoint stays on the same continuous branch.
+        let near_cut = posed(-50.0);
+        let past_cut = posed(-75.0);
+        let dx: Vec<Vec3> = past_cut
+            .iter()
+            .zip(&near_cut)
+            .map(|(&b, &a)| b - a)
+            .collect();
+        let bound = step.bending_step_bound(&model, &near_cut, &dx);
+        assert!(
+            bound > 0.0 && bound < 1.0,
+            "rate step bound must cap crossing Δθ = ±π, got {bound}"
+        );
+        let capped: Vec<Vec3> = near_cut
+            .iter()
+            .zip(&dx)
+            .map(|(&p, &d)| p + d * bound)
+            .collect();
+        step.check_bending_rate_domains(&model, &capped).unwrap();
+        let d_capped =
+            wrap_angle_diff(model.hinges[0].dihedral_angle(&capped) - step.hinge_theta0[0]);
+        assert!(
+            d_capped < 0.0 && d_capped > -PI,
+            "capped step must remain on negative Δθ branch, got {d_capped}"
+        );
+
+        // Rigid translation leaves face normals unchanged -> bound is exactly 1.0.
+        let shift = [Vec3::new(0.5, -0.3, 0.2); 4];
+        assert_eq!(step.bending_step_bound(&model, &near_cut, &shift), 1.0);
     }
 }
