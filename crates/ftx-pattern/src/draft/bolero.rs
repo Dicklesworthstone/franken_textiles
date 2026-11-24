@@ -681,6 +681,12 @@ fn soutache(pat: &mut Value, s: &Map<String, Value>, chest: f64) -> Result<(), R
     ];
     let mut motifs: Vec<(&str, Option<Vec<Vec2>>)> = Vec::new();
     let motif = sf(s, "motif")?;
+    if !motif.is_finite() || motif < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("motif must be finite and >= 0, got {motif}"),
+        ));
+    }
     if motif > 0.0 {
         let r = (motif * chest).max(6.0 * width);
         let v = |p: &Value, id: &str| {
@@ -781,6 +787,7 @@ mod tests {
             json!({"soutache_width": -2.0}),
             json!({"soutache_inset": -1.0}),
             json!({"sleeve_band": -5.0}),
+            json!({"motif": -0.05}),
         ] {
             let err = zouave_bolero(meas, Some(&bad_style)).unwrap_err();
             assert_eq!(err.code, RefusalCode::OutOfRange, "style={bad_style}");

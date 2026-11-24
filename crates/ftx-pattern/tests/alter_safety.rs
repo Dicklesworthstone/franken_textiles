@@ -114,6 +114,7 @@ fn impossible_cap_ratios_and_wrong_seam_sets_are_refused() {
     for seams in [
         vec![],
         vec!["armhole_f_R", "typo"],
+        vec!["armhole_f_R", "armhole_f_R"],
         vec!["armhole_f_R", "armhole_b_L"],
         vec!["side_R"],
     ] {

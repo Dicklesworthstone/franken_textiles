@@ -446,7 +446,11 @@ pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result
     positive("target", target)?;
     let pattern = built(doc)?;
     piece_mut(&mut doc.clone(), pid)?;
+    let mut seen = std::collections::BTreeSet::new();
     for id in seams {
+        if !seen.insert(id.as_str()) {
+            return Err(invalid(format!("duplicate seam id '{id}'")));
+        }
         let count = pattern
             .seams()
             .iter()
