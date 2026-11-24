@@ -27,5 +27,10 @@ serde_json.workspace = true
 [dev-dependencies]
 ftx-wasm = { path = "../ftx-wasm" }
 
+[features]
+# Opt-in bit-identical parallel element evaluation, Hessian gather, and sparse LDLT in `ftx-drape`.
+# Off by default so ordinary builds carry no thread pool.
+parallel = ["ftx-drape/parallel"]
+
 [lints]
 workspace = true
