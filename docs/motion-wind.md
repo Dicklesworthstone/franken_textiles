@@ -98,6 +98,11 @@ When requested, the motion result records:
 - `air_velocity_schedule_m_s` and `air_velocity_basis`: the complete schedule
   and its interval semantics.
 
+Motion-qualified comparisons reconcile the requested schedule, initial ambient velocity,
+every accepted sample's interval and wind, and every endpoint's wind. Missing or changed
+receipts exclude the affected motion result while independent manufacturing output remains
+available. An unscheduled request cannot acquire injected interval-wind receipt metadata.
+
 After success, the last wind remains installed in the continuing solver. The
 original scenario options describe the initial boundary; use the motion receipts
 to identify the boundary at the final state.

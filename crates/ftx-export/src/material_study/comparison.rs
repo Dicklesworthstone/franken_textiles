@@ -4558,7 +4558,85 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
         ));
     }
     admit_pose_sampling(request, motion, frames, samples)?;
+    admit_air_velocity(descriptor, motion, frames, samples, endpoints)?;
     Ok(motion)
+}
+
+fn admit_air_velocity(
+    descriptor: &Value,
+    motion: &Value,
+    frames: &[Value],
+    samples: &[Value],
+    endpoints: &[Value],
+) -> Result<(), Refusal> {
+    let fail = || {
+        invalid(
+            "motion comparison requires the requested wind schedule, initial ambient velocity and every retained interval velocity",
+        )
+    };
+    let request = &descriptor["scenario"]["motion"];
+    let Some(declared) = request
+        .get("air_velocity_schedule_m_s")
+        .filter(|value| !value.is_null())
+    else {
+        return if motion["air_velocity_schedule_m_s"].is_null()
+            && motion["air_velocity_basis"].is_null()
+            && motion["initial_sample"]["air_velocity_m_s"].is_null()
+            && endpoints
+                .iter()
+                .all(|endpoint| endpoint["air_velocity_m_s"].is_null())
+            && samples.iter().all(|sample| {
+                sample["air_velocity_m_s"].is_null()
+                    && sample["authored_interval_index"].is_null()
+            })
+        {
+            Ok(())
+        } else {
+            Err(fail())
+        };
+    };
+    let velocity = |value: &Value| {
+        value
+            .as_array()
+            .is_some_and(|v| v.len() == 3 && v.iter().all(|x| finite(x).is_some()))
+    };
+    let schedule = declared
+        .as_array()
+        .filter(|values| values.len() == frames.len() && values.iter().all(velocity))
+        .ok_or_else(fail)?;
+    let drag = &descriptor["scenario"]["options"]["damping"]["air_drag"];
+    let stationary = json!([0.0, 0.0, 0.0]);
+    let initial = drag.get("air_velocity_m_s").unwrap_or(&stationary);
+    if motion["air_velocity_schedule_m_s"] != *declared
+        || !drag.is_object()
+        || !velocity(initial)
+        || motion["initial_sample"]["air_velocity_m_s"] != *initial
+    {
+        return Err(fail());
+    }
+    // Endpoint indices were admitted above. Their inclusive ranges own every original
+    // interval, including source-pose samples and accepted mechanical subdivisions.
+    let mut start = 0;
+    for (interval, (wind, endpoint)) in schedule.iter().zip(endpoints).enumerate() {
+        let end = endpoint["sample_index"]
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|&value| value >= start && value < samples.len())
+            .ok_or_else(fail)?;
+        if endpoint["air_velocity_m_s"] != *wind
+            || samples[start..=end].iter().any(|sample| {
+                sample["air_velocity_m_s"] != *wind
+                    || sample["authored_interval_index"].as_u64() != Some(interval as u64)
+            })
+        {
+            return Err(fail());
+        }
+        start = end + 1;
+    }
+    if start != samples.len() {
+        return Err(fail());
+    }
+    Ok(())
 }
 
 fn admit_pose_sampling(
