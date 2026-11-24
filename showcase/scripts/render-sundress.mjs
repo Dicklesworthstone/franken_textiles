@@ -20,7 +20,7 @@ try {
     await mkdir(art,{recursive:true});await page.setViewportSize({width:1200,height:1200});
     const style=await page.addStyleTag({content:`
       .sd-stage{position:fixed!important;inset:0!important;min-height:0!important;height:100vh!important;width:100vw!important;z-index:100}
-      .sd-scene{width:100%!important}.sd-stage-caption,nextjs-portal{display:none!important}
+      .sd-scene{width:100%!important}.sd-stage-caption,nextjs-portal,.view-tools,.view-hint{display:none!important}
     `});
     await page.evaluate(()=>window.ftxDressFrame({height:168,bust:90,waist:72,weight:52,left:14,right:22},-.32,2.02,127,true));
     await writeFile(path.join(art,"sundress.jpg"),await page.screenshot({type:"jpeg",quality:95}),{flag:"wx"});
@@ -28,7 +28,7 @@ try {
   }
   await page.addStyleTag({content:`
     .sd-stage{position:fixed!important;inset:0!important;height:100vh!important;width:100vw!important;z-index:100}
-    .sd-scene{width:68%!important;margin-left:32%}.sd-stage-caption,nextjs-portal{display:none!important}
+    .sd-scene{width:68%!important;margin-left:32%}.sd-stage-caption,nextjs-portal,.view-tools,.view-hint{display:none!important}
     .sd-film{position:absolute;left:6%;top:21%;width:29%;pointer-events:none;color:#233d34}
     .sd-film small{font:500 11px var(--mono);letter-spacing:.13em;text-transform:uppercase}
     .sd-film h2{font:400 64px/.91 var(--serif);letter-spacing:-.045em;margin:16px 0 30px}

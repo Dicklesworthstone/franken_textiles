@@ -26,7 +26,7 @@ try {
   await page.evaluate(()=>document.fonts.ready);
   await page.addStyleTag({content:`
     .ts-stage{position:fixed!important;inset:0!important;width:960px!important;height:540px!important;z-index:100;border-radius:0}
-    .ts-canvas{left:34%;width:66%}.ts-mark,.ts-cameras,nextjs-portal{display:none!important}
+    .ts-canvas{left:34%;width:66%}.ts-mark,.ts-cameras,nextjs-portal,.view-tools,.view-hint{display:none!important}
     .ts-film-type{position:absolute;inset:0 auto 0 0;width:31%;padding:75px 22px 25px 32px;background:#f3eddb;color:#2c4437}
     .ts-film-type small,.ts-film-type label{font:500 11px var(--mono);letter-spacing:.06em;text-transform:uppercase}
     .ts-film-type h2{font:400 68px/.91 var(--serif);letter-spacing:-.045em;margin:26px 0}.ts-film-type h2 em{font-weight:400;color:#986440}

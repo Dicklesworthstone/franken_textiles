@@ -21,7 +21,7 @@ try {
     await page.goto(new URL(`/experiments/${kind}/?capture=1`,base).href);
     await page.waitForFunction(()=>typeof window.ftxRigView==="function" && document.querySelector("canvas[data-step]"));
     await page.evaluate(()=>document.fonts.ready);
-    await page.addStyleTag({content:".rig-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:90}.rig-plate,.rig-annot,nextjs-portal{display:none!important}"});
+    await page.addStyleTag({content:".rig-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:90}.rig-plate,.rig-annot,nextjs-portal,.view-tools,.view-hint{display:none!important}"});
     const slider=page.locator(".rig-slider input");
     const last=Number(await slider.getAttribute("max"));
     async function pose(i,angle) {

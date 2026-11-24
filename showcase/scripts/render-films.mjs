@@ -51,7 +51,7 @@ async function hero(page) {
     const exposures = [];
     for (const view of [page, detail]) {
       await view.bringToFront();
-      await view.addStyleTag({ content: "nextjs-portal {display:none!important}" });
+      await view.addStyleTag({ content: "nextjs-portal,.view-tools,.view-hint {display:none!important}" });
       await draw(view, 1, -0.43);
       exposures.push("data:image/png;base64," + (await view.screenshot()).toString("base64"));
     }
@@ -140,7 +140,7 @@ try {
     url.searchParams.set("capture", study.id);
     await page.goto(url.href);
     await page.waitForFunction(() => typeof window.ftxFrame === "function", undefined, { timeout: 90000 });
-    await page.addStyleTag({ content: "nextjs-portal {display:none!important}" });
+    await page.addStyleTag({ content: "nextjs-portal,.view-tools,.view-hint {display:none!important}" });
   }
   for (const study of startFrame === 0 ? studies : []) {
     await openStudy(study);

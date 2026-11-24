@@ -37,7 +37,7 @@ try{
     await page.waitForFunction(wanted=>document.querySelector(".costume-stage canvas")?.dataset.ready===wanted,reg+"-"+layer);
   }
   await select("Compare","Dressed");
-  await page.addStyleTag({content:".costume-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:99}.hu-tag,.hu-plate,nextjs-portal{display:none!important}"});
+  await page.addStyleTag({content:".costume-stage{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:99}.hu-tag,.hu-plate,nextjs-portal,.view-tools,.view-hint{display:none!important}"});
   async function pose(yaw,y,span,check=false){
     await page.evaluate(([angle,y,span,check])=>{
       const canvas=document.querySelector(".costume-stage canvas[data-ready]");
