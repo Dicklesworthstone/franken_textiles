@@ -4974,7 +4974,7 @@ mod strategy_and_integrator_tests {
         };
         let mut guess = x0.clone();
         guess[3] += Vec3::new(0.02, 0.0, 0.004);
-        let err = solver.step_with_guess(0.01, &guess).unwrap_err();
+        let err = solver.step_with_guess(0.01, Some(&guess)).unwrap_err();
         assert_eq!(err.code, RefusalCode::DegenerateGeometry);
         assert_eq!(
             solver.x, x0,
