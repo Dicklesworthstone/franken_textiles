@@ -255,7 +255,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   a missing, failed or stale qualification keeps tightness flags advisory. The native engine requires matching
   `qualification_basis` identities for the posed collision body (`body_sha256`), either the resolved uniform
   material (`material_sha256`) or all active simulated piece materials (`piece_material_sha256s`), including
-  body-contact parameters, and (whenever non-default bending, compression, damping, adaptive-barrier,
+  body-contact parameters, and (whenever non-default integrator, bending, compression, damping, adaptive-barrier,
   stick-slip, or construction physics options are enabled) `physics_sha256`. Older reports require rerunning `ftx qualify`. Even when collider bands pass
   (`collider_tightness_qualified: true`), wearer-blocking tightness promotion (`tightness_qualified: true`)
   requires `|posed_chest_girth_mm - input_chest_mm| <= 5.0` mm and `|residual_mm| <= 5.0` mm on measured

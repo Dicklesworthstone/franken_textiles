@@ -283,11 +283,12 @@ fn sheet_material_sha256(
     ]))
 }
 
-/// Digest of non-default constitutive, damping, adaptive-barrier, stick-slip, and construction
-/// physics options. Omitted (`None`) when all options match legacy defaults so existing
-/// `qualify.json` receipts remain byte-compatible.
+/// Digest of non-default constitutive, time-integration, damping, adaptive-barrier, stick-slip,
+/// and construction physics options. Omitted (`None`) when all options match legacy defaults so
+/// existing `qualify.json` receipts remain byte-compatible.
 fn physics_model_sha256(options: &crate::run::DrapeOptions) -> Result<Option<String>, Refusal> {
-    if options.bending_model.is_default()
+    if options.integrator.is_default()
+        && options.bending_model.is_default()
         && options.compression_model.is_default()
         && options.damping.is_default()
         && options.adaptive_barrier.is_none()
@@ -297,6 +298,7 @@ fn physics_model_sha256(options: &crate::run::DrapeOptions) -> Result<Option<Str
         return Ok(None);
     }
     digest(&json!({
+        "integrator": options.integrator,
         "bending_model": options.bending_model,
         "compression_model": options.compression_model,
         "damping": options.damping,
@@ -1166,10 +1168,35 @@ mod tests {
             .pass
         );
 
-        let mut pr_basis = legacy_basis;
+        let mut pr_basis = legacy_basis.clone();
         pr_basis["physics_sha256"] = json!(pr_sha);
         assert!(
             !check_qualification(Some(Ok(&ds_doc)), "q", "ws", "abc", Some(&fab), &pr_basis).pass
+        );
+
+        // Non-default time integrators (and distinct rho_inf) must also bind physics_sha256.
+        let mut ga0 = defaults;
+        ga0.integrator = crate::TimeIntegrator::GeneralizedAlpha { rho_inf: 0.0 };
+        let mut ga5 = defaults;
+        ga5.integrator = crate::TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 };
+        let ga0_sha = physics_model_sha256(&ga0)
+            .unwrap()
+            .expect("generalized-alpha must produce physics_sha256");
+        let ga5_sha = physics_model_sha256(&ga5).unwrap().unwrap();
+        assert_eq!(ga0_sha.len(), 64);
+        assert_ne!(ga0_sha, ga5_sha);
+        let mut ga0_basis = legacy_basis;
+        ga0_basis["physics_sha256"] = json!(ga0_sha);
+        assert!(
+            !check_qualification(
+                Some(Ok(&legacy_doc)),
+                "q",
+                "ws",
+                "abc",
+                Some(&fab),
+                &ga0_basis
+            )
+            .pass
         );
 
         // Per-piece assemblies enforce the same physics_sha256 binding.
