@@ -20,7 +20,13 @@ packing = run_path(str(HERE / "prepare-hussar-drape.py"), run_name="packing")
 # The rear panels start nearer the waist than the fronts. These distances admit the
 # sewing trajectory for each cut while preserving the flat cut, grain and seam lengths.
 START_RADIUS = {"bodice": 177, "skirt": 270}
-DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "22", "--drape", "150", "--max-settle-steps", "256", "--self-contact-mm", "1"]
+# The cloth model (the skirt study's): compression softened to 5 % of the tensile stiffness on the principal
+# strains, so the gathered skirt falls in folds instead of standing out as a bell, and the solver's
+# uncalibrated hem and seam-allowance weighting. Numerical model choices, not a measured fabric. The softer
+# skirt hangs against the hands, so the whole hand is in contact (--hands full), as it is displayed; with the
+# default wrist cap the petite form's skirt passed through the fingers.
+DRAPE_ARGS = ["--spacing-mm", "20", "--time-subdivision", "--arm-deg", "22", "--drape", "150", "--max-settle-steps", "256", "--self-contact-mm", "1",
+              "--compression", "0.05", "--compression-model", "principal", "--construction-standard", "--hands", "full"]
 
 
 # This authored band represents pleats below the resolution of the 20 mm mesh.

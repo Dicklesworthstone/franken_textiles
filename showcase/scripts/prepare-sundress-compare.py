@@ -3,8 +3,7 @@ plus one genuine native solver refusal on an oversized/tight form for /wardrobe/
 
 - Form A (`reference`): existing native drape in showcase/public/exhibits/sundress/dress.* (168 cm, 90/72/96 cm)
 - Form B (`slender`): newly solved native drape from WORK_DIR/drape (162 cm, 84/66/90 cm) using the EXACT same
-  fixed dress-pattern.json, dress-fit.json, and DRAPE_ARGS (--spacing-mm 20 --time-subdivision --arm-deg 22
-  --drape 150 --max-settle-steps 256 --self-contact-mm 1).
+  fixed dress-pattern.json, dress-fit.json, and DRAPE_ARGS (prepare-sundress-drape.py's, which drew Form A).
 - Form C (`tight_refused`): genuine native `ftx drape` refusal on synthetic full form (170 cm, 99/84/106 cm)
   with no completed garment mesh.
 
@@ -25,15 +24,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-FTX = ROOT / "target/release/ftx"
-DRAPE_ARGS = [
-    "--spacing-mm", "20",
-    "--time-subdivision",
-    "--arm-deg", "22",
-    "--drape", "150",
-    "--max-settle-steps", "256",
-    "--self-contact-mm", "1",
-]
+# The native binary every packed exhibit uses (prepare-hussar-drape.py: FTX_BIN, or target/release/ftx).
+FTX = run_path(str(HERE / "prepare-hussar-drape.py"), run_name="packing")["FTX"]
+# Form A is the published sundress, so Form B must be draped with exactly its arguments.
+DRAPE_ARGS = run_path(str(HERE / "prepare-sundress-drape.py"), run_name="sundress_drape")["DRAPE_ARGS"]
 
 
 def load_packed_final_hem_z_mm(gz_path, json_path):
@@ -78,6 +72,7 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--probe", type=Path, default=Path("/tmp/ftx_sundress_probe"))
     parser.add_argument("--model", type=Path, default=Path("/home/ubuntu/.cache/franken_textiles/anny-0.6.1-default.ftxbody"))
+    parser.add_argument("--solver-revision", help="Full Git commit the native solver was built from (default: HEAD).")
     args = parser.parse_args()
 
     out = args.output.resolve()
@@ -92,7 +87,7 @@ def main():
     sundress_drape = run_path(str(HERE / "prepare-sundress-drape.py"), run_name="sundress_drape")
 
     # Get current solver git commit for full provenance
-    rev = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    rev = args.solver_revision or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
     # Package Form B (slender) into output/ using identical packaging logic as dress.*
     slender_drape_dir = args.slender_work / "drape"

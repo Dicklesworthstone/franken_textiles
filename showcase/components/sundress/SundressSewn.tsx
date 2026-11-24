@@ -61,6 +61,10 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
   const band = waistSeam.gather_relief_mm && waistSeam.gather_compression
     ? { depth: waistSeam.gather_relief_mm, percent: Number((waistSeam.gather_compression * 100).toPrecision(3)) } : null;
   const flags = drape.flags as string[], gating = drape.gating as string[];
+  // The cloth model, read from the arguments the drape was run with.
+  const solverArgs = drape.solverArguments as string[];
+  const argAt = solverArgs.indexOf("--compression");
+  const compressionPercent = argAt >= 0 ? Number((Number(solverArgs[argAt + 1]) * 100).toPrecision(3)) : null;
   const skirtRadius = (side: string) => cuts[cut].pattern.pieces.find(piece => piece.id === "skirt_" + side)!.placement.radius_mm;
   return <><section className="sd-sewn" id="sewn" aria-labelledby="sewn-title">
     <div className="sd-cut-picker">
@@ -111,7 +115,7 @@ export default function SundressSewn({cut,setCut}:{cut:DressCut;setCut:(cut:Dres
         <p>The front panel starts {skirtRadius("front")} mm from the body axis and the back starts {skirtRadius("back")} mm away. The 1 mm cloth-contact barrier stays active through sewing and settling. {band
           ? <>For {band.depth} mm below the waist seam the solver lets the cloth shorten at {band.percent} % of its tensile stiffness. This models pleats finer than the {drape.spacingMm} mm mesh. The narrow pleats drawn below the waist illustrate that shortening. The side view shows the broader folds resolved by the mesh.</>
           : <>Look at the waist in profile. Its broad folds stand away from the form on the {drape.spacingMm} mm mesh.</>} Finer gathers and real-world fit still need comparison with a sewn sample.</p>
-        <p>The viewer draws weave, piece colors and seam guides on the recorded cloth surface. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness. The interactive form is drawn 2.5 mm inside the solver surface.</p>
+        <p>The viewer draws weave, piece colors and seam guides on the recorded cloth surface. The fabric uses synthetic defaults of {(drape.fabric.areal_kg_m2 * 1000).toFixed(0)} g/m² and {drape.fabric.bending_Nm} N·m bending stiffness.{compressionPercent !== null && <> {band ? "Outside the pleat band" : "Throughout"} the cloth resists shortening at {compressionPercent} % of its tensile stiffness, measured on the principal strains, so loose cloth folds instead of standing out as a shell.</>}{solverArgs.includes("--construction-standard") && <> Hems and seam allowances carry the solver’s uncalibrated construction weighting.</>} These are model choices, not a measured fabric.{solverArgs.includes("--hands") && <> The whole hand is a contact surface, as drawn, so the skirt can rest against the fingers.</>} The interactive form is drawn 2.5 mm inside the solver surface.</p>
         <p>All {1 + drape.phases.sew + drape.phases.drape} recorded physical states passed checks for cloth crossing the body, hands or other cloth panels.</p>
       </div>
     </details>

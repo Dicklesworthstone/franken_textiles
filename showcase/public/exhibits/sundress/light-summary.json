@@ -16,9 +16,9 @@
   "skirt_back",
   "skirt_front"
  ],
- "sourcePc2Sha256": "52ec0606fa64145957241c951032c30ea6eb4c50a62ccdee8b760b9233d58b3b",
- "layoutIntegrity": "sha256-6fPGMAnm9WJAKvHLIuzyZmgNhUyWbtAB4EmKZPGdBRs=",
- "geometryIntegrity": "sha256-qe1krEFmElrCvG+Ylkvimy2SbrMee1sE446lSNabRgA=",
+ "sourcePc2Sha256": "3be112e188a33d55094229b28254cf398e7b1f9a4839b9c88d323b8211388c35",
+ "layoutIntegrity": "sha256-JR+o4hxSosnKRuXv0V6Mqqvdm1H00BXh3nd6wKCkiKQ=",
+ "geometryIntegrity": "sha256-T25tHFYA6pISm4b+M++vMRwzXtAb9SFpEcMSJ6Kzb3E=",
  "style": "GARDEN_SUNDRESS",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -32,21 +32,28 @@
   "--max-settle-steps",
   "256",
   "--self-contact-mm",
-  "1"
+  "1",
+  "--compression",
+  "0.05",
+  "--compression-model",
+  "principal",
+  "--construction-standard",
+  "--hands",
+  "full"
  ],
  "armDeg": 22.0,
  "settled": true,
  "gating": [],
  "flags": [
-  "the body rides up 88 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
-  "start restored to an earlier self-contact-clear relaxation block"
+  "the body rides up 70 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
+  "start restored to an earlier contact-clear relaxation checkpoint"
  ],
  "edgeStrainPercent": {
-  "max": 10.99,
-  "min": -6.74,
-  "p95": 1.17
+  "max": 6.51,
+  "min": -24.62,
+  "p95": 0.29
  },
- "massKg": 0.20967533603796454,
+ "massKg": 0.23800204329950425,
  "areaM2": 1.0484,
  "sewingPairs": 146,
  "selfContact": true,
@@ -198,11 +205,12 @@
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 599.0,
+ "wallSeconds": 635.4,
+ "compressionFactor": 0.05,
  "bodyOffsetMm": {
   "target": 1.5,
   "achieved": 1.5
  },
- "finalResidualN": 1.0893844818317602,
- "solverRevision": "44b960d1b1d541ac1120f570459d4438f481f29e"
+ "finalResidualN": 0.3303428298915303,
+ "solverRevision": "a2629d9455993d540fa3a095cc46d08a4af1e778"
 }

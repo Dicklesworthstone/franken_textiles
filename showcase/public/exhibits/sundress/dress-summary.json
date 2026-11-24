@@ -16,9 +16,9 @@
   "skirt_back",
   "skirt_front"
  ],
- "sourcePc2Sha256": "2bbcbd2d7344f3cb6852b5d4ba1b655ada412ecff412bd1b884aaa2adf2d55b0",
- "layoutIntegrity": "sha256-gReghLcevBHGgLxtut+erxn5Faj6CtsNkVMqsO3hBiI=",
- "geometryIntegrity": "sha256-brUfdnDcRBCMGldivscDWJQskbeiAWiJLv6UdiQyBsc=",
+ "sourcePc2Sha256": "818e4961ba291dc3a6f11d13bbfa38371dd65041d475985dc336ee0ffa9e49e3",
+ "layoutIntegrity": "sha256-+srILec9v5bvPyWUNxJw/zo/zQ0ViffX6NBEOqcio8k=",
+ "geometryIntegrity": "sha256-PI4hS3YF6v5XyUDLUjIs7v51xtpv5/qh7gi4d+qtJR0=",
  "style": "GARDEN_SUNDRESS",
  "spacingMm": 20.0,
  "solverArguments": [
@@ -32,23 +32,30 @@
   "--max-settle-steps",
   "256",
   "--self-contact-mm",
-  "1"
+  "1",
+  "--compression",
+  "0.05",
+  "--compression-model",
+  "principal",
+  "--construction-standard",
+  "--hands",
+  "full"
  ],
  "armDeg": 22.0,
  "settled": true,
  "gating": [],
  "flags": [
-  "skirt_front came down 41 mm after gravity as the band of pleats below its gathered seam closed; its least-moved corner stayed within 0 mm, so it is held and did not slide",
-  "skirt_back came down 41 mm after gravity as the band of pleats below its gathered seam closed; its least-moved corner stayed within 0 mm, so it is held and did not slide",
-  "the body rides up 78 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
-  "start restored to an earlier self-contact-clear relaxation block"
+  "skirt_front came down 249 mm after gravity as the band of pleats below its gathered seam closed; its least-moved corner stayed within 1 mm, so it is held and did not slide",
+  "skirt_back came down 249 mm after gravity as the band of pleats below its gathered seam closed; its least-moved corner stayed within 1 mm, so it is held and did not slide",
+  "the body rides up 62 mm with arms at 22\u00b0 (set-in sleeve pulls the side up; a lower cap or more underarm room frees the arm)",
+  "start restored to an earlier contact-clear relaxation checkpoint"
  ],
  "edgeStrainPercent": {
-  "max": 10.21,
-  "min": -32.03,
-  "p95": 0.71
+  "max": 5.74,
+  "min": -26.47,
+  "p95": 0.23
  },
- "massKg": 0.22079033603815004,
+ "massKg": 0.24861013987378777,
  "areaM2": 1.104,
  "sewingPairs": 154,
  "selfContact": true,
@@ -200,7 +207,8 @@
    "target_mm": 1010.0
   }
  },
- "wallSeconds": 1488.1,
+ "wallSeconds": 1384.2,
+ "compressionFactor": 0.05,
  "gatherRelief": [
   {
    "compression": 0.002,
@@ -217,6 +225,6 @@
   "target": 1.5,
   "achieved": 1.5
  },
- "finalResidualN": 0.6958836728654336,
- "solverRevision": "44b960d1b1d541ac1120f570459d4438f481f29e"
+ "finalResidualN": 0.288403412962158,
+ "solverRevision": "a2629d9455993d540fa3a095cc46d08a4af1e778"
 }

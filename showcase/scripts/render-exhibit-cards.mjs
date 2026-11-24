@@ -123,6 +123,8 @@ try {
     await page.goto(new URL(route, origin).href, { waitUntil: "load" });
     const stage = page.locator(selector).first();
     await stage.waitFor();
+    // The 3D views' zoom buttons and drag hint sit over the canvas; a card shows the scene alone.
+    await page.addStyleTag({ content: ".view-tools,.view-hint{display:none!important}" });
     await page.evaluate(() => document.fonts.ready);
     // The stages fill in after their data and solver results arrive; a quiet network and a pause cover both.
     await page.waitForLoadState("networkidle").catch(() => {});
