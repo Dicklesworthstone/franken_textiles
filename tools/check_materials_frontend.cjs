@@ -3298,6 +3298,63 @@ test('parallel feed with shared labor preserves per-operation rounding and relax
   p.e.sewOptions.handlers.change();assert.equal(section(p,'sew').hidden,true);
 });
 
+test('independent cell calendars retain qualified breaks complete timelines and unresolved orders across consumers', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('sewOptions');
+  const calendars={model:'nonpreemptive_resource_windows/1',resources:{
+    'cell-a':[{start_milliseconds:0,end_milliseconds:1}],
+    'cell-b':[{start_milliseconds:0,end_milliseconds:5000},{start_milliseconds:6000,end_milliseconds:7000}]},
+    source:{note:'<independently qualified cell breaks>'}};
+  const selected={makespan_milliseconds:6200,feed_seconds:4.8,scheduled_feed_milliseconds:4800,
+    setup_milliseconds:100,handling_milliseconds:300,cells:[
+      {cell:'cell-a',copies:[],available_at_milliseconds:0,scheduled_feed_milliseconds:0,feed_padding_seconds:0},
+      {cell:'cell-b',copies:[0],available_at_milliseconds:0,finish_milliseconds:6200,
+        scheduled_feed_milliseconds:4800,feed_padding_seconds:0,
+        schedule:{feed_seconds:4.8,ordering:{selected_order:['0/join'],optimality_proven:true},
+          operations:[{id:'0/join',copy:0,operation_id:'join',seam_index:0,after:[]}]},
+        calendar_timeline:{calendar_delay_milliseconds:1000,steps:[
+          {operation:'0/join',copy:0,handling_start_milliseconds:0,setup_start_milliseconds:100,
+            feed_start_milliseconds:200,finish_milliseconds:5000},
+          {operation:null,copy:null,handling_start_milliseconds:6000,setup_start_milliseconds:6200,
+            feed_start_milliseconds:6200,finish_milliseconds:6200}]}}]};
+  const parallel={schema:'ftx-sewing-parallel/10',time_basis:'ceil_operation_feed_milliseconds/1',
+    selected,baseline:selected,availability_calendars:calendars,calendar_order_scope:'retained_serial_incumbents/1',
+    lower_bound_makespan_milliseconds:5200,search_nodes:12,optimality_proven:false,budget_exhausted:false,
+    feed_time_search:{selected_feed_milliseconds:4800,lower_bound_feed_milliseconds:4800,
+      lower_bound_attained:true,optimality_proven:true,unresolved_cell_counts:1},
+    availability:{baseline_replaced:true,cells:[{cell:'cell-a',counts:[
+      {copies:1,incumbent_finish_milliseconds:null,lower_bound_finish_milliseconds:5200,
+        feasible:false,infeasibility_proven:false}]},{cell:'cell-b',counts:[
+      {copies:1,incumbent_finish_milliseconds:6200,lower_bound_finish_milliseconds:5200,
+        feasible:true,infeasibility_proven:false}]}]}};
+  const plan={schema:'ftx-sewing-plan/37',hardware_execution_authorized:false,
+    options:{production:{parallel:{availability_calendars:calendars,cells:[{id:'cell-a'},{id:'cell-b'}]}}},
+    seams:[{pass:{id:'join',needle:'N',thread:'T'}}],production:{schema:'ftx-sewing-production/25',parallel}};
+  for(const op of ['sew','study','scenario']) {
+    const row=studyRow('calendar-qualified');row.sewing=outcome(plan);const study=studyReport([row]);
+    const report=op==='sew'?{stitches:[],plan}:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=JSON.stringify(report);await p.e[op].onclick();p.emit(report,[{name:'cell-calendars.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+    assert.deepEqual(plain(table('independent cell calendar delays').children.slice(2).map(row=>row.children.map(n=>n.textContent))),
+      [['cell-a','Idle'],['cell-b','1']]);
+    assert.deepEqual(plain(table('selected independent cell timeline').children.at(-1).children.map(n=>n.textContent)),
+      ['cell-b','Final unloading','Batch end','6','6.2','6.2','6.2']);
+    assert.deepEqual(plain(table('qualified independent cell calendars').children.at(-1).children.map(n=>n.textContent)),
+      ['cell-b','2','6','7']);
+    const admissions=table('qualified cell availability').children.slice(2);
+    assert.equal(admissions[0].children.at(-1).textContent,'Unresolved search');
+    assert.equal(admissions[1].children.at(-1).textContent,'Complete retained order fits every opening');
+    assert.match(visibleText(s),/rounded upward separately for each positive operation/);
+    assert.doesNotMatch(visibleText(s),/rounded upward once per used cell/);
+    assert.match(visibleText(s),/Garment, fixture and setup state persist across breaks/);
+    assert.match(visibleText(s),/retained-order search alone does not prove a global optimum/);
+    const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.endsWith('independent cell calendar qualification and exact windows'));
+    source.open=true;source.handlers.toggle();assert.match(visibleText(source),/<independently qualified cell breaks>/);
+    const download=descendants(s).find(n=>n.download==='cell-calendars.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+  }
+});
+
 test('parallel cells display elapsed completion, local-to-global copies and exact sources without serial proof leakage', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
   const local=copies=>({production_copies:copies,feed_seconds:copies*8,

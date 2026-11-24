@@ -757,8 +757,67 @@ part of the planning convention, and the final unload cannot be hidden behind a 
 The ordinary stitch program, selected thread inventory, material studies, both native commands
 and portable/browser APIs all consume this same constrained assignment and frozen replay options.
 No calendar lookup, reservation, source update or hardware execution is implied. Shared labor requires
-the additional protocol below; qualified breaks use its optional resource calendars. Preemption and
+the additional protocol below; independent cells can use the qualified calendars in the next section. Preemption and
 garment transfers remain outside whole-garment parallel mode.
+
+## Independent cell shifts and breaks
+
+Fully staffed independent cells can set `production.parallel.availability_calendars` using the
+same `nonpreemptive_resource_windows/1` qualification as routed and shared-operator production.
+Keep `independence: "independent_machines_fixtures_and_handling_labor/1"` and explicitly select
+`time_basis: "ceil_operation_feed_milliseconds/1"`. The following is a policy fragment; existing
+machine, recipe, handling, fixture and cell qualifications remain required:
+
+```json
+{
+  "availability_calendars": {
+    "model": "nonpreemptive_resource_windows/1",
+    "resources": {
+      "cell-a": [
+        {"start_milliseconds": 0, "end_milliseconds": 5100},
+        {"start_milliseconds": 6000, "end_milliseconds": 12000}
+      ]
+    },
+    "source": {
+      "reference": "retained-local-cell-qualification",
+      "accessed_on": "2026-11-23",
+      "note": "Declared operating openings and inactive garment/fixture retention"
+    },
+    "method": "Qualification of complete nonpreemptive blocks and retained setup across breaks",
+    "conditions": {},
+    "evidence": "estimate",
+    "allow_estimates": true
+  }
+}
+```
+
+These numbers illustrate the contract; they are not measured manufacturing timings. Each named
+cell receives 1–16 sorted, strictly separated windows inside its original outer availability.
+Unnamed cells retain their contiguous outer window. Source validation includes idle cells.
+This independent-cell policy is exclusive with shared-operator mode, which keeps its own
+worker/cell calendar authority.
+
+For every retained serial cell order, the complete handling transition, setup and operation feed
+must fit one opening. Final unloading is another complete block. No operation is paused across
+a break, and each positive feed receives its own integer-millisecond ceiling. Setup state,
+garment ownership and local fixture holds persist through gaps; an opening never frees inventory.
+The report separates productive work from `calendar_delay_milliseconds` and retains each exact
+phase boundary in `cells[].calendar_timeline`.
+
+The allocation search uses only complete calendar-feasible cell/count schedules. A retained order
+that cannot fit has `incumbent_finish_milliseconds: null`; it cannot supply a partial garment or
+a false finishing time. Other serial orders may still be feasible, so the report declares
+`calendar_order_scope: "retained_serial_incumbents/1"`. A missing complete allocation returns
+`not_converged` when independent lower bounds still permit one. Exhausting retained orders does
+not prove unrestricted infeasibility or optimality. Makespan, feed and thread-cost proofs remain
+separate, with valid lower-bound equality required where applicable.
+
+Plan `/37`, production `/25` and parallel `/10` retain the policy and exact selected timelines.
+Stitch generation, cell-qualified thread purchasing, recipe selection and material comparisons
+use the same allocation and frozen source declarations. The workbench shows windows, delays,
+final unloading and unresolved counts. Omitting independent calendars preserves the previous
+once-per-cell feed rounding and serialized output. Synthetic regression and replay checks do not
+establish physical factory performance, safe workholding or hardware execution permission.
 
 ## One operator tending autonomous-feed cells
 

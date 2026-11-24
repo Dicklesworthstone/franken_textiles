@@ -281,10 +281,10 @@ impl Policy {
 // fixture, operation and geometry histories are still reconstructed only for returned assignments.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Phase {
-    operation: Option<usize>,
-    handling: u64,
-    setup: u64,
-    feed: u64,
+    pub(super) operation: Option<usize>,
+    pub(super) handling: u64,
+    pub(super) setup: u64,
+    pub(super) feed: u64,
     shared_workholding: Option<Box<shared_workholding::Phase>>,
 }
 
@@ -292,7 +292,7 @@ impl Phase {
     fn attended(&self) -> Result<u64, Refusal> {
         sum_time(self.handling, self.setup)
     }
-    fn duration(&self) -> Result<u64, Refusal> {
+    pub(super) fn duration(&self) -> Result<u64, Refusal> {
         sum_time(self.attended()?, self.feed)
     }
 }
@@ -871,15 +871,18 @@ impl Search<'_> {
             }
             if count > 0 {
                 let trial = &self.trials[cell][count - 1];
+                let finish = trial
+                    .finish
+                    .expect("shared-operator count relaxation is contiguous");
                 if self.cells[cell]
                     .available_until_milliseconds
-                    .is_some_and(|end| trial.finish > end)
-                    || self.deadline.is_some_and(|end| trial.finish > end)
+                    .is_some_and(|end| finish > end)
+                    || self.deadline.is_some_and(|end| finish > end)
                     || self.feed_lower.is_none()
                         && self
                             .best
                             .as_ref()
-                            .is_some_and(|best| trial.finish >= best.makespan)
+                            .is_some_and(|best| finish >= best.makespan)
                 {
                     continue;
                 }

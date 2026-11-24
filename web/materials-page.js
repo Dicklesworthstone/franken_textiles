@@ -3956,6 +3956,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const orderSearch = report.thread_order_search;
   const feedSearch = report.feed_time_search;
   const calendars = operator?.availability_calendars;
+  const cellCalendars = report.availability_calendars;
   const pools = report.shared_workholding;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
@@ -3978,8 +3979,8 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       feedSearch.completion_deadline_milliseconds == null ? "None declared" : milliseconds(feedSearch.completion_deadline_milliseconds),
       metric(feedSearch.unresolved_cell_counts)]);
     const scope = document.createElement("p");
-    scope.textContent = (operator ?
-      "Feed work is rounded upward separately for each positive operation under the qualified shared-operator model. " :
+    scope.textContent = (operator || cellCalendars ?
+      "Feed work is rounded upward separately for each positive operation under the qualified operation-timing model. " :
       "Feed work is rounded upward once per used cell under the declared whole-garment allocation model. ") +
       "The feed minimum is separate from the minimum completion time: a selected allocation can finish later while using less feed work. " +
       "Any declared deadline includes complete cell setup, handling, feed and final unloading. " +
@@ -4040,8 +4041,30 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       for (const count of cell.counts || []) cells(windows, [cell.cell, metric(count.copies),
         typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended",
         metric(seconds(count.incumbent_finish_milliseconds)), metric(seconds(count.lower_bound_finish_milliseconds)),
-        count.feasible ? (calendars ? "Fits before calendar and shared-resource constraints" : pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
+        count.feasible ? (cellCalendars ? "Complete retained order fits every opening" : calendars ? "Fits before calendar and shared-resource constraints" : pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
     }
+  }
+  if (cellCalendars) {
+    const openings = table(parent, `${label}: qualified independent cell calendars`,
+      ["Cell", "Window", "Starts (s)", "Ends (s)"]);
+    for (const [cell, windows] of Object.entries(cellCalendars.resources || {})) {
+      for (const [index, window] of windows.entries()) cells(openings, [cell, metric(index + 1),
+        metric(seconds(window.start_milliseconds)), metric(seconds(window.end_milliseconds))]);
+    }
+    const delays = table(parent, `${label}: independent cell calendar delays`,
+      ["Cell", "Unoccupied calendar delay (s)"]);
+    const timeline = table(parent, `${label}: selected independent cell timeline`,
+      ["Cell", "Local operation", "Global copy", "Handling starts (s)", "Setup starts (s)",
+        "Feed starts (s)", "Complete (s)"]);
+    for (const cell of report.selected?.cells || []) {
+      cells(delays, [cell.cell, cell.calendar_timeline
+        ? metric(seconds(cell.calendar_timeline.calendar_delay_milliseconds)) : "Idle"]);
+      for (const step of cell.calendar_timeline?.steps || []) cells(timeline, [cell.cell,
+        step.operation ?? "Final unloading", typeof step.copy === "number" ? metric(step.copy) : "Batch end",
+        metric(seconds(step.handling_start_milliseconds)), metric(seconds(step.setup_start_milliseconds)),
+        metric(seconds(step.feed_start_milliseconds)), metric(seconds(step.finish_milliseconds))]);
+    }
+    detail(parent, `${label}: independent cell calendar qualification and exact windows`, cellCalendars);
   }
   if (operator) {
     const labor = table(parent, `${label}: shared operator work`,
@@ -4092,7 +4115,12 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       (pools ? "Cell-only window receipts ignore shared operator and fixture contention; the selected timeline enforces cell, operator and pool limits. " :
         "Cell-only window receipts ignore operator contention; the selected timeline enforces both cell and operator limits. ") +
       "Each positive feed operation keeps its own upward-rounded time slot, including after attended work or waiting. " :
-      "Concurrent operation requires independently qualified machines, fixtures and handling labor. Feed is rounded upward once per used cell. ") +
+      "Concurrent operation requires independently qualified machines, fixtures and handling labor. " +
+      (cellCalendars ? "Feed is rounded upward separately for each positive operation. " : "Feed is rounded upward once per used cell. ")) +
+    (cellCalendars ? "Each complete handling, setup and feed block fits one opening; final unloading also fits one opening. " +
+      "Garment, fixture and setup state persist across breaks. Calendar delays are separate from productive work. " +
+      "The allocation replays retained serial operation orders; a failed retained order remains unresolved unless its independent lower bound proves exclusion. " +
+      "Completing that retained-order search alone does not prove a global optimum. " : "") +
     "Each used cell includes its own availability, initial setup and final unloading; raw feed and padding remain separate. " +
     "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
     (heterogeneous ? "Stitch pitch, feed, qualifications and thread consumption come from each selected cell's own admitted plan. " +

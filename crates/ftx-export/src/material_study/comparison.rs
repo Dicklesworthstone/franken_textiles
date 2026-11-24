@@ -2245,8 +2245,13 @@ impl Policy {
                 .production
                 .as_ref()
                 .and_then(|production| production.parallel.as_ref())
-                .and_then(|parallel| parallel.shared_operator.as_ref())
-                .is_some_and(|operator| operator.availability_calendars.is_some())
+                .is_some_and(|parallel| {
+                    parallel.availability_calendars.is_some()
+                        || parallel
+                            .shared_operator
+                            .as_ref()
+                            .is_some_and(|operator| operator.availability_calendars.is_some())
+                })
         };
         let parallel_allocation_search = |options: &crate::sewing::SewOptions| {
             options
@@ -3106,6 +3111,18 @@ fn scheduled_sewing_feed(row: &Alternative) -> Option<f64> {
                                     && plan.schema == "ftx-sewing-plan/36"
                                     && search.search_scope
                                         == "shared_operator_retained_serial_incumbents/1"
+                            } else if request.availability_calendars.is_some() {
+                                request.time_basis == "ceil_operation_feed_milliseconds/1"
+                                    && request.shared_workholding.is_none()
+                                    && parallel.shared_operator.is_none()
+                                    && parallel.shared_workholding.is_none()
+                                    && parallel.availability_calendars.is_some()
+                                    && parallel.schema == "ftx-sewing-parallel/10"
+                                    && production.schema == "ftx-sewing-production/25"
+                                    && plan.schema == "ftx-sewing-plan/37"
+                                    && parallel.calendar_order_scope
+                                        == Some("retained_serial_incumbents/1")
+                                    && search.search_scope == "complete_cell_count_assignments/1"
                             } else {
                                 request.time_basis == "ceil_cell_feed_milliseconds/1"
                                     && request.shared_workholding.is_none()

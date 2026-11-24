@@ -10,6 +10,7 @@ use ftx_pattern::Pattern;
 use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
+use super::routing::calendars;
 use super::{handling, workholding};
 use crate::sewing::{
     MAX_STATIONS, SewOptions, SewPlan, SewingMachine, SewingQualification, access, bad,
@@ -40,7 +41,8 @@ pub struct Policy {
     /// Exclusive with thread-order search; shared labor retains its coupled dispatch authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feed_time_search: Option<FeedTimeSearch>,
-    /// `ceil_cell_feed_milliseconds/1`, or `ceil_operation_feed_milliseconds/1` with shared labor.
+    /// `ceil_cell_feed_milliseconds/1`, or `ceil_operation_feed_milliseconds/1` with shared labor
+    /// or independently qualified cell calendars.
     pub time_basis: String,
     /// `independent_machines_fixtures_and_handling_labor/1`, or the separately qualified
     /// `independent_machines_and_fixtures_shared_operator/1`; explicit shared pools instead require
@@ -63,6 +65,11 @@ pub struct Policy {
     /// This requires shared-operator dispatch and independently qualifies access/release semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_workholding: Option<shared_workholding::Policy>,
+    /// Optional independently qualified shifts and breaks for fully staffed cells. Complete
+    /// handling/setup/feed phases and final unloading must each fit one opening. The source must
+    /// qualify inactive garment and fixture retention; this is exclusive with shared-operator mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability_calendars: Option<calendars::Policy>,
     /// Source qualifying these instances, configurations, declared availability windows and
     /// concurrent independence.
     pub source: Source,
@@ -298,18 +305,48 @@ pub struct CellSchedule {
     pub available_until_milliseconds: Option<u64>,
     /// Exact inner search cap used, retained alongside the unchanged source policy for replay.
     pub schedule_node_limit: usize,
-    /// Generated feed ceiled once per used cell, or once per operation with qualified shared labor.
+    /// Generated feed ceiled once per used cell, or once per operation with shared labor/calendars.
     pub scheduled_feed_milliseconds: u64,
     /// Numerical feed-ceiling padding; below 1 ms per cell or per operation under the chosen model.
     pub feed_padding_seconds: f64,
     /// Common-origin completion of a used cell including its actual final unloading.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_milliseconds: Option<u64>,
+    /// Complete operating intervals under independently qualified cell calendars. Idle cells omit
+    /// this field; gaps retain setup and local fixture state without inventing production work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_timeline: Option<CellTimeline>,
     /// Complete ordinary schedule with cell-local IDs and independently qualified resource history.
     /// Version 2 seam indices resolve in this cell's retained `CellPlan`, not the outer plan.
     /// The `copies` map applies to every operation, dependency, hold, handling transition and stitch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<super::Report>,
+}
+
+/// One nonpreemptive operation, or the final unloading, on a fully staffed independent cell.
+#[derive(Clone, Debug, Serialize)]
+pub struct CellStep {
+    /// Cell-local scoped operation identity; absent for final batch unloading.
+    pub operation: Option<String>,
+    /// Global physical garment copy; absent for final batch unloading.
+    pub copy: Option<usize>,
+    /// Start of the existing source-qualified handling transition.
+    pub handling_start_milliseconds: u64,
+    /// Handling completion and setup start.
+    pub setup_start_milliseconds: u64,
+    /// Setup completion and complete operation feed start.
+    pub feed_start_milliseconds: u64,
+    /// Complete feed finish, or final unloading completion.
+    pub finish_milliseconds: u64,
+}
+
+/// Exact replay of one retained complete cell order through its independently qualified openings.
+#[derive(Clone, Debug, Serialize)]
+pub struct CellTimeline {
+    /// Every actual operation followed by final unloading, with no partial phases.
+    pub steps: Vec<CellStep>,
+    /// Unoccupied time introduced by openings, excluding ordinary setup, handling and feed.
+    pub calendar_delay_milliseconds: u64,
 }
 
 /// A complete feasible whole-garment allocation, with elapsed time separate from aggregate work.
@@ -334,8 +371,9 @@ pub struct Assignment {
 pub struct CountAvailability {
     /// Whole garments assigned to this cell in the independently solved subproblem.
     pub copies: usize,
-    /// Finish of the complete retained serial incumbent, including final unloading.
-    pub incumbent_finish_milliseconds: u64,
+    /// Finish of the complete retained serial incumbent, including final unloading. Absent when
+    /// that order cannot fit the cell's calendars; no partial schedule supplies a finish time.
+    pub incumbent_finish_milliseconds: Option<u64>,
     /// Valid finish lower bound; an incomplete search may still find a shorter serial schedule.
     pub lower_bound_finish_milliseconds: u64,
     /// The complete incumbent finishes inside this cell's inclusive window.
@@ -371,7 +409,8 @@ pub struct AvailabilityReport {
 pub struct Report {
     /// `/1` shared geometry; `/2` configured sources; `/3` windows; `/4` shared labor; `/5` shared pools;
     /// `/6` operator calendars; `/7` configured-cell thread-order allocation;
-    /// `/8` independent configured-cell exact feed allocation; `/9` shared-operator feed allocation.
+    /// `/8` independent configured-cell exact feed allocation; `/9` shared-operator feed allocation;
+    /// `/10` independently staffed cell calendars, with complete per-operation feed slots.
     pub schema: &'static str,
     /// Same explicit time convention as the qualified input.
     pub time_basis: &'static str,
@@ -388,9 +427,16 @@ pub struct Report {
     pub baseline: Assignment,
     /// Complete best feasible assignment, retaining every used cell's full schedule.
     pub selected: Assignment,
-    /// Present only when at least one cell has an explicit end to its availability window.
+    /// Present when at least one cell has an explicit availability end or calendars are requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability: Option<AvailabilityReport>,
+    /// Exact independent cell calendar source, including qualifications for finally idle cells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability_calendars: Option<calendars::Policy>,
+    /// Calendars replay each cell/count's retained serial order. Another order can finish sooner;
+    /// only the independent lower bound can establish an unrestricted completion optimum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_order_scope: Option<&'static str>,
     /// Exact exclusive operator and concurrent autonomous-feed replay, when explicitly qualified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_operator: Option<operator::Report>,
@@ -409,7 +455,7 @@ pub struct Report {
     pub search_nodes: usize,
     /// All nested schedules and allocation subproblems completed their declared search.
     pub search_complete: bool,
-    /// The incumbent meets the global lower bound, or all inner searches and allocation completed.
+    /// The complete incumbent meets the independently relaxed global completion lower bound.
     pub optimality_proven: bool,
     /// At least one nested serial search stopped at its assigned work limit without a proof.
     pub budget_exhausted: bool,
@@ -545,6 +591,7 @@ impl Policy {
         let shared_operator = self.shared_operator.is_some();
         if (!configured && self.model != "independent_whole_garment_cells/1")
             || self.shared_workholding.is_some() && !shared_operator
+            || self.availability_calendars.is_some() && shared_operator
             || !(self.objective == "minimize_makespan"
                 && self.thread_order_search.is_none()
                 && self.feed_time_search.is_none()
@@ -558,7 +605,7 @@ impl Policy {
                     && self.feed_time_search.is_some()
                     && self.thread_order_search.is_none())
             || self.time_basis
-                != if shared_operator {
+                != if shared_operator || self.availability_calendars.is_some() {
                     "ceil_operation_feed_milliseconds/1"
                 } else {
                     "ceil_cell_feed_milliseconds/1"
@@ -635,6 +682,23 @@ impl Policy {
                     }),
             )?;
         }
+        if let Some(calendars) = &self.availability_calendars {
+            calendars.validate_resources(
+                &self
+                    .cells
+                    .iter()
+                    .map(|cell| {
+                        (
+                            cell.id.as_str(),
+                            (
+                                u64::from(cell.available_at_milliseconds),
+                                cell.available_until_milliseconds,
+                            ),
+                        )
+                    })
+                    .collect(),
+            )?;
+        }
         qualification_refs(plan, &self.qualifications)
     }
 }
@@ -706,7 +770,7 @@ struct Trial {
     handling_milliseconds: u64,
     feed_milliseconds: u64,
     padding_seconds: f64,
-    finish: u64,
+    finish: Option<u64>,
     lower: u64,
     attended_lower: u64,
     search_nodes: usize,
@@ -745,14 +809,40 @@ fn sum_time(a: u64, b: u64) -> Result<u64, Refusal> {
         })
 }
 
+fn calendar_intervals(
+    cell: &Cell,
+    phases: &[operator::Phase],
+    calendars: &calendars::Policy,
+) -> Result<Option<Vec<[u64; 4]>>, Refusal> {
+    let mut ready = u64::from(cell.available_at_milliseconds);
+    let mut intervals = Vec::with_capacity(phases.len());
+    for phase in phases {
+        let duration = phase.duration()?;
+        let Some(start) = calendars.earliest_start(&cell.id, ready, duration)? else {
+            return Ok(None);
+        };
+        if duration > MAX_EXACT_MILLISECONDS - start
+            || cell
+                .available_until_milliseconds
+                .is_some_and(|end| start > end || duration > end - start)
+        {
+            return Ok(None);
+        }
+        let setup = sum_time(start, phase.handling)?;
+        let feed = sum_time(setup, phase.setup)?;
+        ready = sum_time(feed, phase.feed)?;
+        intervals.push([start, setup, feed, ready]);
+    }
+    Ok(Some(intervals))
+}
+
 fn trial(
     plan: &SewPlan,
     cell: &Cell,
     copies: usize,
     node_limit: usize,
     pattern: &Pattern,
-    shared_operator: bool,
-    shared_workholding: Option<&shared_workholding::Policy>,
+    parallel: &Policy,
 ) -> Result<(Trial, super::Report), Refusal> {
     let mut ordering = cell.ordering.clone();
     ordering.max_search_nodes = node_limit;
@@ -766,7 +856,9 @@ fn trial(
     };
     let schedule = super::evaluate(plan, &policy, pattern)?;
     let feed = schedule.feed_seconds * 1000.0;
-    let rounded = if shared_operator {
+    let per_operation =
+        parallel.shared_operator.is_some() || parallel.availability_calendars.is_some();
+    let rounded = if per_operation {
         schedule
             .operations
             .iter()
@@ -801,6 +893,23 @@ fn trial(
         )?,
     )?;
     let lower = sum_time(start, handling.lower_bound_setup_and_handling_milliseconds)?;
+    let phases = if per_operation {
+        operator::phases(
+            plan,
+            cell,
+            &schedule,
+            feed_milliseconds,
+            parallel.shared_workholding.as_ref(),
+        )?
+    } else {
+        Vec::new()
+    };
+    let finish = if let Some(calendars) = &parallel.availability_calendars {
+        calendar_intervals(cell, &phases, calendars)?
+            .map(|intervals| intervals.last().expect("complete final unloading")[3])
+    } else {
+        Some(finish)
+    };
     let receipt = Trial {
         node_limit,
         feed_seconds: schedule.feed_seconds,
@@ -815,8 +924,8 @@ fn trial(
         search_complete: schedule.ordering.search_complete,
         budget_exhausted: schedule.ordering.budget_exhausted,
         schedule_sha256: schedule_sha256(&schedule)?,
-        phases: if shared_operator {
-            operator::phases(plan, cell, &schedule, feed_milliseconds, shared_workholding)?
+        phases: if parallel.shared_operator.is_some() {
+            phases
         } else {
             Vec::new()
         },
@@ -846,11 +955,14 @@ fn allocate(
                     continue;
                 }
                 let finish = if count == 0 {
-                    0
+                    Some(0)
                 } else if lower {
-                    row[count - 1].lower
+                    Some(row[count - 1].lower)
                 } else {
                     row[count - 1].finish
+                };
+                let Some(finish) = finish else {
+                    continue;
                 };
                 if count > 0
                     && (cells[cell]
@@ -907,7 +1019,9 @@ fn unresolved_cell_counts(cells: &[&Cell], trials: &[Vec<Trial>], deadline: Opti
                 .unwrap_or(MAX_EXACT_MILLISECONDS)
                 .min(deadline.unwrap_or(MAX_EXACT_MILLISECONDS));
             row.iter()
-                .filter(|trial| trial.finish > limit && trial.lower <= limit)
+                .filter(|trial| {
+                    trial.finish.is_none_or(|finish| finish > limit) && trial.lower <= limit
+                })
                 .count()
         })
         .sum()
@@ -1014,9 +1128,12 @@ impl CostSearch<'_> {
                 return;
             }
             let next = if count == 0 {
-                0
+                Some(0)
             } else {
                 self.trials[cell][count - 1].finish
+            };
+            let Some(next) = next else {
+                continue;
             };
             if count > 0
                 && (self.cells[cell]
@@ -1054,6 +1171,12 @@ fn cheapest_assignment(
     seed: (u64, &[usize]),
     lower: u64,
 ) -> Result<CostOutcome, Refusal> {
+    let calendar_constrained = plan
+        .options
+        .production
+        .as_ref()
+        .and_then(|production| production.parallel.as_ref())
+        .is_some_and(|parallel| parallel.availability_calendars.is_some());
     if policy
         .completion_deadline_milliseconds
         .is_some_and(|end| seed.0 > end)
@@ -1066,8 +1189,16 @@ fn cheapest_assignment(
                 bad("parallel completion lower bound exceeds the thread-order search deadline")
             } else {
                 Refusal::new(RefusalCode::NotConverged,
-                "no retained complete cell allocation meets the thread-order search deadline; unfinished serial orders remain unresolved")
-                .repair("increase the bounded serial/parallel schedule allowance or supply a longer completion deadline")
+                if calendar_constrained {
+                    "no retained complete cell allocation meets the calendar-constrained thread-order deadline; other calendar-specific operation orders remain unsearched"
+                } else {
+                    "no retained complete cell allocation meets the thread-order search deadline; unfinished serial orders remain unresolved"
+                })
+                .repair(if calendar_constrained {
+                    "review the qualified windows, eligible configurations and deadline; increasing serial search does not search calendar-specific orders"
+                } else {
+                    "increase the bounded serial/parallel schedule allowance or supply a longer completion deadline"
+                })
             },
         );
     }
@@ -1141,6 +1272,14 @@ fn assignment(
     search_nodes: &mut usize,
     pattern: &Pattern,
 ) -> Result<Assignment, Refusal> {
+    let parallel = plan
+        .options
+        .production
+        .as_ref()
+        .expect("production caller")
+        .parallel
+        .as_ref()
+        .expect("parallel caller");
     let mut out = Assignment {
         cells: Vec::with_capacity(cells.len()),
         makespan_milliseconds: 0,
@@ -1152,26 +1291,16 @@ fn assignment(
     let mut first_copy = 0;
     for ((cell, row), &count) in cells.iter().zip(trials).zip(counts) {
         let active = count.checked_sub(1).map(|index| &row[index]);
-        let copies = (first_copy..first_copy + count).collect();
+        let copies: Vec<_> = (first_copy..first_copy + count).collect();
         first_copy += count;
+        let mut calendar_timeline = None;
         let schedule = if let Some(expected) = active {
             let source = cell_plans
                 .iter()
                 .find(|source| source.cell == cell.id)
                 .map_or(plan, |source| source.plan.as_ref());
-            let (replayed, schedule) = trial(
-                source,
-                cell,
-                count,
-                expected.node_limit,
-                pattern,
-                !expected.phases.is_empty(),
-                plan.options
-                    .production
-                    .as_ref()
-                    .and_then(|production| production.parallel.as_ref())
-                    .and_then(|parallel| parallel.shared_workholding.as_ref()),
-            )?;
+            let (replayed, schedule) =
+                trial(source, cell, count, expected.node_limit, pattern, parallel)?;
             if &replayed != expected {
                 return Err(Refusal::new(
                     RefusalCode::NotConverged,
@@ -1179,7 +1308,39 @@ fn assignment(
                 ));
             }
             *search_nodes += replayed.search_nodes;
-            out.makespan_milliseconds = out.makespan_milliseconds.max(replayed.finish);
+            let finish = replayed.finish.ok_or_else(|| {
+                bad("parallel assignment contains an unavailable cell calendar order")
+            })?;
+            if let Some(calendars) = &parallel.availability_calendars {
+                let phases =
+                    operator::phases(source, cell, &schedule, replayed.feed_milliseconds, None)?;
+                let intervals = calendar_intervals(cell, &phases, calendars)?
+                    .ok_or_else(|| bad("parallel cell calendar intervals did not replay"))?;
+                let mut ready = u64::from(cell.available_at_milliseconds);
+                let mut delay = 0;
+                let mut steps = Vec::with_capacity(phases.len());
+                for (phase, [start, setup, feed, end]) in phases.iter().zip(intervals) {
+                    let operation = phase.operation.map(|index| &schedule.operations[index]);
+                    delay = sum_time(delay, start - ready)?;
+                    steps.push(CellStep {
+                        operation: operation.map(|operation| operation.id.clone()),
+                        copy: operation.map(|operation| copies[operation.copy]),
+                        handling_start_milliseconds: start,
+                        setup_start_milliseconds: setup,
+                        feed_start_milliseconds: feed,
+                        finish_milliseconds: end,
+                    });
+                    ready = end;
+                }
+                if ready != finish {
+                    return Err(bad("parallel cell calendar finish did not replay"));
+                }
+                calendar_timeline = Some(CellTimeline {
+                    steps,
+                    calendar_delay_milliseconds: delay,
+                });
+            }
+            out.makespan_milliseconds = out.makespan_milliseconds.max(finish);
             out.feed_seconds += replayed.feed_seconds;
             out.scheduled_feed_milliseconds =
                 sum_time(out.scheduled_feed_milliseconds, replayed.feed_milliseconds)?;
@@ -1198,7 +1359,8 @@ fn assignment(
             schedule_node_limit: active.map_or(0, |trial| trial.node_limit),
             scheduled_feed_milliseconds: active.map_or(0, |trial| trial.feed_milliseconds),
             feed_padding_seconds: active.map_or(0.0, |trial| trial.padding_seconds),
-            finish_milliseconds: active.map(|trial| trial.finish),
+            finish_milliseconds: active.and_then(|trial| trial.finish),
+            calendar_timeline,
             schedule,
         });
     }
@@ -1291,15 +1453,7 @@ pub(super) fn evaluate(
         let node_limit = cell.ordering.max_search_nodes.min(reservation.per_trial);
         let mut row = Vec::with_capacity(copies);
         for count in 1..=copies {
-            let (receipt, _) = trial(
-                source,
-                cell,
-                count,
-                node_limit,
-                pattern,
-                policy.shared_operator.is_some(),
-                policy.shared_workholding.as_ref(),
-            )?;
+            let (receipt, _) = trial(source, cell, count, node_limit, pattern, policy)?;
             search_nodes += receipt.search_nodes;
             search_complete &= receipt.search_complete;
             budget_exhausted |= receipt.budget_exhausted;
@@ -1314,9 +1468,17 @@ pub(super) fn evaluate(
         return Err(if bound.is_some() {
             Refusal::new(
                 RefusalCode::NotConverged,
-                "no complete parallel assignment was found inside the qualified cell availability windows; unfinished serial searches still permit a feasible assignment, so infeasibility is not proved",
+                if policy.availability_calendars.is_some() {
+                    "no retained complete serial order fits the qualified cell calendars; other operation orders remain unsearched, so production infeasibility is not proved"
+                } else {
+                    "no complete parallel assignment was found inside the qualified cell availability windows; unfinished serial searches still permit a feasible assignment, so infeasibility is not proved"
+                },
             )
-            .repair("increase the bounded serial and shared parallel search allowances")
+            .repair(if policy.availability_calendars.is_some() {
+                "review the qualified operating windows, alternative cells and explicit operation prerequisites; a larger serial node cap does not search calendar-specific orders"
+            } else {
+                "increase the bounded serial and shared parallel search allowances"
+            })
             .repair("supply independently qualified longer availability windows or additional cells")
         } else {
             bad("qualified cell availability windows cannot accommodate all garment copies: even the complete allocation over valid serial finish lower bounds is infeasible")
@@ -1384,9 +1546,17 @@ pub(super) fn evaluate(
                 } else {
                     Refusal::new(
                     RefusalCode::NotConverged,
-                    "no retained complete cell allocation meets the feed search deadline; unfinished serial orders remain unresolved",
+                    if policy.availability_calendars.is_some() {
+                        "no retained complete cell allocation meets the calendar-constrained feed deadline; other calendar-specific operation orders remain unsearched"
+                    } else {
+                        "no retained complete cell allocation meets the feed search deadline; unfinished serial orders remain unresolved"
+                    },
                 )
-                .repair("increase the bounded serial/parallel schedule allowance or supply a longer completion deadline")
+                .repair(if policy.availability_calendars.is_some() {
+                    "review the qualified windows, eligible configurations and deadline; increasing serial search does not search calendar-specific orders"
+                } else {
+                    "increase the bounded serial/parallel schedule allowance or supply a longer completion deadline"
+                })
                 },
             );
         }
@@ -1417,7 +1587,9 @@ pub(super) fn evaluate(
             cost = counts
                 .iter()
                 .zip(&trials)
-                .filter_map(|(&count, row)| count.checked_sub(1).map(|index| row[index].finish))
+                .filter_map(|(&count, row)| {
+                    count.checked_sub(1).and_then(|index| row[index].finish)
+                })
                 .max()
                 .expect("positive complete garment quantity");
         }
@@ -1440,12 +1612,12 @@ pub(super) fn evaluate(
     };
     let baseline_replaced = operator.as_ref().map_or_else(
         || {
-            cells[0]
-                .available_until_milliseconds
-                .is_some_and(|end| trials[0][copies - 1].finish > end)
-                || policy
-                    .completion_deadline()
-                    .is_some_and(|end| trials[0][copies - 1].finish > end)
+            trials[0][copies - 1].finish.is_none_or(|finish| {
+                cells[0]
+                    .available_until_milliseconds
+                    .is_some_and(|end| finish > end)
+                    || policy.completion_deadline().is_some_and(|end| finish > end)
+            })
         },
         |operator| operator.baseline_replaced,
     );
@@ -1522,35 +1694,37 @@ pub(super) fn evaluate(
             )
         })
         .transpose()?;
-    let availability = cells
-        .iter()
-        .any(|cell| cell.available_until_milliseconds.is_some())
-        .then(|| AvailabilityReport {
-            cells: cells
-                .iter()
-                .zip(&trials)
-                .map(|(cell, row)| CellAvailability {
-                    cell: cell.id.clone(),
-                    available_until_milliseconds: cell.available_until_milliseconds,
-                    counts: row
-                        .iter()
-                        .enumerate()
-                        .map(|(index, trial)| CountAvailability {
-                            copies: index + 1,
-                            incumbent_finish_milliseconds: trial.finish,
-                            lower_bound_finish_milliseconds: trial.lower,
-                            feasible: cell
-                                .available_until_milliseconds
-                                .is_none_or(|end| trial.finish <= end),
-                            infeasibility_proven: cell
-                                .available_until_milliseconds
-                                .is_some_and(|end| trial.lower > end),
-                        })
-                        .collect(),
-                })
-                .collect(),
-            baseline_replaced,
-        });
+    let availability = (policy.availability_calendars.is_some()
+        || cells
+            .iter()
+            .any(|cell| cell.available_until_milliseconds.is_some()))
+    .then(|| AvailabilityReport {
+        cells: cells
+            .iter()
+            .zip(&trials)
+            .map(|(cell, row)| CellAvailability {
+                cell: cell.id.clone(),
+                available_until_milliseconds: cell.available_until_milliseconds,
+                counts: row
+                    .iter()
+                    .enumerate()
+                    .map(|(index, trial)| CountAvailability {
+                        copies: index + 1,
+                        incumbent_finish_milliseconds: trial.finish,
+                        lower_bound_finish_milliseconds: trial.lower,
+                        feasible: trial.finish.is_some_and(|finish| {
+                            cell.available_until_milliseconds
+                                .is_none_or(|end| finish <= end)
+                        }),
+                        infeasibility_proven: cell
+                            .available_until_milliseconds
+                            .is_some_and(|end| trial.lower > end),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        baseline_replaced,
+    });
     debug_assert_eq!(
         incumbent_work
             + bound_work
@@ -1561,7 +1735,9 @@ pub(super) fn evaluate(
     debug_assert!(search_nodes <= policy.max_search_nodes);
     let optimality_proven = selected.makespan_milliseconds == lower_bound_makespan_milliseconds;
     Ok(Report {
-        schema: if feed_time_search.is_some() && shared_operator.is_some() {
+        schema: if policy.availability_calendars.is_some() {
+            "ftx-sewing-parallel/10"
+        } else if feed_time_search.is_some() && shared_operator.is_some() {
             "ftx-sewing-parallel/9"
         } else if feed_time_search.is_some() {
             "ftx-sewing-parallel/8"
@@ -1583,7 +1759,7 @@ pub(super) fn evaluate(
         } else {
             "ftx-sewing-parallel/2"
         },
-        time_basis: if shared_operator.is_some() {
+        time_basis: if shared_operator.is_some() || policy.availability_calendars.is_some() {
             "ceil_operation_feed_milliseconds/1"
         } else {
             "ceil_cell_feed_milliseconds/1"
@@ -1594,6 +1770,11 @@ pub(super) fn evaluate(
         baseline,
         selected,
         availability,
+        availability_calendars: policy.availability_calendars.clone(),
+        calendar_order_scope: policy
+            .availability_calendars
+            .as_ref()
+            .map(|_| "retained_serial_incumbents/1"),
         shared_operator,
         shared_workholding,
         thread_order_search,

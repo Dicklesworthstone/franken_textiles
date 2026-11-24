@@ -819,6 +819,13 @@ impl SewPlan {
                 .production
                 .as_ref()
                 .and_then(|production| production.parallel.as_ref())
+                .is_some_and(|parallel| parallel.availability_calendars.is_some())
+            {
+                "ftx-sewing-plan/37"
+            } else if options
+                .production
+                .as_ref()
+                .and_then(|production| production.parallel.as_ref())
                 .is_some_and(production::parallel::Policy::feed_directed)
             {
                 if options

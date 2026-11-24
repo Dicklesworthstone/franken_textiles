@@ -111,6 +111,18 @@ fn operator_calendars(options: &mut Value, resources: Value) {
     });
 }
 
+fn independent_calendars(options: &mut Value, resources: Value) {
+    let parallel = &mut options["production"]["parallel"];
+    parallel["time_basis"] = json!("ceil_operation_feed_milliseconds/1");
+    parallel["availability_calendars"] = json!({
+        "model":"nonpreemptive_resource_windows/1", "resources":resources,
+        "source":{"reference":"test:independent-cell-calendars","accessed_on":"2026-11-24",
+            "note":"Synthetic fully staffed cell openings, not measured factory availability"},
+        "method":"Complete operating blocks with qualified inactive garment and fixture retention",
+        "conditions":{}, "evidence":"estimate", "allow_estimates":true
+    });
+}
+
 fn windows(rows: &[[u64; 2]]) -> Value {
     json!(
         rows.iter()
@@ -2170,6 +2182,345 @@ fn shared_operator_overlaps_only_autonomous_feed_and_replays_every_attended_phas
                 .unwrap()
                 .max_search_nodes
     );
+}
+
+#[test]
+fn independent_cell_calendars_keep_complete_phases_and_final_unloading_inside_openings() {
+    for (first_end, finish, delay) in [(5300, 5300, 0), (5100, 6200, 900), (5099, 11300, 6000)] {
+        let (pattern, mut options) = one_operation(2);
+        independent_calendars(
+            &mut options,
+            json!({
+                "cell-a":windows(&[[0,first_end],[6000,12000]]),
+                "cell-b":windows(&[[0,first_end],[6000,12000]])
+            }),
+        );
+        let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+        let program = SewProgram::build(&pattern, &typed).unwrap();
+        let production = program.plan.production.as_ref().unwrap();
+        let report = production.parallel.as_ref().unwrap();
+        assert_eq!(program.plan.schema, "ftx-sewing-plan/37");
+        assert_eq!(production.schema, "ftx-sewing-production/25");
+        assert_eq!(report.schema, "ftx-sewing-parallel/10");
+        assert_eq!(
+            report.calendar_order_scope,
+            Some("retained_serial_incumbents/1")
+        );
+        assert_eq!(report.selected.makespan_milliseconds, finish);
+        assert_eq!(report.selected.scheduled_feed_milliseconds, 8000);
+        assert_eq!(report.lower_bound_makespan_milliseconds, 5300);
+        assert_eq!(report.optimality_proven, finish == 5300);
+        assert!(report.availability.as_ref().unwrap().baseline_replaced);
+        assert_eq!(program.stitches.len(), 80);
+        assert!(!report.hardware_execution_authorized);
+        for assignment in [&report.baseline, &report.selected] {
+            for cell in &assignment.cells {
+                assert_eq!(cell.copies.len(), 1);
+                assert_eq!(cell.finish_milliseconds, Some(finish));
+                let timeline = cell.calendar_timeline.as_ref().unwrap();
+                assert_eq!(timeline.calendar_delay_milliseconds, delay);
+                assert_eq!(timeline.steps.len(), 2);
+                assert_eq!(timeline.steps[0].copy, Some(cell.copies[0]));
+                assert!(timeline.steps[1].operation.is_none());
+                assert_eq!(timeline.steps[1].finish_milliseconds, finish);
+                assert_eq!(
+                    timeline.steps[1].finish_milliseconds
+                        - timeline.steps[1].handling_start_milliseconds,
+                    200
+                );
+                for step in &timeline.steps {
+                    assert!(
+                        report.availability_calendars.as_ref().unwrap().resources[&cell.cell]
+                            .iter()
+                            .any(|window| window.start_milliseconds
+                                <= step.handling_start_milliseconds
+                                && step.finish_milliseconds <= window.end_milliseconds)
+                    );
+                }
+            }
+        }
+        for cell in &report.availability.as_ref().unwrap().cells {
+            assert_eq!(cell.counts[1].incumbent_finish_milliseconds, None);
+            assert!(!cell.counts[1].feasible && !cell.counts[1].infeasibility_proven);
+        }
+        assert_eq!(
+            serde_json::to_value(&program).unwrap(),
+            serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(report.availability_calendars.as_ref().unwrap()).unwrap(),
+            options["production"]["parallel"]["availability_calendars"]
+        );
+    }
+}
+
+#[test]
+fn independent_cell_calendars_preserve_idle_sources_and_refuse_unavailable_complete_orders() {
+    let (pattern, mut options) = one_operation(2);
+    independent_calendars(
+        &mut options,
+        json!({
+            "cell-a":windows(&[[0,0]]), "cell-b":windows(&[[0,20000]])
+        }),
+    );
+    let plan = build(&pattern, options.clone()).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    assert!(report.selected.cells[0].copies.is_empty());
+    assert!(report.selected.cells[0].calendar_timeline.is_none());
+    assert_eq!(report.selected.cells[0].finish_milliseconds, None);
+    assert_eq!(report.selected.cells[0].scheduled_feed_milliseconds, 0);
+    assert_eq!(report.selected.cells[1].copies.len(), 2);
+    assert_eq!(report.selected.makespan_milliseconds, 14300);
+
+    for field in [
+        "source", "estimate", "unknown", "overlap", "outside", "rounding", "shared",
+    ] {
+        let mut wrong = options.clone();
+        let parallel = &mut wrong["production"]["parallel"];
+        match field {
+            "source" => parallel["availability_calendars"]["method"] = json!(""),
+            "estimate" => parallel["availability_calendars"]["allow_estimates"] = json!(false),
+            "unknown" => {
+                parallel["availability_calendars"]["resources"]["absent-cell"] = windows(&[[0, 10]])
+            }
+            "overlap" => {
+                parallel["availability_calendars"]["resources"]["cell-a"] =
+                    windows(&[[0, 0], [0, 10]])
+            }
+            "outside" => {
+                parallel["cells"][0]["available_until_milliseconds"] = json!(0);
+                parallel["availability_calendars"]["resources"]["cell-a"] = windows(&[[0, 1]]);
+            }
+            "rounding" => parallel["time_basis"] = json!("ceil_cell_feed_milliseconds/1"),
+            "shared" => shared_operator(&mut wrong, 40000),
+            _ => unreachable!(),
+        }
+        assert!(build(&pattern, wrong).is_err(), "{field}");
+    }
+    independent_calendars(
+        &mut options,
+        json!({
+            "cell-a":windows(&[[0,5099]]), "cell-b":windows(&[[0,5099]])
+        }),
+    );
+    assert_eq!(
+        build(&pattern, options).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
+fn independent_cell_calendars_charge_each_feed_and_preserve_legacy_rounding() {
+    let (pattern, mut options) = heterogeneous();
+    options["production"]["production_copies"] = json!(1);
+    options["production"]["parallel"]["cells"][0]["available_until_milliseconds"] = json!(0);
+    let fast = &mut options["production"]["parallel"]["cells"][1];
+    fast["configuration"]["machine"]["max_stitches_per_minute"] = json!(6_000_000.0);
+    fast["configuration"]["qualifications"][0]["stitches_per_minute"] = json!([1.0, 6_000_000.0]);
+    for operation in ["join", "reinforce"] {
+        fast["configuration"]["recipes"][operation]["stitches_per_minute"] = json!(6_000_000.0);
+    }
+    refresh_cell_locks(fast);
+    let legacy = build(&pattern, options.clone()).unwrap();
+    let legacy = legacy.production.unwrap().parallel.unwrap();
+    assert_eq!(legacy.selected.cells[1].scheduled_feed_milliseconds, 1);
+    assert!(legacy.availability_calendars.is_none());
+    assert!(legacy.selected.cells[1].calendar_timeline.is_none());
+    independent_calendars(
+        &mut options,
+        json!({
+            "cell-a":windows(&[[0,0]]), "cell-b":windows(&[[0,10000]])
+        }),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    let fast = &report.selected.cells[1];
+    assert_eq!(fast.scheduled_feed_milliseconds, 2);
+    assert!((fast.feed_padding_seconds - 0.0016).abs() < 1e-12);
+    assert_eq!(fast.finish_milliseconds, Some(902));
+    let steps = &fast.calendar_timeline.as_ref().unwrap().steps;
+    assert_eq!(steps.len(), 3);
+    for step in &steps[..2] {
+        assert_eq!(step.finish_milliseconds - step.feed_start_milliseconds, 1);
+    }
+}
+
+#[test]
+fn independent_cell_calendars_keep_unsearched_operation_orders_unresolved() {
+    let (pattern, mut options) = fixture(1);
+    options["passes"][0]["stitches_per_minute"] = json!(1000.0);
+    options["passes"][1]["after"] = json!([]);
+    options["production"]["workholding"] = Value::Null;
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["workholding"] = Value::Null;
+        for transition in cell["ordering"]["setup_times"]["transitions"]
+            .as_array_mut()
+            .unwrap()
+        {
+            transition["milliseconds"] = json!(0);
+        }
+        for key in ["initial_milliseconds", "final_milliseconds"] {
+            for duration in cell["handling"][key].as_object_mut().unwrap().values_mut() {
+                *duration = json!(0);
+            }
+        }
+        for transition in cell["handling"]["transitions"].as_array_mut().unwrap() {
+            transition["milliseconds"] = json!(0);
+        }
+    }
+    independent_calendars(
+        &mut options,
+        json!({
+            "cell-a":windows(&[[0,4000],[10000,12400]]), "cell-b":windows(&[[0,0]])
+        }),
+    );
+    // The tied uninterrupted incumbent is join (2400 ms), reinforce (4000 ms). Neither
+    // opening can hold the second operation after that first choice, but reversing them fits.
+    let refusal = build(&pattern, options.clone()).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::NotConverged);
+    assert!(
+        refusal
+            .message
+            .contains("other operation orders remain unsearched")
+    );
+    options["passes"][0]["after"] = json!(["reinforce"]);
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 12400);
+    assert!(!report.optimality_proven);
+}
+
+#[test]
+fn independent_cell_calendars_keep_local_fixture_ownership_across_inactive_gaps() {
+    let (pattern, mut options) = fixture(1);
+    independent_calendars(
+        &mut options,
+        json!({
+            "cell-a":windows(&[[0,5100],[10000,15000]]), "cell-b":windows(&[[0,0]])
+        }),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.unwrap().parallel.unwrap();
+    let cell = &report.selected.cells[0];
+    let timeline = cell.calendar_timeline.as_ref().unwrap();
+    assert_eq!(timeline.steps[0].finish_milliseconds, 5100);
+    assert_eq!(timeline.steps[1].handling_start_milliseconds, 10000);
+    assert_eq!(timeline.calendar_delay_milliseconds, 4900);
+    let held = cell
+        .schedule
+        .as_ref()
+        .unwrap()
+        .workholding
+        .as_ref()
+        .unwrap();
+    assert_eq!(held.holds.len(), 1);
+    assert_eq!(held.selected.peak_occupancy["holding-jig"], 1);
+    assert_eq!(held.selected.operations[0].acquired.len(), 1);
+    assert!(held.selected.operations[0].released.is_empty());
+    assert_eq!(held.selected.operations[0].occupied_after["holding-jig"], 1);
+    assert_eq!(
+        held.selected.operations[1].occupied_before["holding-jig"],
+        1
+    );
+    assert_eq!(held.selected.operations[1].released.len(), 1);
+}
+
+#[test]
+fn independent_cell_calendars_bind_direct_selected_feed_and_thread_comparisons() {
+    use ftx_export::material_study::Request;
+
+    let (pattern, mut original) = parallel_feed_fixture();
+    thread_inventory(&mut original);
+    independent_calendars(
+        &mut original,
+        json!({
+            "cell-a":windows(&[[0,0]]), "cell-b":windows(&[[20000,50000]])
+        }),
+    );
+    for feed_directed in [false, true] {
+        let mut options = original.clone();
+        if !feed_directed {
+            options["production"]["parallel"]["objective"] = json!("minimize_makespan");
+            options["production"]["parallel"]["feed_time_search"] = Value::Null;
+        } else {
+            options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
+                json!(31104);
+        }
+        for selected in [false, true] {
+            let mut input = if selected {
+                parallel_feed_selection(options.clone())
+            } else {
+                options.clone()
+            };
+            if selected && !feed_directed {
+                input["schema"] = json!("ftx-sewing-selection/5");
+                input["objective"] = json!("minimize_parallel_makespan");
+            }
+            for metric in [
+                "feed_seconds",
+                "thread_required_length_m",
+                "sewing_scheduled_feed_milliseconds",
+            ] {
+                let study = |input: Value| {
+                    let mut request = json!({"schema":"ftx-material-study/1",
+                        "variants":[{"key":"calendar","changes":{"schema":"ftx-material-bindings/1",
+                            "default":pattern.raw()["fabric"]["material"]}}],
+                        "comparison":{"basis":"nominal","objectives":[{"metric":metric,"direction":"minimize"}]}});
+                    request[if selected {
+                        "sewing_selection"
+                    } else {
+                        "sewing"
+                    }] = input;
+                    let result = serde_json::to_value(
+                        serde_json::from_value::<Request>(request)
+                            .unwrap()
+                            .evaluate(&pattern)
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(result["comparison"]["frontier"], json!(["calendar"]));
+                    let parallel =
+                        &result["alternatives"][0]["sewing"]["result"]["production"]["parallel"];
+                    assert_eq!(parallel["selected"]["cells"][0]["copies"], json!([]));
+                    assert_eq!(parallel["selected"]["scheduled_feed_milliseconds"], 8004);
+                    assert_eq!(parallel["selected"]["makespan_milliseconds"], 31104);
+                    if metric == "sewing_scheduled_feed_milliseconds" {
+                        assert_eq!(
+                            result["comparison"]["alternatives"][0]["readings"][metric]["value"],
+                            8004.0
+                        );
+                    }
+                    result
+                };
+                let retained = study(input.clone());
+                let mut changed = input.clone();
+                let source = if selected {
+                    &mut changed["options"]
+                } else {
+                    &mut changed
+                };
+                source["production"]["parallel"]["availability_calendars"]["resources"]["cell-a"]
+                    [0]["end_milliseconds"] = json!(1);
+                let changed = study(changed);
+                assert_eq!(
+                    retained["comparison"]["alternatives"][0]["readings"],
+                    changed["comparison"]["alternatives"][0]["readings"]
+                );
+                assert_ne!(
+                    retained["comparison"]["alternatives"][0]["input_protocol_sha256"],
+                    changed["comparison"]["alternatives"][0]["input_protocol_sha256"],
+                    "feed_directed={feed_directed},selected={selected},metric={metric}"
+                );
+            }
+        }
+    }
+    original["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
+        json!(31103);
+    assert!(build(&pattern, original).is_err());
 }
 
 #[test]

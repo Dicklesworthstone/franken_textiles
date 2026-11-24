@@ -481,6 +481,19 @@ assignment. Parallel `/3` retains bounded count/admission receipts and supplied 
 schemas and serialization stay unchanged. Actual cell recipes, stitches, yarn inventory and material
 studies follow the constrained assignment. Reconstruction shares the existing work reservation.
 
+**Independent cell calendars** (`production.parallel.availability_calendars`, `ftx-pb2.2`).
+The existing source-qualified `nonpreemptive_resource_windows/1` policy admits complete
+handling/setup/feed blocks and final unloading inside each cell's openings. It requires
+`ceil_operation_feed_milliseconds/1`, independent labor and separately qualified inactive
+garment/fixture retention; setup and local holds persist across gaps. Exact phase timelines,
+unoccupied delay and complete sources survive replay through stitches, thread purchasing,
+recipe selection and material comparisons. Plan `/37`, production `/25` and parallel `/10`
+identify the extension; omitted calendars preserve prior serialization and arithmetic.
+Allocation uses retained serial incumbents, named explicitly by `calendar_order_scope`.
+An unavailable order has a null finish, remains unresolved under an admissible independent
+lower bound, and never supplies partial work or an unrestricted infeasibility/optimality claim.
+Tests: `sewing_parallel::independent_cell_calendars_*` and ordinary workbench consumer views.
+
 **One shared operator** (`production.parallel.shared_operator`). The explicit
 `exclusive_setup_handling_autonomous_feed/1` protocol shares one qualified person across otherwise
 independent machines and fixtures. Full cell/effective-recipe/timing hashes, separate estimate consent,

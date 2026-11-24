@@ -6171,6 +6171,26 @@ synthetic mixed-pose, silhouette, derivative, budget and held-out checks accompa
 Supplied poses, calibrated cameras and real-wearer anatomical accuracy remain separate assumptions
 and acceptance gates; this does not establish physical garment fit.
 
+### 25.222 Schedule independent parallel cells through qualified shifts and breaks
+
+Whole-garment parallel production can retain a source-qualified calendar for each independently
+staffed cell. Complete handling, setup and operation-feed blocks must fit inside one opening;
+final unloading is another complete block. Per-operation feed ceilings prevent fractional work
+from crossing a closing boundary. Garments, fixture holds and setup state persist across gaps.
+
+The existing allocation search replays each retained serial incumbent against these openings.
+Only complete feasible cell/count schedules enter the allocation. An unavailable retained order
+has no finishing time and remains unresolved when independent lower bounds still admit another
+order. Retained-order exhaustion alone proves neither unrestricted infeasibility nor optimality.
+The report identifies this scope and separates productive work from calendar delay.
+
+Exact policies and phase timelines reach stitches, cell-qualified thread purchasing, feed/recipe
+selection and material comparisons; idle-cell source declarations remain part of the frozen
+comparison protocol. Native report consumers and the browser workbench show openings, delays,
+final unloading and unresolved counts. Omission preserves prior clocks and output. This advances
+`ftx-pb2.2`; synthetic scheduling regressions do not establish measured factory performance or
+safe workholding through a break. The contract is in `docs/sewing-production.md`.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
