@@ -5705,7 +5705,7 @@ mod strategy_and_integrator_tests {
             Vec3::new(0.019, 0.011, 0.004),
         ];
         for strategy in [
-            NewtonStrategy::ProjectedDirect,
+            NewtonStrategy::ProjectedNewton,
             NewtonStrategy::adaptive_ilu_default(),
         ] {
             let mut solver = Solver::new(
