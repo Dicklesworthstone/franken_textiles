@@ -69,7 +69,7 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   air velocity `air_velocity_m_s`, supporting both `ImplicitEuler` and `GeneralizedAlpha`) and
   stiffness-proportional Green-strain-rate / dihedral-rate Rayleigh damping (`DampingOptions`).
   Stationary air (`air_velocity_m_s = [0, 0, 0]`) bypasses subtraction and omits the JSON key so
-  stationary-air arithmetic, receipts, and qualification digests remain bit-identical. An active
+  omitted and explicit-zero wind have identical arithmetic and receipts. An active
   wind load refuses both the conservative static solve and its adjoint, including material and
   reaction gradients. Still air, zero density, and zero drag coefficients exert no steady load.
   Rayleigh damping also vanishes at equilibrium and permits the same static sensitivities.
@@ -89,6 +89,14 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   the accepted dynamic result remains available. Analytical forces, common-velocity invariance,
   both integrators' derivatives and actual resting/comoving cloth are covered by focused tests
   in `damping::tests` and `tests/kat_realism.rs` (`ftx-aero-wind`).
+  Enabled drag uses positive three-point degree-two area quadrature of the linear triangle
+  velocity field, retaining rotational/flapping resistance when the centroid is stationary.
+  Barycentric force and Hessian assembly share the potential's weights and existing triangle
+  sparsity; consistent initial acceleration uses the same distributed nodal forces. The linear
+  low-speed tangent is the consistent triangle area matrix, not a centroid rank-three reduction.
+  Active nonuniform-velocity trajectories change from the former center-only rule. The default
+  disabled law is unchanged; nonlinear drag still needs spatial refinement and is not an airflow,
+  shielding or empirical fabric model. See `docs/motion-wind.md`.
 - **Principal-strain tension-field softening (`FTX-27c`)**: `CompressionModel::Principal` applies
   the `C²` `tanh` blend to Green-strain eigenvalues through a shared spectral transform for linear
   and characterized nonlinear membranes, Maxwell histories, and homogeneous elastic adjoints.

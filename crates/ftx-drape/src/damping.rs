@@ -3,7 +3,9 @@
 //! - **Aerodynamic drag** ([`AirDrag`]): anisotropic per-triangle crossflow (normal) and skin-friction
 //!   (tangential) drag on cloth velocity relative to an optional prescribed uniform world-space
 //!   ambient air velocity (`v_rel = v_cloth − v_air`), formulated as a strictly convex `C^∞`
-//!   variational step potential with lagged step-start triangle area and unit normal. Stationary air
+//!   variational step potential integrated at three positive-weight triangle quadrature points,
+//!   with lagged step-start triangle area and unit normal. Interpolated nodal velocities retain
+//!   rotational and deformation resistance even when a triangle's centroid is stationary. Stationary air
 //!   (`air_velocity_m_s = [0, 0, 0]`) bypasses subtraction to preserve bit-identical stationary-air
 //!   arithmetic. Its `9 × 9` element Hessian is symmetric positive semidefinite by construction
 //!   (`psd = true`) and shares the exact sparsity pattern of [`crate::elements::MembraneElement`]
@@ -109,11 +111,11 @@ impl AirDrag {
     /// ambient air is stationary so stationary-air floating-point arithmetic is bit-identical.
     #[must_use]
     #[inline]
-    pub fn relative_velocity(&self, centroid_velocity: Vec3) -> Vec3 {
+    pub fn relative_velocity(&self, velocity: Vec3) -> Vec3 {
         if self.has_wind() {
-            centroid_velocity - self.air_velocity()
+            velocity - self.air_velocity()
         } else {
-            centroid_velocity
+            velocity
         }
     }
 
@@ -170,19 +172,14 @@ impl AirDrag {
     }
 
     /// Instantaneous triangle resistance (`-F_drag`, the contribution to `M a + ∇Ψ − F_drag = M g`)
-    /// at the supplied world-space cloth centroid velocity, relative to [`Self::air_velocity_m_s`].
-    /// The caller distributes this total equally across the triangle's three vertices.
+    /// at a uniform world-space cloth velocity, relative to [`Self::air_velocity_m_s`].
+    /// For nonuniform vertex velocities use [`Self::triangle_nodal_resistance_forces`].
     #[must_use]
-    pub fn triangle_resistance_force(
-        &self,
-        area: f64,
-        normal: Vec3,
-        centroid_velocity: Vec3,
-    ) -> Vec3 {
+    pub fn triangle_resistance_force(&self, area: f64, normal: Vec3, velocity: Vec3) -> Vec3 {
         if area <= 0.0 || self.rho_air_kg_m3 == 0.0 {
             return Vec3::ZERO;
         }
-        let v_rel = self.relative_velocity(centroid_velocity);
+        let v_rel = self.relative_velocity(velocity);
         let s_n = v_rel.dot(normal);
         let v_t = v_rel - normal * s_n;
         let eps2 = self.eps_v_m_s * self.eps_v_m_s;
@@ -190,6 +187,30 @@ impl AirDrag {
         let u_t = (v_t.norm2() + eps2).sqrt();
         let pref = 0.5 * self.rho_air_kg_m3 * area;
         normal * (pref * self.c_normal * u_n * s_n) + v_t * (pref * self.c_tangent * u_t)
+    }
+
+    /// Consistent nodal resistance for the affine triangle velocity field. The same positive
+    /// area quadrature is used by the incremental potential and its derivatives. Uniform
+    /// translation retains the direct whole-triangle force and equal nodal shares.
+    #[must_use]
+    pub fn triangle_nodal_resistance_forces(
+        &self,
+        area: f64,
+        normal: Vec3,
+        velocities: [Vec3; 3],
+    ) -> [Vec3; 3] {
+        if velocities[0] == velocities[1] && velocities[0] == velocities[2] {
+            return [self.triangle_resistance_force(area, normal, velocities[0]) * (1.0 / 3.0); 3];
+        }
+        let mut forces = [Vec3::ZERO; 3];
+        for shape in AIR_DRAG_SHAPES {
+            let velocity = interpolate_velocity(velocities, shape);
+            let force = self.triangle_resistance_force(area / 3.0, normal, velocity);
+            for a in 0..3 {
+                forces[a] += force * shape[a];
+            }
+        }
+        forces
     }
 }
 
@@ -351,18 +372,11 @@ impl<'a> VelocityMap<'a> {
         }
     }
 
-    fn centroid_velocity(&self, x: &[Vec3], v: [usize; 3]) -> Vec3 {
+    fn nodal_velocities(&self, x: &[Vec3], v: [usize; 3]) -> [Vec3; 3] {
         match self {
-            Self::ImplicitEuler { x0, inv_h } => {
-                let d0 = x[v[0]] - x0[v[0]];
-                let d1 = x[v[1]] - x0[v[1]];
-                let d2 = x[v[2]] - x0[v[2]];
-                (d0 + d1 + d2) * (*inv_h / 3.0)
-            }
+            Self::ImplicitEuler { x0, inv_h } => v.map(|i| (x[i] - x0[i]) * *inv_h),
             Self::GeneralizedAlpha { x0, v_base, c_v } => {
-                let b = (v_base[v[0]] + v_base[v[1]] + v_base[v[2]]) * (1.0 / 3.0);
-                let d = (x[v[0]] - x0[v[0]]) + (x[v[1]] - x0[v[1]]) + (x[v[2]] - x0[v[2]]);
-                b + d * (*c_v / 3.0)
+                v.map(|i| v_base[i] + (x[i] - x0[i]) * *c_v)
             }
         }
     }
@@ -486,8 +500,8 @@ impl<'a> DampingStep<'a> {
                 if area <= 0.0 {
                     continue;
                 }
-                let v = self.vel.centroid_velocity(x, e.v);
-                total += air_drag_energy(drag, area, normal, v, c_v);
+                let velocities = self.vel.nodal_velocities(x, e.v);
+                total += air_drag_triangle_energy(drag, area, normal, velocities, c_v);
             }
         }
         if self.options.rayleigh_membrane_s > 0.0 {
@@ -586,8 +600,14 @@ impl<'a> DampingStep<'a> {
         if area <= 0.0 || drag.rho_air_kg_m3 == 0.0 {
             return None;
         }
-        let v = self.vel.centroid_velocity(x, verts);
-        Some(air_drag_local(drag, area, normal, v, self.vel.c_v()))
+        let velocities = self.vel.nodal_velocities(x, verts);
+        Some(air_drag_triangle_local(
+            drag,
+            area,
+            normal,
+            velocities,
+            self.vel.c_v(),
+        ))
     }
 
     /// Per-triangle SE(3)-invariant Rayleigh membrane strain-rate local potential.
@@ -690,6 +710,84 @@ fn smooth_drag_psi(r2: f64, eps: f64) -> (f64, f64) {
     }
 }
 
+// Positive three-point degree-two area rule. An affine velocity field is sampled inside the
+// triangle, so translation, rotation and deformation all enter the same convex drag potential.
+const AIR_DRAG_SHAPES: [[f64; 3]; 3] = [
+    [2.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0],
+    [1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0],
+    [1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0],
+];
+
+fn interpolate_velocity(velocities: [Vec3; 3], shape: [f64; 3]) -> Vec3 {
+    velocities[0] * shape[0] + velocities[1] * shape[1] + velocities[2] * shape[2]
+}
+
+fn air_drag_triangle_energy(
+    drag: AirDrag,
+    area: f64,
+    normal: Vec3,
+    velocities: [Vec3; 3],
+    c_v: f64,
+) -> f64 {
+    if velocities[0] == velocities[1] && velocities[0] == velocities[2] {
+        return air_drag_energy(drag, area, normal, velocities[0], c_v);
+    }
+    AIR_DRAG_SHAPES
+        .into_iter()
+        .map(|shape| {
+            air_drag_energy(
+                drag,
+                area / 3.0,
+                normal,
+                interpolate_velocity(velocities, shape),
+                c_v,
+            )
+        })
+        .sum()
+}
+
+fn air_drag_triangle_local(
+    drag: AirDrag,
+    area: f64,
+    normal: Vec3,
+    velocities: [Vec3; 3],
+    c_v: f64,
+) -> Local<9, 81> {
+    if velocities[0] == velocities[1] && velocities[0] == velocities[2] {
+        return air_drag_local(drag, area, normal, velocities[0], c_v);
+    }
+    let mut local = Local {
+        energy: 0.0,
+        grad: [0.0; 9],
+        hess: [0.0; 81],
+        psd: true,
+    };
+    for shape in AIR_DRAG_SHAPES {
+        let point = air_drag_point_local(
+            drag,
+            area / 3.0,
+            normal,
+            interpolate_velocity(velocities, shape),
+            c_v,
+        );
+        local.energy += point.energy;
+        for a in 0..3 {
+            for i in 0..3 {
+                local.grad[3 * a + i] += shape[a] * point.grad[i];
+            }
+            for b in 0..3 {
+                for i in 0..3 {
+                    for j in 0..3 {
+                        local.hess[(3 * a + i) * 9 + 3 * b + j] +=
+                            shape[a] * shape[b] * point.hess[3 * i + j];
+                    }
+                }
+            }
+        }
+    }
+    local
+}
+
 fn air_drag_energy(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) -> f64 {
     if drag.rho_air_kg_m3 == 0.0 {
         return 0.0;
@@ -703,6 +801,34 @@ fn air_drag_energy(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) ->
 }
 
 fn air_drag_local(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) -> Local<9, 81> {
+    let point = air_drag_point_local(drag, area, normal, v, c_v);
+    let mut grad = [0.0; 9];
+    let mut hess = [0.0; 81];
+    for a in 0..3 {
+        for i in 0..3 {
+            grad[3 * a + i] = point.grad[i] / 3.0;
+        }
+        for b in 0..3 {
+            // Exact integral of affine shape products: area/6 on the diagonal, area/12 off.
+            // Equal present velocities do not make perturbations uniform; their tangent must
+            // still resist zero-centroid rotation and deformation.
+            let weight = if a == b { 1.0 / 6.0 } else { 1.0 / 12.0 };
+            for i in 0..3 {
+                for j in 0..3 {
+                    hess[(3 * a + i) * 9 + 3 * b + j] = weight * point.hess[3 * i + j];
+                }
+            }
+        }
+    }
+    Local {
+        energy: point.energy,
+        grad,
+        hess,
+        psd: true,
+    }
+}
+
+fn air_drag_point_local(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) -> Local<3, 9> {
     let v_rel = drag.relative_velocity(v);
     let s_n = v_rel.dot(normal);
     let v_t = v_rel - normal * s_n;
@@ -711,17 +837,12 @@ fn air_drag_local(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) -> 
     let pref = 0.5 * drag.rho_air_kg_m3 * area;
     let energy = (pref / c_v) * (drag.c_normal * psi_n + drag.c_tangent * psi_t);
 
-    // Gradient wrt centroid velocity v (with constant v_air, ∂v_rel/∂v = I_3):
+    // Gradient wrt the sampled position (constant v_air, ∂v_rel/∂v = I_3):
     // F_res = pref * (C_n * u_n * s_n * n + C_t * u_t * v_t).
-    // Chain rule dv/dx_a = (c_v / 3) I_3 cancels the (1 / c_v) prefactor on grad.
-    let f_vertex =
-        (normal * (drag.c_normal * u_n * s_n) + v_t * (drag.c_tangent * u_t)) * (pref / 3.0);
-    let mut grad = [0.0; 9];
-    for a in 0..3 {
-        grad[3 * a] = f_vertex.x;
-        grad[3 * a + 1] = f_vertex.y;
-        grad[3 * a + 2] = f_vertex.z;
-    }
+    // dv/dx = c_v I_3 cancels the potential's 1/c_v factor. Nodal shape weights are
+    // applied separately, including their products in the Hessian.
+    let resistance = (normal * (drag.c_normal * u_n * s_n) + v_t * (drag.c_tangent * u_t)) * pref;
+    let grad = [resistance.x, resistance.y, resistance.z];
 
     // 3×3 velocity Jacobian H_v = ∂F_res / ∂v (strictly symmetric positive semidefinite):
     // H_v = pref * [ C_n * ((2 s_n² + ε²)/u_n) n nᵀ + C_t * (u_t (I − n nᵀ) + (1/u_t) v_t v_tᵀ) ].
@@ -729,25 +850,16 @@ fn air_drag_local(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) -> 
     let kn = drag.c_normal * (2.0 * s_n * s_n + eps2) / u_n;
     let kt_iso = drag.c_tangent * u_t;
     let kt_dir = drag.c_tangent / u_t;
-    let h_scale = pref * c_v / 9.0;
+    let h_scale = pref * c_v;
     let n = [normal.x, normal.y, normal.z];
     let vt = [v_t.x, v_t.y, v_t.z];
-    let mut h3 = [[0.0; 3]; 3];
+    let mut hess = [0.0; 9];
     for i in 0..3 {
         for j in 0..3 {
             let delta_ij = if i == j { 1.0 } else { 0.0 };
             let proj_t = delta_ij - n[i] * n[j];
-            h3[i][j] = h_scale * (kn * n[i] * n[j] + kt_iso * proj_t + kt_dir * vt[i] * vt[j]);
-        }
-    }
-    let mut hess = [0.0; 81];
-    for a in 0..3 {
-        for b in 0..3 {
-            for i in 0..3 {
-                for j in 0..3 {
-                    hess[(3 * a + i) * 9 + (3 * b + j)] = h3[i][j];
-                }
-            }
+            hess[3 * i + j] =
+                h_scale * (kn * n[i] * n[j] + kt_iso * proj_t + kt_dir * vt[i] * vt[j]);
         }
     }
     Local {
@@ -826,6 +938,145 @@ mod tests {
         });
     }
 
+    #[test]
+    fn distributed_air_drag_rest_tangent_is_the_consistent_triangle_area_matrix() {
+        let drag = AirDrag {
+            rho_air_kg_m3: 2.0,
+            c_normal: 3.0,
+            c_tangent: 2.0,
+            eps_v_m_s: 0.25,
+            ..AirDrag::standard()
+        };
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let local = air_drag_triangle_local(drag, 6.0, normal, [Vec3::ZERO; 3], 4.0);
+        assert_eq!(local.energy, 0.0);
+        assert_eq!(local.grad, [0.0; 9]);
+        // Integral N_a N_b dA = A/6 for a=b and A/12 otherwise, independently of
+        // triangle shape. At rest the smooth law has slope rho*C*eps/2 per area.
+        for a in 0..3 {
+            for b in 0..3 {
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let expected = if i != j {
+                            0.0
+                        } else {
+                            let whole = if i == 2 { 18.0 } else { 12.0 };
+                            whole / if a == b { 6.0 } else { 12.0 }
+                        };
+                        assert_eq!(local.hess[(3 * a + i) * 9 + 3 * b + j], expected);
+                    }
+                }
+            }
+        }
+        check_fd(
+            &[Vec3::ZERO; 3],
+            &[0, 1, 2],
+            1e-7,
+            |p| air_drag_triangle_energy(drag, 6.0, normal, [p[0], p[1], p[2]], 1.0),
+            |p| air_drag_triangle_local(drag, 6.0, normal, [p[0], p[1], p[2]], 1.0),
+        );
+    }
+
+    #[test]
+    fn distributed_air_drag_resists_flapping_and_spin_about_a_stationary_centroid() {
+        let a = 0.4;
+        let b = 0.2;
+        let positions = [
+            Vec3::new(-a, -b, 0.0),
+            Vec3::new(a, -b, 0.0),
+            Vec3::new(0.0, 2.0 * b, 0.0),
+        ];
+        let area = 3.0 * a * b;
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let drag = AirDrag {
+            eps_v_m_s: 1.0,
+            ..AirDrag::standard()
+        };
+        let omega = 0.01;
+        for axis in [Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)] {
+            let velocities = positions.map(|p| axis.cross(p) * omega);
+            assert_eq!(
+                velocities.iter().copied().fold(Vec3::ZERO, |x, v| x + v),
+                Vec3::ZERO
+            );
+            let forces = drag.triangle_nodal_resistance_forces(area, normal, velocities);
+            let torque = positions
+                .iter()
+                .zip(forces)
+                .fold(Vec3::ZERO, |sum, (&p, f)| sum + p.cross(f));
+            // Analytic triangle area moments: integral x² = A*a²/6 and integral
+            // y² = A*b²/2. At small speed, drag tends to rho*C*eps*v/2.
+            let (coefficient, moment) = if axis.y == 1.0 {
+                (drag.c_normal, area * a * a / 6.0)
+            } else {
+                (drag.c_tangent, area * (a * a / 6.0 + b * b / 2.0))
+            };
+            let expected = 0.5 * drag.rho_air_kg_m3 * coefficient * drag.eps_v_m_s * omega * moment;
+            assert!((torque.dot(axis) - expected).abs() < 2e-5 * expected);
+            assert!(
+                torque.dot(axis) > 0.0,
+                "physical force is the negative resistance torque"
+            );
+            let power: f64 = velocities.iter().zip(forces).map(|(v, f)| v.dot(f)).sum();
+            assert!(power > 0.0);
+            assert!((power - omega * torque.dot(axis)).abs() < 1e-14);
+            let local = air_drag_triangle_local(drag, area, normal, velocities, 24.0);
+            assert!(local.energy > 0.0);
+            for (i, force) in forces.iter().enumerate() {
+                let gradient = Vec3::new(
+                    local.grad[3 * i],
+                    local.grad[3 * i + 1],
+                    local.grad[3 * i + 2],
+                );
+                assert!((gradient - *force).norm() < 1e-14);
+            }
+        }
+    }
+
+    #[test]
+    fn distributed_air_drag_preserves_translation_galilean_invariance_and_positive_tangents() {
+        let drag = AirDrag::standard();
+        let normal = Vec3::new(2.0, -1.0, 3.0).normalized();
+        let area = 0.125;
+        let c_v = 24.0;
+        let translation = Vec3::new(0.5, -0.25, 1.0);
+        let uniform = air_drag_triangle_local(drag, area, normal, [translation; 3], c_v);
+        assert_eq!(
+            uniform.energy,
+            air_drag_energy(drag, area, normal, translation, c_v)
+        );
+        let total = drag.triangle_resistance_force(area, normal, translation);
+        assert_eq!(
+            drag.triangle_nodal_resistance_forces(area, normal, [translation; 3]),
+            [total * (1.0 / 3.0); 3]
+        );
+        let velocities = [
+            Vec3::new(-0.75, 0.5, -1.25),
+            Vec3::new(0.5, -0.25, 0.75),
+            Vec3::new(0.25, -0.75, 0.5),
+        ];
+        let boosted = AirDrag {
+            air_velocity_m_s: [translation.x, translation.y, translation.z],
+            ..drag
+        };
+        let reference = air_drag_triangle_local(drag, area, normal, velocities, c_v);
+        for (law, n, v) in [
+            (drag, normal * -1.0, velocities),
+            (boosted, normal, velocities.map(|v| v + translation)),
+        ] {
+            let actual = air_drag_triangle_local(law, area, n, v, c_v);
+            assert!((reference.energy - actual.energy).abs() < 1e-14);
+            for (a, b) in reference.grad.iter().zip(actual.grad) {
+                assert!((*a - b).abs() < 1e-14);
+            }
+            for (a, b) in reference.hess.iter().zip(actual.hess) {
+                assert!((*a - b).abs() < 1e-13);
+            }
+            let (eigenvalues, _) = crate::eigen::jacobi_eigh(&actual.hess, 9);
+            assert!(actual.psd && eigenvalues[0] > 0.0, "{eigenvalues:?}");
+        }
+    }
+
     fn check_air_drag_and_rayleigh_derivatives(drag: AirDrag) {
         let rest = vec![
             Vec2::new(0.0, 0.0),
@@ -873,11 +1124,11 @@ mod tests {
             1e-7,
             |p| {
                 let (a, n) = step_ie.tri_frames[0];
-                air_drag_energy(
+                air_drag_triangle_energy(
                     opts.air_drag.unwrap(),
                     a,
                     n,
-                    step_ie.vel.centroid_velocity(p, model.membranes[0].v),
+                    step_ie.vel.nodal_velocities(p, model.membranes[0].v),
                     step_ie.vel.c_v(),
                 )
             },
@@ -944,11 +1195,11 @@ mod tests {
             1e-7,
             |p| {
                 let (a, n) = step_ga.tri_frames[0];
-                air_drag_energy(
+                air_drag_triangle_energy(
                     opts.air_drag.unwrap(),
                     a,
                     n,
-                    step_ga.vel.centroid_velocity(p, model.membranes[0].v),
+                    step_ga.vel.nodal_velocities(p, model.membranes[0].v),
                     step_ga.vel.c_v(),
                 )
             },
@@ -1372,11 +1623,11 @@ mod tests {
             1e-7,
             |p| {
                 let (a, n) = step_ie.tri_frames[0];
-                air_drag_energy(
+                air_drag_triangle_energy(
                     windy,
                     a,
                     n,
-                    step_ie.vel.centroid_velocity(p, model.membranes[0].v),
+                    step_ie.vel.nodal_velocities(p, model.membranes[0].v),
                     step_ie.vel.c_v(),
                 )
             },
@@ -1412,11 +1663,11 @@ mod tests {
             1e-7,
             |p| {
                 let (a, n) = step_ga.tri_frames[0];
-                air_drag_energy(
+                air_drag_triangle_energy(
                     windy,
                     a,
                     n,
-                    step_ga.vel.centroid_velocity(p, model.membranes[0].v),
+                    step_ga.vel.nodal_velocities(p, model.membranes[0].v),
                     step_ga.vel.c_v(),
                 )
             },

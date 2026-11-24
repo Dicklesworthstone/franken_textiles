@@ -224,6 +224,100 @@ fn kat_air_drag_terminal_velocity_separates_chiffon_from_denim() {
 }
 
 #[test]
+fn kat_air_drag_damps_zero_centroid_spin_and_flap_with_consistent_initial_force() {
+    // One equilateral triangle has equal lumped nodal masses. Pure spin about its normal and
+    // pure flap about an in-plane axis both have zero centroid velocity, but nonzero distributed
+    // air resistance. A centroid-only force cannot see either mode.
+    let radius = 0.05;
+    let y = 3.0_f64.sqrt() * radius / 2.0;
+    let rest = vec![
+        Vec2::new(radius, 0.0),
+        Vec2::new(-radius / 2.0, y),
+        Vec2::new(-radius / 2.0, -y),
+    ];
+    let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+    let areal = 0.2;
+    let make_solver = |integrator, flap: bool, drag| {
+        let model = ClothModel::new(rest.clone(), &[[0, 1, 2]], cotton(), 0.0, areal).unwrap();
+        let mut solver = Solver::new(model, x0.clone(), &[[false; 3]; 3], Vec3::ZERO);
+        solver.integrator = integrator;
+        solver.damping.air_drag = drag;
+        solver.tol = 1e-10;
+        let omega = if flap {
+            Vec3::new(10.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 0.0, 10.0)
+        };
+        solver.v = x0.iter().map(|x| omega.cross(*x)).collect();
+        assert!((solver.v[0] + solver.v[1] + solver.v[2]).norm() < 1e-15);
+        solver
+    };
+
+    for integrator in [
+        TimeIntegrator::ImplicitEuler,
+        TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+    ] {
+        let mut measured_rates = [0.0; 2];
+        for (mode, flap) in [false, true].into_iter().enumerate() {
+            // In the independently integrable linear limit, traction = -k v, k = rho C eps/2.
+            // Triangle moments are integral(N_i^2) = A/6 and integral(N_i N_j) = A/12.
+            // For sum(v_i)=0 and nodal mass areal*A/3, a_i = -rho*C*eps/(8*areal) v_i.
+            // eps=100 bounds the nonlinear correction by max(|v|)^2/(2 eps^2) < 1.3e-5.
+            let drag = AirDrag {
+                eps_v_m_s: 100.0,
+                ..AirDrag::standard()
+            };
+            let coefficient = if flap { drag.c_normal } else { drag.c_tangent };
+            let expected_rate = drag.rho_air_kg_m3 * coefficient * drag.eps_v_m_s / (8.0 * areal);
+            let mut solver = make_solver(integrator, flap, Some(drag));
+            let initial = solver.v.clone();
+            let norm2: f64 = initial.iter().map(|v| v.norm2()).sum();
+            let h = 1e-5;
+            assert!(solver.step(h).unwrap().converged);
+            let rate = initial
+                .iter()
+                .zip(&solver.v)
+                .map(|(before, after)| before.dot(*before - *after))
+                .sum::<f64>()
+                / (h * norm2);
+            assert!(
+                (rate - expected_rate).abs() < 0.003 * expected_rate,
+                "{integrator:?} flap={flap}: angular decay rate {rate} vs {expected_rate}"
+            );
+            measured_rates[mode] = rate;
+
+            // The ordinary quadratic regime must also resist the same angular modes over time.
+            // Compare with an otherwise identical drag-free trajectory to exclude structural and
+            // time-integration damping; no empirical aerodynamic calibration is asserted.
+            let mut resisted = make_solver(integrator, flap, Some(AirDrag::standard()));
+            let mut free = make_solver(integrator, flap, None);
+            for _ in 0..20 {
+                assert!(resisted.step(0.001).unwrap().converged);
+                assert!(free.step(0.001).unwrap().converged);
+            }
+            let relative_energy = |s: &Solver| {
+                let center_v = (s.v[0] + s.v[1] + s.v[2]) / 3.0;
+                s.v.iter()
+                    .zip(&s.model.mass)
+                    .map(|(v, mass)| 0.5 * mass * (*v - center_v).norm2())
+                    .sum::<f64>()
+            };
+            let resisted_energy = relative_energy(&resisted);
+            let free_energy = relative_energy(&free);
+            assert!(
+                resisted_energy < free_energy * (1.0 - 1e-4),
+                "{integrator:?} flap={flap}: angular kinetic energy {resisted_energy} vs drag-free {free_energy}"
+            );
+        }
+        let expected_ratio = AirDrag::standard().c_normal / AirDrag::standard().c_tangent;
+        assert!(
+            (measured_rates[1] / measured_rates[0] - expected_ratio).abs() < 0.004 * expected_ratio,
+            "{integrator:?}: normal/tangential angular damping must retain its declared anisotropy"
+        );
+    }
+}
+
+#[test]
 fn kat_prescribed_wind_moves_resting_cloth_and_preserves_comoving_motion() {
     let (rest, tris) = grid(0.10, 0.10, 2, 2, Vec2::ZERO);
     let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();

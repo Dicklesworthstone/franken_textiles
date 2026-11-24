@@ -3360,11 +3360,12 @@ impl Solver {
                     if !(norm.is_finite() && norm > 0.0) {
                         continue;
                     }
-                    let vc = (v0[e.v[0]] + v0[e.v[1]] + v0[e.v[2]]) * (1.0 / 3.0);
-                    let f_res =
-                        drag.triangle_resistance_force(0.5 * norm, cross * (1.0 / norm), vc)
-                            * (1.0 / 3.0);
-                    for &vi in &e.v {
+                    let forces = drag.triangle_nodal_resistance_forces(
+                        0.5 * norm,
+                        cross * (1.0 / norm),
+                        e.v.map(|vi| v0[vi]),
+                    );
+                    for (&vi, f_res) in e.v.iter().zip(forces) {
                         for k in 0..3 {
                             if let Some(f) = self.free[3 * vi + k] {
                                 g0[f] += f_res[k];
@@ -4963,13 +4964,12 @@ mod strategy_and_integrator_tests {
                     for e in &actual.model.membranes {
                         let normal = (x0[e.v[1]] - x0[e.v[0]]).cross(x0[e.v[2]] - x0[e.v[0]]);
                         let norm = normal.norm();
-                        let velocity = (v0[e.v[0]] + v0[e.v[1]] + v0[e.v[2]]) * (1. / 3.);
-                        let resistance = drag.triangle_resistance_force(
+                        let resistances = drag.triangle_nodal_resistance_forces(
                             0.5 * norm,
                             normal * (1. / norm),
-                            velocity,
-                        ) * (1. / 3.);
-                        for &vertex in &e.v {
+                            e.v.map(|vertex| v0[vertex]),
+                        );
+                        for (&vertex, resistance) in e.v.iter().zip(resistances) {
                             force[vertex] += resistance;
                         }
                     }

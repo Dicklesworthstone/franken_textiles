@@ -5,6 +5,27 @@ body-pose intervals. The same sewn garment continues through the whole trajector
 positions, velocities, contact state and material history are retained. Aerodynamic
 loading uses cloth velocity relative to the prescribed world-space air velocity.
 
+## Drag across a moving cloth triangle
+
+Enabled aerodynamic drag integrates the triangle's interpolated velocity at three
+interior area-quadrature points. The positive, degree-two rule retains resistance
+to rotation, flapping and other velocity differences across a triangle even when
+its center is stationary. Each point contributes force to its three vertices
+through the same barycentric weights used for velocity. Opposing local forces can
+therefore produce a resisting torque without a net force.
+
+The step-start area and normal remain fixed during each solve. The potential,
+gradient, Hessian and generalized-alpha initial acceleration use the same
+distributed law; no additional coupling outside the existing triangle is needed.
+The degree-two rule exactly integrates the linear low-speed limit for a linear
+triangle velocity field. Nonlinear quadratic drag still requires spatial mesh
+refinement; three samples do not resolve arbitrary airflow or subtriangle folds.
+
+No additional option is needed. Existing `air_drag` settings enable this law in
+native drapes, portable folds and motion studies. Disabled drag is unchanged, and
+omitted wind and explicit zero wind remain equivalent. Active-drag trajectories
+with nonuniform triangle velocities change from the former center-only sampling.
+
 ## Author a schedule in the Material Workbench
 
 1. Enable aerodynamic drag in the scenario options and choose its density,
