@@ -156,6 +156,18 @@ admission on their already selected `FittedBody`, with no second shape fit.
 required independent passage evidence under `supplemental_measurements`.
 Unrelated measurement names cannot supplement or replace model dimensions.
 
+**Body-contact start recovery (ftx-jnqs).** If the final kinematic start remains intersecting
+after the existing exact body untangler, scene construction now tries earlier relaxation checkpoints
+before refusing. Complete 200-iteration blocks take precedence, followed by the existing 25-iteration
+push-out checkpoints. Each candidate retains the original pre-sewn state, welds, rest geometry,
+material assignments and gather weights; its strain receipt is recomputed from its actual replay.
+Both pre- and post-untangle material-domain admission remain required. Non-contact refusals propagate,
+failed searches publish no candidate, and explicit caller-supplied checkpoints are never replaced.
+Any selected start must still pass physical contact, self-contact and displayed-body admission before
+dynamics. The original rejected iteration count survives subsequent self-contact or leg-start repair.
+The synthetic closed-body regression verifies this formerly unreachable recovery path; it does not
+qualify the unchanged 385 mm sleeve on Anny or establish physical garment fit.
+
 **Optional convergence-driven subdivision.** `DrapeOptions.time_subdivision` connects the existing
 transactional `Solver::step_subdivided` to ordinary sewing, gravity and settling. Explicit
 `max_halvings` and `max_trials` bound the whole run; every requested base interval needs at least

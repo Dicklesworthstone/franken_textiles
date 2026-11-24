@@ -1011,6 +1011,7 @@ pub(crate) fn build_scene_resolved_with_options(
                 // before any constitutive history is initialized. The displayed body can retain
                 // hands or feet omitted by the collider; every candidate must clear both surfaces.
                 let original = scene.start.relax_iterations;
+                let rejected = scene.start_backtracked_from.unwrap_or(original);
                 let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
                 let mut replacement = None;
                 let plain: Vec<_> = crate::start::face_edges(&scene.mesh.faces)
@@ -1077,7 +1078,7 @@ pub(crate) fn build_scene_resolved_with_options(
                         if let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
                             && admit(&candidate).is_ok()
                         {
-                            candidate.start_backtracked_from = Some(original);
+                            candidate.start_backtracked_from = Some(rejected);
                             replacement = Some(candidate);
                         }
                     }
@@ -1095,6 +1096,7 @@ pub(crate) fn build_scene_resolved_with_options(
                 ) && let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
                     && admit(&candidate).is_ok()
                 {
+                    candidate.start_backtracked_from = scene.start_backtracked_from;
                     candidate.start_leg_separation = Some((moved, max_mm));
                     scene = candidate;
                 }
@@ -1281,7 +1283,8 @@ fn build_scene_inner(
         ));
     }
     let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
-    let start = match start_override {
+    let allow_body_recovery = start_override.is_none();
+    let mut start = match start_override {
         Some(start) => start,
         None => match options.start_self_repulsion {
             Some(repulsion) => {
@@ -1551,8 +1554,18 @@ fn build_scene_inner(
         });
     }
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
-    let untangled = untangle(&mut x, &tris, &body, &tree)?;
-    model.check_membrane_domains(&x)?;
+    let (untangled, start_backtracked_from) = admit_body_start(
+        &mesh,
+        &mut start,
+        &weld,
+        &model,
+        &mut x,
+        &tris,
+        &body,
+        &tree,
+        options.start_self_repulsion,
+        allow_body_recovery,
+    )?;
     // The relaxed start keeps every vertex 4.8 mm out, but an edge between two of them can pass close to
     // a sharp body feature (a thumb by a sleeve hem). Start the barrier at half the smallest distance
     // when that is less than the cloth offset; `run_phase` raises it back as the cloth moves out.
@@ -1620,7 +1633,7 @@ fn build_scene_inner(
         collapsed,
         triangle_owner,
         untangled,
-        start_backtracked_from: None,
+        start_backtracked_from,
         start_leg_separation: None,
         target_thickness: contact.thickness,
         solver,
@@ -1629,6 +1642,116 @@ fn build_scene_inner(
         construction_field,
         authored_crease_hinges,
     })
+}
+
+/// Retry only earlier kinematic starts after a body-contact refusal. Material/domain failures
+/// remain authoritative, and a refused search leaves both the start and welded positions intact.
+#[allow(clippy::too_many_arguments)]
+fn admit_body_start(
+    mesh: &GarmentMesh,
+    start: &mut StartState,
+    weld: &[usize],
+    model: &ClothModel,
+    x: &mut Vec<Vec3>,
+    tris: &[[usize; 3]],
+    body: &Body,
+    tree: &NearestTree,
+    repulsion: Option<SelfRepulsionOptions>,
+    allow_recovery: bool,
+) -> Result<(Vec<usize>, Option<usize>), Refusal> {
+    let mut trial = x.clone();
+    let refusal = match untangle(&mut trial, tris, body, tree) {
+        Ok(counts) => {
+            model.check_membrane_domains(&trial)?;
+            *x = trial;
+            return Ok((counts, None));
+        }
+        Err(refusal) if allow_recovery && refusal.code == RefusalCode::IntersectingStart => refusal,
+        Err(refusal) => return Err(refusal),
+    };
+    let original = start.relax_iterations;
+    let recovered = earlier_relaxed_start(mesh, start, tree, repulsion, |candidate| {
+        let mut positions = vec![Vec3::ZERO; x.len()];
+        for (vertex, &welded) in weld.iter().enumerate() {
+            positions[welded] = candidate.relaxed[vertex];
+        }
+        model.check_membrane_domains(&positions)?;
+        let counts = untangle(&mut positions, tris, body, tree)?;
+        model.check_membrane_domains(&positions)?;
+        Ok((positions, counts))
+    })?;
+    if let Some((candidate, (positions, counts))) = recovered {
+        *start = candidate;
+        *x = positions;
+        Ok((counts, Some(original)))
+    } else {
+        Err(refusal)
+    }
+}
+
+/// Prefer the latest admitted complete block, then the existing finer push-out checkpoints.
+/// Every receipt is measured on its actual replay; non-divisor repulsion periods can produce a
+/// different fine replay from the rejected complete-block path.
+fn earlier_relaxed_start<T>(
+    mesh: &GarmentMesh,
+    source: &StartState,
+    tree: &NearestTree,
+    repulsion: Option<SelfRepulsionOptions>,
+    mut admit: impl FnMut(&StartState) -> Result<T, Refusal>,
+) -> Result<Option<(StartState, T)>, Refusal> {
+    let plain: Vec<_> = crate::start::face_edges(&mesh.faces)
+        .into_iter()
+        .filter(|&(a, b)| source.gather_weights[a] >= 1.0 && source.gather_weights[b] >= 1.0)
+        .collect();
+    for stride in [
+        crate::start::RELAX_ITERS,
+        crate::start::RELAX_PUSH_OUT_ITERS,
+    ] {
+        let mut positions = source.presewn.clone();
+        let mut blocks = Vec::new();
+        let mut replacement = None;
+        for iterations in (stride..source.relax_iterations).step_by(stride) {
+            positions = crate::start::relax_with_repulsion(
+                mesh,
+                &positions,
+                &source.groups,
+                tree,
+                stride,
+                crate::start::RELAX_CLEARANCE,
+                &source.gather_weights,
+                repulsion,
+            )?;
+            let strain: Vec<_> = crate::start::edge_strain(&positions, &mesh.verts2d, &plain)
+                .into_iter()
+                .map(f64::abs)
+                .collect();
+            let p95 = if strain.is_empty() {
+                0.0
+            } else {
+                ftx_core::np::percentile(&strain, 95.0)
+            };
+            let complete_block = iterations.is_multiple_of(crate::start::RELAX_ITERS);
+            if complete_block {
+                blocks.push(p95);
+            }
+            let mut candidate = source.clone();
+            candidate.relaxed = positions.clone();
+            candidate.relax_iterations = iterations;
+            candidate.block_p95 = blocks.clone();
+            if !complete_block {
+                candidate.block_p95.push(p95);
+            }
+            match admit(&candidate) {
+                Ok(result) => replacement = Some((candidate, result)),
+                Err(refusal) if refusal.code == RefusalCode::IntersectingStart => {}
+                Err(refusal) => return Err(refusal),
+            }
+        }
+        if replacement.is_some() {
+            return Ok(replacement);
+        }
+    }
+    Ok(None)
 }
 
 /// Clearance the untangling moves cloth to above a crossed body triangle or ridge (m).
@@ -3524,6 +3647,179 @@ mod grain_tests {
             max_speed_or_nan(&[Vec3::new(1.0, 0.0, 0.0), Vec3::new(f64::NAN, 0.0, 0.0)]).is_nan()
         );
         assert!(max_speed_or_nan(&[Vec3::new(f64::INFINITY, 0.0, 0.0)]).is_infinite());
+    }
+
+    fn body_start_recovery_fixture() -> (
+        GarmentMesh,
+        StartState,
+        Vec<usize>,
+        ClothModel,
+        Body,
+        NearestTree,
+    ) {
+        let mesh = GarmentMesh {
+            instances: vec!["panel".into()],
+            verts2d: vec![
+                Vec2::new(10.0, 10.0),
+                Vec2::new(30.0, 10.0),
+                Vec2::new(10.0, 30.0),
+            ],
+            faces: vec![[0, 1, 2]],
+            owner: vec![0; 3],
+            inst_range: vec![(0, 3)],
+            pairs: Vec::new(),
+            seams: Vec::new(),
+            corner: BTreeMap::new(),
+            index: BTreeMap::new(),
+            creases: Vec::new(),
+        };
+        let outside: Vec<_> = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * MM, p.y * MM, 0.2))
+            .collect();
+        // A recorded terminal candidate inside the closed body. The original pre-sewn
+        // triangle is outside and already at rest; this isolates the refused-build handoff.
+        let start = StartState {
+            wrapped: outside.clone(),
+            presewn: outside.clone(),
+            groups: Vec::new(),
+            relaxed: outside.iter().map(|p| Vec3::new(p.x, p.y, 0.01)).collect(),
+            relax_iterations: crate::start::RELAX_ITERS,
+            block_p95: vec![9.0],
+            gather_weights: vec![1.0; 3],
+        };
+        let model = ClothModel::new(
+            mesh.verts2d.iter().map(|p| *p * MM).collect(),
+            &mesh.faces,
+            Fabric::default().membrane(0.05),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let vertices = vec![
+            Vec3::ZERO,
+            Vec3::new(0.1, 0.0, 0.0),
+            Vec3::new(0.0, 0.1, 0.0),
+            Vec3::new(0.0, 0.0, 0.1),
+        ];
+        let triangles = vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        let tree = NearestTree::new(vertices.clone(), triangles.clone()).unwrap();
+        let body = Body::new(vertices, triangles, 0.01).unwrap();
+        assert!(body.closed);
+        (mesh, start, vec![0, 1, 2], model, body, tree)
+    }
+
+    #[test]
+    fn body_start_recovery_reaches_an_earlier_clear_checkpoint() {
+        let (mesh, mut start, weld, model, body, tree) = body_start_recovery_fixture();
+        let source = start.clone();
+        let mut x = start.relaxed.clone();
+        assert_eq!(
+            untangle(&mut x.clone(), &mesh.faces, &body, &tree)
+                .unwrap_err()
+                .code,
+            RefusalCode::IntersectingStart
+        );
+        let (counts, rejected) = admit_body_start(
+            &mesh,
+            &mut start,
+            &weld,
+            &model,
+            &mut x,
+            &mesh.faces,
+            &body,
+            &tree,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(rejected, Some(200));
+        assert_eq!(start.relax_iterations, 175);
+        assert_eq!(start.wrapped, source.wrapped);
+        assert_eq!(start.presewn, source.presewn);
+        assert_eq!(start.gather_weights, source.gather_weights);
+        assert_eq!(start.block_p95.len(), 1);
+        assert!(start.block_p95[0] < 1e-12);
+        assert!(counts.is_empty());
+        assert!(x.iter().all(|p| p.z == 0.2));
+        assert_eq!(x, start.relaxed);
+        assert!(
+            untangle(&mut x, &mesh.faces, &body, &tree)
+                .unwrap()
+                .is_empty()
+        );
+        model.check_membrane_domains(&x).unwrap();
+    }
+
+    #[test]
+    fn body_start_recovery_never_replaces_an_explicit_checkpoint() {
+        let (mesh, mut start, weld, model, body, tree) = body_start_recovery_fixture();
+        let original = format!("{start:?}");
+        let mut x = start.relaxed.clone();
+        let before = x.clone();
+        let expected = untangle(&mut x.clone(), &mesh.faces, &body, &tree).unwrap_err();
+        let refusal = admit_body_start(
+            &mesh,
+            &mut start,
+            &weld,
+            &model,
+            &mut x,
+            &mesh.faces,
+            &body,
+            &tree,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, expected.code);
+        assert_eq!(refusal.message, expected.message);
+        assert_eq!(x, before);
+        assert_eq!(format!("{start:?}"), original);
+    }
+
+    #[test]
+    fn body_start_recovery_recomputes_receipts_and_preserves_coarse_precedence() {
+        let (mesh, mut source, _, _, _, tree) = body_start_recovery_fixture();
+        source.relax_iterations = 600;
+        source.block_p95 = vec![9.0; 3];
+        let mut visited = Vec::new();
+        let (accepted, ()) = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
+            visited.push(candidate.relax_iterations);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(visited, vec![200, 400]);
+        assert_eq!(accepted.relax_iterations, 400);
+        assert_eq!(accepted.block_p95.len(), 2);
+        assert!(accepted.block_p95.iter().all(|p95| *p95 < 1e-12));
+        assert_eq!(source.block_p95, vec![9.0; 3]);
+    }
+
+    #[test]
+    fn body_start_recovery_propagates_noncontact_refusals_without_publishing() {
+        let (mesh, source, _, _, _, tree) = body_start_recovery_fixture();
+        for code in [RefusalCode::OutOfRange, RefusalCode::BudgetExceeded] {
+            let mut visited = Vec::new();
+            let refusal = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
+                visited.push(candidate.relax_iterations);
+                Err::<(), _>(Refusal::new(code, "independent admission refusal"))
+            })
+            .unwrap_err();
+            assert_eq!(refusal.code, code);
+            assert_eq!(visited, vec![25]);
+        }
+        let none = earlier_relaxed_start(&mesh, &source, &tree, None, |_| {
+            Err::<(), _>(Refusal::new(
+                RefusalCode::IntersectingStart,
+                "body crossing remains",
+            ))
+        })
+        .unwrap();
+        assert!(none.is_none());
+        assert_eq!(source.relax_iterations, 200);
+        assert_eq!(source.block_p95, vec![9.0]);
     }
 
     fn two_panel_cylinder_scene_inputs() -> (Pattern, Vec<Vec3>, Vec<[usize; 3]>) {
