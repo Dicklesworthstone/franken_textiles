@@ -162,6 +162,12 @@ impl CsrFill {
         self.csr.vals[slot] += val;
     }
 
+    /// The value array, in slot order, for filling slots directly. Each slot must still receive its
+    /// contributions in insertion order for the [`Coo::assemble`] equality.
+    pub fn values_mut(&mut self) -> &mut [f64] {
+        &mut self.csr.vals
+    }
+
     /// The filled matrix.
     #[must_use]
     pub fn finish(self) -> Csr {

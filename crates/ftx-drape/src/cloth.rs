@@ -869,6 +869,24 @@ struct FillSlots {
     starts: Vec<usize>,
     slots: Vec<usize>,
     diagonal: Vec<usize>,
+    /// With the `parallel` feature: the membrane and hinge entries regrouped by slot, see
+    /// [`GatherPlan`].
+    #[cfg(feature = "parallel")]
+    gather: GatherPlan,
+}
+
+/// Every membrane and hinge Hessian entry listed by the slot it lands in: for slot `s`,
+/// `sources[first[s]..first[s + 1]]` are `(element, local entry)` pairs (elements counted over the
+/// membranes, then the hinges; `local` indexes that element's row-major Hessian) in the order
+/// `assemble_ctx` scatters them. Summing a slot's sources in that order from −0.0 makes the same
+/// additions as the scatter, so the slots can be filled independently (in parallel) to the same bits.
+/// Membranes and hinges are scattered before anything else, so the later families continue each
+/// slot's sum exactly where the scatter would.
+#[cfg(feature = "parallel")]
+#[derive(Debug)]
+struct GatherPlan {
+    first: Vec<u32>,
+    sources: Vec<(u32, u16)>,
 }
 
 impl FillSlots {
@@ -877,6 +895,9 @@ impl FillSlots {
         let free = &solver.free;
         let mut starts = Vec::new();
         let mut slots = Vec::new();
+        // Each slot entry's place in its element's row-major local Hessian (for the gather plan).
+        #[cfg(feature = "parallel")]
+        let mut locals: Vec<u16> = Vec::new();
         let mut element = |vs: &[usize]| -> Option<()> {
             starts.push(slots.len());
             let n = 3 * vs.len();
@@ -887,6 +908,8 @@ impl FillSlots {
                 for b in 0..n {
                     if let Some(fb) = free[3 * vs[b / 3] + b % 3] {
                         slots.push(pattern.position(fa, fb)?);
+                        #[cfg(feature = "parallel")]
+                        locals.push(u16::try_from(a * n + b).ok()?);
                     }
                 }
             }
@@ -909,6 +932,31 @@ impl FillSlots {
         let diagonal = (0..solver.nfree)
             .map(|f| pattern.position(f, f))
             .collect::<Option<Vec<_>>>()?;
+        // A stable counting sort of the membrane and hinge entries by slot keeps each slot's sources
+        // in scatter order.
+        #[cfg(feature = "parallel")]
+        let gather = {
+            let elements = m.membranes.len() + m.hinges.len();
+            let end = starts[elements];
+            u32::try_from(end).ok()?;
+            let mut first = vec![0u32; pattern.nnz() + 1];
+            for &s in &slots[..end] {
+                first[s + 1] += 1;
+            }
+            for s in 0..pattern.nnz() {
+                first[s + 1] += first[s];
+            }
+            let mut next = first[..pattern.nnz()].to_vec();
+            let mut sources = vec![(0u32, 0u16); end];
+            for e in 0..elements {
+                for k in starts[e]..starts[e + 1] {
+                    let s = slots[k];
+                    sources[next[s] as usize] = (e as u32, locals[k]);
+                    next[s] += 1;
+                }
+            }
+            GatherPlan { first, sources }
+        };
         Some(FillSlots {
             pattern: pattern.clone(),
             free: free.clone(),
@@ -916,6 +964,8 @@ impl FillSlots {
             starts,
             slots,
             diagonal,
+            #[cfg(feature = "parallel")]
+            gather,
         })
     }
 
@@ -1770,18 +1820,6 @@ impl Solver {
             }
             l
         });
-        for (i, (e, mut l)) in self.model.membranes.iter().zip(membranes).enumerate() {
-            scatter(
-                &e.v,
-                plan.map(|s| s.element(i)),
-                &l.grad,
-                &mut l.hess,
-                l.psd,
-                hess_scale,
-                &mut sink,
-                &mut g,
-            );
-        }
         let hinges = par::map(n_hinges, |i| {
             let mut l = self.model.hinge_local(i, x_el);
             if project_elements && !l.psd {
@@ -1790,17 +1828,77 @@ impl Solver {
             }
             l
         });
-        for (i, (h, mut l)) in self.model.hinges.iter().zip(hinges).enumerate() {
-            scatter(
-                &h.v,
-                plan.map(|s| s.element(n_membranes + i)),
-                &l.grad,
-                &mut l.hess,
-                l.psd,
-                hess_scale,
-                &mut sink,
-                &mut g,
-            );
+        // With the `parallel` feature and a slot plan, the membrane and hinge entries are gathered
+        // slot by slot (see `GatherPlan`), the slots in parallel; the gradient is added serially in
+        // element order. Every entry is then the same sum as the scatter's, bit for bit.
+        #[cfg(feature = "parallel")]
+        let gathered = match (plan, &mut sink) {
+            (Some(slots), Sink::Fill(fill)) => {
+                let mut gradient = |vs: &[usize], grad: &[f64]| {
+                    for (a, &value) in grad.iter().enumerate().take(3 * vs.len()) {
+                        if let Some(fa) = self.free[3 * vs[a / 3] + a % 3] {
+                            g[fa] += value;
+                        }
+                    }
+                };
+                for (e, l) in self.model.membranes.iter().zip(&membranes) {
+                    gradient(&e.v, &l.grad);
+                }
+                for (h, l) in self.model.hinges.iter().zip(&hinges) {
+                    gradient(&h.v, &l.grad);
+                }
+                let locals: Vec<&[f64]> = membranes
+                    .iter()
+                    .map(|l| &l.hess[..])
+                    .chain(hinges.iter().map(|l| &l.hess[..]))
+                    .collect();
+                let gather = &slots.gather;
+                const CHUNK: usize = 2048;
+                par::for_each_chunk_mut(fill.values_mut(), CHUNK, |c, values| {
+                    for (k, value) in values.iter_mut().enumerate() {
+                        let s = c * CHUNK + k;
+                        let span = gather.first[s] as usize..gather.first[s + 1] as usize;
+                        for &(e, local) in &gather.sources[span] {
+                            let val = locals[e as usize][usize::from(local)];
+                            *value += if hess_scale != 1.0 {
+                                val * hess_scale
+                            } else {
+                                val
+                            };
+                        }
+                    }
+                });
+                true
+            }
+            _ => false,
+        };
+        #[cfg(not(feature = "parallel"))]
+        let gathered = false;
+        if !gathered {
+            for (i, (e, mut l)) in self.model.membranes.iter().zip(membranes).enumerate() {
+                scatter(
+                    &e.v,
+                    plan.map(|s| s.element(i)),
+                    &l.grad,
+                    &mut l.hess,
+                    l.psd,
+                    hess_scale,
+                    &mut sink,
+                    &mut g,
+                );
+            }
+            for (i, (h, mut l)) in self.model.hinges.iter().zip(hinges).enumerate() {
+                scatter(
+                    &h.v,
+                    plan.map(|s| s.element(n_membranes + i)),
+                    &l.grad,
+                    &mut l.hess,
+                    l.psd,
+                    hess_scale,
+                    &mut sink,
+                    &mut g,
+                );
+            }
         }
         for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
             let mut l = self
@@ -2139,7 +2237,9 @@ impl Solver {
         // Once a solve has met negative inertia it keeps projecting: retrying the exact Hessian first
         // cost a second assembly and factorization on almost every iteration of a garment.
         let mut projecting = false;
+        let mut retried_exact_noop = false;
         for it in 0..self.max_newton {
+            let prev_ew_eta = ew_eta;
             let mut iter_lin_tol: Option<f64> = None;
             let mut next_lin_tol = |g_vec: &[f64]| -> f64 {
                 if let Some(t) = iter_lin_tol {
@@ -2297,6 +2397,8 @@ impl Solver {
             rep.ccd_limited += usize::from(ccd_alpha < 1.0);
             let mut alpha = ccd_alpha.min(self.dihedral_step_bound(&p, ctx));
             let mut accepted = false;
+            let mut unchanged = false;
+            let mut escalated = false;
             for _ in 0..50 {
                 let trial = self.apply(&self.x, &p, alpha);
                 let e = match self.potential_ctx(&trial, ctx) {
@@ -2331,6 +2433,11 @@ impl Solver {
                             )
                     };
                 if armijo || precision_step {
+                    unchanged = trial.iter().zip(&self.x).all(|(a, b)| {
+                        a.x.to_bits() == b.x.to_bits()
+                            && a.y.to_bits() == b.y.to_bits()
+                            && a.z.to_bits() == b.z.to_bits()
+                    });
                     self.x = trial;
                     energy = e;
                     rep.roundoff_steps += usize::from(precision_step);
@@ -2344,6 +2451,7 @@ impl Solver {
                         self.precond = None;
                         prev_grad_l2 = None;
                         ew_eta = eta_max;
+                        escalated = true;
                     }
                     accepted = true;
                     break;
@@ -2354,6 +2462,25 @@ impl Solver {
             if !accepted {
                 rep.line_search_failures += 1;
                 break;
+            }
+            if unchanged && !escalated {
+                if used_lin_tol > base_linear_tol {
+                    ew_eta = base_linear_tol;
+                    continue;
+                }
+                if !retried_exact_noop && self.pcg_iters > 0 && self.precond.is_some() {
+                    self.precond = None;
+                    retried_exact_noop = true;
+                    continue;
+                }
+                if ew_eta >= prev_ew_eta {
+                    // The accepted step rounded bit-identically onto `self.x` with no barrier or
+                    // linear-tolerance change; further iterations would replay the exact same
+                    // factorization without making progress. Stay fail-closed (NotConverged).
+                    break;
+                }
+            } else {
+                retried_exact_noop = false;
             }
         }
         rep.energy_end = energy;
@@ -5441,10 +5568,10 @@ mod strategy_and_integrator_tests {
         let fixed = [[true; 3], [true; 3], [true; 3], [false; 3]];
         let damping = DampingOptions {
             air_drag: None,
-            rayleigh_membrane_s: 0.005,
-            rayleigh_bending_s: 0.008,
+            rayleigh_membrane_s: 0.001,
+            rayleigh_bending_s: 0.002,
         };
-        let make = || {
+        let make = |tol: f64| {
             let mut s = Solver::new(
                 model.clone(),
                 x0.clone(),
@@ -5452,33 +5579,93 @@ mod strategy_and_integrator_tests {
                 Vec3::new(0.0, 0.0, -9.81),
             );
             s.v = v0.clone();
-            s.tol = 1e-13;
+            s.tol = tol;
             s.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
             s.damping = damping;
             s
         };
-        let mut s_small = make();
-        let (g_static, _) = s_small.assemble_static_exact();
+        let probe = make(1e-9);
+        let (g_static, _) = probe.assemble_static_exact();
         let f_rayleigh = damping
-            .initial_rayleigh_resistance(&s_small.model, &x0, &v0)
+            .initial_rayleigh_resistance(&probe.model, &x0, &v0)
             .unwrap();
         assert!(
             f_rayleigh[3].norm() > 1e-3,
             "Rayleigh initial resistance must be non-trivial"
         );
         let a_true = Vec3::new(
-            -(g_static[0] + f_rayleigh[3].x) / s_small.model.mass[3],
-            -(g_static[1] + f_rayleigh[3].y) / s_small.model.mass[3],
-            -(g_static[2] + f_rayleigh[3].z) / s_small.model.mass[3],
+            -(g_static[0] + f_rayleigh[3].x) / probe.model.mass[3],
+            -(g_static[1] + f_rayleigh[3].y) / probe.model.mass[3],
+            -(g_static[2] + f_rayleigh[3].z) / probe.model.mass[3],
         );
-        // Without Rayleigh resistance in a0, rho_inf=0.9 injects an O(1) jump into a1 as h -> 0.
-        // With consistent a0, a1 converges cleanly to a_true as h shrinks.
-        s_small.step(1e-6).unwrap();
-        let err_small = (s_small.acceleration()[3] - a_true).norm() / a_true.norm();
+        // Keep h * tol = 1e-15 m well above IEEE-754 position ULP (~3.5e-18 m at x = 0.02 m).
+        // Without Rayleigh resistance in a0, rho_inf=0.9 injects an O(1) jump into a1 as h -> 0;
+        // with consistent a0, a1 approaches a_true at O(h).
+        let rel_err = |h: f64, tol: f64| -> f64 {
+            let mut s = make(tol);
+            s.step(h).unwrap();
+            (s.acceleration()[3] - a_true).norm() / a_true.norm()
+        };
+        let err_coarse = rel_err(1e-6, 1e-9);
+        let err_fine = rel_err(1e-7, 1e-8);
         assert!(
-            err_small < 2e-3,
-            "consistent Generalized-alpha a1 must match continuum limit as h->0: rel_err={err_small}, a1={:?}, a_true={a_true:?}",
-            s_small.acceleration()[3]
+            err_fine < 5e-3,
+            "consistent Generalized-alpha a1 must match Rayleigh continuum limit: err_fine={err_fine:.3e}, err_coarse={err_coarse:.3e}"
+        );
+        assert!(
+            err_fine < 0.2 * err_coarse,
+            "consistent Generalized-alpha a1 must refine cleanly with h: err_fine={err_fine:.3e}, err_coarse={err_coarse:.3e}"
+        );
+    }
+
+    #[test]
+    fn newton_stops_immediately_on_sub_ulp_noop_instead_of_burning_factorizations() {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.02),
+            Vec2::new(-0.02, 0.01),
+            Vec2::new(0.02, 0.01),
+        ];
+        let tris = [[0, 1, 2], [1, 0, 3]];
+        let mut model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(400.0, 300.0, 0.2, 80.0, 1.0),
+            5e-4,
+            0.2,
+        )
+        .unwrap();
+        model.bending_model = BendingModel::DiscreteShells;
+        let x0 = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.02, 0.0),
+            Vec3::new(-0.02, 0.01, 0.0),
+            Vec3::new(0.019, 0.011, 0.004),
+        ];
+        let mut solver = Solver::new(
+            model,
+            x0,
+            &[[true; 3], [true; 3], [true; 3], [false; 3]],
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        solver.v[3] = Vec3::new(0.25, -0.1, 0.4);
+        // Demanding tol * h = 1e-19 m is below 0.5 ULP(0.019 m) (~1.73e-18 m), so the final
+        // Newton update rounds bit-identically onto `self.x`. The solver must remain fail-closed
+        // (NotConverged) without replaying 300 identical factorizations.
+        solver.tol = 1e-13;
+        solver.max_newton = 300;
+        solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
+        solver.damping = DampingOptions {
+            air_drag: None,
+            rayleigh_membrane_s: 0.005,
+            rayleigh_bending_s: 0.008,
+        };
+        let err = solver.step(1e-6).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NotConverged);
+        assert!(
+            !err.message.contains("after 300 iterations"),
+            "sub-ULP no-op step must terminate early instead of burning all max_newton iterations: {}",
+            err.message
         );
     }
 

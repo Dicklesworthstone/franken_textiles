@@ -46,9 +46,45 @@ pub(crate) fn filter_ranges<T: Send>(
     f(0..n)
 }
 
+/// `f(c, chunk)` for every consecutive `chunk`-sized piece of `data` (the last may be shorter), `c`
+/// counting pieces from zero. Each call owns its piece alone, so the pieces may run in parallel (with
+/// the `parallel` feature) and every element still sees exactly the operations a serial pass gives it.
+#[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+pub(crate) fn for_each_chunk_mut<T: Send>(
+    data: &mut [T],
+    chunk: usize,
+    f: impl Fn(usize, &mut [T]) + Sync + Send,
+) {
+    let chunk = chunk.max(1);
+    #[cfg(feature = "parallel")]
+    if data.len() > chunk {
+        use rayon::prelude::*;
+        data.par_chunks_mut(chunk)
+            .enumerate()
+            .for_each(|(c, piece)| f(c, piece));
+        return;
+    }
+    data.chunks_mut(chunk)
+        .enumerate()
+        .for_each(|(c, piece)| f(c, piece));
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{filter_ranges, map};
+    use super::{filter_ranges, for_each_chunk_mut, map};
+
+    #[test]
+    fn chunked_updates_touch_each_element_once_with_its_chunk_index() {
+        for n in [0, 1, 7, 4096, 10_001] {
+            let mut data = vec![0usize; n];
+            for_each_chunk_mut(&mut data, 1000, |c, piece| {
+                for (k, v) in piece.iter_mut().enumerate() {
+                    *v += c * 1000 + k + 1;
+                }
+            });
+            assert_eq!(data, (1..=n).collect::<Vec<_>>());
+        }
+    }
 
     #[test]
     fn keeps_index_order_on_both_sides_of_the_threshold() {
