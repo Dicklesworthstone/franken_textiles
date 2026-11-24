@@ -2805,6 +2805,18 @@ fn shared_operator_searches_alternative_orders_inside_qualified_calendars() {
 #[test]
 fn shared_operator_feed_objective_recovers_a_calendar_feasible_alternative_order() {
     let (pattern, mut options) = joint_operator_order_fixture(1, 0);
+    let machine = options["machine"].clone();
+    let qualifications = options["qualifications"].clone();
+    options["production"]["parallel"]["model"] = json!("independent_whole_garment_cells/2");
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["configuration"] =
+            json!({"machine":machine,"qualifications":qualifications,"recipes":{}});
+        refresh_cell_locks(cell);
+    }
+    refresh_operator_locks(&mut options);
     operator_calendars(
         &mut options,
         json!({
