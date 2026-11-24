@@ -68,7 +68,9 @@ debug = "line-tables-only"
 
 [profile.wasm-release]
 inherits = "release"
-opt-level = "s"
+# Speed over size: the posing room's browser sew took 31.0 s at "s" and 24.7 s at 3 (Node, same
+# digest; 2026-11-24), and the 3 build was the smaller one (25.6 against 27.6 MB with names).
+opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
