@@ -1215,13 +1215,12 @@ fn scheduled_wind_admits_stationary_initial_air_and_requires_declared_drag() {
                     motion["air_velocity_schedule_m_s"] =
                         json!([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]);
                     for (interval, index) in [2, 5].into_iter().enumerate() {
-                        motion["keyframes"][interval]["air_velocity_m_s"] =
-                            motion["air_velocity_schedule_m_s"][interval].clone();
+                        let wind = motion["air_velocity_schedule_m_s"][interval].clone();
+                        motion["keyframes"][interval]["air_velocity_m_s"] = wind.clone();
                         let start = if interval == 0 { 0 } else { 3 };
                         for sample in &mut motion["samples"].as_array_mut().unwrap()[start..=index]
                         {
-                            sample["air_velocity_m_s"] =
-                                motion["air_velocity_schedule_m_s"][interval].clone();
+                            sample["air_velocity_m_s"] = wind.clone();
                         }
                     }
                 }
