@@ -524,7 +524,7 @@ garment transfer, hardware control and empirical seam qualification remain outsi
 
 ### Allocate whole garments by complete thread order cost
 
-Configured independent-labor cells (`independent_whole_garment_cells/2`) can explicitly optimize the
+Configured cells (`independent_whole_garment_cells/2`) can explicitly optimize the
 complete thread order instead of elapsed completion. Keep the existing qualified machine, setup,
 handling, fixture, availability and source declarations, and supply ordinary `consumables.purchasing`
 with its unchanged quote book and comparable market. Add these fields to `production.parallel`:
@@ -542,8 +542,8 @@ with its unchanged quote book and comparable market. Add these fields to `produc
 
 The optional deadline is inclusive and measured from the job origin; every used cell must finish
 its complete retained schedule, including final unloading. It must be an exact integer from zero
-through `9007199254740991`. This mode currently requires separately qualified independent handling
-labor; it refuses the shared-operator and shared-fixture protocols rather than ignoring their work.
+through `9007199254740991`. Independently staffed cells use their own complete schedules. A separately
+qualified shared operator, calendars and shared fixtures use the coupled dispatch search described below.
 
 The existing cell/count solvers and complete fastest allocation supply the initial feasible
 incumbent. Deterministic bounded count-prefix search then considers whole-garment allocations,
@@ -590,6 +590,48 @@ Actual stitches, complete thread inventory, manufacturing/design/scenario studie
 browser views consume the same retained allocation. Feed-only and thread-only comparisons retain
 the complete allocation policy and purchasing inputs, including unused cells and original outer
 selection domains. Omitting the new policy preserves the existing schemas and allocation behavior.
+
+#### Complete orders with one shared operator
+
+The same cost objective and `thread_order_search` compose with `shared_operator`, its resource
+calendars and optional shared fixture pools. Keep `ceil_operation_feed_milliseconds/1`, the exact
+cell locks, qualified unattended feed, travel and attendance, and the applicable shared-resource
+independence declaration. This changes allocation selection; it does not infer a worker or drop
+the supplied qualifications.
+
+Only a complete coupled dispatch is a feasible candidate. Each occupied machine interval and
+operator trip, wait, setup, handling and final unload must satisfy the existing calendars, windows
+and fixture lifecycles. The complete-job deadline includes final unloading on every used cell.
+An allocation that fits independent cell schedules can therefore fail the shared-operator test.
+
+Each distinct feasible count vector sends its whole actual demand to the canonical thread-order
+consumer once. Subsequent dispatch interleavings reuse that exact price. Selection minimizes
+complete observed order cost, then complete-job finishing time; equal cost and finish retain the
+first deterministic incumbent. A faster but more expensive schedule cannot prune an unpriced
+allocation. The independent makespan lower bound cannot terminate a cost search.
+
+`thread_order_search.max_search_nodes` charges seed attempts and count-prefix choices, and
+`shared_operator.max_search_nodes` continues to bound dispatch and allocation work. The separate
+`max_order_evaluations` cap counts distinct complete order evaluations, including unavailable
+orders. All reservations remain inside the existing enclosing scheduling and purchasing limits.
+Reaching any cap preserves a complete feasible incumbent when one has been found. If every examined
+price is unavailable, the best retained complete timeline remains useful with an absent cost.
+
+Plan `/38`, production `/26` and parallel `/11` retain both the actual operator timeline and the
+complete-order result. The cost report uses
+`search_scope: "shared_operator_retained_serial_incumbents/1"`. Its
+`retained_order_optimality_proven` is true only when count/dispatch exploration completed and every
+relevant examined order had a complete proved price. This proves the minimum over the retained
+cell-local serial orders and their dispatch interleavings. Different local operation orders remain
+outside that search, so the unrestricted `optimality_proven` stays false. Makespan proof remains a
+separate claim based on the selected feasible finish and its independent lower bound.
+
+Recipe selection `/3` retains the selected cost and tightens the inner deadline, while preserving
+the incomplete unrestricted proof. Ordinary stitches, material studies and browser review use the
+same complete allocation and exact purchasing replay. The browser displays the retained-order
+proof separately and preserves the full original result in downloads. These are source-qualified
+numerical planning results, not observed factory throughput or authorization to purchase or operate
+machinery.
 
 ### Minimize scheduled feed work across configured cells
 

@@ -241,13 +241,16 @@ works with fixed specialist routes, qualified calendars, fixtures, attending wor
 Existing eligibility and allocation restrictions on cost/feed objectives still apply: this constraint
 does not turn a makespan-selected cell assignment into a joint cost/assignment optimizer.
 
-For configured independent-labor whole-garment cells, explicitly set
+For configured whole-garment cells, explicitly set
 `options.production.parallel.objective` to `minimize_thread_observed_order_cost` and provide its
 bounded `thread_order_search`. Selection `/3` then compares the actual complete orders from that
 allocator. An outer deadline tightens the inner completion limit before each allocation search;
 it cannot loosen an authored inner deadline. Recipe selection retains the original request and
 freezes the effective limit in selected options. A cost-directed cell request cannot be used with
-the time or feed objective. See [complete cell-order allocation](sewing-production.md#allocate-whole-garments-by-complete-thread-order-cost).
+the time or feed objective. Qualified shared operators, their calendars and shared fixture pools
+use the actual coupled dispatcher. Such a search retains useful selected costs and a separate proof
+over retained operation orders; its unrestricted cost proof remains false and selection preserves
+that limitation. See [complete cell-order allocation](sewing-production.md#allocate-whole-garments-by-complete-thread-order-cost).
 
 Each trial retains `completion_deadline` with its limit, timing basis, available selected completion,
 valid lower bound, timing proof and reason:

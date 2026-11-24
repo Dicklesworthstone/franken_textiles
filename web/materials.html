@@ -611,6 +611,12 @@ the operator's attendance, calendars and any shared fixture pools. Completion, s
 Use <code>ftx-sewing-selection/9</code> with <code>objective: "minimize_parallel_feed_milliseconds"</code>
 to compare qualified recipes using the same allocation objective. The result shows the selected feed, its independent
 lower bound and proof separately from makespan. A completed search over retained operation orders alone does not prove a global minimum.</p>
+<p class="note">To minimize a complete thread purchase with one operator tending several configured cells, use
+<code>objective: "minimize_thread_observed_order_cost"</code>, a bounded <code>thread_order_search</code>,
+the qualified <code>shared_operator</code> policy and complete <code>consumables.purchasing</code> inputs.
+The planner checks actual attendance, calendars, fixture holds and final unloading before pricing an allocation.
+Supplier minimums, increments and tiers apply to the combined order. The result distinguishes a cost minimum
+over retained operation orders from an unrestricted optimum and preserves a complete incumbent when a limit is reached.</p>
 <p class="note">To reduce needle and thread changes, add <code>ordering</code> to the recipe with
 <code>objective: "minimize_setup_changes"</code> and an explicit <code>max_search_nodes</code>.
 The bounded planner preserves declared predecessors and every stitch pass. The result shows the

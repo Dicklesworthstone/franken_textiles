@@ -4029,12 +4029,15 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     const orders = table(parent, `${label}: complete thread-order allocation`,
       ["Currency", "Selected order cost", "Inclusive deadline (ms)", "Count search complete", "Cost minimum proved",
         "Count search nodes", "Complete order evaluations", "Unresolved orders", "Unresolved cell counts",
-        "Count work limit reached", "Order work limit reached"]);
+        "Count work limit reached", "Order work limit reached",
+        ...(operator ? ["Retained-order cost minimum proved"] : [])]);
     cells(orders, [orderSearch.currency, metric(orderSearch.selected_order_cost),
       orderSearch.completion_deadline_milliseconds == null ? "None" : metric(orderSearch.completion_deadline_milliseconds),
       String(orderSearch.search_complete), String(orderSearch.optimality_proven), metric(orderSearch.search_nodes),
       metric(orderSearch.order_evaluations), metric(orderSearch.unresolved_assignments), metric(orderSearch.unresolved_cell_counts),
-      String(orderSearch.assignment_budget_exhausted), String(orderSearch.order_budget_exhausted)]);
+      String(orderSearch.assignment_budget_exhausted), String(orderSearch.order_budget_exhausted),
+      ...(operator ? [typeof orderSearch.retained_order_optimality_proven === "boolean"
+        ? String(orderSearch.retained_order_optimality_proven) : "Unknown"] : [])]);
   }
   const machines = table(parent, `${label}: selected physical cells`,
     ["Cell", ...(heterogeneous ? ["Qualified machine"] : []), "Global garment copies (zero-based)", "Available (s)",
@@ -4186,7 +4189,9 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
     (heterogeneous ? "Stitch pitch, feed, qualifications and thread consumption come from each selected cell's own admitted plan. " +
       (orderSearch ? "Complete source-qualified thread orders select the allocation within the explicit deadline. Cost proof is separate from makespan proof; missing orders and unresolved cell/count timing withhold a cost minimum. " +
-        "Every supplier minimum, increment and tier applies to the combined order. " :
+        "Every supplier minimum, increment and tier applies to the combined order. " +
+        (operator ? "Cost candidates must complete the actual shared-operator timeline, including final unloading, calendars and fixture holds. " +
+          "The retained-order cost proof covers the selected serial operation orders and their dispatch interleavings; other serial orders remain outside that proof. " : "") :
         feedSearch ? "The allocation minimizes total scheduled feed work within any declared completion deadline. Thread purchasing cost is a reported consequence, and feed and makespan proofs remain separate. " :
         "The allocation minimizes elapsed completion; its thread purchasing cost and total feed are reported consequences, not separately optimized quantities. ") : "") +
     (operator ? "This calculation does not qualify garment transfers, unmodeled shared resources or hardware execution." :

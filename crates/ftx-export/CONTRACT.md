@@ -1,5 +1,21 @@
 # ftx-export
 
+**Shared-operator thread orders.** Configured whole-garment cells can minimize canonical complete
+thread-order cost while one qualified operator tends their autonomous feed. Only complete coupled
+dispatches satisfying attendance, calendars, fixture lifecycles and final-unload deadlines supply
+prices. Exact common-yarn demand is aggregated before supplier rounding, tiers, stock and split-order
+allocation. Cached complete count prices can prune equivalent dispatches; a faster schedule cannot
+prune an unpriced assignment. Cost ties prefer earlier completion. Separate count, operator and
+pricing caps retain a complete feasible incumbent, with unavailable cost kept distinct from zero.
+Plan `/38`, production `/26` and parallel `/11` retain the full source-bound result. The optional
+`retained_order_optimality_proven` covers only retained cell-local orders and their dispatch
+interleavings after complete exploration and proved prices. Unrestricted cost proof stays false;
+makespan proof remains independently bound. Recipe selection propagates this limitation and its
+deadline, while native, portable and material-study consumers replay the same selected stitches
+and whole order. Independent enumeration and resource/cap regressions are in `sewing_parallel`;
+native/portable replay is in `sewing_production_workflow`. No factory-performance or machine
+execution claim follows. See `docs/sewing-production.md`.
+
 **Parallel scheduled feed.** Configured independent whole-garment cells can explicitly minimize
 the additive `ceil_cell_feed_milliseconds/1` work under an optional inclusive complete-job deadline.
 Retained count schedules supply feasible assignments; valid finish lower bounds supply a separate
