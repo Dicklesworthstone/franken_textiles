@@ -68,7 +68,7 @@ const USAGE: &str = "usage:
             [--thumb-pose JSON] [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
-            [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
+            [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--air-velocity VX,VY,VZ] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
             [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
@@ -82,7 +82,7 @@ const USAGE: &str = "usage:
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
-            [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
+            [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--air-velocity VX,VY,VZ] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
             [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
@@ -92,7 +92,7 @@ const USAGE: &str = "usage:
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON]
               [--compression F] [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
-              [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
+              [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--air-velocity VX,VY,VZ] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
               [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]]
               [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
@@ -995,8 +995,25 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
                 bad_input("--air-rho must be a finite nonnegative air density in kg/m³")
             })?;
         }
+        if let Some(v) = args.options.get("air-velocity") {
+            let parts: Vec<&str> = v.split(',').collect();
+            if parts.len() != 3 {
+                return Err(bad_input(
+                    "--air-velocity must be three comma-separated finite numbers VX,VY,VZ in m/s",
+                ));
+            }
+            let mut wind = [0.0; 3];
+            for (slot, raw) in wind.iter_mut().zip(parts) {
+                *slot = raw.trim().parse().map_err(|_| {
+                    bad_input(
+                        "--air-velocity must be three comma-separated finite numbers VX,VY,VZ in m/s",
+                    )
+                })?;
+            }
+            drag.air_velocity_m_s = wind;
+        }
         opts.damping.air_drag = Some(drag);
-    } else if let Some(name) = ["air-cn", "air-ct", "air-rho"]
+    } else if let Some(name) = ["air-cn", "air-ct", "air-rho", "air-velocity"]
         .into_iter()
         .find(|key| args.options.contains_key(*key))
     {
@@ -1306,6 +1323,7 @@ fn cmd_drape_bound(
             "air-cn",
             "air-ct",
             "air-rho",
+            "air-velocity",
             "rayleigh-membrane-s",
             "rayleigh-bending-s",
             "adaptive-barrier",
@@ -2805,6 +2823,8 @@ mod tests {
                     "0.08",
                     "--air-rho",
                     "1.2",
+                    "--air-velocity",
+                    "-2.5,1.25,0.5",
                     "--rayleigh-membrane-s",
                     "0.002",
                     "--rayleigh-bending-s",
@@ -2859,6 +2879,7 @@ mod tests {
         assert_eq!(drag.c_normal, 1.4);
         assert_eq!(drag.c_tangent, 0.08);
         assert_eq!(drag.rho_air_kg_m3, 1.2);
+        assert_eq!(drag.air_velocity_m_s, [-2.5, 1.25, 0.5]);
         assert_eq!(rich.damping.rayleigh_membrane_s, 0.002);
         assert_eq!(rich.damping.rayleigh_bending_s, 0.004);
         assert_eq!(
@@ -3036,6 +3057,12 @@ mod tests {
             vec!["--bending-model", "bogus"],
             vec!["--compression-model", "bogus"],
             vec!["--air-cn", "1.2"],
+            vec!["--air-velocity", "1,0,0"],
+            vec!["--air-drag", "--air-velocity", "1,2"],
+            vec!["--air-drag", "--air-velocity", "1,2,3,4"],
+            vec!["--air-drag", "--air-velocity", "NaN,0,0"],
+            vec!["--air-drag", "--air-velocity", "inf,0,0"],
+            vec!["--air-drag", "--air-velocity", "1e120,0,0"],
             vec!["--air-drag", "--air-cn", "-0.1"],
             vec!["--air-drag", "--air-rho", "NaN"],
             vec!["--rayleigh-membrane-s", "-0.001"],

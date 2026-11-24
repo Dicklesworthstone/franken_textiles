@@ -237,6 +237,30 @@ mod tests {
         let bad_opts: DrapeOptions = serde_json::from_value(bad).unwrap();
         assert!(bad_opts.validate().is_err());
 
+        // Ambient wind is opt-in, omitted when zero, round-trips when nonzero, and refuses invalid inputs.
+        let mut with_zero_wind = declared.clone();
+        with_zero_wind["damping"]["air_drag"]["air_velocity_m_s"] =
+            serde_json::json!([0.0, -0.0, 0.0]);
+        let zero_wind_opts: DrapeOptions = serde_json::from_value(with_zero_wind).unwrap();
+        zero_wind_opts.validate().unwrap();
+        assert_eq!(serde_json::to_value(zero_wind_opts).unwrap(), declared);
+
+        let mut windy = declared.clone();
+        windy["damping"]["air_drag"]["air_velocity_m_s"] = serde_json::json!([2.5, -1.25, 0.5]);
+        let windy_opts: DrapeOptions = serde_json::from_value(windy.clone()).unwrap();
+        windy_opts.validate().unwrap();
+        assert_eq!(serde_json::to_value(windy_opts).unwrap(), windy);
+
+        let mut bad_wind_len = declared.clone();
+        bad_wind_len["damping"]["air_drag"]["air_velocity_m_s"] = serde_json::json!([1.0, 2.0]);
+        assert!(serde_json::from_value::<DrapeOptions>(bad_wind_len).is_err());
+
+        let mut bad_wind_overflow = declared.clone();
+        bad_wind_overflow["damping"]["air_drag"]["air_velocity_m_s"] =
+            serde_json::json!([1e120, 0.0, 0.0]);
+        let bad_wind_opts: DrapeOptions = serde_json::from_value(bad_wind_overflow).unwrap();
+        assert!(bad_wind_opts.validate().is_err());
+
         declared["damping"]["unknown_field"] = serde_json::json!(1);
         assert!(serde_json::from_value::<DrapeOptions>(declared).is_err());
     }

@@ -7,7 +7,9 @@ and recorded on `sim_report.json["hand_collider"]` only when non-default, wired 
 workbenches, workers and round handoffs), `newton_strategy`
 (`ProjectedNewton` default omitted from JSON;
 `AdaptiveIlu` and `TrustRegionSteihaug`), `integrator` (`ImplicitEuler` default omitted from
-JSON; `GeneralizedAlpha { rho_inf }`), and schedule/tolerance overrides (`step_s`, `sew_steps`,
+JSON; `GeneralizedAlpha { rho_inf }`), opt-in physics/damping options including `damping.air_drag`
+with optional uniform world-space ambient wind `air_velocity_m_s` (omitted when `[0, 0, 0]`;
+uncalibrated drag coefficients, no airflow/fit claim), and schedule/tolerance overrides (`step_s`, `sew_steps`,
 `drape_steps`, `newton_tol_m_s`, capped at `sew + drape + settle <= 512`), forwarding them directly
 into `ftx_drape::run::DrapeOptions` while preserving legacy wire JSON when default; `session::SessionSettings`
 on `WebDrapeSession` likewise accepts opt-in `newton_strategy` (refusing `pcg_iters > 256`, `max_shifts > 16`,

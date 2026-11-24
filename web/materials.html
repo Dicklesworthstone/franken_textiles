@@ -484,7 +484,10 @@ studies below use their separately selected body source.</p>
 <details><summary>Cloth physics &amp; meshing realism (opt-in; defaults keep reference behavior)</summary>
 <label>Bending model <select id="drapeBendingModel"><option value="quadratic">Quadratic (reference default)</option><option value="discrete_shells">Discrete Shells (Grinspun nonlinear)</option></select></label>
 <label>Compression model <select id="drapeCompressionModel"><option value="axis_aligned">Axis-aligned (reference default)</option><option value="principal">Principal-strain (rotation-invariant)</option></select></label>
-<label><input id="drapeAirDrag" type="checkbox"> Aerodynamic drag (still air, ρ=1.225 kg/m³)</label>
+<label><input id="drapeAirDrag" type="checkbox"> Aerodynamic drag (ρ=1.225 kg/m³; still air when wind = 0)</label>
+<label>Wind X (m/s) <input id="drapeAirWindX" type="number" step="any" value="0" disabled></label>
+<label>Wind Y (m/s, −y front) <input id="drapeAirWindY" type="number" step="any" value="0" disabled></label>
+<label>Wind Z (m/s, +z up) <input id="drapeAirWindZ" type="number" step="any" value="0" disabled></label>
 <label>Rayleigh membrane damping (s) <input id="drapeRayleighMembraneS" type="number" min="0" step="any" value="0"></label>
 <label>Rayleigh bending damping (s) <input id="drapeRayleighBendingS" type="number" min="0" step="any" value="0"></label>
 <label><input id="drapeAdaptiveBarrier" type="checkbox"> Adaptive IPC barrier stiffness (Li et al. 2020)</label>
@@ -1314,7 +1317,12 @@ section-3 contract for their separate design-fit screening even when this scenar
 <label>Bending model <select id="guidedScenarioBendingModel"><option value="quadratic">Quadratic (default)</option><option value="discrete_shells">Discrete Shells</option></select></label>
 <label>Compression model <select id="guidedScenarioCompressionModel"><option value="axis_aligned">Axis-aligned (default)</option><option value="principal">Principal-strain</option></select></label>
 </div>
-<label><input id="guidedScenarioAirDrag" type="checkbox"> Aerodynamic drag (still air, ρ=1.225 kg/m³)</label>
+<label><input id="guidedScenarioAirDrag" type="checkbox"> Aerodynamic drag (ρ=1.225 kg/m³; still air when wind = 0)</label>
+<div class="study-fields">
+<label>Wind X (m/s) <input id="guidedScenarioAirWindX" type="number" step="any" value="0" disabled></label>
+<label>Wind Y (m/s, −y front) <input id="guidedScenarioAirWindY" type="number" step="any" value="0" disabled></label>
+<label>Wind Z (m/s, +z up) <input id="guidedScenarioAirWindZ" type="number" step="any" value="0" disabled></label>
+</div>
 <div class="study-fields">
 <label>Rayleigh membrane damping (s) <input id="guidedScenarioRayleighMembraneS" type="number" min="0" step="any" value="0"></label>
 <label>Rayleigh bending damping (s) <input id="guidedScenarioRayleighBendingS" type="number" min="0" step="any" value="0"></label>

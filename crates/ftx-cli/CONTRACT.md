@@ -272,7 +272,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--compression F]
   [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha]
   [--rho-inf F] [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal]
-  [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
+  [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--air-velocity VX,VY,VZ] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
   [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]]
   [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F]
   [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F] [--json]`:

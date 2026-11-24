@@ -1,11 +1,14 @@
 //! Physical aerodynamic drag and SE(3)-invariant Rayleigh internal damping for [`crate::cloth::Solver`].
 //!
 //! - **Aerodynamic drag** ([`AirDrag`]): anisotropic per-triangle crossflow (normal) and skin-friction
-//!   (tangential) drag formulated as a strictly convex `C^∞` variational step potential with lagged
-//!   step-start triangle area and unit normal. Its `9 × 9` element Hessian is symmetric positive
-//!   semidefinite by construction (`psd = true`) and shares the exact sparsity pattern of
-//!   [`crate::elements::MembraneElement`] (zero new matrix nonzeros). Supports both backward Euler
-//!   (`v = (x − x₀)/h`) and Chung–Hulbert Generalized-α midpoint velocity (`v_{n+1−α_f}`).
+//!   (tangential) drag on cloth velocity relative to an optional prescribed uniform world-space
+//!   ambient air velocity (`v_rel = v_cloth − v_air`), formulated as a strictly convex `C^∞`
+//!   variational step potential with lagged step-start triangle area and unit normal. Stationary air
+//!   (`air_velocity_m_s = [0, 0, 0]`) bypasses subtraction to preserve bit-identical stationary-air
+//!   arithmetic. Its `9 × 9` element Hessian is symmetric positive semidefinite by construction
+//!   (`psd = true`) and shares the exact sparsity pattern of [`crate::elements::MembraneElement`]
+//!   (zero new matrix nonzeros). Supports both backward Euler (`v = (x − x₀)/h`) and
+//!   Chung–Hulbert Generalized-α midpoint velocity (`v_{n+1−α_f}`).
 //! - **Rayleigh internal damping** ([`DampingOptions::rayleigh_membrane_s`],
 //!   [`DampingOptions::rayleigh_bending_s`]): stiffness-proportional Kelvin–Voigt strain-rate and
 //!   dihedral curvature-rate potentials. Because Green strain `E(x)` and dihedral angle `θ(x)` are
@@ -21,8 +24,10 @@
 //! internal-rate extension is not a second-order Kelvin-Voigt time discretization.
 //!
 //! Honesty boundary: aerodynamic drag coefficients are uncalibrated reference defaults unless
-//! measured in experiment. Physics KATs verify terminal velocity, anisotropy, and SE(3) invariance;
-//! they do not certify real garment fit.
+//! measured in experiment, and ambient wind is an explicitly prescribed uniform world-space air
+//! velocity rather than measured room/outdoor airflow. Physics KATs verify terminal velocity,
+//! anisotropy, Galilean invariance, wind deflection, and SE(3) invariance; they do not certify
+//! real garment fit.
 
 use std::f64::consts::PI;
 
@@ -36,6 +41,10 @@ use crate::elements::Local;
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &T
 fn is_zero_f64(v: &f64) -> bool {
     *v == 0.0
+}
+
+fn is_zero_air_velocity(v: &[f64; 3]) -> bool {
+    v[0] == 0.0 && v[1] == 0.0 && v[2] == 0.0
 }
 
 /// Anisotropic per-triangle aerodynamic drag parameters.
@@ -52,6 +61,11 @@ pub struct AirDrag {
     /// quadratic drag (`|v| ≫ ε_v`) to linear viscous drag near zero speed so the potential is
     /// `C^∞` with strictly bounded PSD Hessian.
     pub eps_v_m_s: f64,
+    /// Prescribed uniform world-space ambient air velocity `v_air` (m/s, 3D world frame: z up,
+    /// wearer facing −y). Stationary air (`[0.0, 0.0, 0.0]`) is omitted from serialized JSON so
+    /// stationary-air receipts and qualification digests stay byte-identical.
+    #[serde(skip_serializing_if = "is_zero_air_velocity")]
+    pub air_velocity_m_s: [f64; 3],
 }
 
 impl Default for AirDrag {
@@ -62,7 +76,7 @@ impl Default for AirDrag {
 
 impl AirDrag {
     /// Sea-level dry air (`1.225 kg/m³`) with uncalibrated flat-plate reference drag coefficients
-    /// (`C_n = 1.2`, `C_t = 0.05`, `ε_v = 1e-3 m/s`).
+    /// (`C_n = 1.2`, `C_t = 0.05`, `ε_v = 1e-3 m/s`) and stationary air (`[0, 0, 0] m/s`).
     #[must_use]
     pub const fn standard() -> Self {
         Self {
@@ -70,6 +84,35 @@ impl AirDrag {
             c_normal: 1.2,
             c_tangent: 0.05,
             eps_v_m_s: 1e-3,
+            air_velocity_m_s: [0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Prescribed uniform world-space ambient air velocity `v_air` (m/s).
+    #[must_use]
+    pub const fn air_velocity(&self) -> Vec3 {
+        Vec3::new(
+            self.air_velocity_m_s[0],
+            self.air_velocity_m_s[1],
+            self.air_velocity_m_s[2],
+        )
+    }
+
+    /// Whether a nonzero ambient air velocity is prescribed.
+    #[must_use]
+    pub fn has_wind(&self) -> bool {
+        !is_zero_air_velocity(&self.air_velocity_m_s)
+    }
+
+    /// Cloth velocity relative to ambient air (`v_cloth − v_air`), bypassing subtraction when
+    /// ambient air is stationary so stationary-air floating-point arithmetic is bit-identical.
+    #[must_use]
+    #[inline]
+    pub fn relative_velocity(&self, centroid_velocity: Vec3) -> Vec3 {
+        if self.has_wind() {
+            centroid_velocity - self.air_velocity()
+        } else {
+            centroid_velocity
         }
     }
 
@@ -77,12 +120,16 @@ impl AirDrag {
     ///
     /// # Errors
     /// [`RefusalCode::OutOfRange`] or [`RefusalCode::NonFinite`] for negative/non-finite
-    /// density/coefficients or non-positive velocity regularization.
+    /// density/coefficients, non-positive velocity regularization, or non-finite/overflowing
+    /// ambient air velocity.
     pub fn validate(&self) -> Result<(), Refusal> {
         Refusal::finite("air density", self.rho_air_kg_m3)?;
         Refusal::finite("normal air drag coefficient", self.c_normal)?;
         Refusal::finite("tangential air drag coefficient", self.c_tangent)?;
         Refusal::finite("air drag velocity regularization", self.eps_v_m_s)?;
+        for (axis, component) in ["x", "y", "z"].into_iter().zip(self.air_velocity_m_s) {
+            Refusal::finite(&format!("ambient air velocity {axis}"), component)?;
+        }
         if self.rho_air_kg_m3 < 0.0 || self.c_normal < 0.0 || self.c_tangent < 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -99,11 +146,24 @@ impl AirDrag {
             "air drag velocity regularization cubed",
             self.eps_v_m_s * self.eps_v_m_s * self.eps_v_m_s,
         )?;
+        if self.has_wind() {
+            let wind2 = self.air_velocity_m_s[0] * self.air_velocity_m_s[0]
+                + self.air_velocity_m_s[1] * self.air_velocity_m_s[1]
+                + self.air_velocity_m_s[2] * self.air_velocity_m_s[2];
+            Refusal::finite("ambient air velocity squared", wind2)?;
+            let wind3 = wind2 * wind2.sqrt();
+            Refusal::finite("ambient air velocity cubed", wind3)?;
+            Refusal::finite(
+                "ambient air drag scale",
+                self.rho_air_kg_m3 * (self.c_normal + self.c_tangent) * wind3,
+            )?;
+        }
         Ok(())
     }
 
-    /// Instantaneous resistive force (`-F_drag(v)`, i.e. gradient contribution to `M a + ∇Ψ − F_drag = M g`)
-    /// distributed equally across the three vertices of a triangle with area `area` and unit normal `normal`.
+    /// Instantaneous resistive force (`-F_drag(v_cloth - v_air)`, i.e. gradient contribution to
+    /// `M a + ∇Ψ − F_drag = M g`) distributed equally across the three vertices of a triangle with
+    /// area `area` and unit normal `normal`.
     #[must_use]
     pub fn triangle_resistance_force(
         &self,
@@ -114,8 +174,9 @@ impl AirDrag {
         if area <= 0.0 || self.rho_air_kg_m3 == 0.0 {
             return Vec3::ZERO;
         }
-        let s_n = centroid_velocity.dot(normal);
-        let v_t = centroid_velocity - normal * s_n;
+        let v_rel = self.relative_velocity(centroid_velocity);
+        let s_n = v_rel.dot(normal);
+        let v_t = v_rel - normal * s_n;
         let eps2 = self.eps_v_m_s * self.eps_v_m_s;
         let u_n = (s_n * s_n + eps2).sqrt();
         let u_t = (v_t.norm2() + eps2).sqrt();
@@ -625,22 +686,25 @@ fn air_drag_energy(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) ->
     if drag.rho_air_kg_m3 == 0.0 {
         return 0.0;
     }
-    let s_n = v.dot(normal);
-    let v_t = v - normal * s_n;
+    let v_rel = drag.relative_velocity(v);
+    let s_n = v_rel.dot(normal);
+    let v_t = v_rel - normal * s_n;
     let (psi_n, _) = smooth_drag_psi(s_n * s_n, drag.eps_v_m_s);
     let (psi_t, _) = smooth_drag_psi(v_t.norm2(), drag.eps_v_m_s);
     (0.5 * drag.rho_air_kg_m3 * area / c_v) * (drag.c_normal * psi_n + drag.c_tangent * psi_t)
 }
 
 fn air_drag_local(drag: AirDrag, area: f64, normal: Vec3, v: Vec3, c_v: f64) -> Local<9, 81> {
-    let s_n = v.dot(normal);
-    let v_t = v - normal * s_n;
+    let v_rel = drag.relative_velocity(v);
+    let s_n = v_rel.dot(normal);
+    let v_t = v_rel - normal * s_n;
     let (psi_n, u_n) = smooth_drag_psi(s_n * s_n, drag.eps_v_m_s);
     let (psi_t, u_t) = smooth_drag_psi(v_t.norm2(), drag.eps_v_m_s);
     let pref = 0.5 * drag.rho_air_kg_m3 * area;
     let energy = (pref / c_v) * (drag.c_normal * psi_n + drag.c_tangent * psi_t);
 
-    // Gradient wrt centroid velocity v: F_res = pref * (C_n * u_n * s_n * n + C_t * u_t * v_t).
+    // Gradient wrt centroid velocity v (with constant v_air, ∂v_rel/∂v = I_3):
+    // F_res = pref * (C_n * u_n * s_n * n + C_t * u_t * v_t).
     // Chain rule dv/dx_a = (c_v / 3) I_3 cancels the (1 / c_v) prefactor on grad.
     let f_vertex =
         (normal * (drag.c_normal * u_n * s_n) + v_t * (drag.c_tangent * u_t)) * (pref / 3.0);
@@ -1029,6 +1093,200 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, RefusalCode::OutOfRange);
+
+        // Ambient wind validation refusals: NaN, ±inf, and arithmetic overflow.
+        for bad_wind in [
+            [f64::NAN, 0.0, 0.0],
+            [0.0, f64::INFINITY, 0.0],
+            [0.0, 0.0, f64::NEG_INFINITY],
+            [1e120, 0.0, 0.0],
+            [0.0, 1e200, 0.0],
+        ] {
+            let err = DampingOptions {
+                air_drag: Some(AirDrag {
+                    air_velocity_m_s: bad_wind,
+                    ..AirDrag::standard()
+                }),
+                ..DampingOptions::default()
+            }
+            .validate()
+            .unwrap_err();
+            assert_eq!(err.code, RefusalCode::NonFinite, "wind={bad_wind:?}");
+        }
+    }
+
+    #[test]
+    fn ambient_wind_analytical_forces_derivatives_and_stationary_bit_identity() {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.02, 0.0),
+            Vec2::new(0.01, 0.02),
+            Vec2::new(0.01, -0.02),
+        ];
+        let tris = [[0, 1, 2], [1, 0, 3]];
+        let mat = Membrane::orthotropic(500.0, 300.0, 0.2, 60.0, 1.0);
+        let model = ClothModel::new(rest.clone(), &tris, mat, 2e-5, 0.15).unwrap();
+        let x0: Vec<Vec3> = rest
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Vec3::new(p.x, p.y, if i == 3 { 0.005 } else { 0.0 }))
+            .collect();
+        let x1 = vec![
+            x0[0] + Vec3::new(0.001, -0.002, -0.015),
+            x0[1] + Vec3::new(0.002, 0.001, -0.012),
+            x0[2] + Vec3::new(-0.001, 0.003, -0.018),
+            x0[3] + Vec3::new(0.003, -0.001, -0.011),
+        ];
+        let h = 1.0 / 24.0;
+
+        // 1. Stationary air ([0, 0, 0] and [-0.0, 0.0, 0.0]) preserves bit-identical arithmetic.
+        let still = AirDrag::standard();
+        let neg_zero = AirDrag {
+            air_velocity_m_s: [-0.0, 0.0, -0.0],
+            ..still
+        };
+        assert!(!still.has_wind());
+        assert!(!neg_zero.has_wind());
+        let sample_v = Vec3::new(-0.0, 1.25, -3.5);
+        let sample_n = Vec3::new(0.0, 0.6, 0.8);
+        assert_eq!(
+            still.relative_velocity(sample_v).x.to_bits(),
+            sample_v.x.to_bits()
+        );
+        let l_still = air_drag_local(still, 0.01, sample_n, sample_v, 24.0);
+        let l_neg0 = air_drag_local(neg_zero, 0.01, sample_n, sample_v, 24.0);
+        assert_eq!(l_still.energy.to_bits(), l_neg0.energy.to_bits());
+        for (a, b) in l_still.grad.iter().zip(&l_neg0.grad) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+        for (a, b) in l_still.hess.iter().zip(&l_neg0.hess) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+
+        // 2. Analytical force: rest cloth in normal wind pushes in wind direction, flips
+        //    invariantly under reversed triangle normal, and vanishes when v_cloth == v_air.
+        let wind = Vec3::new(2.0, -3.0, 1.5);
+        let windy = AirDrag {
+            air_velocity_m_s: [wind.x, wind.y, wind.z],
+            ..still
+        };
+        assert!(windy.has_wind());
+        let f_co = windy.triangle_resistance_force(0.02, Vec3::new(0.0, 0.0, 1.0), wind);
+        assert_eq!(f_co, Vec3::ZERO);
+
+        let area = 0.05;
+        let normal_wind = AirDrag {
+            air_velocity_m_s: [0.0, 4.0, 0.0],
+            ..still
+        };
+        let n_pos = Vec3::new(0.0, 1.0, 0.0);
+        let n_neg = Vec3::new(0.0, -1.0, 0.0);
+        // Resistive force (-F_aero) points in -y when cloth is at rest in +y wind, so F_aero = -F_res points in +y.
+        let f_res_pos = normal_wind.triangle_resistance_force(area, n_pos, Vec3::ZERO);
+        let f_res_neg = normal_wind.triangle_resistance_force(area, n_neg, Vec3::ZERO);
+        let u_expected = (16.0_f64 + still.eps_v_m_s * still.eps_v_m_s).sqrt();
+        let expected_mag = 0.5 * still.rho_air_kg_m3 * area * still.c_normal * 4.0 * u_expected;
+        assert!((f_res_pos.y + expected_mag).abs() <= 1e-13 * expected_mag);
+        assert!(f_res_pos.x.abs() < 1e-15 && f_res_pos.z.abs() < 1e-15);
+        assert!((f_res_pos - f_res_neg).norm() < 1e-15);
+
+        // Tangential wind scales with c_tangent and pushes along the wind vector.
+        let f_res_tan =
+            normal_wind.triangle_resistance_force(area, Vec3::new(0.0, 0.0, 1.0), Vec3::ZERO);
+        let expected_tan = 0.5 * still.rho_air_kg_m3 * area * still.c_tangent * 4.0 * u_expected;
+        assert!((f_res_tan.y + expected_tan).abs() <= 1e-13 * expected_tan);
+        assert!(f_res_tan.x.abs() < 1e-15 && f_res_tan.z.abs() < 1e-15);
+
+        // 3. Exact finite-difference gradients & PSD Hessians under 3D ambient wind for both
+        //    Implicit Euler and Generalized-α velocity maps.
+        let opts = DampingOptions {
+            air_drag: Some(windy),
+            rayleigh_membrane_s: 0.0,
+            rayleigh_bending_s: 0.0,
+        };
+        let step_ie = DampingStep::build(
+            &model,
+            opts,
+            &x0,
+            h,
+            VelocityMap::ImplicitEuler {
+                x0: &x0,
+                inv_h: 1.0 / h,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        check_fd(
+            &x1,
+            &model.membranes[0].v,
+            1e-7,
+            |p| {
+                let (a, n) = step_ie.tri_frames[0];
+                air_drag_energy(
+                    windy,
+                    a,
+                    n,
+                    step_ie.vel.centroid_velocity(p, model.membranes[0].v),
+                    step_ie.vel.c_v(),
+                )
+            },
+            |p| step_ie.air_drag_local(0, model.membranes[0].v, p).unwrap(),
+        );
+
+        let v_base = vec![
+            Vec3::new(0.1, -0.2, 0.3),
+            Vec3::new(-0.05, 0.15, -0.1),
+            Vec3::new(0.2, 0.05, -0.25),
+            Vec3::new(-0.1, -0.1, 0.2),
+        ];
+        let step_ga = DampingStep::build(
+            &model,
+            opts,
+            &x0,
+            h,
+            VelocityMap::GeneralizedAlpha {
+                x0: &x0,
+                v_base,
+                c_v: 18.5,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let loc_ga = step_ga
+            .air_drag_local(0, model.membranes[0].v, &x1)
+            .unwrap();
+        assert!(loc_ga.psd);
+        check_fd(
+            &x1,
+            &model.membranes[0].v,
+            1e-7,
+            |p| {
+                let (a, n) = step_ga.tri_frames[0];
+                air_drag_energy(
+                    windy,
+                    a,
+                    n,
+                    step_ga.vel.centroid_velocity(p, model.membranes[0].v),
+                    step_ga.vel.c_v(),
+                )
+            },
+            |p| step_ga.air_drag_local(0, model.membranes[0].v, p).unwrap(),
+        );
+
+        // 4. Serde compatibility: stationary air omits air_velocity_m_s and parses legacy JSON;
+        //    nonzero wind round-trips exact components; unknown fields refuse.
+        let still_val = serde_json::to_value(still).unwrap();
+        assert!(still_val.get("air_velocity_m_s").is_none());
+        let from_legacy: AirDrag = serde_json::from_value(still_val).unwrap();
+        assert_eq!(from_legacy, still);
+
+        let windy_val = serde_json::to_value(windy).unwrap();
+        assert_eq!(
+            windy_val["air_velocity_m_s"],
+            serde_json::json!([2.0, -3.0, 1.5])
+        );
+        let roundtrip: AirDrag = serde_json::from_value(windy_val).unwrap();
+        assert_eq!(roundtrip, windy);
     }
 
     #[test]

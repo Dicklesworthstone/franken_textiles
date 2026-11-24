@@ -280,6 +280,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <p class="row"><label>Bending model <select id="drapeBendingModel"><option value="quadratic">Quadratic (legacy default)</option><option value="discrete_shells">Discrete Shells (finite-angle dihedral)</option></select></label>
           <label>Compression softening <select id="drapeCompressionModel"><option value="axis_aligned">Axis-aligned (legacy default)</option><option value="principal">Principal-strain (bias-isotropic)</option></select></label></p>
         <p class="row"><label><input type="checkbox" id="drapeAirDrag"> Anisotropic air drag (C<sub>n</sub>=1.2, C<sub>t</sub>=0.05)</label>
+          <label>Wind X (m/s) <input id="drapeAirWindX" type="number" step="any" value="0" disabled></label>
+          <label>Wind Y (m/s, −y front) <input id="drapeAirWindY" type="number" step="any" value="0" disabled></label>
+          <label>Wind Z (m/s, +z up) <input id="drapeAirWindZ" type="number" step="any" value="0" disabled></label>
           <label>Rayleigh membrane (s) <input id="drapeRayleighMembraneS" type="number" min="0" step="0.0005" value="0"></label>
           <label>Rayleigh bending (s) <input id="drapeRayleighBendingS" type="number" min="0" step="0.0005" value="0"></label></p>
         <p class="row"><label><input type="checkbox" id="drapeAdaptiveBarrier"> Adaptive IPC barrier stiffness</label>
@@ -306,7 +309,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           <label>Stiffness <input id="drapeRepulsionStiffness" type="number" min="0.05" max="1" step="0.05" value="0.5" disabled></label>
           <label>Period <input id="drapeRepulsionPeriod" type="number" min="1" max="25" step="1" value="5" disabled></label>
           <label>Max checks <input id="drapeRepulsionMaxChecks" type="number" min="1" max="128000000" step="1" value="32000000" disabled></label></p>
-        <p class="mut">Every option above is opt-in and omitted from settings when left at its legacy default. Air drag, uncalibrated stick-slip friction, and hem/seam multipliers are structural approximations, not measured textile constants or physical-fit claims; characterized material records refuse uncalibrated stick-slip or construction overrides.</p>
+        <p class="mut">Every option above is opt-in and omitted from settings when left at its legacy default. Air drag (including any prescribed uniform world-space ambient wind), uncalibrated stick-slip friction, and hem/seam multipliers are structural approximations, not measured airflow, measured textile constants, or physical-fit claims; characterized material records refuse uncalibrated stick-slip or construction overrides.</p>
       </details>
       <p class="mut">Static equilibrium runs a separate frictionless conservative solve from the finished dynamic state without altering dynamic frames, flags, or simulated time. History-dependent materials refuse the static comparison while retaining the dynamic drape.</p>
       <p class="mut">Projected Newton with Implicit Euler is the default solver. Opt-in Generalized-α (ρ<sub>∞</sub> ∈ [0, 1]; 0 strongest high-frequency damping, 1 zero numerical dissipation) refuses history-dependent materials and may require smaller steps on stiff contact transitions. Custom schedule overrides stay within the 512-step browser budget per sewing path (sew + gravity + settling).</p>
@@ -641,6 +644,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = !$("customDrapeSchedule").checked;
     for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = !$("staticEquilibrium").checked;
     $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
+    for (const id of ["drapeAirWindX", "drapeAirWindY", "drapeAirWindZ"]) $(id).disabled = !$("drapeAirDrag").checked;
     for (const id of ["drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV"]) $(id).disabled = !$("drapeStickSlip").checked;
     for (const id of ["drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV"]) $(id).disabled = !$("drapeSelfStickSlip").checked;
     for (const id of ["drapeMeshMinMm", "drapeMeshCvt"]) $(id).disabled = !$("drapeAdaptiveMesh").checked;
@@ -908,17 +912,33 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       const damp = {};
       if (d.air_drag !== undefined) {
         const a = d.air_drag;
-        const aKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
-        if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).length !== 4 ||
+        const aReq = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+        const aKeys = [...aReq, "air_velocity_m_s"];
+        if (!a || typeof a !== "object" || Array.isArray(a) ||
             Object.keys(a).some(k => !aKeys.includes(k)) ||
-            aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
+            aReq.some(k => !Object.hasOwn(a, k) || typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
             a.rho_air_kg_m3 !== DEFAULT_AIR_DRAG.rho_air_kg_m3 ||
             a.c_normal !== DEFAULT_AIR_DRAG.c_normal ||
             a.c_tangent !== DEFAULT_AIR_DRAG.c_tangent ||
             a.eps_v_m_s !== DEFAULT_AIR_DRAG.eps_v_m_s) {
-          throw Error("Air drag must match the supported workbench preset (still air: ρ=1.225, Cn=1.2, Ct=0.05, eps_v=1e-3).");
+          throw Error("Air drag must match the supported workbench preset (ρ=1.225, Cn=1.2, Ct=0.05, eps_v=1e-3, plus optional air_velocity_m_s).");
         }
-        damp.air_drag = { ...DEFAULT_AIR_DRAG };
+        const dragOut = { ...DEFAULT_AIR_DRAG };
+        if (Object.hasOwn(a, "air_velocity_m_s")) {
+          const w = a.air_velocity_m_s;
+          if (!Array.isArray(w) || w.length !== 3 || w.some(c => typeof c !== "number" || !Number.isFinite(c))) {
+            throw Error("Air drag air_velocity_m_s must be a 3-element array of finite numbers in m/s.");
+          }
+          const w2 = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+          const w3 = w2 * Math.sqrt(w2);
+          if (!Number.isFinite(w2) || !Number.isFinite(w3) || !Number.isFinite(a.rho_air_kg_m3 * (a.c_normal + a.c_tangent) * w3)) {
+            throw Error("Air drag air_velocity_m_s overflows aerodynamic drag arithmetic.");
+          }
+          if (w[0] !== 0 || w[1] !== 0 || w[2] !== 0) {
+            dragOut.air_velocity_m_s = [w[0] === 0 ? 0 : w[0], w[1] === 0 ? 0 : w[1], w[2] === 0 ? 0 : w[2]];
+          }
+        }
+        damp.air_drag = dragOut;
       }
       for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
         if (d[key] !== undefined) {
@@ -1043,7 +1063,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const rb = reqRealismNum("drapeRayleighBendingS", "Rayleigh bending damping (s)");
     if ($("drapeAirDrag").checked || rm !== 0 || rb !== 0) {
       raw.damping = {
-        ...($("drapeAirDrag").checked ? { air_drag: { ...DEFAULT_AIR_DRAG } } : {}),
+        ...($("drapeAirDrag").checked ? {
+          air_drag: {
+            ...DEFAULT_AIR_DRAG,
+            air_velocity_m_s: [
+              reqRealismNum("drapeAirWindX", "ambient wind X (m/s)"),
+              reqRealismNum("drapeAirWindY", "ambient wind Y (m/s)"),
+              reqRealismNum("drapeAirWindZ", "ambient wind Z (m/s)"),
+            ],
+          },
+        } : {}),
         ...(rm !== 0 ? { rayleigh_membrane_s: rm } : {}),
         ...(rb !== 0 ? { rayleigh_bending_s: rb } : {}),
       };
@@ -1100,6 +1129,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("drapeBendingModel").value = r.bending_model ?? "quadratic";
     $("drapeCompressionModel").value = r.compression_model ?? "axis_aligned";
     $("drapeAirDrag").checked = r.damping?.air_drag !== undefined;
+    const airWind = r.damping?.air_drag?.air_velocity_m_s;
+    $("drapeAirWindX").value = String(airWind ? airWind[0] : 0);
+    $("drapeAirWindY").value = String(airWind ? airWind[1] : 0);
+    $("drapeAirWindZ").value = String(airWind ? airWind[2] : 0);
     $("drapeRayleighMembraneS").value = String(r.damping?.rayleigh_membrane_s ?? 0);
     $("drapeRayleighBendingS").value = String(r.damping?.rayleigh_bending_s ?? 0);
     $("drapeAdaptiveBarrier").checked = r.adaptive_barrier !== undefined;
@@ -1500,7 +1533,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       }
       if (r.numerical?.damping) {
         const dp = r.numerical.damping, parts = [];
-        if (dp.air_drag) parts.push("air drag");
+        if (dp.air_drag) {
+          const w = dp.air_drag.air_velocity_m_s;
+          parts.push(Array.isArray(w) && w.length === 3 && (w[0] !== 0 || w[1] !== 0 || w[2] !== 0)
+            ? `air drag (wind [${w.join(", ")}] m/s)` : "air drag");
+        }
         if (dp.rayleigh_membrane_s > 0) parts.push(`Rayleigh membrane ${dp.rayleigh_membrane_s} s`);
         if (dp.rayleigh_bending_s > 0) parts.push(`Rayleigh bending ${dp.rayleigh_bending_s} s`);
         if (parts.length) $("foldSummary").innerHTML += `<br>Damping: ${esc(parts.join(", "))}`;
@@ -1633,7 +1670,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton", "drapeBendingModel", "drapeCompressionModel", "drapeAirDrag", "drapeRayleighMembraneS", "drapeRayleighBendingS", "drapeAdaptiveBarrier", "drapeStickSlip", "drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV", "drapeSelfStickSlip", "drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV", "drapeAdaptiveMesh", "drapeMeshMinMm", "drapeMeshCvt", "drapeConstruction", "drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult", "drapeStartRepulsion", "drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod", "drapeRepulsionMaxChecks"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton", "drapeBendingModel", "drapeCompressionModel", "drapeAirDrag", "drapeAirWindX", "drapeAirWindY", "drapeAirWindZ", "drapeRayleighMembraneS", "drapeRayleighBendingS", "drapeAdaptiveBarrier", "drapeStickSlip", "drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV", "drapeSelfStickSlip", "drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV", "drapeAdaptiveMesh", "drapeMeshMinMm", "drapeMeshCvt", "drapeConstruction", "drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult", "drapeStartRepulsion", "drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod", "drapeRepulsionMaxChecks"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("applyRealismPreset").addEventListener("click", () => {

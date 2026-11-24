@@ -263,6 +263,175 @@ fn kat_air_drag_edge_on_falls_faster_than_face_on() {
 }
 
 #[test]
+fn kat_air_drag_ambient_wind_galilean_invariance() {
+    // Boosting an unconstrained cloth's initial velocity and ambient air velocity by the same
+    // constant 3D vector U must shift x(t) by exactly t * U and v(t) by exactly U under both
+    // Implicit Euler and Generalized-α, even with SE(3)-invariant Rayleigh damping active.
+    let (rest, tris) = grid(0.10, 0.10, 2, 2, Vec2::ZERO);
+    let x0: Vec<Vec3> = rest
+        .iter()
+        .map(|p| Vec3::new(p.x, p.y, 0.02 * (p.x - 0.05) + 0.015 * p.y))
+        .collect();
+    let fixed = vec![[false; 3]; rest.len()];
+    let boost = Vec3::new(3.5, -2.0, 1.25);
+    let h = 1.0 / 60.0;
+    let steps = 20;
+
+    for integrator in [
+        TimeIntegrator::ImplicitEuler,
+        TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+    ] {
+        let mut still = Solver::new(
+            ClothModel::new(rest.clone(), &tris, cotton(), 2e-5, 0.12).unwrap(),
+            x0.clone(),
+            &fixed,
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        still.integrator = integrator;
+        still.tol = 1e-12;
+        still.damping = DampingOptions {
+            air_drag: Some(AirDrag::standard()),
+            rayleigh_membrane_s: 1e-3,
+            rayleigh_bending_s: 2e-3,
+        };
+
+        let mut boosted = Solver::new(
+            ClothModel::new(rest.clone(), &tris, cotton(), 2e-5, 0.12).unwrap(),
+            x0.clone(),
+            &fixed,
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        boosted.integrator = integrator;
+        boosted.tol = 1e-12;
+        boosted.v.fill(boost);
+        boosted.damping = DampingOptions {
+            air_drag: Some(AirDrag {
+                air_velocity_m_s: [boost.x, boost.y, boost.z],
+                ..AirDrag::standard()
+            }),
+            rayleigh_membrane_s: 1e-3,
+            rayleigh_bending_s: 2e-3,
+        };
+
+        for step in 1..=steps {
+            still.step(h).unwrap();
+            boosted.step(h).unwrap();
+            let shift = boost * (step as f64 * h);
+            for i in 0..still.x.len() {
+                let x_err = (boosted.x[i] - (still.x[i] + shift)).norm();
+                let v_err = (boosted.v[i] - (still.v[i] + boost)).norm();
+                assert!(
+                    x_err < 1e-10,
+                    "{integrator:?} step {step} vertex {i}: Galilean position err={x_err:.3e}"
+                );
+                assert!(
+                    v_err < 1e-9,
+                    "{integrator:?} step {step} vertex {i}: Galilean velocity err={v_err:.3e}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn kat_air_drag_prescribed_wind_deflects_pinned_sheet_in_wind_direction_and_scales_anisotropically()
+{
+    // A hanging vertical curtain in the x-z plane pinned along its top edge (z = 0.20 m) must:
+    // 1. Deflect strongly in +y under a +y face-on crosswind (matching aerodynamic swing angle
+    //    tan(θ) = (½ ρ C_n U² sin(θ_proj) ...), with symmetric reversal under -y wind).
+    // 2. Deflect far less under an equal-speed +x edge-on wind (C_t = 0.05 vs C_n = 1.2).
+    let width = 0.16;
+    let height = 0.20;
+    let (rest, tris) = grid(width, height, 4, 5, Vec2::ZERO);
+    let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, 0.0, p.y)).collect();
+    let mut fixed = vec![[false; 3]; rest.len()];
+    let mut bottom = Vec::new();
+    for (i, p) in rest.iter().enumerate() {
+        if (p.y - height).abs() < 1e-9 {
+            fixed[i] = [true; 3];
+        }
+        if p.y.abs() < 1e-9 {
+            bottom.push(i);
+        }
+    }
+
+    let run_wind = |wind: [f64; 3]| -> (f64, f64) {
+        let model = ClothModel::new(rest.clone(), &tris, cotton(), 1e-5, 0.10).unwrap();
+        let mut solver = Solver::new(model, x0.clone(), &fixed, Vec3::new(0.0, 0.0, -9.81));
+        solver.damping = DampingOptions {
+            air_drag: Some(AirDrag {
+                air_velocity_m_s: wind,
+                ..AirDrag::standard()
+            }),
+            rayleigh_membrane_s: 1e-3,
+            rayleigh_bending_s: 1e-3,
+        };
+        solver.tol = 1e-9;
+        for _ in 0..80 {
+            solver.step(1.0 / 60.0).unwrap();
+        }
+        let n = bottom.len() as f64;
+        let mean_x = bottom.iter().map(|&i| solver.x[i].x - x0[i].x).sum::<f64>() / n;
+        let mean_y = bottom.iter().map(|&i| solver.x[i].y - x0[i].y).sum::<f64>() / n;
+        (mean_x, mean_y)
+    };
+
+    let (_, dy_still) = run_wind([0.0, 0.0, 0.0]);
+    let (_, dy_pos_y) = run_wind([0.0, 4.0, 0.0]);
+    let (_, dy_neg_y) = run_wind([0.0, -4.0, 0.0]);
+    let (dx_edge_x, dy_edge_x) = run_wind([4.0, 0.0, 0.0]);
+
+    assert!(
+        dy_still.abs() < 1e-6,
+        "stationary air must not sway sheet: {dy_still}"
+    );
+    assert!(
+        dy_pos_y > 0.04,
+        "4 m/s face-on +y crosswind must substantially deflect hem in +y: {dy_pos_y:.4} m"
+    );
+    assert!(
+        (dy_pos_y + dy_neg_y).abs() < 1e-4,
+        "±y face-on wind must deflect symmetrically: +y={dy_pos_y:.5}, -y={dy_neg_y:.5}"
+    );
+    assert!(
+        dx_edge_x > 1e-3 && dx_edge_x < 0.25 * dy_pos_y,
+        "edge-on +x wind ({dx_edge_x:.5} m) must push in +x yet stay far smaller than face-on +y ({dy_pos_y:.5} m)"
+    );
+    assert!(
+        dy_edge_x.abs() < 1e-5,
+        "pure +x wind must not push out of plane: {dy_edge_x}"
+    );
+}
+
+#[test]
+fn kat_air_drag_stationary_wind_zero_matches_bit_identically() {
+    let (rest, tris) = grid(0.08, 0.08, 2, 2, Vec2::ZERO);
+    let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+    let fixed = vec![[false; 3]; rest.len()];
+    let mut a = Solver::new(
+        ClothModel::new(rest.clone(), &tris, cotton(), 1e-5, 0.12).unwrap(),
+        x0.clone(),
+        &fixed,
+        Vec3::new(0.0, 0.0, -9.81),
+    );
+    let mut b = a.clone();
+    a.damping.air_drag = Some(AirDrag::standard());
+    b.damping.air_drag = Some(AirDrag {
+        air_velocity_m_s: [-0.0, 0.0, -0.0],
+        ..AirDrag::standard()
+    });
+    for _ in 0..10 {
+        a.step(1.0 / 60.0).unwrap();
+        b.step(1.0 / 60.0).unwrap();
+    }
+    for (pa, pb) in a.x.iter().zip(&b.x) {
+        assert_eq!(pa.x.to_bits(), pb.x.to_bits());
+        assert_eq!(pa.y.to_bits(), pb.y.to_bits());
+        assert_eq!(pa.z.to_bits(), pb.z.to_bits());
+    }
+}
+
+#[test]
 fn kat_rayleigh_damping_preserves_rigid_translation_and_damps_generalized_alpha_ringing() {
     // 1. Free-falling sheet with strong Rayleigh membrane + bending damping under zero air drag
     //    must match exact rigid ballistic fall z(t) = -½ g t² (zero parasitic global drag).

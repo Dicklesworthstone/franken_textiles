@@ -529,8 +529,17 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             }
             if let Some(damp) = sim["numerical"]["damping"].as_object() {
                 let mut parts = Vec::new();
-                if damp.get("air_drag").is_some_and(Value::is_object) {
-                    parts.push("air drag".to_string());
+                if let Some(drag) = damp.get("air_drag").and_then(Value::as_object) {
+                    if let Some(wind) = drag.get("air_velocity_m_s").and_then(Value::as_array)
+                        && wind.len() == 3
+                        && let (Some(wx), Some(wy), Some(wz)) =
+                            (wind[0].as_f64(), wind[1].as_f64(), wind[2].as_f64())
+                        && (wx != 0.0 || wy != 0.0 || wz != 0.0)
+                    {
+                        parts.push(format!("air drag (wind [{wx}, {wy}, {wz}] m/s)"));
+                    } else {
+                        parts.push("air drag".to_string());
+                    }
                 }
                 if let Some(rm) = damp.get("rayleigh_membrane_s").and_then(Value::as_f64)
                     && rm > 0.0
@@ -1018,6 +1027,15 @@ mod tests {
                 },
                 "hand_collider": "knuckle",
                 "numerical": {
+                    "damping": {
+                        "air_drag": {
+                            "rho_air_kg_m3": 1.225,
+                            "c_normal": 1.2,
+                            "c_tangent": 0.05,
+                            "eps_v_m_s": 0.001,
+                            "air_velocity_m_s": [2.5, -1.0, 0.5]
+                        }
+                    },
                     "mesh": {
                         "options": {"min_spacing_mm": 6.0, "cvt_iterations": 4},
                         "quality": {"min_angle_deg": 32.5}
@@ -1061,6 +1079,7 @@ mod tests {
             }
         });
         let ext_html = render(Path::new("."), &[extended]).unwrap();
+        assert!(ext_html.contains("Damping: air drag (wind [2.5, -1, 0.5] m/s)."));
         assert!(ext_html.contains("Hand collider: knuckle."));
         assert!(ext_html.contains(
             "Thumb pose (rad): L [0, 0, 0.1745], R [0, 0, -0.1745] (4200 hand-surface pairs audited)."

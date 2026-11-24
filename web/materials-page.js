@@ -297,6 +297,7 @@ function controls() {
   for (const id of ["staticTolMm", "staticMaxNewton"]) $(id).disabled = !$("staticEquilibrium").checked;
   $("drapeRhoInf").disabled = $("drapeIntegrator").value !== "generalized_alpha";
   for (const [toggle, ids] of [
+    ["drapeAirDrag", ["drapeAirWindX", "drapeAirWindY", "drapeAirWindZ"]],
     ["drapeStickSlip", ["drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV"]],
     ["drapeSelfStickSlip", ["drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV"]],
     ["drapeAdaptiveMesh", ["drapeMeshMinMm", "drapeMeshCvt"]],
@@ -356,6 +357,7 @@ function controls() {
     $(id).disabled = !guidedScenarioMode() || !$("guidedScenarioStaticEquilibrium").checked;
   }
   for (const [toggle, ids] of [
+    ["guidedScenarioAirDrag", ["guidedScenarioAirWindX", "guidedScenarioAirWindY", "guidedScenarioAirWindZ"]],
     ["guidedScenarioStickSlip", ["guidedScenarioStickSlipMus", "guidedScenarioStickSlipMuk", "guidedScenarioStickSlipV"]],
     ["guidedScenarioSelfStickSlip", ["guidedScenarioSelfStickSlipMus", "guidedScenarioSelfStickSlipMuk", "guidedScenarioSelfStickSlipV"]],
     ["guidedScenarioAdaptiveMesh", ["guidedScenarioMeshMinMm", "guidedScenarioMeshCvt"]],
@@ -5838,7 +5840,7 @@ const DEFAULT_ADAPTIVE_BARRIER = Object.freeze({
   membrane_floor_scale: 1e-5, kappa_min: 1e-3, kappa_max: 1e5,
 });
 const REALISM_SUFFIXES = [
-  "BendingModel", "CompressionModel", "AirDrag", "RayleighMembraneS", "RayleighBendingS",
+  "BendingModel", "CompressionModel", "AirDrag", "AirWindX", "AirWindY", "AirWindZ", "RayleighMembraneS", "RayleighBendingS",
   "AdaptiveBarrier", "StickSlip", "StickSlipMus", "StickSlipMuk", "StickSlipV",
   "SelfStickSlip", "SelfStickSlipMus", "SelfStickSlipMuk", "SelfStickSlipV",
   "AdaptiveMesh", "MeshMinMm", "MeshCvt",
@@ -5846,7 +5848,7 @@ const REALISM_SUFFIXES = [
   "StartRepulsion", "RepulsionMm", "RepulsionStiffness", "RepulsionPeriod", "RepulsionMaxChecks",
 ];
 const REALISM_NUM_SUFFIXES = [
-  "RayleighMembraneS", "RayleighBendingS",
+  "AirWindX", "AirWindY", "AirWindZ", "RayleighMembraneS", "RayleighBendingS",
   "StickSlipMus", "StickSlipMuk", "StickSlipV",
   "SelfStickSlipMus", "SelfStickSlipMuk", "SelfStickSlipV",
   "MeshMinMm", "MeshCvt",
@@ -5873,14 +5875,30 @@ function checkedRealismOptions(settings, maxSpacing = 12) {
     const damp = {};
     if (d.air_drag !== undefined) {
       const a = d.air_drag;
-      const aKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
-      if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).length !== 4 ||
+      const aReq = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+      const aKeys = [...aReq, "air_velocity_m_s"];
+      if (!a || typeof a !== "object" || Array.isArray(a) ||
           Object.keys(a).some(k => !aKeys.includes(k)) ||
-          aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
-          aKeys.some(k => a[k] !== DEFAULT_AIR_DRAG[k])) {
-        throw Error("Air drag must match the supported workbench preset (still air: ρ=1.225, Cn=1.2, Ct=0.05, eps_v=1e-3).");
+          aReq.some(k => !Object.hasOwn(a, k) || typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
+          aReq.some(k => a[k] !== DEFAULT_AIR_DRAG[k])) {
+        throw Error("Air drag must match the supported workbench preset (ρ=1.225, Cn=1.2, Ct=0.05, eps_v=1e-3, plus optional air_velocity_m_s).");
       }
-      damp.air_drag = { ...DEFAULT_AIR_DRAG };
+      const dragOut = { ...DEFAULT_AIR_DRAG };
+      if (Object.hasOwn(a, "air_velocity_m_s")) {
+        const w = a.air_velocity_m_s;
+        if (!Array.isArray(w) || w.length !== 3 || w.some(c => typeof c !== "number" || !Number.isFinite(c))) {
+          throw Error("Air drag air_velocity_m_s must be a 3-element array of finite numbers in m/s.");
+        }
+        const w2 = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+        const w3 = w2 * Math.sqrt(w2);
+        if (!Number.isFinite(w2) || !Number.isFinite(w3) || !Number.isFinite(a.rho_air_kg_m3 * (a.c_normal + a.c_tangent) * w3)) {
+          throw Error("Air drag air_velocity_m_s overflows aerodynamic drag arithmetic.");
+        }
+        if (w[0] !== 0 || w[1] !== 0 || w[2] !== 0) {
+          dragOut.air_velocity_m_s = [w[0] === 0 ? 0 : w[0], w[1] === 0 ? 0 : w[1], w[2] === 0 ? 0 : w[2]];
+        }
+      }
+      damp.air_drag = dragOut;
     }
     for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
       if (d[key] !== undefined) {
@@ -6006,7 +6024,16 @@ function readRealismControls(prefix, maxSpacing = 12) {
   const rb = reqRealismNum(prefix + "RayleighBendingS", "Rayleigh bending damping (s)");
   if ($(prefix + "AirDrag").checked || rm !== 0 || rb !== 0) {
     raw.damping = {
-      ...($(prefix + "AirDrag").checked ? { air_drag: { ...DEFAULT_AIR_DRAG } } : {}),
+      ...($(prefix + "AirDrag").checked ? {
+        air_drag: {
+          ...DEFAULT_AIR_DRAG,
+          air_velocity_m_s: [
+            reqRealismNum(prefix + "AirWindX", "ambient wind X (m/s)"),
+            reqRealismNum(prefix + "AirWindY", "ambient wind Y (m/s)"),
+            reqRealismNum(prefix + "AirWindZ", "ambient wind Z (m/s)"),
+          ],
+        },
+      } : {}),
       ...(rm !== 0 ? { rayleigh_membrane_s: rm } : {}),
       ...(rb !== 0 ? { rayleigh_bending_s: rb } : {}),
     };
@@ -6062,6 +6089,10 @@ function setRealismOptions(settings) {
   $("drapeBendingModel").value = r.bending_model ?? "quadratic";
   $("drapeCompressionModel").value = r.compression_model ?? "axis_aligned";
   $("drapeAirDrag").checked = r.damping?.air_drag !== undefined;
+  const airWind = r.damping?.air_drag?.air_velocity_m_s;
+  $("drapeAirWindX").value = String(airWind ? airWind[0] : 0);
+  $("drapeAirWindY").value = String(airWind ? airWind[1] : 0);
+  $("drapeAirWindZ").value = String(airWind ? airWind[2] : 0);
   $("drapeRayleighMembraneS").value = String(r.damping?.rayleigh_membrane_s ?? 0);
   $("drapeRayleighBendingS").value = String(r.damping?.rayleigh_bending_s ?? 0);
   $("drapeAdaptiveBarrier").checked = r.adaptive_barrier !== undefined;
@@ -7434,7 +7465,7 @@ function showGuidedScenarioDrafts() {
       (value.options.static_equilibrium ? `static equilibrium (${value.options.static_equilibrium.correction_tolerance_m * 1e3} mm, ${value.options.static_equilibrium.max_newton_iterations} iters); ` : "") +
       (value.options.bending_model && value.options.bending_model !== "quadratic" ? `bending ${value.options.bending_model}; ` : "") +
       (value.options.compression_model && value.options.compression_model !== "axis_aligned" ? `compression ${value.options.compression_model}; ` : "") +
-      (value.options.damping ? "damping; " : "") +
+      (value.options.damping ? `damping${Array.isArray(value.options.damping.air_drag?.air_velocity_m_s) ? ` (wind [${value.options.damping.air_drag.air_velocity_m_s.join(", ")}] m/s)` : ""}; ` : "") +
       (value.options.adaptive_barrier ? "adaptive barrier; " : "") +
       (value.options.stick_slip ? `stick-slip (μs=${value.options.stick_slip.mu_s}, μk=${value.options.stick_slip.mu_k}); ` : "") +
       (value.options.self_stick_slip ? `self stick-slip (μs=${value.options.self_stick_slip.mu_s}, μk=${value.options.self_stick_slip.mu_k}); ` : "") +

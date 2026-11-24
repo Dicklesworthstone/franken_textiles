@@ -1348,10 +1348,21 @@ export function buildMaterialScenarioRequest(state) {
     const d = object(options.damping, ["air_drag", "rayleigh_membrane_s", "rayleigh_bending_s"], [], "Damping options");
     if (own(d, "air_drag") && d.air_drag !== null) {
       const aKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
-      const a = object(d.air_drag, aKeys, aKeys, "Air drag");
+      const a = object(d.air_drag, [...aKeys, "air_velocity_m_s"], aKeys, "Air drag");
       if (aKeys.some(k => typeof a[k] !== "number" || !Number.isFinite(a[k])) ||
           a.rho_air_kg_m3 < 0 || a.c_normal < 0 || a.c_tangent < 0 || a.eps_v_m_s <= 0) {
         throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
+      }
+      if (own(a, "air_velocity_m_s")) {
+        const w = a.air_velocity_m_s;
+        if (!Array.isArray(w) || w.length !== 3 || w.some(c => typeof c !== "number" || !Number.isFinite(c))) {
+          throw Error("Air drag air_velocity_m_s must be a 3-element array of finite numbers in m/s.");
+        }
+        const w2 = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+        const w3 = w2 * Math.sqrt(w2);
+        if (!Number.isFinite(w2) || !Number.isFinite(w3) || !Number.isFinite(a.rho_air_kg_m3 * (a.c_normal + a.c_tangent) * w3)) {
+          throw Error("Air drag air_velocity_m_s overflows aerodynamic drag arithmetic.");
+        }
       }
     }
     for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {

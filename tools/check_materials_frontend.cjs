@@ -1427,6 +1427,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
   e.drapeBendingModel.value='quadratic';e.drapeCompressionModel.value='axis_aligned';
+  e.drapeAirWindX.value='0';e.drapeAirWindY.value='0';e.drapeAirWindZ.value='0';
   e.drapeRayleighMembraneS.value='0';e.drapeRayleighBendingS.value='0';
   e.drapeStickSlipMus.value='0.5';e.drapeStickSlipMuk.value='0.3';e.drapeStickSlipV.value='0.02';
   e.drapeSelfStickSlipMus.value='0.45';e.drapeSelfStickSlipMuk.value='0.25';e.drapeSelfStickSlipV.value='0.02';
@@ -1438,6 +1439,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.guidedScenarioNewtonStrategy.value='projected';e.guidedScenarioIntegrator.value='implicit_euler';e.guidedScenarioRhoInf.value='0';
   e.guidedScenarioStaticTolMm.value='0.001';e.guidedScenarioStaticMaxNewton.value='300';
   e.guidedScenarioBendingModel.value='quadratic';e.guidedScenarioCompressionModel.value='axis_aligned';
+  e.guidedScenarioAirWindX.value='0';e.guidedScenarioAirWindY.value='0';e.guidedScenarioAirWindZ.value='0';
   e.guidedScenarioRayleighMembraneS.value='0';e.guidedScenarioRayleighBendingS.value='0';
   e.guidedScenarioStickSlipMus.value='0.5';e.guidedScenarioStickSlipMuk.value='0.3';e.guidedScenarioStickSlipV.value='0.02';
   e.guidedScenarioSelfStickSlipMus.value='0.45';e.guidedScenarioSelfStickSlipMuk.value='0.25';e.guidedScenarioSelfStickSlipV.value='0.02';
@@ -5758,6 +5760,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
   e.drapeBendingModel.value='quadratic';e.drapeCompressionModel.value='axis_aligned';
+  e.drapeAirWindX.value='0';e.drapeAirWindY.value='0';e.drapeAirWindZ.value='0';
   e.drapeRayleighMembraneS.value='0';e.drapeRayleighBendingS.value='0';
   e.drapeStickSlipMus.value='0.5';e.drapeStickSlipMuk.value='0.3';e.drapeStickSlipV.value='0.02';
   if(e.drapeSelfStickSlipMus){e.drapeSelfStickSlipMus.value='0.45';e.drapeSelfStickSlipMuk.value='0.25';e.drapeSelfStickSlipV.value='0.02';}
@@ -25604,6 +25607,159 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   p.e.drapeRepulsionMaxChecks.value = '900000';
   p.e.drapeRepulsionMaxChecks.handlers.change();
   assert.equal(fSec.hidden, true, 'change on drapeRepulsionMaxChecks must invalidate prior fold');
+
+  // 8. damping.air_drag.air_velocity_m_s (ftx-aero-wind): both workers, both workbenches, guided scenarios, and handoffs
+  //    omit stationary [0, 0, 0], forward exact finite 3D wind, refuse invalid/overflowing vectors, and invalidate on input/change.
+  const baseAirDrag = { rho_air_kg_m3: 1.225, c_normal: 1.2, c_tangent: 0.05, eps_v_m_s: 1e-3 };
+  assert.equal((await mw.send({ ...baseFold, request: 23, bytes: new Uint8Array([1]).buffer,
+    damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [0, -0, 0] } } })).type, 'result');
+  assert.equal(Object.hasOwn(mCalls.at(-1).settings.damping.air_drag, 'air_velocity_m_s'), false);
+  assert.equal((await mw.send({ ...baseFold, request: 24, bytes: new Uint8Array([1]).buffer,
+    damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [2.5, -1.25, 0.5] } } })).type, 'result');
+  assert.deepEqual(mCalls.at(-1).settings.damping.air_drag.air_velocity_m_s, [2.5, -1.25, 0.5]);
+  for (const [reqId, badWind] of [[25, [1, 2]], [26, [NaN, 0, 0]], [27, [1e120, 0, 0]]]) {
+    assert.equal((await mw.send({ ...baseFold, request: reqId, bytes: new Uint8Array([1]).buffer,
+      damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: badWind } } })).type, 'error');
+  }
+
+  assert.equal((await dwSend({ type: 'fold', request: 7, round: 3, body: 2,
+    damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [0, 0, -0] } } })).type, 'folded');
+  assert.equal(Object.hasOwn(dwCalls.at(-1).settings.damping.air_drag, 'air_velocity_m_s'), false);
+  assert.equal((await dwSend({ type: 'fold', request: 8, round: 3, body: 2,
+    damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [-1.5, 3.0, 0.25] } } })).type, 'folded');
+  assert.deepEqual(dwCalls.at(-1).settings.damping.air_drag.air_velocity_m_s, [-1.5, 3.0, 0.25]);
+  for (const [reqId, badWind] of [[9, [1, 2, 3, 4]], [10, [0, Infinity, 0]], [11, [0, 1e120, 0]]]) {
+    assert.equal((await dwSend({ type: 'fold', request: reqId, round: 3, body: 2,
+      damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: badWind } } })).type, 'error');
+  }
+
+  // Round -> Materials handoff preserves nonzero wind, normalizes zero wind, and refuses invalid wind.
+  const windToken = 'a'.repeat(32);
+  const windOk = await pageModule({ roundToken: windToken });
+  await windOk.windowEvents.message({
+    origin: 'https://unit.invalid', source: windOk.opener,
+    data: {
+      type: 'ftx-round-sources', token: windToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [2.5, -1.25, 0.5] } } },
+    },
+  });
+  assert.equal(windOk.e.drapeAirDrag.checked, true);
+  assert.equal(windOk.e.drapeAirWindX.value, '2.5');
+  assert.equal(windOk.e.drapeAirWindY.value, '-1.25');
+  assert.equal(windOk.e.drapeAirWindZ.value, '0.5');
+
+  const badWindToken = 'b'.repeat(32);
+  const badWindRej = await pageModule({ roundToken: badWindToken });
+  await badWindRej.windowEvents.message({
+    origin: 'https://unit.invalid', source: badWindRej.opener,
+    data: {
+      type: 'ftx-round-sources', token: badWindToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [1e120, 0, 0] } } },
+    },
+  });
+  assert.match(badWindRej.e.roundImportText.textContent, /refused/i);
+
+  // Guided scenario controls forward custom wind, omit zero wind, refuse overflow, and invalidate on input/change.
+  gs.e.guidedScenarioRepulsionMaxChecks.value = '32000000';
+  gs.e.guidedScenarioAirDrag.checked = true;
+  gs.e.guidedScenarioAirWindX.value = '2.5';
+  gs.e.guidedScenarioAirWindY.value = '-1.25';
+  gs.e.guidedScenarioAirWindZ.value = '0.5';
+  const beforeWindScen = gs.current().messages.length;
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeWindScen + 1, gs.e.error.textContent);
+  const windScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
+  assert.deepEqual(windScen.options.damping.air_drag.air_velocity_m_s, [2.5, -1.25, 0.5]);
+  gs.emit(scenarioReport());
+  assert.equal(gsOut.hidden, false);
+  gs.e.guidedScenarioAirWindY.value = '-2.0';
+  gs.e.guidedScenarioAirWindY.handlers.input();
+  assert.equal(gsOut.hidden, true, 'input on guidedScenarioAirWindY must invalidate prior scenario');
+  await gs.e.scenario.onclick();
+  gs.emit(scenarioReport());
+  assert.equal(gsOut.hidden, false);
+  gs.e.guidedScenarioAirWindZ.value = '1.0';
+  gs.e.guidedScenarioAirWindZ.handlers.change();
+  assert.equal(gsOut.hidden, true, 'change on guidedScenarioAirWindZ must invalidate prior scenario');
+  gs.e.guidedScenarioAirWindX.value = '1e120';
+  const beforeBadWindScen = gs.current().messages.length;
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeBadWindScen);
+  assert.match(gs.e.error.textContent, /air_velocity_m_s/);
+  gs.e.guidedScenarioAirWindX.value = '0';
+  gs.e.guidedScenarioAirWindY.value = '0';
+  gs.e.guidedScenarioAirWindZ.value = '0';
+  await gs.e.scenario.onclick();
+  const stillScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
+  assert.equal(Object.hasOwn(stillScen.options.damping.air_drag, 'air_velocity_m_s'), false);
+
+  // Material Workbench fold controls forward custom wind, omit zero wind, and invalidate on input/change.
+  p.e.drapeRepulsionMaxChecks.value = '32000000';
+  p.e.drapeAirDrag.checked = true;
+  p.e.drapeAirWindX.value = '1.5';
+  p.e.drapeAirWindY.value = '-0.5';
+  p.e.drapeAirWindZ.value = '0';
+  await p.e.fold.onclick();
+  assert.deepEqual(Array.from(p.current().messages.at(-1).damping.air_drag.air_velocity_m_s), [1.5, -0.5, 0]);
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(fSec.hidden, false);
+  p.e.drapeAirWindX.value = '2.0';
+  p.e.drapeAirWindX.handlers.input();
+  assert.equal(fSec.hidden, true, 'input on drapeAirWindX must invalidate prior fold');
+  await p.e.fold.onclick();
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(fSec.hidden, false);
+  p.e.drapeAirWindY.value = '0.25';
+  p.e.drapeAirWindY.handlers.change();
+  assert.equal(fSec.hidden, true, 'change on drapeAirWindY must invalidate prior fold');
+  p.e.drapeAirWindX.value = '0';
+  p.e.drapeAirWindY.value = '0';
+  p.e.drapeAirWindZ.value = '0';
+  await p.e.fold.onclick();
+  assert.equal(Object.hasOwn(p.current().messages.at(-1).damping.air_drag, 'air_velocity_m_s'), false);
+
+  // Pattern Workbench (web/index.html): handoff restores wind, fold forwards wind, summary renders wind, invalid wind refuses.
+  {
+    const tkn = 'c'.repeat(32);
+    const pw = draftingPage({ materialToken: tkn });
+    pw.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+    await pw.windowEvents.message({
+      origin: 'https://unit.invalid', source: pw.opener,
+      data: {
+        type: 'ftx-material-pattern', token: tkn, pattern: new Blob(['{"pieces":[{"id":"front"}]}']), source_sha256: 'c'.repeat(64),
+        evaluatedInputs: {
+          fit: new Blob(['{}']), measurements: new Blob(['{}']), model: new Blob([new Uint8Array([1])]), bodyFit: null,
+          drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+            damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [2.5, -1.25, 0.5] } } },
+        },
+      },
+    });
+    assert.equal(pw.e.drapeAirDrag.checked, true);
+    assert.equal(pw.e.drapeAirWindX.value, '2.5');
+    assert.equal(pw.e.drapeAirWindY.value, '-1.25');
+    assert.equal(pw.e.drapeAirWindZ.value, '0.5');
+    assert.equal(pw.e.drapeAirWindX.disabled, false);
+
+    const pw2 = draftingPage();
+    await pw2.body();
+    await pw2.e.go.handlers.click();
+    pw2.result();
+    pw2.e.drapeAirDrag.checked = true;
+    pw2.e.drapeAirWindX.value = '2.5';
+    pw2.e.drapeAirWindY.value = '-1.25';
+    pw2.e.drapeAirWindZ.value = '0.5';
+    pw2.e.foldGo.handlers.click();
+    const foldMsg = pw2.last('fold');
+    assert.deepEqual(Array.from(foldMsg.damping.air_drag.air_velocity_m_s), [2.5, -1.25, 0.5]);
+    const rep = {
+      settled: true, gating: [], flags: [], body: { fit: { tape: {} } },
+      numerical: { damping: { air_drag: { ...baseAirDrag, air_velocity_m_s: [2.5, -1.25, 0.5] } } },
+    };
+    pw2.emit({ type: 'folded', request: foldMsg.request, report: rep, reportText: JSON.stringify(rep), viewer: '<html/>' });
+    assert.match(pw2.e.foldSummary.innerHTML, /Damping: air drag \(wind \[2\.5, -1\.25, 0\.5\] m\/s\)/);
+  }
 });
 
 test('guided regional objectives author exact regions, freeze named-case snapshots, deduplicate columns, and render regional adaptive readings', async () => {

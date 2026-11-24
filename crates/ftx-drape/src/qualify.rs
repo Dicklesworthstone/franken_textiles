@@ -1213,5 +1213,39 @@ mod tests {
         let mut pp_ds = pp_legacy;
         pp_ds["physics_sha256"] = json!(ds_sha);
         assert!(!check_qualification(Some(Ok(&pp_doc)), "q", "ws", "abc", None, &pp_ds).pass);
+
+        // Ambient wind binds into physics_sha256 while stationary air [0,0,0] stays byte-identical.
+        let mut still_air = defaults;
+        still_air.damping.air_drag = Some(crate::AirDrag::standard());
+        let mut zero_wind = defaults;
+        zero_wind.damping.air_drag = Some(crate::AirDrag {
+            air_velocity_m_s: [0.0, -0.0, 0.0],
+            ..crate::AirDrag::standard()
+        });
+        let mut crosswind = defaults;
+        crosswind.damping.air_drag = Some(crate::AirDrag {
+            air_velocity_m_s: [0.0, 3.0, 0.0],
+            ..crate::AirDrag::standard()
+        });
+        let still_sha = physics_model_sha256(&still_air).unwrap().unwrap();
+        let zero_sha = physics_model_sha256(&zero_wind).unwrap().unwrap();
+        let wind_sha = physics_model_sha256(&crosswind).unwrap().unwrap();
+        assert_eq!(still_sha, zero_sha);
+        assert_ne!(still_sha, wind_sha);
+        let still_basis = json!({"body_sha256":"b".repeat(64),"material_sha256":"a".repeat(64),"physics_sha256":still_sha});
+        let wind_basis = json!({"body_sha256":"b".repeat(64),"material_sha256":"a".repeat(64),"physics_sha256":wind_sha});
+        let mut still_doc = legacy_doc;
+        still_doc["qualification_basis"] = still_basis;
+        assert!(
+            !check_qualification(
+                Some(Ok(&still_doc)),
+                "q",
+                "ws",
+                "abc",
+                Some(&fab),
+                &wind_basis
+            )
+            .pass
+        );
     }
 }

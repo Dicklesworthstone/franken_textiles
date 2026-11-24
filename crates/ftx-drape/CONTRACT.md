@@ -63,10 +63,17 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   Unadmitted warm guesses are bypassed. Failed steps preserve accepted state and `ccd_limited`
   continues to count contact restrictions only. Direct regressions live in `elements::tests` and
   `cloth::strategy_and_integrator_tests`; these numerical safeguards do not qualify fabric or fit.
-- **Anisotropic aerodynamic drag & SE(3)-invariant Rayleigh damping (`FTX-27b`)**: `damping::AirDrag`
-  (variational strictly convex PSD normal/tangential crossflow and skin-friction drag supporting both
-  `ImplicitEuler` and `GeneralizedAlpha`) and stiffness-proportional Green-strain-rate / dihedral-rate
-  Rayleigh damping (`DampingOptions`). Internal damping also follows characterized panel curvature:
+- **Anisotropic aerodynamic drag & SE(3)-invariant Rayleigh damping (`FTX-27b`, `ftx-aero-wind`)**:
+  `damping::AirDrag` (variational strictly convex PSD normal/tangential crossflow and skin-friction
+  drag on relative velocity `v_cloth − v_air` with optional prescribed uniform world-space ambient
+  air velocity `air_velocity_m_s`, supporting both `ImplicitEuler` and `GeneralizedAlpha`) and
+  stiffness-proportional Green-strain-rate / dihedral-rate Rayleigh damping (`DampingOptions`).
+  Stationary air (`air_velocity_m_s = [0, 0, 0]`) bypasses subtraction and omits the JSON key so
+  stationary-air arithmetic, receipts, and qualification digests remain bit-identical. Nonzero
+  prescribed wind refuses `Solver::static_solve` fail-closed (conservative static minimization
+  omits non-conservative steady aerodynamic follower loading) while retaining the dynamic drape;
+  drag coefficients remain uncalibrated reference defaults and prescribed wind does not claim
+  measured airflow or real garment fit. Internal damping also follows characterized panel curvature:
   normal-projected patches use signed raw curvature increments; vector-Hessian patches use a
   differentiated corotating source-triangle frame. Both preserve the source tensor and reference
   area, ignore preferred-curvature offsets, and dissipate no rigid translation or rotation.

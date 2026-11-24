@@ -5096,6 +5096,13 @@ test("guided scenario options accept opt-in FTX-27 physics/meshing realism, omit
   for(const bad of [0, -1, 1.5, 128000001, null, '100']) {
     assert.throws(()=>single({...base,options:{...base.options,start_self_repulsion:{...realism.start_self_repulsion,max_candidate_checks:bad}}}),/max_candidate_checks/);
   }
+
+  // damping.air_drag.air_velocity_m_s (ftx-aero-wind): finite 3D wind vector round-trips; invalid/overflowing wind refuses.
+  const windy = JSON.parse(single({...base,options:{...base.options,damping:{air_drag:{...realism.damping.air_drag,air_velocity_m_s:[2.5,-1.25,0.5]}}}}));
+  assert.deepEqual(windy.options.damping.air_drag.air_velocity_m_s, [2.5, -1.25, 0.5]);
+  for(const badWind of [[1, 2], [1, 2, 3, 4], [NaN, 0, 0], [0, Infinity, 0], [1e120, 0, 0], '1,0,0', null]) {
+    assert.throws(()=>single({...base,options:{...base.options,damping:{air_drag:{...realism.damping.air_drag,air_velocity_m_s:badWind}}}}),/air_velocity_m_s/);
+  }
 });
 
 test('regional comparison objectives retain distinct region identities, enforce nominal strain/contact scope, and require matching region for worst-case guidance', async () => {

@@ -3328,6 +3328,12 @@ impl Solver {
                 "a static solve cannot choose a material-history duration or irreversible loading path; use explicit time steps",
             ));
         }
+        if self.damping.air_drag.is_some_and(|d| d.has_wind()) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "a conservative static solve omits non-conservative aerodynamic wind loading; use explicit time steps",
+            ));
+        }
         let mut trial = self.clone();
         trial.audit_self_contact()?;
         let rep = trial.minimize(None)?;
@@ -5089,6 +5095,90 @@ mod strategy_and_integrator_tests {
             "consistent Generalized-alpha a1 must match continuum limit as h->0: rel_err={err_small}, a1={:?}, a_true={a_true:?}",
             s_small.acceleration()[3]
         );
+    }
+
+    #[test]
+    fn generalized_alpha_initial_acceleration_matches_prescribed_wind_limit() {
+        let (rest, tris) = grid(0.10, 0.10, 2, 2, Vec2::ZERO);
+        let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let fixed = vec![[false; 3]; rest.len()];
+        let areal = 0.15;
+        let g = Vec3::new(0.0, 0.0, -9.81);
+        let drag = crate::damping::AirDrag {
+            air_velocity_m_s: [1.5, -0.5, 4.0],
+            ..crate::damping::AirDrag::standard()
+        };
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(500.0, 300.0, 0.2, 80.0, 1.0),
+            1e-5,
+            areal,
+        )
+        .unwrap();
+        let mut solver = Solver::new(model, x0, &fixed, g);
+        solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
+        solver.damping = DampingOptions {
+            air_drag: Some(drag),
+            rayleigh_membrane_s: 0.0,
+            rayleigh_bending_s: 0.0,
+        };
+        solver.tol = 1e-13;
+
+        // Flat unconstrained sheet at rest in uniform wind has exact initial acceleration:
+        // a_true = g - F_res(0 - v_air) / (areal * area) on every vertex.
+        let f_res = drag.triangle_resistance_force(1.0, Vec3::new(0.0, 0.0, 1.0), Vec3::ZERO);
+        let a_true = g - f_res * (1.0 / areal);
+        solver.step(1e-6).unwrap();
+        for (i, &a1) in solver.acceleration().iter().enumerate() {
+            let rel_err = (a1 - a_true).norm() / a_true.norm();
+            assert!(
+                rel_err < 1e-4,
+                "vertex {i}: Generalized-alpha a1={a1:?} must match wind continuum limit {a_true:?} (rel_err={rel_err})"
+            );
+        }
+    }
+
+    #[test]
+    fn static_solve_refuses_nonzero_ambient_wind_but_allows_stationary_air() {
+        let (rest, tris) = grid(0.08, 0.08, 2, 2, Vec2::ZERO);
+        let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, 0.0, p.y)).collect();
+        let mut fixed = vec![[false; 3]; rest.len()];
+        for (i, p) in rest.iter().enumerate() {
+            if (p.y - 0.08).abs() < 1e-9 {
+                fixed[i] = [true; 3];
+            }
+        }
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(500.0, 300.0, 0.2, 80.0, 1.0),
+            1e-5,
+            0.15,
+        )
+        .unwrap();
+
+        let mut still = Solver::new(
+            model.clone(),
+            x0.clone(),
+            &fixed,
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        still.damping.air_drag = Some(crate::damping::AirDrag::standard());
+        still
+            .static_solve()
+            .expect("stationary-air drag vanishes at v=0 and must allow static_solve");
+
+        let mut windy = Solver::new(model, x0, &fixed, Vec3::new(0.0, 0.0, -9.81));
+        windy.damping.air_drag = Some(crate::damping::AirDrag {
+            air_velocity_m_s: [0.0, 3.0, 0.0],
+            ..crate::damping::AirDrag::standard()
+        });
+        let err = windy.static_solve().expect_err(
+            "nonzero prescribed wind must refuse conservative static_solve fail-closed",
+        );
+        assert_eq!(err.code, RefusalCode::OutOfRange);
+        assert!(err.message.contains("wind"), "{err}");
     }
 
     #[test]

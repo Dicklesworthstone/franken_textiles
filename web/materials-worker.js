@@ -687,16 +687,33 @@ self.onmessage = async ({ data: msg }) => {
           const out = {};
           if (value.air_drag !== undefined) {
             const d = value.air_drag;
-            const dKeys = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+            const dReq = ["rho_air_kg_m3", "c_normal", "c_tangent", "eps_v_m_s"];
+            const dKeys = [...dReq, "air_velocity_m_s"];
             if (!d || typeof d !== "object" || Array.isArray(d) ||
-                Object.keys(d).length !== 4 || Object.keys(d).some(k => !dKeys.includes(k)) ||
+                Object.keys(d).some(k => !dKeys.includes(k)) ||
+                dReq.some(k => !Object.hasOwn(d, k)) ||
                 typeof d.rho_air_kg_m3 !== "number" || !Number.isFinite(d.rho_air_kg_m3) || d.rho_air_kg_m3 < 0 ||
                 typeof d.c_normal !== "number" || !Number.isFinite(d.c_normal) || d.c_normal < 0 ||
                 typeof d.c_tangent !== "number" || !Number.isFinite(d.c_tangent) || d.c_tangent < 0 ||
                 typeof d.eps_v_m_s !== "number" || !Number.isFinite(d.eps_v_m_s) || d.eps_v_m_s <= 0) {
               throw Error("Air drag requires finite nonnegative rho_air_kg_m3, c_normal, c_tangent and positive eps_v_m_s.");
             }
-            out.air_drag = { rho_air_kg_m3: d.rho_air_kg_m3, c_normal: d.c_normal, c_tangent: d.c_tangent, eps_v_m_s: d.eps_v_m_s };
+            const dragOut = { rho_air_kg_m3: d.rho_air_kg_m3, c_normal: d.c_normal, c_tangent: d.c_tangent, eps_v_m_s: d.eps_v_m_s };
+            if (Object.hasOwn(d, "air_velocity_m_s")) {
+              const w = d.air_velocity_m_s;
+              if (!Array.isArray(w) || w.length !== 3 || w.some(c => typeof c !== "number" || !Number.isFinite(c))) {
+                throw Error("Air drag air_velocity_m_s must be a 3-element array of finite numbers in m/s.");
+              }
+              const w2 = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+              const w3 = w2 * Math.sqrt(w2);
+              if (!Number.isFinite(w2) || !Number.isFinite(w3) || !Number.isFinite(d.rho_air_kg_m3 * (d.c_normal + d.c_tangent) * w3)) {
+                throw Error("Air drag air_velocity_m_s overflows aerodynamic drag arithmetic.");
+              }
+              if (w[0] !== 0 || w[1] !== 0 || w[2] !== 0) {
+                dragOut.air_velocity_m_s = [w[0] === 0 ? 0 : w[0], w[1] === 0 ? 0 : w[1], w[2] === 0 ? 0 : w[2]];
+              }
+            }
+            out.air_drag = dragOut;
           }
           for (const key of ["rayleigh_membrane_s", "rayleigh_bending_s"]) {
             if (value[key] !== undefined) {

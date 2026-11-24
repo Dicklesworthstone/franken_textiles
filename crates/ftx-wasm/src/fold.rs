@@ -1071,8 +1071,33 @@ mod tests {
             serde_json::to_value(ftx_drape::ConstructionMechanicsOptions::standard()).unwrap();
         custom["start_self_repulsion"] =
             serde_json::to_value(ftx_drape::SelfRepulsionOptions::default()).unwrap();
+        custom["damping"] = json!({
+            "air_drag": {
+                "rho_air_kg_m3": 1.225,
+                "c_normal": 1.2,
+                "c_tangent": 0.05,
+                "eps_v_m_s": 1e-3,
+                "air_velocity_m_s": [1.5, -2.0, 0.25]
+            },
+            "rayleigh_membrane_s": 1e-4
+        });
         let parsed: FoldSettings = serde_json::from_value(custom.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), custom);
+        assert_eq!(
+            parsed.damping.air_drag.unwrap().air_velocity_m_s,
+            [1.5, -2.0, 0.25]
+        );
+        let mut zero_wind = custom.clone();
+        zero_wind["damping"]["air_drag"]["air_velocity_m_s"] = json!([0.0, 0.0, 0.0]);
+        let parsed_still: FoldSettings = serde_json::from_value(zero_wind).unwrap();
+        assert!(
+            serde_json::to_value(parsed_still).unwrap()["damping"]["air_drag"]
+                .get("air_velocity_m_s")
+                .is_none()
+        );
+        let mut bad_wind = custom;
+        bad_wind["damping"]["air_drag"]["air_velocity_m_s"] = json!([1.0, 2.0]);
+        assert!(serde_json::from_value::<FoldSettings>(bad_wind).is_err());
         assert_eq!(
             (
                 parsed.step_s,

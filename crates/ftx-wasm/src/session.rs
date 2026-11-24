@@ -1124,7 +1124,7 @@ mod tests {
             "bending_model": "discrete_shells",
             "compression_model": "principal",
             "damping": {
-                "air_drag": { "rho_air_kg_m3": 1.225, "c_normal": 1.2, "c_tangent": 0.05, "eps_v_m_s": 1e-3 },
+                "air_drag": { "rho_air_kg_m3": 1.225, "c_normal": 1.2, "c_tangent": 0.05, "eps_v_m_s": 1e-3, "air_velocity_m_s": [0.5, -1.5, 0.25] },
                 "rayleigh_membrane_s": 1e-4,
                 "rayleigh_bending_s": 2e-4
             },
@@ -1181,6 +1181,24 @@ mod tests {
         .unwrap();
         let body2 = PosableBody::parse(&header, &data).unwrap();
         assert!(Session::start(body2, &uncharacterized, &json!({}), bad, |_| {}).is_err());
+
+        // Fail-closed: overflowing ambient wind must refuse before meshing/stepping.
+        let bad_wind: SessionSettings = serde_json::from_value(json!({
+            "sew_steps": 12,
+            "drape_steps": 0,
+            "damping": {
+                "air_drag": {
+                    "rho_air_kg_m3": 1.225,
+                    "c_normal": 1.2,
+                    "c_tangent": 0.05,
+                    "eps_v_m_s": 1e-3,
+                    "air_velocity_m_s": [1e120, 0.0, 0.0]
+                }
+            }
+        }))
+        .unwrap();
+        let body_wind = PosableBody::parse(&header, &data).unwrap();
+        assert!(Session::start(body_wind, &uncharacterized, &json!({}), bad_wind, |_| {}).is_err());
 
         // Fail-closed: excessive browser solver work budgets must be refused before meshing.
         let over_budget: SessionSettings = serde_json::from_value(json!({
