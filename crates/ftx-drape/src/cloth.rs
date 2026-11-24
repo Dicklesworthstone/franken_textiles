@@ -2248,7 +2248,7 @@ impl Solver {
                 if let Some(t) = iter_lin_tol {
                     return t;
                 }
-                let t = if force_base_lin_tol {
+                let t = if force_base_lin_tol || iter_adaptive_ilu.is_none() {
                     ew_eta = base_linear_tol;
                     base_linear_tol
                 } else if adaptive_ilu.is_some() && ctx.is_dynamic() {
@@ -2481,6 +2481,9 @@ impl Solver {
                     && (adaptive_ilu.is_some() || (self.pcg_iters > 0 && self.precond.is_some()))
                 {
                     self.precond = None;
+                    ew_eta = base_linear_tol;
+                    prev_grad_l2 = None;
+                    force_base_lin_tol = true;
                     force_exact_ldlt = true;
                     retried_exact_noop = true;
                     continue;
@@ -5715,6 +5718,7 @@ mod strategy_and_integrator_tests {
             (NewtonStrategy::ProjectedNewton, 0),
             (NewtonStrategy::ProjectedNewton, 20),
             (NewtonStrategy::adaptive_ilu_default(), 0),
+            (NewtonStrategy::trust_region_default(), 0),
         ] {
             let mut solver = Solver::new(
                 model.clone(),
