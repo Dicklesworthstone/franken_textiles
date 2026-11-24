@@ -2238,14 +2238,17 @@ impl Solver {
         // cost a second assembly and factorization on almost every iteration of a garment.
         let mut projecting = false;
         let mut retried_exact_noop = false;
+        let mut force_base_lin_tol = false;
         for it in 0..self.max_newton {
-            let prev_ew_eta = ew_eta;
             let mut iter_lin_tol: Option<f64> = None;
             let mut next_lin_tol = |g_vec: &[f64]| -> f64 {
                 if let Some(t) = iter_lin_tol {
                     return t;
                 }
-                let t = if adaptive_ilu.is_some() && ctx.is_dynamic() {
+                let t = if force_base_lin_tol {
+                    ew_eta = base_linear_tol;
+                    base_linear_tol
+                } else if adaptive_ilu.is_some() && ctx.is_dynamic() {
                     let gl2 = g_vec.iter().map(|v| v * v).sum::<f64>().sqrt();
                     if let Some(prev) = prev_grad_l2 {
                         ew_eta = eisenstat_walker(prev, gl2, ew_eta, 1e-8, eta_max, 0.9, 2.0);
@@ -2330,6 +2333,7 @@ impl Solver {
                 && let Some(a_cur) = a_mat.take()
             {
                 ew_eta = base_linear_tol;
+                used_lin_tol = base_linear_tol;
                 let mut p_tight = self.solve_newton_linear(
                     &a_cur,
                     &g,
@@ -2466,6 +2470,8 @@ impl Solver {
             if unchanged && !escalated {
                 if used_lin_tol > base_linear_tol {
                     ew_eta = base_linear_tol;
+                    prev_grad_l2 = None;
+                    force_base_lin_tol = true;
                     continue;
                 }
                 if !retried_exact_noop && self.pcg_iters > 0 && self.precond.is_some() {
@@ -2473,14 +2479,14 @@ impl Solver {
                     retried_exact_noop = true;
                     continue;
                 }
-                if ew_eta >= prev_ew_eta {
-                    // The accepted step rounded bit-identically onto `self.x` with no barrier or
-                    // linear-tolerance change; further iterations would replay the exact same
-                    // factorization without making progress. Stay fail-closed (NotConverged).
-                    break;
-                }
+                // The accepted step rounded bit-identically onto `self.x` at `base_linear_tol`
+                // with no barrier escalation and (when enabled) after retrying without a cached
+                // preconditioner; further iterations would replay the same factorization without
+                // making progress. Stay fail-closed (NotConverged).
+                break;
             } else {
                 retried_exact_noop = false;
+                force_base_lin_tol = false;
             }
         }
         rep.energy_end = energy;
@@ -5698,31 +5704,37 @@ mod strategy_and_integrator_tests {
             Vec3::new(-0.02, 0.01, 0.0),
             Vec3::new(0.019, 0.011, 0.004),
         ];
-        let mut solver = Solver::new(
-            model,
-            x0,
-            &[[true; 3], [true; 3], [true; 3], [false; 3]],
-            Vec3::new(0.0, 0.0, -9.81),
-        );
-        solver.v[3] = Vec3::new(0.25, -0.1, 0.4);
-        // Demanding tol * h = 1e-19 m is below 0.5 ULP(0.019 m) (~1.73e-18 m), so the final
-        // Newton update rounds bit-identically onto `self.x`. The solver must remain fail-closed
-        // (NotConverged) without replaying 300 identical factorizations.
-        solver.tol = 1e-13;
-        solver.max_newton = 300;
-        solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
-        solver.damping = DampingOptions {
-            air_drag: None,
-            rayleigh_membrane_s: 0.005,
-            rayleigh_bending_s: 0.008,
-        };
-        let err = solver.step(1e-6).unwrap_err();
-        assert_eq!(err.code, RefusalCode::NotConverged);
-        assert!(
-            !err.message.contains("after 300 iterations"),
-            "sub-ULP no-op step must terminate early instead of burning all max_newton iterations: {}",
-            err.message
-        );
+        for strategy in [
+            NewtonStrategy::ProjectedDirect,
+            NewtonStrategy::adaptive_ilu_default(),
+        ] {
+            let mut solver = Solver::new(
+                model.clone(),
+                x0.clone(),
+                &[[true; 3], [true; 3], [true; 3], [false; 3]],
+                Vec3::new(0.0, 0.0, -9.81),
+            );
+            solver.v[3] = Vec3::new(0.25, -0.1, 0.4);
+            // Demanding tol * h = 1e-19 m is below 0.5 ULP(0.019 m) (~1.73e-18 m), so the final
+            // Newton update rounds bit-identically onto `self.x`. Both exact direct and Eisenstat–Walker
+            // AdaptiveIlu solves must remain fail-closed (NotConverged) without replaying 300 iterations.
+            solver.tol = 1e-13;
+            solver.max_newton = 300;
+            solver.newton_strategy = strategy;
+            solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
+            solver.damping = DampingOptions {
+                air_drag: None,
+                rayleigh_membrane_s: 0.005,
+                rayleigh_bending_s: 0.008,
+            };
+            let err = solver.step(1e-6).unwrap_err();
+            assert_eq!(err.code, RefusalCode::NotConverged);
+            assert!(
+                !err.message.contains("after 300 iterations"),
+                "{strategy:?}: sub-ULP no-op step must terminate early instead of burning all max_newton iterations: {}",
+                err.message
+            );
+        }
     }
 
     #[test]
