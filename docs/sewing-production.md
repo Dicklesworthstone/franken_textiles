@@ -811,6 +811,12 @@ complete finishing time, including final unloading. The two searches and subsequ
 stay inside the existing per-cell and whole-job work reservations; calendar search adds no unbounded
 permutation pass. Omission preserves the ordinary serial optimizer.
 
+The finish lower bound spends the minimum remaining feed, setup and handling time only in
+qualified openings. For the bound alone this work can split at any break, so no real order can
+finish earlier. When the remaining openings cannot hold even that much work, every order extending
+the prefix is infeasible. This can rule out an entire cell/count before spending search nodes.
+Only a replay of complete, nonpreemptive blocks supplies an actual finishing time.
+
 This matters even for two operations. With zero setup/handling, feed durations of 2400 and 4000 ms,
 and openings `[0, 4000]` and `[10000, 12400]`, the uninterrupted order that puts 2400 ms first
 cannot finish. The calendar search finds the reverse order and finishes at 12400 ms. These are

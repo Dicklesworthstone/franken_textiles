@@ -1216,15 +1216,11 @@ fn cheapest_assignment(
             } else {
                 Refusal::new(RefusalCode::NotConverged,
                 if calendar_constrained {
-                    "no retained complete cell allocation meets the calendar-constrained thread-order deadline; other calendar-specific operation orders remain unsearched"
+                    "no retained complete cell allocation meets the calendar-constrained thread-order deadline; unfinished calendar-specific operation orders remain unresolved"
                 } else {
                     "no retained complete cell allocation meets the thread-order search deadline; unfinished serial orders remain unresolved"
                 })
-                .repair(if calendar_constrained {
-                    "review the qualified windows, eligible configurations and deadline; increasing serial search does not search calendar-specific orders"
-                } else {
-                    "increase the bounded serial/parallel schedule allowance or supply a longer completion deadline"
-                })
+                .repair("increase the bounded serial/parallel schedule allowance or supply a longer completion deadline")
             },
         );
     }
