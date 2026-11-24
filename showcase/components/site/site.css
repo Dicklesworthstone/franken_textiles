@@ -193,8 +193,9 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 /* Two renders of one cuff and the flat change between them, side by side on the studio's paper. */
 .ft-fitting-pair{display:grid;grid-template-columns:1fr 1fr .86fr;gap:12px;margin:0 0 18px}
 .ft-fitting-pair figure{margin:0;display:flex;flex-direction:column;gap:8px}
-.ft-fitting-pair img{display:block;width:100%;height:auto;aspect-ratio:744/1199;object-fit:contain;border-radius:6px;background:#ece7df}
-.ft-fitting-pair figure:last-child img{background:#f7f4ed;border:1px solid #e3ddcf;padding:10% 8%}
+/* The cuff and hand are in the lower half of each 744 × 1199 render; the top third is plain sleeve, so it is cut. */
+.ft-fitting-pair img{display:block;width:100%;height:auto;aspect-ratio:744/820;object-fit:cover;object-position:50% 85%;border-radius:6px;background:#ece7df}
+.ft-fitting-pair figure:last-child img{object-fit:contain;background:#f7f4ed;border:1px solid #e3ddcf;padding:10% 8%}
 .ft-fitting-pair figcaption{font-size:13.5px;line-height:1.5;color:#4c585c}
 .ft-fitting-pair figcaption strong{display:block;font:500 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink);margin-bottom:3px}
 @media(max-width:640px){.ft-fitting-pair{grid-template-columns:1fr 1fr}.ft-fitting-pair figure:last-child{grid-column:1/-1;max-width:60%;margin:0 auto}}
@@ -278,7 +279,8 @@ body:has(.capture) :is(.ft-head,.ft-foot,.skip){display:none}
 .ft-code{position:relative;margin:0;background:var(--dark);color:#e9e5d9;border-radius:5px;overflow:hidden;box-shadow:0 22px 50px -30px #16232bb3}
 .ft-code figcaption{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 18px;border-bottom:1px solid #2c3a43;color:#ffbd95;letter-spacing:.14em}
 .ft-code pre{margin:0;padding:18px;overflow:auto;font:400 13px/1.75 var(--mono);tab-size:2}
-.ft-code code{font:inherit}
+/* A block placed inside prose must not take the prose's inline-code chip (a pale box behind every line). */
+.ft-code pre code{font:inherit;background:none;padding:0;border-radius:0;color:inherit}
 .ft-code .c{color:#8a9b9d}.ft-code .o{color:var(--peach)}
 .ft-code-more{display:inline-flex;align-items:center;gap:8px;margin:0 18px 16px;font-size:13px;font-weight:600;color:#cfd6d2}
 .ft-code-more:hover{color:var(--peach)}
