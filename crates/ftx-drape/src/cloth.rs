@@ -753,6 +753,9 @@ pub struct Solver {
     symbolic: Option<SymbolicLdlt>,
     /// The Hessian pattern used by the current symbolic analysis.
     pattern: Option<Csr>,
+    /// Without self-contact: where each element entry lands in `pattern` (shared by the trial
+    /// copies a step makes; checked against the pattern before each use).
+    fill_slots: Option<std::sync::Arc<FillSlots>>,
     /// With self-contact: the free-DOF pattern of every element, elastic and mass block (and the
     /// membrane, hinge and elastic counts it was built for), which each assembly extends by its
     /// contact couplings.
@@ -840,6 +843,95 @@ impl Sink {
         }
     }
 
+    /// [`Sink::push`] of an entry whose position in a filled pattern is already known.
+    fn push_at(&mut self, slot: usize, row: usize, col: usize, val: f64) {
+        match self {
+            Sink::Fill(f) => f.add_at(slot, val),
+            Sink::Coo(c) => c.push(row, col, val),
+        }
+    }
+}
+
+/// Where each element's Hessian entries land in the analysed pattern's value array, in the order
+/// `assemble_ctx` scatters them (row-major over each element's free DOFs), and each free DOF's
+/// diagonal slot. With it a body-only assembly adds every element entry in place instead of
+/// searching its row: the same additions into the same entries in the same order, so the matrix is
+/// unchanged bit for bit. It is a function of the pattern, the free-DOF map and the element vertex
+/// lists, and is used only while all three still match the ones it was built from.
+#[derive(Debug)]
+struct FillSlots {
+    pattern: Csr,
+    free: Vec<Option<usize>>,
+    counts: [usize; 4],
+    /// Each element's first entry in `slots`, in the order membranes, hinges, panel patches,
+    /// elastics, then one past the end.
+    starts: Vec<usize>,
+    slots: Vec<usize>,
+    diagonal: Vec<usize>,
+}
+
+impl FillSlots {
+    /// The slots of every element of `solver` in `pattern`, or `None` when an entry is missing from it.
+    fn build(solver: &Solver, pattern: &Csr) -> Option<FillSlots> {
+        let free = &solver.free;
+        let mut starts = Vec::new();
+        let mut slots = Vec::new();
+        let mut element = |vs: &[usize]| -> Option<()> {
+            starts.push(slots.len());
+            let n = 3 * vs.len();
+            for a in 0..n {
+                let Some(fa) = free[3 * vs[a / 3] + a % 3] else {
+                    continue;
+                };
+                for b in 0..n {
+                    if let Some(fb) = free[3 * vs[b / 3] + b % 3] {
+                        slots.push(pattern.position(fa, fb)?);
+                    }
+                }
+            }
+            Some(())
+        };
+        let m = &solver.model;
+        for e in &m.membranes {
+            element(&e.v)?;
+        }
+        for h in &m.hinges {
+            element(&h.v)?;
+        }
+        for p in m.panel_bending_patches() {
+            element(&p.v)?;
+        }
+        for e in &m.elastics {
+            element(&e.v)?;
+        }
+        starts.push(slots.len());
+        let diagonal = (0..solver.nfree)
+            .map(|f| pattern.position(f, f))
+            .collect::<Option<Vec<_>>>()?;
+        Some(FillSlots {
+            pattern: pattern.clone(),
+            free: free.clone(),
+            counts: solver.element_counts(),
+            starts,
+            slots,
+            diagonal,
+        })
+    }
+
+    /// Whether these slots index `pattern` for `solver`'s current free DOFs and elements.
+    fn fits(&self, solver: &Solver, pattern: &Csr) -> bool {
+        self.counts == solver.element_counts()
+            && self.free == solver.free
+            && self.pattern.same_structure(pattern)
+    }
+
+    /// The slots of element `index` (counted across membranes, hinges, panel patches, elastics).
+    fn element(&self, index: usize) -> &[usize] {
+        &self.slots[self.starts[index]..self.starts[index + 1]]
+    }
+}
+
+impl Sink {
     fn finish(self) -> Csr {
         match self {
             Sink::Fill(f) => f.finish(),
@@ -903,6 +995,7 @@ impl Solver {
             nfree,
             symbolic: None,
             pattern: None,
+            fill_slots: None,
             element_pattern: None,
             cached_panel_count,
             precond: None,
@@ -1556,11 +1649,24 @@ impl Solver {
         } else {
             Sink::Coo(Coo::new(self.nfree, self.nfree))
         };
+        // Filling the analysed body-only pattern: each element's entries go to known slots.
+        let plan = match (&sink, &self.pattern, &self.fill_slots) {
+            (Sink::Fill(_), Some(p), Some(s)) if !self.dynamic_contact() && s.fits(self, p) => {
+                Some(s.as_ref())
+            }
+            _ => None,
+        };
+        let (n_membranes, n_hinges, n_patches) = (
+            self.model.membranes.len(),
+            self.model.hinges.len(),
+            self.model.panel_bending_patches().len(),
+        );
         // Elements whose Hessian is PSD by construction (every hinge; membranes without compression
         // or a negative stress) are not projected: it would change nothing but rounding. The others
         // depend on their vertices only through differences, so they project on the complement of
         // the translations.
         let scatter = |dofs: &[usize],
+                       slots: Option<&[usize]>,
                        grad: &[f64],
                        hess: &mut [f64],
                        psd: bool,
@@ -1571,6 +1677,7 @@ impl Solver {
             if project_elements && !psd {
                 project_psd_translation_free(hess, dofs.len());
             }
+            let mut next = 0;
             for a in 0..n {
                 let Some(fa) = self.free[3 * dofs[a / 3] + a % 3] else {
                     continue;
@@ -1579,7 +1686,14 @@ impl Solver {
                 for b in 0..n {
                     if let Some(fb) = self.free[3 * dofs[b / 3] + b % 3] {
                         let val = hess[a * n + b];
-                        sink.push(fa, fb, if scale != 1.0 { val * scale } else { val });
+                        let val = if scale != 1.0 { val * scale } else { val };
+                        match slots {
+                            Some(slots) => {
+                                sink.push_at(slots[next], fa, fb, val);
+                                next += 1;
+                            }
+                            None => sink.push(fa, fb, val),
+                        }
                     }
                 }
             }
@@ -1618,6 +1732,7 @@ impl Solver {
             }
             scatter(
                 &e.v,
+                plan.map(|s| s.element(i)),
                 &l.grad,
                 &mut l.hess,
                 l.psd,
@@ -1630,6 +1745,7 @@ impl Solver {
             let mut l = self.model.hinge_local(i, x_el);
             scatter(
                 &h.v,
+                plan.map(|s| s.element(n_membranes + i)),
                 &l.grad,
                 &mut l.hess,
                 l.psd,
@@ -1646,6 +1762,7 @@ impl Solver {
                 .unwrap_or_else(|| p.local(x_el));
             scatter(
                 &p.v,
+                plan.map(|s| s.element(n_membranes + n_hinges + i)),
                 &l.grad,
                 &mut l.hess,
                 l.psd,
@@ -1654,10 +1771,11 @@ impl Solver {
                 &mut g,
             );
         }
-        for e in &self.model.elastics {
+        for (i, e) in self.model.elastics.iter().enumerate() {
             let mut l = e.local(x_el);
             scatter(
                 &e.v,
+                plan.map(|s| s.element(n_membranes + n_hinges + n_patches + i)),
                 &l.grad,
                 &mut l.hess,
                 l.psd,
@@ -1668,22 +1786,52 @@ impl Solver {
         }
         if let Some(damping) = ctx.damping() {
             for (i, e) in self.model.membranes.iter().enumerate() {
+                let slots = plan.map(|s| s.element(i));
                 if let Some(mut l) = damping.air_drag_local(i, e.v, x) {
-                    scatter(&e.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
+                    scatter(
+                        &e.v,
+                        slots,
+                        &l.grad,
+                        &mut l.hess,
+                        l.psd,
+                        1.0,
+                        &mut sink,
+                        &mut g,
+                    );
                 }
                 if let Some(mut l) = damping.rayleigh_membrane_local(&self.model, i, x) {
-                    scatter(&e.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
+                    scatter(
+                        &e.v,
+                        slots,
+                        &l.grad,
+                        &mut l.hess,
+                        l.psd,
+                        1.0,
+                        &mut sink,
+                        &mut g,
+                    );
                 }
             }
             for (i, h) in self.model.hinges.iter().enumerate() {
                 if let Some(mut l) = damping.rayleigh_bending_local(&self.model, i, x) {
-                    scatter(&h.v, &l.grad, &mut l.hess, l.psd, 1.0, &mut sink, &mut g);
+                    let slots = plan.map(|s| s.element(n_membranes + i));
+                    scatter(
+                        &h.v,
+                        slots,
+                        &l.grad,
+                        &mut l.hess,
+                        l.psd,
+                        1.0,
+                        &mut sink,
+                        &mut g,
+                    );
                 }
             }
             for (i, patch) in self.model.panel_bending_patches().iter().enumerate() {
                 if let Some(mut l) = damping.rayleigh_panel_local(&self.model, i, x) {
                     scatter(
                         &patch.v,
+                        plan.map(|s| s.element(n_membranes + n_hinges + i)),
                         &l.grad,
                         &mut l.hess,
                         l.psd,
@@ -1699,20 +1847,24 @@ impl Solver {
                 let Some(f) = self.free[3 * i + k] else {
                     continue;
                 };
-                match ctx {
+                let hessian = match ctx {
                     StepContext::ImplicitEuler { xt, h, .. } => {
                         g[f] += m * (x[i][k] - xt[i][k]) / (h * h);
-                        sink.push(f, f, m / (h * h));
+                        m / (h * h)
                     }
                     StepContext::GeneralizedAlpha { xt, h, params, .. } => {
                         let cm = params.mass_coeff(h);
                         g[f] += cm * m * (x[i][k] - xt[i][k]);
-                        sink.push(f, f, cm * m);
+                        cm * m
                     }
                     StepContext::Static => {
                         g[f] -= m * self.gravity[k];
-                        sink.push(f, f, 0.0);
+                        0.0
                     }
+                };
+                match plan {
+                    Some(s) => sink.push_at(s.diagonal[f], f, f, hessian),
+                    None => sink.push(f, f, hessian),
                 }
             }
         }
@@ -1799,6 +1951,11 @@ impl Solver {
             self.symbolic = Some(s);
             // Body-only assemblies fill this in place; self-contact compares the next pattern.
             self.pattern = Some(a.clone());
+            self.fill_slots = if self.dynamic_contact() {
+                None
+            } else {
+                FillSlots::build(self, a).map(std::sync::Arc::new)
+            };
         }
         self.symbolic
             .as_ref()

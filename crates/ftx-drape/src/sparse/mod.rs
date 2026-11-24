@@ -152,6 +152,16 @@ impl CsrFill {
         self.csr.vals[lo + k] += val;
     }
 
+    /// Adds `val` at `slot`, the position of an entry in the pattern's value array (as returned by
+    /// [`Csr::position`] on a matrix of the same structure). The same addition as [`CsrFill::add`]
+    /// at that entry, without searching its row.
+    ///
+    /// # Panics
+    /// When `slot` is outside the pattern.
+    pub fn add_at(&mut self, slot: usize, val: f64) {
+        self.csr.vals[slot] += val;
+    }
+
     /// The filled matrix.
     #[must_use]
     pub fn finish(self) -> Csr {
@@ -240,6 +250,26 @@ impl Csr {
     #[must_use]
     pub fn nnz(&self) -> usize {
         self.vals.len()
+    }
+
+    /// Where (row, col) is stored in the value array, or `None` when it is not in the pattern.
+    #[must_use]
+    pub fn position(&self, row: usize, col: usize) -> Option<usize> {
+        let (lo, hi) = (*self.row_ptr.get(row)?, *self.row_ptr.get(row + 1)?);
+        self.col_idx[lo..hi]
+            .binary_search(&col)
+            .ok()
+            .map(|k| lo + k)
+    }
+
+    /// Whether `other` has the same dimensions and the same entries in the same positions (values
+    /// are not compared).
+    #[must_use]
+    pub fn same_structure(&self, other: &Csr) -> bool {
+        self.nrows == other.nrows
+            && self.ncols == other.ncols
+            && self.row_ptr == other.row_ptr
+            && self.col_idx == other.col_idx
     }
 
     /// One row's (columns, values).
