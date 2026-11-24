@@ -908,6 +908,7 @@ mod tests {
             image_size_px: [100, 100],
             rotation_cw_deg: 0,
             keypoints: vec![],
+            fixed_pose: None,
             camera: Camera {
                 intrinsics: Intrinsics {
                     focal_px: Vec2::new(128., 128.),

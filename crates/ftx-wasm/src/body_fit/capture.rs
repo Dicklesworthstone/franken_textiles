@@ -506,6 +506,7 @@ impl BodyCapture {
             rotation_cw_deg,
             keypoints: Vec::new(),
             silhouette: None,
+            fixed_pose: None,
         });
         self.images.push(source);
         self.receipts.push(receipt.clone());

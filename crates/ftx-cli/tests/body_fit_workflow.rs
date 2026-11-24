@@ -776,6 +776,137 @@ fn fixed_pose_shape_fit_replays_native_portable_and_accepted_body_workflows() {
 }
 
 #[test]
+fn per_frame_fixed_pose_replays_mixed_controls_and_check_only_views() {
+    let dir = setup();
+    let (bytes, mut input) = fixture();
+    let values = [
+        [0.0, 0.1, 0.05, 0.04, -0.05, 0.02, -0.4],
+        [0.2, -0.1, 0.08, -0.03, 0.06, -0.02, 0.5],
+    ];
+    let names: Vec<String> = input["model"]["pose_parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|parameter| parameter["name"].as_str().unwrap().to_owned())
+        .collect();
+    for (index, pose) in values.iter().enumerate() {
+        let timestamp = if index == 0 {
+            (1_u64 << 53) + 1
+        } else {
+            u64::MAX
+        };
+        input["fit"]["frames"][index]["frame"]["timestamp_us"] = json!(timestamp);
+        let fixed: BTreeMap<_, _> = names
+            .iter()
+            .zip(pose)
+            .enumerate()
+            .filter(|(parameter, _)| index == 1 || *parameter == 1 || *parameter == 6)
+            .map(|(_, (name, value))| (name.clone(), *value))
+            .collect();
+        input["fit"]["frames"][index]["fixed_pose"] = json!({
+            "values": fixed,
+            "evidence": "Synthetic prescribed frame pose; not measured anatomy"
+        });
+        if index == 1 {
+            for point in input["fit"]["frames"][index]["keypoints"]
+                .as_array_mut()
+                .unwrap()
+            {
+                point["partition"] = json!("held_out");
+            }
+        }
+        for start in input["fit"]["starts"].as_array_mut().unwrap() {
+            start["poses"][index]["frame"]["timestamp_us"] = json!(timestamp);
+            for (parameter, name) in names.iter().enumerate() {
+                if let Some(value) = fixed.get(name) {
+                    start["poses"][index]["values"][parameter] = json!(value);
+                }
+            }
+        }
+    }
+    // Keep source ordinals distinct from canonical time order.
+    input["fit"]["frames"].as_array_mut().unwrap().reverse();
+    save(&dir, &input);
+    let native = run(&dir, &["--out", "frame-fixed.json"], 0)["result"].clone();
+    let portable =
+        ftx_wasm::body_fit::fit_body(&bytes, &input.to_string(), "50", "100000").unwrap();
+    assert_eq!(native, portable);
+    assert_eq!(native["status"], "ACCEPTED");
+    let accepted =
+        ftx_body::accepted_shape::AcceptedShape::read(&native, &sha256_hex(&bytes), &[]).unwrap();
+    assert!((accepted.params.phenotype.height - 0.6).abs() < 1e-6);
+    assert!((accepted.params.phenotype.weight - 0.45).abs() < 1e-6);
+    for (index, pose) in values.iter().enumerate() {
+        let solution = &native["solution"]["poses"][index]["values"];
+        assert_eq!(solution.as_array().unwrap().len(), names.len());
+        for (parameter, value) in pose.iter().enumerate() {
+            if index == 1 || parameter == 1 || parameter == 6 {
+                assert_eq!(solution[parameter], json!(value));
+                assert_eq!(
+                    native["pose_spread_fraction"][index]["fractions"][parameter],
+                    0.0
+                );
+            }
+        }
+        assert_eq!(
+            native["input"]["frames"][index]["fixed_pose"],
+            input["fit"]["frames"][1 - index]["fixed_pose"]
+        );
+    }
+    let first =
+        ftx_wasm::body_fit::review_body_fit_frame(&bytes, &native.to_string(), "0").unwrap();
+    let second =
+        ftx_wasm::body_fit::review_body_fit_frame(&bytes, &native.to_string(), "1").unwrap();
+    assert_ne!(first["mesh_obj"], second["mesh_obj"]);
+    let mut changed_pose = native.clone();
+    changed_pose["solution"]["poses"][1]["values"][0] = json!(0.21);
+    assert!(
+        ftx_wasm::body_fit::review_body_fit_frame(&bytes, &changed_pose.to_string(), "1").is_err()
+    );
+    let mut changed_spread = native.clone();
+    changed_spread["pose_spread_fraction"][1]["fractions"][0] = json!(0.001);
+    assert!(
+        ftx_wasm::body_fit::review_body_fit_frame(&bytes, &changed_spread.to_string(), "1")
+            .is_err()
+    );
+    assert_eq!(
+        native["solution"]["poses"][1]["frame"]["timestamp_us"],
+        json!(u64::MAX)
+    );
+
+    // CHECK-only evidence may reject the result but cannot influence any optimizer trial.
+    let mut bad_check = input.clone();
+    let pixel = &mut bad_check["fit"]["frames"][0]["keypoints"][0]["pixel_px"][0];
+    *pixel = json!(pixel.as_f64().unwrap() + 10.0);
+    save(&dir, &bad_check);
+    let rejected = run(&dir, &[], 2)["result"].clone();
+    assert_eq!(
+        rejected,
+        ftx_wasm::body_fit::fit_body(&bytes, &bad_check.to_string(), "50", "100000").unwrap()
+    );
+    assert_eq!(rejected["status"], "REJECTED");
+    assert!(rejected["solution"].is_null());
+    for index in 0..2 {
+        assert_eq!(
+            rejected["attempts"][index]["cost_history"],
+            native["attempts"][index]["cost_history"]
+        );
+    }
+
+    let mut bad_start = input;
+    bad_start["fit"]["starts"][0]["poses"][1]["values"][0] = json!(0.21);
+    save(&dir, &bad_start);
+    let refusal = run(&dir, &[], 3);
+    assert!(
+        refusal["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fixed")
+    );
+    assert!(ftx_wasm::body_fit::fit_body(&bytes, &bad_start.to_string(), "50", "100000").is_err());
+}
+
+#[test]
 fn reviewed_capture_joins_actual_selection_cameras_and_articulated_fit() {
     let dir = setup();
     let original: Value =

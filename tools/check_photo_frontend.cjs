@@ -1433,6 +1433,118 @@ function bodyStartField(p,id) {
   const descend=node=>[node,...node.children.flatMap(descend)];
   const input=descend(p.e.bodyStartsFields).find(node=>node.id===id);assert.ok(input,`missing start field ${id}`);return input;
 }
+
+// Exercise the native review's embedded editor as shipped, including its prepared-input download.
+function nativeStartsData({fixed=0.7,starts=2}={}) {
+  const view=bodyStartsReport();
+  view.pose=[{name:'root_x_m',lower:-2,upper:2,unit:'m'}];
+  view.frames[0].fixed_pose={values:{root_x_m:fixed},evidence:'Explicit first-frame placement'};
+  view.frames[1].fixed_pose={values:{root_x_m:-0.4},evidence:'Explicit second-frame placement'};
+  view.annotations={schema:'ftx-body-starts/1',source_input:'/checked/input.json',source_input_sha256:view.input_sha256,
+    model_sha256:view.model_sha256,capture_sources_sha256:null,silhouettes:null,
+    starts:view.starts.slice(0,starts).map(start=>({...start,poses:[{frame_index:0,values:[fixed]},
+      {frame_index:1,values:[-0.4]}]}))};
+  return view;
+}
+function nativeStartsEditor(data=nativeStartsData(),changePrepared=()=>{}) {
+  const script=fs.readFileSync(path.join(root,'crates/ftx-cli/src/measure/body_fit/start_edit.js'),'utf8');
+  const element=()=>{const e=new Element();e.dataset={};e.removeAttribute=name=>{delete e[name];};return e;};
+  const ids=new Set(['startData',...Array.from(script.matchAll(/byId\('([^']+)'\)/g),m=>m[1])]);
+  const e=Object.fromEntries([...ids].map(id=>[id,element()]));
+  e.startDraftFile.type='file';e.startData.textContent=JSON.stringify(data);
+  const prepared={schema:'ftx-anny-body-fit-input/1',model:{model_sha256:data.model_sha256,keypoints:{anchor:{kind:'bone_head',bone:'root'}}},
+    fit:{schema:'ftx-body-fit-input/1',frames:data.frames.map(frame=>({
+      frame:{stream:frame.identity.stream,timestamp_us:JSON.rawJSON(frame.identity.timestamp_us)},
+      ...(Object.hasOwn(frame,'fixed_pose')?{fixed_pose:structuredClone(frame.fixed_pose)}:{}),
+      keypoints:[{name:'anchor',pixel_px:[10,20],sigma_px:1,partition:'held_out'}]
+    })),starts:[]}};
+  changePrepared(prepared);e.startPreparedInput.textContent=JSON.stringify(prepared);
+  const urls=new Map(),events={};let serial=0;
+  class LocalURL extends URL {}
+  LocalURL.createObjectURL=blob=>{const url=`blob:native-start-${++serial}`;urls.set(url,blob);return url;};
+  LocalURL.revokeObjectURL=url=>{assert.equal(urls.delete(url),true);};
+  const context=vm.createContext({document:{getElementById:id=>{assert.ok(e[id],`missing native start control ${id}`);return e[id];},createElement:element},
+    window:{addEventListener:(name,fn)=>{events[name]=fn;}},URL:LocalURL,Blob,TextEncoder,TextDecoder,structuredClone,JSON});
+  vm.runInContext(script,context);
+  return {e,urls,events,data};
+}
+function nativeStartField(p,id) {
+  return bodyStartField({e:{bodyStartsFields:p.e.startParameters}},id);
+}
+function editNativeStart(p,id,value) {
+  const input=nativeStartField(p,id);input.value=value;input.handlers.input();
+}
+
+test('native body-start editor preserves fixed declarations through blanks midpoints copies and exact prepared exports',async()=>{
+  const p=nativeStartsEditor(nativeStartsData({starts:0}));
+  p.e.newStart.handlers.click();assert.equal(nativeStartField(p,'start-shape-0').value,'');
+  for(const [index,value] of [0.7,-0.4].entries()){
+    const control=nativeStartField(p,`start-pose-${index}-0`);
+    assert.equal(control.value,String(value));assert.equal(control.readOnly,true);assert.equal(control.disabled,true);
+  }
+  assert.match(p.e.startParameters.children[1].children[1].children[0].textContent,/fixed for this frame.*Explicit first-frame/);
+  p.e.midpointStart.handlers.click();p.e.applyStart.handlers.click();
+  assert.match(p.e.startStatus.textContent,/1 applied start/);
+  p.e.duplicateStart.handlers.click();editNativeStart(p,'start-shape-0','0.65');p.e.applyStart.handlers.click();
+  assert.equal(p.e.startPreparedDownload.hidden,false);
+  const text=await p.urls.get(p.e.startPreparedDownload.href).text();
+  const prepared=JSON.parse(text,(key,value,context)=>key==='timestamp_us'?context.source:value);
+  assert.deepEqual(prepared.fit.starts.map(start=>start.shape),[[0.5],[0.65]]);
+  for(const start of prepared.fit.starts){
+    assert.deepEqual(start.poses.map(pose=>pose.values),[[0.7],[-0.4]]);
+    assert.deepEqual(start.poses.map(pose=>pose.frame.timestamp_us),p.data.frames.map(frame=>frame.identity.timestamp_us));
+  }
+  assert.deepEqual(prepared.fit.frames.map(frame=>frame.fixed_pose),p.data.frames.map(frame=>frame.fixed_pose));
+  assert.deepEqual(prepared.fit.frames[0].keypoints,[{name:'anchor',pixel_px:[10,20],sigma_px:1,partition:'held_out'}]);
+});
+
+test('native body-start editor rejects direct and imported changes to fixed controls',async()=>{
+  const p=nativeStartsEditor();
+  editNativeStart(p,'start-pose-0-0','0.9');p.e.applyStart.handlers.click();
+  assert.match(p.e.startStatus.textContent,/declared fixed value/);assert.equal(p.e.startPreparedDownload.hidden,true);
+  p.e.cancelStart.handlers.click();assert.equal(nativeStartField(p,'start-pose-0-0').value,'0.7');
+  const annotations=structuredClone(p.data.annotations);annotations.starts[1].poses[0].values[0]=0.9;
+  p.e.startDraftFile.files=[file(JSON.stringify(annotations))];await p.e.startDraftFile.handlers.change();
+  assert.match(p.e.startStatus.textContent,/Draft not loaded:.*declared fixed/);
+  assert.equal(p.e.startDownload.hidden,true);assert.equal(p.e.startPreparedDownload.hidden,true);
+  p.e.cancelStart.handlers.click();assert.equal(nativeStartField(p,'start-pose-0-0').value,'0.7');
+});
+
+test('native body-start editor retains exact interior fixed values when normalization would round to a bound',async()=>{
+  const fixed=1.9999999999999998;assert.equal((fixed+2)/4,1);
+  const p=nativeStartsEditor(nativeStartsData({fixed}));
+  editNativeStart(p,'start-shape-0','0.45');p.e.applyStart.handlers.click();
+  assert.equal(p.e.startPreparedDownload.hidden,false,p.e.startStatus.textContent+' '+p.e.startPreparedNotice.textContent);
+  const prepared=JSON.parse(await p.urls.get(p.e.startPreparedDownload.href).text());
+  assert.equal(prepared.fit.frames[0].fixed_pose.values.root_x_m,fixed);
+  for(const start of prepared.fit.starts)assert.equal(start.poses[0].values[0],fixed);
+  const annotations=structuredClone(p.data.annotations);annotations.starts[0].shape[0]=0.46;
+  p.e.startDraftFile.files=[file(JSON.stringify(annotations))];await p.e.startDraftFile.handlers.change();
+  assert.match(p.e.startStatus.textContent,/applied starts restored/);
+  p.e.applyStart.handlers.click();assert.equal(p.e.startPreparedDownload.hidden,false);
+});
+
+test('native body-start editor binds prepared frame constraints to reviewed metadata independent of key order',()=>{
+  for(const change of [frame=>{delete frame.fixed_pose;},frame=>{frame.fixed_pose=null;},
+    frame=>{frame.fixed_pose.values.root_x_m=0.8;},frame=>{frame.fixed_pose.evidence='different placement source';}]){
+    const p=nativeStartsEditor(nativeStartsData(),prepared=>change(prepared.fit.frames[0]));
+    editNativeStart(p,'start-shape-0','0.45');p.e.applyStart.handlers.click();
+    assert.equal(p.e.startPreparedDownload.hidden,true);assert.match(p.e.startPreparedNotice.textContent,/fixed|constraint/i);
+    assert.equal(p.e.startDownload.hidden,false,'native source-bound annotation path remains available');
+  }
+  const data=nativeStartsData();data.pose.push({name:'root_y_m',lower:-2,upper:2,unit:'m'});
+  for(const frame of data.frames)frame.fixed_pose.values.root_y_m=0.3;
+  for(const start of data.annotations.starts)for(const pose of start.poses)pose.values.push(0.3);
+  const p=nativeStartsEditor(data,prepared=>{
+    const fixed=prepared.fit.frames[0].fixed_pose;prepared.fit.frames[0].fixed_pose={evidence:fixed.evidence,
+      values:{root_y_m:fixed.values.root_y_m,root_x_m:fixed.values.root_x_m}};
+  });
+  editNativeStart(p,'start-shape-0','0.45');p.e.applyStart.handlers.click();assert.equal(p.e.startPreparedDownload.hidden,false);
+  const legacy=nativeStartsData();for(const frame of legacy.frames)delete frame.fixed_pose;
+  const old=nativeStartsEditor(legacy,prepared=>{prepared.fit.frames[0].fixed_pose=null;});
+  editNativeStart(old,'start-shape-0','0.45');old.e.applyStart.handlers.click();assert.equal(old.e.startPreparedDownload.hidden,false);
+});
+
 function editBodyStart(p,id,value) {const input=bodyStartField(p,id);input.value=value;input.handlers.input();}
 async function loadBodyStarts(p,overrides={}) {
   await p.e.bodyStartsLoad.onclick();const w=p.current(),message=w.messages[0];
@@ -1496,6 +1608,72 @@ test('body-start editor keeps fixed pose frame identities while editing distinct
   assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.e.bodyFitRun.disabled,false);
   assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),input);
   await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,input);
+});
+
+
+test('body-start editor preserves per-frame fixed pose values through blanks midpoints copies and worker edits',async()=>{
+  const p=await photoPage();selectBodyFit(p);
+  const frames=bodyStartsReport().frames;
+  frames[0].fixed_pose={values:{root_x_m:0.7},evidence:'Explicit first-frame root placement'};
+  frames[1].fixed_pose={values:{root_x_m:-0.4},evidence:'Explicit second-frame root placement'};
+  const view=await loadBodyStarts(p,{frames,starts:[]});
+  p.e.bodyStartsAdd.onclick();
+  assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'');
+  for(const [index,value] of [0.7,-0.4].entries()){
+    const input=bodyStartField(p,'bodyStart-pose-'+index+'-0');
+    assert.equal(input.value,String(value));assert.equal(input.readOnly,true);assert.equal(input.disabled,true);
+  }
+  const label=p.e.bodyStartsFields.children[1].children[1].children[0].textContent;
+  assert.match(label,/fixed for this frame/);assert.match(label,/Explicit first-frame/);
+  p.e.bodyStartsMidpoint.onclick();
+  assert.equal(bodyStartField(p,'bodyStart-shape-0').value,'0.5');
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').value,'0.7');
+  assert.equal(bodyStartField(p,'bodyStart-pose-1-0').value,'-0.4');
+  p.e.bodyStartsCopy.onclick();editBodyStart(p,'bodyStart-shape-0','0.65');
+  // Programmatic events on disabled controls cannot alter the retained draft.
+  editBodyStart(p,'bodyStart-pose-0-0','0.9');
+  await p.e.bodyStartsApply.onclick();const worker=p.current(),message=worker.messages[0],edits=JSON.parse(message.edits);
+  assert.equal(message.op,'body-fit-starts');assert.equal(edits.starts.length,2);
+  for(const start of edits.starts)assert.deepEqual(start.poses,[{frame_index:0,values:[0.7]},{frame_index:1,values:[-0.4]}]);
+  const input=' {"retained_fixed_frames":true,"timestamp_us":18446744073709551615}\r\n';
+  await worker.emit({type:'result',request:message.request,
+    report:JSON.stringify({...view,input,input_sha256:'b'.repeat(64),starts:edits.starts})});
+  assert.equal(p.e.bodyStartsError.textContent,'');assert.equal(p.e.bodyFitRun.disabled,false);
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').disabled,true);
+  assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),input);
+  await p.e.bodyFitRun.onclick();assert.equal(p.current().messages[0].input,input);
+});
+
+test('body-start editor rejects invalid fixed pose metadata and mismatched checked starts',async()=>{
+  for(const fixed of [null,{values:{},evidence:'source'},{values:{unknown:0},evidence:'source'},
+    {values:{root_x_m:3},evidence:'source'},{values:{root_x_m:'0.1'},evidence:'source'},
+    {values:{root_x_m:0.1},evidence:' '},{values:{root_x_m:0.1},evidence:'source',extra:true}]){
+    const p=await photoPage();selectBodyFit(p);const frames=bodyStartsReport().frames;
+    frames[0].fixed_pose=fixed;await loadBodyStarts(p,{frames,starts:[]});
+    assert.equal(p.e.bodyStartsEditor.hidden,true);assert.match(p.e.bodyStartsError.textContent,/fixed pose/);
+  }
+  const p=await photoPage();selectBodyFit(p);const frames=bodyStartsReport().frames;
+  frames[0].fixed_pose={values:{root_x_m:0.1},evidence:'source'};
+  await loadBodyStarts(p,{frames}); // Second start disagrees with the fixed first-frame coordinate.
+  assert.equal(p.e.bodyStartsEditor.hidden,true);assert.match(p.e.bodyStartsError.textContent,/fixed pose/);
+});
+
+test('body-start editor leaves unfixed frame controls editable and rejects changed fixed metadata on apply',async()=>{
+  const p=await photoPage();selectBodyFit(p);const frames=bodyStartsReport().frames;
+  frames[0].fixed_pose={values:{root_x_m:0.1},evidence:'Explicit fixed first frame'};
+  const starts=bodyStartsReport().starts;starts[1].poses[0].values[0]=0.1;
+  const view=await loadBodyStarts(p,{frames,starts});
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').disabled,true);
+  assert.equal(bodyStartField(p,'bodyStart-pose-1-0').disabled,false);
+  editBodyStart(p,'bodyStart-pose-1-0','0.8');
+  await p.e.bodyStartsApply.onclick();const worker=p.current(),message=worker.messages[0],edits=JSON.parse(message.edits);
+  assert.equal(edits.starts[0].poses[0].values[0],0.1);
+  assert.equal(edits.starts[0].poses[1].values[0],0.8);
+  const changedFrames=JSON.parse(JSON.stringify(frames));changedFrames[0].fixed_pose.evidence='different source';
+  await worker.emit({type:'result',request:message.request,report:JSON.stringify({...view,
+    input:'{"changed":true}',input_sha256:'b'.repeat(64),starts:edits.starts,frames:changedFrames})});
+  assert.match(p.e.bodyStartsError.textContent,/controls or frames/);
+  assert.equal(p.e.bodyFitRun.disabled,true);assert.equal(p.urls.size,0);
 });
 
 test('body-start draft edits withdraw accepted handoffs and invalid applies cannot fit or restore stale output',async()=>{

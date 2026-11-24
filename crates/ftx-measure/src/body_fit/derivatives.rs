@@ -89,8 +89,14 @@ pub(super) fn column(
         }
         (0..base.values.len(), plus.values, minus.values)
     } else {
-        let f = (k - ns) / l.pose.len();
-        let begin = ns + f * l.pose.len();
+        let (f, coordinates) = input
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(f, _)| (f, pose_range(input, l, f)))
+            .find(|(_, coordinates)| coordinates.contains(&k))
+            .expect("validated free frame-pose coordinate");
+        let begin = coordinates.start;
         let shape = values(&x[..ns], &l.shape);
         let frame = &input.frames[f];
         let range = base.frame_rows[f].clone();
@@ -98,11 +104,11 @@ pub(super) fn column(
             // Held-out evidence cannot supply a derivative for an unobserved pose.
             return Ok(vec![0.0; base.values.len()]);
         }
-        let mut local = x[begin..begin + l.pose.len()].to_vec();
+        let mut local = x[coordinates].to_vec();
         local[k - begin] += h;
-        let plus_pose = values(&local, &l.pose);
+        let plus_pose = pose_values(frame, &l.pose, &local);
         local[k - begin] = x[k] - h;
-        let minus_pose = values(&local, &l.pose);
+        let minus_pose = pose_values(frame, &l.pose, &local);
         let plus_points = budget.call(|| model.points(&shape, &plus_pose))?;
         let plus = frame_residual(frame, model, &shape, &plus_pose, &plus_points, budget)?;
         let minus_points = budget.call(|| model.points(&shape, &minus_pose))?;
@@ -222,6 +228,7 @@ mod tests {
                 },
                 image_size_px: [200, 200],
                 rotation_cw_deg: 0,
+                fixed_pose: None,
                 keypoints: vec![
                     Keypoint {
                         name: "center".into(),
@@ -285,7 +292,7 @@ mod tests {
             }],
         };
         let input = prepare_input(&input, &model.layout).unwrap();
-        let x = encode(&input.starts[0], &model.layout).unwrap();
+        let x = encode(&input.starts[0], &model.layout, &input.frames).unwrap();
         (model, input, x)
     }
     fn budget() -> EvaluationBudget {
@@ -369,6 +376,82 @@ mod tests {
                             let expected_pose =
                                 values(&x[1 + 2 * f..3 + 2 * f], &model.layout.pose);
                             assert_eq!(p[other], expected_pose[other]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_fixed_pose_columns_match_dense_differences_without_perturbing_fixed_values() {
+        let (model, mut input, _) = scene(8, true);
+        for (index, frame) in input.frames.iter_mut().enumerate() {
+            let coordinates: &[usize] = match index % 3 {
+                0 => &[0, 1],
+                1 => &[1],
+                _ => &[0],
+            };
+            let original = input.starts[0].poses[index].values.clone();
+            frame.fixed_pose = Some(FixedPose {
+                values: coordinates
+                    .iter()
+                    .map(|&axis| (model.layout.pose[axis].name.clone(), original[axis]))
+                    .collect(),
+                evidence: "synthetic independently fixed coordinates".into(),
+            });
+            for start in &mut input.starts {
+                for &axis in coordinates {
+                    start.poses[index].values[axis] = original[axis];
+                }
+            }
+        }
+        let input = prepare_input(&input, &model.layout).unwrap();
+        let x = encode(&input.starts[0], &model.layout, &input.frames).unwrap();
+        assert_eq!(x.len(), 6);
+        let base = residual(&input, &model, &x, &mut budget()).unwrap();
+        for k in 0..x.len() {
+            let h = 1e-5;
+            let mut plus = x.clone();
+            let mut minus = x.clone();
+            plus[k] += h;
+            minus[k] -= h;
+            let plus = residual(&input, &model, &plus, &mut budget()).unwrap();
+            let minus = residual(&input, &model, &minus, &mut budget()).unwrap();
+            let expected: Vec<_> = plus
+                .values
+                .iter()
+                .zip(&minus.values)
+                .map(|(a, b)| ((a - b) / (2. * h)).to_bits())
+                .collect();
+            model.calls.borrow_mut().clear();
+            let actual = column(&input, &model, &x, k, h, &base, &mut budget()).unwrap();
+            assert_eq!(
+                actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected,
+                "reduced coordinate {k}"
+            );
+            if k > 0 {
+                let frame = input
+                    .frames
+                    .iter()
+                    .enumerate()
+                    .find(|(index, _)| pose_range(&input, &model.layout, *index).contains(&k))
+                    .unwrap();
+                for call in model.calls.borrow().iter() {
+                    let (Call::Points(pose) | Call::Surface(pose)) = call else {
+                        panic!("pose derivative evaluated an unrelated tape functional");
+                    };
+                    for (axis, parameter) in model.layout.pose.iter().enumerate() {
+                        if let Some(expected) = frame
+                            .1
+                            .fixed_pose
+                            .as_ref()
+                            .unwrap()
+                            .values
+                            .get(&parameter.name)
+                        {
+                            assert_eq!(pose[axis].to_bits(), expected.to_bits());
                         }
                     }
                 }

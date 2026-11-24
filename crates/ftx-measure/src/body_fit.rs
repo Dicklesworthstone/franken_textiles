@@ -2,7 +2,7 @@
 //! Cameras stay calibrated and fixed. Metric tape constraints can break the shape/depth gauge;
 //! damping and a good-looking image residual cannot substitute for observable fit data.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -230,7 +230,19 @@ pub fn review_keypoints(
         .collect()
 }
 
-/// One decoded image, with an independently variable body pose and a fixed metric camera.
+/// Explicitly retained pose coordinates for one image, independent of fitting initializations.
+/// These are caller assumptions with a stated basis, not pose measurements inferred by the solver.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixedPose {
+    /// Nonempty subset of the model's declared pose parameter names, in their original units.
+    /// Values stay strictly inside the same declared bounds; no missing coordinate is inferred.
+    pub values: BTreeMap<String, f64>,
+    /// Source or assumption justifying this frame's fixed coordinates.
+    pub evidence: String,
+}
+
+/// One decoded image, with an independent body pose and a fixed metric camera.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FitFrame {
@@ -247,6 +259,10 @@ pub struct FitFrame {
     /// Optional fixed scanlines in the camera's original oriented pixels. Absence preserves /1 JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silhouette: Option<Silhouette>,
+    /// Optional fixed subset of this frame's pose. Other declared coordinates remain free.
+    /// Every start retains the full pose vector and must agree exactly with these values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_pose: Option<FixedPose>,
 }
 
 /// Exact encoded image retained by capture preparation for later local visual inspection.
@@ -512,6 +528,7 @@ pub struct PoseSpread {
     /// Canonical decoded-frame identity.
     pub frame: FrameId,
     /// High minus low over converged starts, in normalized `ModelLayout::pose` order.
+    /// Fixed coordinates have zero spread by constraint, not zero uncertainty.
     pub fractions: Vec<f64>,
 }
 
@@ -520,7 +537,7 @@ pub struct PoseSpread {
 pub struct BodyFitSolution {
     /// One shared shape vector for all frames.
     pub shape: Vec<f64>,
-    /// Independent per-frame root/joint parameters.
+    /// Complete per-frame root/joint parameters, including explicitly retained fixed values.
     pub poses: Vec<FramePose>,
     /// Model predictions in layout measurement order, not records eligible for evidence fusion.
     pub predicted_measurements_m: Vec<f64>,
@@ -634,7 +651,6 @@ fn canonical(
         || !(2..=8).contains(&input.frames.len())
         || !(1..=12).contains(&ns)
         || np > 18
-        || ns + np * input.frames.len() > 128
         || input.measurements.len() > 32
         || layout.keypoints.len() > 128
         || layout.measurements.len() > 32
@@ -672,6 +688,25 @@ fn canonical(
     input.frames.sort_by(|a, b| a.frame.cmp(&b.frame));
     let mut ids = BTreeSet::new();
     for frame in &mut input.frames {
+        if let Some(fixed) = &frame.fixed_pose {
+            if fixed.values.is_empty() || !text(&fixed.evidence) {
+                return Err(invalid(
+                    "fixed frame pose needs a nonempty parameter subset and explicit evidence",
+                ));
+            }
+            for (name, &value) in &fixed.values {
+                let parameter = layout
+                    .pose
+                    .iter()
+                    .find(|parameter| parameter.name == *name)
+                    .ok_or_else(|| invalid("fixed frame pose names an unknown pose parameter"))?;
+                if !value.is_finite() || value <= parameter.lower || value >= parameter.upper {
+                    return Err(invalid(format!(
+                        "fixed frame pose {name} must lie strictly inside its declared bounds"
+                    )));
+                }
+            }
+        }
         frame.camera.validate()?;
         if let Some(silhouette) = &mut frame.silhouette {
             silhouette::validate_observation(&frame.camera, frame.image_size_px, silhouette)?;
@@ -706,6 +741,16 @@ fn canonical(
             }
             frame.camera.ray(point.pixel_px)?;
         }
+    }
+    if ns
+        + input
+            .frames
+            .iter()
+            .map(|frame| free_pose_count(frame, layout))
+            .sum::<usize>()
+        > 128
+    {
+        return Err(invalid("body-fit free-parameter budget exceeded"));
     }
     if layout.keypoints.is_empty()
         && !allow_incomplete_evidence
@@ -747,12 +792,12 @@ fn canonical(
                 "each start needs exactly one correctly identified pose per frame",
             ));
         }
-        encode(start, layout)?;
+        encode(start, layout, &input.frames)?;
     }
     let encoded: Vec<_> = input
         .starts
         .iter()
-        .map(|s| encode(s, layout))
+        .map(|s| encode(s, layout, &input.frames))
         .collect::<Result<_, _>>()?;
     for (i, x) in encoded.iter().enumerate() {
         if encoded[..i]
@@ -767,23 +812,40 @@ fn canonical(
     Ok(input)
 }
 
-fn encode(start: &FitStart, layout: &ModelLayout) -> Result<Vec<f64>, Refusal> {
+fn encode(
+    start: &FitStart,
+    layout: &ModelLayout,
+    frames: &[FitFrame],
+) -> Result<Vec<f64>, Refusal> {
     let mut x = Vec::new();
-    for (values, params) in std::iter::once((&start.shape, &layout.shape))
-        .chain(start.poses.iter().map(|p| (&p.values, &layout.pose)))
-    {
+    for (values, params, fixed) in std::iter::once((&start.shape, &layout.shape, None)).chain(
+        start
+            .poses
+            .iter()
+            .zip(frames)
+            .map(|(pose, frame)| (&pose.values, &layout.pose, frame.fixed_pose.as_ref())),
+    ) {
         if values.len() != params.len() {
             return Err(invalid("starting parameter vector has wrong length"));
         }
         for (&v, p) in values.iter().zip(params) {
-            let u = (v - p.lower) / (p.upper - p.lower);
-            if !v.is_finite() || !(0.0..1.0).contains(&u) || u == 0.0 {
-                return Err(invalid(format!(
-                    "{} must start strictly inside its bounds",
-                    p.name
-                )));
+            if let Some(expected) = fixed.and_then(|fixed| fixed.values.get(&p.name)) {
+                if v != *expected {
+                    return Err(invalid(format!(
+                        "starting {} disagrees with its frame's fixed pose value",
+                        p.name
+                    )));
+                }
+            } else {
+                let u = (v - p.lower) / (p.upper - p.lower);
+                if !v.is_finite() || !(0.0..1.0).contains(&u) || u == 0.0 {
+                    return Err(invalid(format!(
+                        "{} must start strictly inside its bounds",
+                        p.name
+                    )));
+                }
+                x.push(u);
             }
-            x.push(u);
         }
     }
     Ok(x)
@@ -796,6 +858,42 @@ fn values(x: &[f64], params: &[Parameter]) -> Vec<f64> {
         .collect()
 }
 
+fn free_pose_count(frame: &FitFrame, layout: &ModelLayout) -> usize {
+    layout.pose.len()
+        - frame
+            .fixed_pose
+            .as_ref()
+            .map_or(0, |fixed| fixed.values.len())
+}
+
+fn pose_range(input: &BodyFitInput, layout: &ModelLayout, frame: usize) -> std::ops::Range<usize> {
+    let begin = layout.shape.len()
+        + input.frames[..frame]
+            .iter()
+            .map(|frame| free_pose_count(frame, layout))
+            .sum::<usize>();
+    begin..begin + free_pose_count(&input.frames[frame], layout)
+}
+
+fn pose_values(frame: &FitFrame, params: &[Parameter], x: &[f64]) -> Vec<f64> {
+    let mut free = x.iter();
+    params
+        .iter()
+        .map(|parameter| {
+            frame
+                .fixed_pose
+                .as_ref()
+                .and_then(|fixed| fixed.values.get(&parameter.name))
+                .copied()
+                .unwrap_or_else(|| {
+                    parameter.lower
+                        + *free.next().expect("validated free pose coordinate")
+                            * (parameter.upper - parameter.lower)
+                })
+        })
+        .collect()
+}
+
 struct Prediction {
     points: Vec<Vec<Vec3>>,
     metrics: Vec<f64>,
@@ -803,7 +901,7 @@ struct Prediction {
 fn predict(
     model: &impl BodyModel,
     x: &[f64],
-    frames: usize,
+    input: &BodyFitInput,
     budget: &mut EvaluationBudget,
 ) -> Result<Prediction, Refusal> {
     let l = model.layout();
@@ -813,10 +911,9 @@ fn predict(
     {
         return Err(invalid("model returned invalid measurement vector"));
     }
-    let mut points = Vec::with_capacity(frames);
-    for f in 0..frames {
-        let begin = l.shape.len() + f * l.pose.len();
-        let pose = values(&x[begin..begin + l.pose.len()], &l.pose);
+    let mut points = Vec::with_capacity(input.frames.len());
+    for (f, frame) in input.frames.iter().enumerate() {
+        let pose = pose_values(frame, &l.pose, &x[pose_range(input, l, f)]);
         let p = budget.call(|| model.points(&shape, &pose))?;
         if p.len() != l.keypoints.len() || p.iter().any(|v| !v.is_finite()) {
             return Err(invalid("model returned invalid keypoint vector"));
@@ -832,20 +929,19 @@ fn residual(
     x: &[f64],
     budget: &mut EvaluationBudget,
 ) -> Result<derivatives::Residual, Refusal> {
-    let p = predict(model, x, input.frames.len(), budget)?;
+    let p = predict(model, x, input, budget)?;
     let l = model.layout();
     let mut r = Vec::new();
     let mut frame_rows = Vec::with_capacity(input.frames.len());
     let ns = l.shape.len();
     let shape = values(&x[..ns], &l.shape);
     for (f, frame) in input.frames.iter().enumerate() {
-        let begin = ns + f * l.pose.len();
         let first = r.len();
         r.extend(derivatives::frame_residual(
             frame,
             model,
             &shape,
-            &values(&x[begin..begin + l.pose.len()], &l.pose),
+            &pose_values(frame, &l.pose, &x[pose_range(input, l, f)]),
             &p.points[f],
             budget,
         )?);
@@ -912,7 +1008,7 @@ fn checks(
     x: &[f64],
     budget: &mut EvaluationBudget,
 ) -> Result<Vec<FitCheck>, Refusal> {
-    let p = predict(model, x, input.frames.len(), budget)?;
+    let p = predict(model, x, input, budget)?;
     let l = model.layout();
     let mut out = Vec::new();
     for (f, frame) in input.frames.iter().enumerate() {
@@ -937,11 +1033,10 @@ fn checks(
         }
         if let Some(s) = &frame.silhouette {
             let ns = l.shape.len();
-            let begin = ns + f * l.pose.len();
             let mesh = budget.call(|| {
                 model.surface(
                     &values(&x[..ns], &l.shape),
-                    &values(&x[begin..begin + l.pose.len()], &l.pose),
+                    &pose_values(frame, &l.pose, &x[pose_range(input, l, f)]),
                 )
             })?;
             for line in silhouette::compare(&mesh, &frame.camera, frame.image_size_px, s, None)? {
@@ -989,7 +1084,7 @@ fn attempt(
         flags: Vec::new(),
         model_evaluations: 0,
     };
-    let mut x = encode(start, model.layout()).expect("validated start");
+    let mut x = encode(start, model.layout(), &input.frames).expect("validated start");
     let mut r = match residual(input, model, &x, budget) {
         Ok(r) => r,
         Err(e) => {
@@ -1177,6 +1272,9 @@ pub fn fit_body(
     if model.layout().pose.is_empty() {
         report.advisories.push("No pose parameters were fitted. Every view uses the same explicitly fixed model pose and placement; their accuracy remains a caller assumption.".into());
     }
+    if input.frames.iter().any(|frame| frame.fixed_pose.is_some()) {
+        report.advisories.push("Declared fixed frame-pose coordinates were retained exactly and excluded from optimization and observability tests. Their evidence is a caller assumption, not a pose estimate or an uncertainty bound; all image acceptance checks still apply.".into());
+    }
     if input.frames.iter().any(|f| f.silhouette.is_some()) {
         let coordinates = if input.frames.iter().any(|frame| {
             frame.silhouette.is_some()
@@ -1229,16 +1327,30 @@ pub fn fit_body(
         .iter()
         .any(|s| *s > options.max_shape_spread_fraction);
     report.shape_spread_fraction = Some(spread);
-    let np = model.layout().pose.len();
     let poses: Vec<PoseSpread> = input
         .frames
         .iter()
         .enumerate()
-        .map(|(i, f)| PoseSpread {
-            frame: f.frame.clone(),
-            fractions: (ns + i * np..ns + (i + 1) * np)
-                .map(parameter_spread)
-                .collect(),
+        .map(|(i, f)| {
+            let mut free = pose_range(&input, model.layout(), i);
+            PoseSpread {
+                frame: f.frame.clone(),
+                fractions: model
+                    .layout()
+                    .pose
+                    .iter()
+                    .map(|parameter| {
+                        if f.fixed_pose
+                            .as_ref()
+                            .is_some_and(|fixed| fixed.values.contains_key(&parameter.name))
+                        {
+                            0.0
+                        } else {
+                            parameter_spread(free.next().expect("validated pose spread coordinate"))
+                        }
+                    })
+                    .collect(),
+            }
         })
         .collect();
     let pose_ambiguous = poses.iter().any(|p| {
@@ -1280,10 +1392,7 @@ pub fn fit_body(
         .enumerate()
         .map(|(i, f)| FramePose {
             frame: f.frame.clone(),
-            values: values(
-                &x[ns + i * l.pose.len()..ns + (i + 1) * l.pose.len()],
-                &l.pose,
-            ),
+            values: pose_values(f, &l.pose, &x[pose_range(&input, l, i)]),
         })
         .collect();
     let final_metrics = budget.call(|| model.measurements(&shape));

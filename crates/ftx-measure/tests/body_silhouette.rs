@@ -73,6 +73,7 @@ fn scene() -> (Panel, BodyFitInput) {
             },
             image_size_px: [200, 200],
             rotation_cw_deg: 0,
+            fixed_pose: None,
             keypoints: vec![Keypoint {
                 name: "center".into(),
                 pixel_px: Vec2::new(100. + 100. * x, 100.),
@@ -458,5 +459,46 @@ fn surface_evaluations_share_the_global_budget_including_held_out_checks() {
         assert_eq!(report.model_evaluations, limit);
         assert_eq!(model.calls.get(), limit);
         assert!(report.solution.is_none());
+    }
+}
+
+#[test]
+fn independent_fixed_poses_support_silhouette_only_fit_and_check_views() {
+    let (mut model, mut input) = scene();
+    model.layout.keypoints.clear();
+    for (index, (frame, position)) in input.frames.iter_mut().zip([-0.1, 0.1]).enumerate() {
+        frame.keypoints.clear();
+        frame.fixed_pose = Some(FixedPose {
+            values: [("root_x".into(), position)].into_iter().collect(),
+            evidence: "analytical panel placement in the calibrated world frame".into(),
+        });
+        for start in &mut input.starts {
+            start.poses[index].values[0] = position;
+        }
+        if index == 1 {
+            for line in &mut frame.silhouette.as_mut().unwrap().lines {
+                line.partition = Partition::HeldOut;
+            }
+        }
+    }
+    let baseline = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(baseline.status, "ACCEPTED", "{baseline:#?}");
+    let solution = baseline.solution.as_ref().unwrap();
+    assert!((solution.shape[0] - 0.6).abs() < 1e-8);
+    assert_eq!(solution.poses[0].values, vec![-0.1]);
+    assert_eq!(solution.poses[1].values, vec![0.1]);
+    assert!(baseline.attempts.iter().all(|attempt| {
+        attempt.checks.iter().all(|check| check.passed)
+            && attempt
+                .checks
+                .iter()
+                .all(|check| check.name.starts_with("silhouette:"))
+    }));
+    input.frames[1].silhouette.as_mut().unwrap().lines[0].intervals_px[0][1] += 4.0;
+    let rejected = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(rejected.status, "REJECTED", "{rejected:#?}");
+    assert!(rejected.solution.is_none());
+    for (original, changed) in baseline.attempts.iter().zip(&rejected.attempts) {
+        assert_eq!(original.cost_history, changed.cost_history);
     }
 }

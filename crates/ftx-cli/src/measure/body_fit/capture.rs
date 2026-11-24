@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use ftx_core::{Refusal, RefusalCode, Vec2, receipt::sha256_hex};
-use ftx_measure::body_fit::{BodyFitInput, FitFrame, FitStart, Keypoint, MetricObservation};
+use ftx_measure::body_fit::{
+    BodyFitInput, FitFrame, FitStart, FixedPose, Keypoint, MetricObservation,
+};
 use ftx_measure::camera::{Camera, Intrinsics};
 use ftx_measure::photo::intrinsics::checked_calibration;
 use ftx_measure::photo::{MAX_PHOTO_PIXELS, capture::StationarySheet, detect_charuco};
@@ -147,6 +149,8 @@ struct Frame {
     keypoints: Vec<Keypoint>,
     #[serde(default)]
     silhouette: Option<Silhouette>,
+    #[serde(default)]
+    fixed_pose: Option<FixedPose>,
 }
 
 #[derive(Deserialize)]
@@ -434,6 +438,7 @@ fn prepare_from_base(
             rotation_cw_deg: metadata.rotation_cw_deg,
             keypoints: entry.keypoints,
             silhouette: entry.silhouette,
+            fixed_pose: entry.fixed_pose,
         });
         let mut receipt = json!({"frame":id,"source":selected_source,
             "lens_id":entry.lens_id,"calibration_sha256":calibration_sha256,

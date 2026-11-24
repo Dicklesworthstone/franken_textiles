@@ -6153,6 +6153,24 @@ from the independent body wet-film owner. Initial inventory and constant source 
 explicit operating conditions. Physical wet-material and garment qualification remain separate.
 The versioned supply contract and numerical model are in `docs/textile-surface-water.md`.
 
+### 25.221 Retain independently prescribed pose controls in each body-fit frame
+
+Each calibrated frame can fix an explicit subset of its named root and joint controls, retaining
+different supplied poses across views while fitting one shared shape and the remaining unknown
+coordinates. The fixed values and their evidence remain attached to the original frame identity.
+Every complete initialization must agree exactly; no silent override, normalization or inferred
+pose replaces a declaration. Only free coordinates enter differentiation, rank and work budgets.
+
+A fully fixed CHECK-only view can independently reject the fitted shape without entering its
+objective. Partial fixed/free frames retain the same observability gate. Native capture, portable
+fitting, accepted-frame replay and both initialization editors preserve the constraints, including
+full-width timestamps. Fixed output spread is zero by construction and is not an uncertainty bound.
+
+This extends §§9.4/10.2 and `ftx-onn` through an implementable body-fit capability. Independent
+synthetic mixed-pose, silhouette, derivative, budget and held-out checks accompany the change.
+Supplied poses, calibrated cameras and real-wearer anatomical accuracy remain separate assumptions
+and acceptance gates; this does not establish physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

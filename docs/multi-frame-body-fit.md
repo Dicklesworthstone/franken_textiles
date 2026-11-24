@@ -1002,7 +1002,7 @@ The `model` object specifies:
 | `shape_parameters` | Ordered array of `{name, lower, upper}` for the shared variables |
 | `root_translation_m`, `root_rotation_rad` | Optional fixed root translation and rotation vector, both defaulting to `[0,0,0]`; named free pose parameters override their respective components |
 | `joints` | Optional map from exact bone label to `{axis: [x,y,z], angle_rad: 0}`; axis is a unit vector in that bone's **local rest frame**, not a world axis |
-| `pose_parameters` | Ordered array of `{name, lower, upper}` repeated independently in every frame; `[]` keeps all declared root/joint values fixed across views |
+| `pose_parameters` | Ordered array of `{name, lower, upper}` used in every frame; a frame's `fixed_pose` can fix a named subset; `[]` keeps the same declared root/joint values fixed across views |
 | `keypoints` | Map from correspondence name to an explicit vertex, triangle-surface or bone target |
 | `measurements` | Ordered array of requested rest-body tape functional names |
 
@@ -1019,6 +1019,39 @@ Joint angles and root rotation components use radians within +/-pi; root transla
 are finite metres within +/-1e6. Choose physically meaningful tight bounds around the starting
 estimate, not enormous ranges that make finite-difference perturbations leave the camera domain.
 Every free parameter starts and remains strictly inside its bounds: no silent clamping.
+
+### Prescribe different known poses in individual frames
+
+Each `fit.frames[]` record may include an explicit subset of the existing pose controls:
+
+```json
+{
+  "fixed_pose": {
+    "values": {"root_y_m": 0.1, "joint:arm": -0.4},
+    "evidence": "Explicit independently supplied placement and arm angle for this frame"
+  }
+}
+```
+
+This is a fragment to add to a complete frame, and the names must already appear in
+`model.pose_parameters`. The map must be nonempty, every value must be finite and strictly
+inside its declared bounds, and the evidence text must identify the supplied assumption or
+source. Different frames may fix different subsets to different values. Omission preserves
+ordinary fitting of all listed pose controls in that frame.
+
+Every start still carries the full ordered pose vector for every frame. Its fixed entries
+must equal that frame's declarations exactly; disagreement refuses rather than overriding
+the start. Fixed entries are excluded from optimization and the free-parameter rank test.
+They remain exact in accepted poses and have zero multistart spread because they are
+constraints, not because their physical uncertainty is zero.
+
+A frame containing only CHECK observations becomes usable when all its pose controls are
+explicitly fixed. Its observations can reject the final body, but cannot move the fitted
+shape or improve the FIT-data rank. Any still-free control in a CHECK-only frame remains
+unobservable. The native and local Photo Workbench start editors label and lock fixed
+entries, retaining them when adding, copying or taking midpoint guesses for free controls.
+Capture preparation, accepted-frame review and downstream body reuse preserve the original
+declarations and evidence. This is conditional numerical fitting, not measured pose accuracy.
 
 Keypoint targets have one of these forms (syntax examples, not anatomical mappings):
 
@@ -1219,7 +1252,8 @@ root translation, root rotation and any joint angles. Every view then observes t
 world-space body through its own calibrated camera. Each start still lists every frame, with
 `values: []` for that frame's pose; two to four distinct shared-shape starts remain required.
 A fixed pose is a caller assumption, not a pose recovered from the photographs. Use free pose
-controls for movement between views. The output retains empty per-frame pose and pose-spread
+controls for unknown movement, or per-frame `fixed_pose` values for explicitly prescribed
+movement between views. With an empty pose catalogue, the output retains empty pose and pose-spread
 vectors and states that pose was not fitted. Incorrect fixed placement still faces every original
 pixel, silhouette and tape check, and insufficient shape information still returns `UNOBSERVABLE`.
 

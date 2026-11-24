@@ -57,6 +57,19 @@
       const key = JSON.stringify([expected.stream, expected.timestamp_us]);
       if (seen.has(key)) throw new Error('Prepared frame identities are duplicated.');
       seen.add(key);
+      const fixed = frame.fixed_pose ?? null;
+      const preparedFixed = value.fit.frames[index].fixed_pose ?? null;
+      if ((fixed === null) !== (preparedFixed === null)) {
+        throw new Error('Prepared input changes the reviewed fixed pose controls.');
+      }
+      if (fixed !== null) {
+        fields(preparedFixed, ['values', 'evidence']);
+        fields(preparedFixed.values, Object.keys(fixed.values));
+        if (preparedFixed.evidence !== fixed.evidence
+          || Object.keys(fixed.values).some(name => preparedFixed.values[name] !== fixed.values[name])) {
+          throw new Error('Prepared input changes the reviewed fixed pose controls or evidence.');
+        }
+      }
     });
     return value;
   }
@@ -158,7 +171,7 @@
     return node;
   }
 
-  function parameterInput(parameter, value, group, index, frameIndex) {
+  function parameterInput(parameter, value, group, index, frameIndex, fixedPose) {
     const label = element('label');
     const input = element('input');
     input.type = 'number';
@@ -171,9 +184,14 @@
     if (frameIndex !== undefined) input.dataset.frame = String(frameIndex);
     input.id = `start-${group}-${frameIndex === undefined ? '' : frameIndex + '-'}${index}`;
     label.htmlFor = input.id;
-    label.append(element('span', `${parameter.name} (${parameter.unit}); ${parameter.lower} < value < ${parameter.upper} `), input);
-    input.addEventListener('input', markPending);
-    return { label, input, parameter };
+    const fixed = Object.hasOwn(fixedPose?.values ?? {}, parameter.name);
+    input.readOnly = fixed;
+    input.disabled = fixed;
+    label.append(element('span', fixed
+      ? `${parameter.name} (${parameter.unit}); fixed for this frame. ${fixedPose.evidence} `
+      : `${parameter.name} (${parameter.unit}); ${parameter.lower} < value < ${parameter.upper} `), input);
+    input.addEventListener('input', () => { if (!fixed) markPending(); });
+    return { label, input, parameter, fixed, fixedValue: fixed ? fixedPose.values[parameter.name] : undefined };
   }
 
   function render() {
@@ -207,7 +225,7 @@
         fieldset.append(element('legend', frame.label));
         const values = draft.poses.find(pose => pose.frame_index === frame.frame_index).values;
         const controls = data.pose.map((parameter, index) => {
-          const control = parameterInput(parameter, values[index], 'pose', index, frame.frame_index);
+          const control = parameterInput(parameter, values[index], 'pose', index, frame.frame_index, frame.fixed_pose);
           fieldset.append(control.label);
           return control;
         });
@@ -223,10 +241,18 @@
 
   function valueOf(control, location) {
     const text = control.input.value.trim();
-    return checkedValue(text ? Number(text) : NaN, control.parameter, location);
+    return checkedValue(text ? Number(text) : NaN, control.parameter, location,
+      control.fixed ? control.fixedValue : undefined);
   }
 
-  function checkedValue(value, p, location) {
+  function checkedValue(value, p, location, fixedValue) {
+    if (fixedValue !== undefined) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value !== fixedValue
+        || value <= p.lower || value >= p.upper) {
+        throw new Error(`${location}: ${p.name} must retain its declared fixed value inside the bounds.`);
+      }
+      return value;
+    }
     const normalized = (value - p.lower) / (p.upper - p.lower);
     if (typeof value !== 'number' || !Number.isFinite(value) || !(normalized > 0 && normalized < 1)) {
       throw new Error(`${location}: ${p.name} (${p.unit}) needs a finite value strictly between ${p.lower} and ${p.upper}.`);
@@ -296,7 +322,11 @@
         if (!data.frames.some(frame => frame.frame_index === pose.frame_index) || seen.has(pose.frame_index)) throw new Error('Unknown or duplicate frame ordinal.');
         seen.add(pose.frame_index);
         if (!Array.isArray(pose.values) || pose.values.length !== data.pose.length) throw new Error('Every named pose value is required.');
-        pose.values.forEach((value, index) => checkedValue(value, data.pose[index], 'Frame pose'));
+        const fixed = data.frames.find(frame => frame.frame_index === pose.frame_index).fixed_pose?.values ?? {};
+        pose.values.forEach((value, index) => {
+          checkedValue(value, data.pose[index], 'Frame pose',
+            Object.hasOwn(fixed, data.pose[index].name) ? fixed[data.pose[index].name] : undefined);
+        });
       }
     }
     validateDistinct(annotations.starts);
@@ -357,7 +387,9 @@
 
   byId('newStart').addEventListener('click', () => begin({
     shape: data.shape.map(() => ''),
-    poses: data.frames.map(frame => ({ frame_index: frame.frame_index, values: data.pose.map(() => '') }))
+    poses: data.frames.map(frame => ({ frame_index: frame.frame_index,
+      values: data.pose.map(parameter => Object.hasOwn(frame.fixed_pose?.values ?? {}, parameter.name)
+        ? frame.fixed_pose.values[parameter.name] : '') }))
   }));
   byId('duplicateStart').addEventListener('click', () => {
     if (selected !== null) begin(copy(starts[selected]));
@@ -366,10 +398,10 @@
     if (draft === null) return;
     [...shapeInputs, ...poseInputs.flatMap(frame => frame.controls)].forEach(control => {
       const p = control.parameter;
-      control.input.value = String(p.lower + 0.5 * (p.upper - p.lower));
+      control.input.value = String(control.fixed ? control.fixedValue : p.lower + 0.5 * (p.upper - p.lower));
     });
     markPending();
-    status.textContent = 'Bounds midpoints entered as an explicit guess. Inspect every value and apply when ready; no body or pose was estimated.';
+    status.textContent = 'Bounds midpoints entered as an explicit guess for free controls; declared fixed poses are retained. Inspect every value and apply when ready; no body or pose was estimated.';
   });
   byId('applyStart').addEventListener('click', () => {
     if (draft === null) return;

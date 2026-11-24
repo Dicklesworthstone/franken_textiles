@@ -117,10 +117,14 @@ pub(super) fn attach(
         .iter()
         .enumerate()
         .map(|(frame_index, frame)| {
-            json!({"frame_index":frame_index,"label":format!("Frame {}: {} @ {} us",
+            let mut value = json!({"frame_index":frame_index,"label":format!("Frame {}: {} @ {} us",
                 frame_index + 1, frame.frame.stream, frame.frame.timestamp_us),
                 "identity":{"stream":frame.frame.stream,
-                    "timestamp_us":frame.frame.timestamp_us.to_string()}})
+                    "timestamp_us":frame.frame.timestamp_us.to_string()}});
+            if let Some(fixed) = &frame.fixed_pose {
+                value["fixed_pose"] = json!(fixed);
+            }
+            value
         })
         .collect();
     let shape: Vec<_> = adapter

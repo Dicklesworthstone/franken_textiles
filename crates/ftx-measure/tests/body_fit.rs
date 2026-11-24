@@ -94,6 +94,7 @@ fn scene() -> (HingedBody, BodyFitInput, Vec<Vec<f64>>) {
                 image_size_px: [1280, 960],
                 rotation_cw_deg: 0,
                 silhouette: None,
+                fixed_pose: None,
                 keypoints: model
                     .points(&shape, p)
                     .unwrap()
@@ -725,4 +726,280 @@ fn identical_shape_minima_do_not_hide_conflicting_per_frame_poses() {
         serde_json::to_value(r).unwrap(),
         serde_json::to_value(reversed).unwrap()
     );
+}
+
+fn fix_frame_pose(
+    input: &mut BodyFitInput,
+    layout: &ModelLayout,
+    frame_index: usize,
+    coordinates: &[(usize, f64)],
+) {
+    let frame = &mut input.frames[frame_index];
+    frame.fixed_pose = Some(FixedPose {
+        values: coordinates
+            .iter()
+            .map(|&(index, value)| (layout.pose[index].name.clone(), value))
+            .collect(),
+        evidence: format!("synthetic independently declared pose for frame {frame_index}"),
+    });
+    for start in &mut input.starts {
+        let pose = start
+            .poses
+            .iter_mut()
+            .find(|pose| pose.frame == frame.frame)
+            .unwrap();
+        for &(index, value) in coordinates {
+            pose.values[index] = value;
+        }
+    }
+}
+
+#[test]
+fn distinct_fixed_frame_poses_admit_a_check_only_view_without_fitting_its_pose() {
+    let (model, mut input, truth) = scene();
+    input.measurements.clear();
+    for (frame, pose) in truth.iter().enumerate() {
+        fix_frame_pose(
+            &mut input,
+            model.layout(),
+            frame,
+            &pose.iter().copied().enumerate().collect::<Vec<_>>(),
+        );
+    }
+    for observation in &mut input.frames[1].keypoints {
+        observation.partition = Partition::HeldOut;
+    }
+    let baseline = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(baseline.status, "ACCEPTED", "{baseline:#?}");
+    let solution = baseline.solution.as_ref().unwrap();
+    for (actual, expected) in solution.shape.iter().zip([0.48, 1.25]) {
+        assert!((actual - expected).abs() < 1e-7);
+    }
+    for (pose, expected) in solution.poses.iter().zip(&truth) {
+        assert_eq!(pose.values, *expected);
+    }
+    for spread in baseline.pose_spread_fraction.as_ref().unwrap() {
+        assert_eq!(spread.fractions, vec![0.0; 4]);
+    }
+    assert!(
+        baseline.advisories.iter().any(|text| {
+            text.contains("fixed frame-pose") && text.contains("not a pose estimate")
+        })
+    );
+    assert!(baseline.attempts.iter().all(|attempt| {
+        attempt.checks.iter().all(|check| check.passed)
+            && attempt
+                .cost_history
+                .windows(2)
+                .all(|pair| pair[1] < pair[0])
+    }));
+
+    // The fully held-out frame cannot steer shared shape, but still rejects inaccurate placement.
+    let mut shifted = input.clone();
+    shifted.frames[1].keypoints[0].pixel_px.x += 4.0;
+    let rejected = fit_body(&shifted, &model, &FitOptions::default()).unwrap();
+    assert_eq!(rejected.status, "REJECTED", "{rejected:#?}");
+    assert!(rejected.solution.is_none());
+    for (original, changed) in baseline.attempts.iter().zip(&rejected.attempts) {
+        assert_eq!(original.cost_history, changed.cost_history);
+    }
+
+    let mut wrong_pose = input.clone();
+    let shifted_x = truth[1][0] + 0.03;
+    wrong_pose.frames[1]
+        .fixed_pose
+        .as_mut()
+        .unwrap()
+        .values
+        .insert("x".into(), shifted_x);
+    for start in &mut wrong_pose.starts {
+        start.poses[1].values[0] = shifted_x;
+    }
+    let rejected = fit_body(&wrong_pose, &model, &FitOptions::default()).unwrap();
+    assert_eq!(rejected.status, "REJECTED", "{rejected:#?}");
+    assert!(rejected.solution.is_none());
+    for (original, changed) in baseline.attempts.iter().zip(&rejected.attempts) {
+        assert_eq!(original.cost_history, changed.cost_history);
+    }
+
+    // A remaining free pose coordinate in a CHECK-only frame still has no fitting evidence.
+    let mut unobserved = input.clone();
+    unobserved.frames[1]
+        .fixed_pose
+        .as_mut()
+        .unwrap()
+        .values
+        .remove("arm");
+    let report = fit_body(&unobserved, &model, &FitOptions::default()).unwrap();
+    assert_eq!(report.status, "UNOBSERVABLE", "{report:#?}");
+    assert!(report.solution.is_none());
+
+    let stopped = fit_body(
+        &input,
+        &model,
+        &FitOptions {
+            max_model_evaluations: baseline.model_evaluations - 1,
+            ..FitOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(stopped.status, "BUDGET_STOP");
+    assert!(stopped.solution.is_none());
+
+    input.frames.reverse();
+    for frame in &mut input.frames {
+        frame.keypoints.reverse();
+    }
+    for start in &mut input.starts {
+        start.poses.reverse();
+    }
+    assert_eq!(
+        serde_json::to_value(&baseline).unwrap(),
+        serde_json::to_value(fit_body(&input, &model, &FitOptions::default()).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn mixed_fixed_subsets_recover_only_the_independent_free_coordinates() {
+    let (model, mut input, truth) = scene();
+    input.measurements.clear();
+    fix_frame_pose(
+        &mut input,
+        model.layout(),
+        0,
+        &[(0, truth[0][0]), (1, truth[0][1]), (2, truth[0][2])],
+    );
+    fix_frame_pose(&mut input, model.layout(), 1, &[(1, truth[1][1])]);
+    let report = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(report.status, "ACCEPTED", "{report:#?}");
+    let solution = report.solution.as_ref().unwrap();
+    for (actual, expected) in solution.shape.iter().zip([0.48, 1.25]) {
+        assert!((actual - expected).abs() < 1e-7);
+    }
+    for ((pose, expected), frame) in solution.poses.iter().zip(&truth).zip(&input.frames) {
+        for (index, (actual, expected)) in pose.values.iter().zip(expected).enumerate() {
+            if frame
+                .fixed_pose
+                .as_ref()
+                .unwrap()
+                .values
+                .contains_key(&model.layout.pose[index].name)
+            {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            } else {
+                assert!((actual - expected).abs() < 1e-6);
+            }
+        }
+    }
+    let spread = report.pose_spread_fraction.as_ref().unwrap();
+    assert_eq!(spread[0].fractions[..3], [0.0; 3]);
+    assert_eq!(spread[1].fractions[1], 0.0);
+    assert!(
+        spread
+            .iter()
+            .flat_map(|pose| &pose.fractions)
+            .all(|v| *v < 1e-6)
+    );
+
+    // Removing the fixed-depth evidence restores the existing scale/depth gauge failure.
+    for frame in &mut input.frames {
+        frame.fixed_pose = None;
+    }
+    let unobservable = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(unobservable.status, "UNOBSERVABLE", "{unobservable:#?}");
+    assert!(unobservable.solution.is_none());
+}
+
+#[test]
+fn fixed_pose_admission_refuses_conflicts_and_retains_legacy_serialization() {
+    let (body, mut input, truth) = scene();
+    let legacy = serde_json::to_value(&input).unwrap();
+    assert!(
+        legacy["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|frame| { frame.get("fixed_pose").is_none() })
+    );
+    let roundtrip: BodyFitInput = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&roundtrip).unwrap(), legacy);
+    fix_frame_pose(&mut input, body.layout(), 1, &[(1, truth[1][1])]);
+    let model = CountedBody {
+        body,
+        calls: std::cell::Cell::new(0),
+    };
+    let prepared = prepare_input(&input, model.layout()).unwrap();
+    assert_eq!(
+        prepared.frames[1].fixed_pose.as_ref().unwrap().values["y"],
+        truth[1][1]
+    );
+    let mut draft = input.clone();
+    draft.starts.clear();
+    assert!(prepare_start_authoring(&draft, model.layout()).is_ok());
+
+    let mut invalids = Vec::new();
+    for (key, value) in [
+        ("unknown", 0.0),
+        ("width", 0.48),
+        ("y", f64::NAN),
+        ("y", f64::INFINITY),
+        ("y", -2.0),
+        ("y", 2.0),
+    ] {
+        let mut changed = input.clone();
+        changed.frames[1].fixed_pose.as_mut().unwrap().values =
+            [(key.to_owned(), value)].into_iter().collect();
+        invalids.push(changed);
+    }
+    let mut changed = input.clone();
+    changed.frames[1]
+        .fixed_pose
+        .as_mut()
+        .unwrap()
+        .evidence
+        .clear();
+    invalids.push(changed);
+    let mut changed = input.clone();
+    changed.frames[1]
+        .fixed_pose
+        .as_mut()
+        .unwrap()
+        .values
+        .clear();
+    invalids.push(changed);
+    let mut changed = input.clone();
+    changed.starts[0].poses[1].values[1] += 0.01;
+    invalids.push(changed);
+    let mut changed = input.clone();
+    changed.starts[1] = changed.starts[0].clone();
+    invalids.push(changed);
+    for invalid in invalids {
+        assert!(fit_body(&invalid, &model, &FitOptions::default()).is_err());
+        assert_eq!(model.calls.get(), 0);
+    }
+
+    // A fixed source declaration never consumes a free-variable slot, but all source bounds
+    // and retained vectors remain limited by the existing per-model/frame budgets.
+    let mut layout = model.layout().clone();
+    layout.pose = (0..18)
+        .map(|index| parameter(&format!("p{index}"), -1.0, 1.0))
+        .collect();
+    draft.frames = (0..8)
+        .map(|index| {
+            let mut frame = draft.frames[0].clone();
+            frame.frame.timestamp_us = index * 200_000;
+            frame.fixed_pose = None;
+            frame
+        })
+        .collect();
+    assert!(prepare_capture_authoring(&draft, &layout).is_err());
+    for frame in &mut draft.frames {
+        frame.fixed_pose = Some(FixedPose {
+            values: [("p0".into(), 0.0), ("p1".into(), 0.1), ("p2".into(), -0.1)]
+                .into_iter()
+                .collect(),
+            evidence: "synthetic fixed subset".into(),
+        });
+    }
+    assert!(prepare_capture_authoring(&draft, &layout).is_ok());
 }

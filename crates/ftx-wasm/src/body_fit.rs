@@ -377,11 +377,15 @@ pub fn body_fit_starts(
         .iter()
         .enumerate()
         .map(|(frame_index, frame)| {
-            json!({"frame_index":frame_index,
+            let mut value = json!({"frame_index":frame_index,
                 "label":format!("Frame {}: {} @ {} us", frame_index + 1,
                     frame.frame.stream, frame.frame.timestamp_us),
                 "identity":{"stream":frame.frame.stream,
-                    "timestamp_us":frame.frame.timestamp_us.to_string()}})
+                    "timestamp_us":frame.frame.timestamp_us.to_string()}});
+            if let Some(fixed) = &frame.fixed_pose {
+                value["fixed_pose"] = json!(fixed);
+            }
+            value
         })
         .collect();
     let starts = request
@@ -956,6 +960,23 @@ pub fn review_body_fit_frame(
                     || v.iter()
                         .any(|f| f.as_f64().is_none_or(|n| !(0.0..=limit).contains(&n)))
             })
+            || frame.fixed_pose.as_ref().is_some_and(|fixed| {
+                adapter
+                    .layout
+                    .pose
+                    .iter()
+                    .zip(&pose.values)
+                    .enumerate()
+                    .any(|(index, (parameter, value))| {
+                        fixed.values.get(&parameter.name).is_some_and(|expected| {
+                            value != expected
+                                || fractions
+                                    .and_then(|values| values.get(index))
+                                    .and_then(Value::as_f64)
+                                    != Some(0.0)
+                        })
+                    })
+            })
         {
             return Err(invalid(
                 "accepted frame poses or their multistart agreement are inconsistent",
@@ -1037,6 +1058,9 @@ pub fn review_body_fit_frame(
         "projection_kind":if silhouette::require_rectified(&frame.camera).is_ok(){"straight_edges"}else{"distorted_vertices"},
         "export_pose_evaluations":1,
         "no_claim":"Accepted MODEL_FIT pose reviewed without refitting. Complete topology, not a collision skin. Supplied keypoints and scanlines are rechecked, not full-mask, visibility, occlusion, anatomy or real-wearer fit. Source image identity, when retained, supports separate local inspection."});
+    if let Some(fixed) = &frame.fixed_pose {
+        value["fixed_pose"] = json!(fixed);
+    }
     if let Some(images) = images {
         value["source_image"] = json!(
             images
@@ -1243,6 +1267,9 @@ pub fn review_body_fit_start(
         "omitted_faces":omitted_faces,"diagnostics":diagnostics,
         "projection_kind":if silhouette::require_rectified(&frame.camera).is_ok(){"straight_edges"}else{"distorted_vertices"},
         "no_claim":"Declared INITIALIZATION inspected without optimization or acceptance; pose_evaluations counts complete requested poses. Large residuals and failed projections remain diagnostics. Keep held-out evidence fixed; do not tune starts to CHECK residuals. This is not an accepted body, collision skin, anatomical validation, READY measurement or physical garment-fit result."});
+    if let Some(fixed) = &frame.fixed_pose {
+        value["fixed_pose"] = json!(fixed);
+    }
     if let Some(images) = request.capture_images {
         value["source_image"] = json!(
             images

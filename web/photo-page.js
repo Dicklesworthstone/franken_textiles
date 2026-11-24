@@ -126,7 +126,7 @@ function controls() {
   $("bodyStartsApply").disabled=startsLocked || !bodyStartsPending || !bodyStartsDraft.length;
   $("bodyStartsCancel").disabled=!bodyStartsPending && !bodyStartsBusy;
   $("bodyStartsReset").disabled=!bodyStartsView && !bodyStartsBusy;
-  for(const input of bodyStartsInputs) input.disabled=startsLocked;
+  for(const input of bodyStartsInputs) input.disabled=startsLocked || input.readOnly;
   const pointsLocked=bodyPointsBusy || bodyFitBusy || startsBlocked, pointName=$("bodyPointsTarget").value;
   const pointFrame=bodyPointsView?.frames[bodyPointsSelected], originalPoint=pointFrame?.keypoints.find(p=>p.name===pointName);
   $("bodyPointsLoad").disabled=pointsBlocked || bodyFitBusy || startsBlocked || !!bodyPointsView || !$("bodyFitModel").files.length || !bodyInputFile();
@@ -871,7 +871,7 @@ function renderBodyStarts() {
   list.value=String(bodyStartsSelected);
   const start=bodyStartsDraft[bodyStartsSelected];
   if(!start) {controls();return;}
-  const group=(title,parameters,values,prefix)=>{
+  const group=(title,parameters,values,prefix,fixedPose)=>{
     const fieldset=document.createElement("fieldset"), legend=document.createElement("legend");
     legend.textContent=title; fieldset.append(legend);
     parameters.forEach((parameter,index)=>{
@@ -879,9 +879,12 @@ function renderBodyStarts() {
       input.type="number"; input.step="any"; input.min=String(parameter.lower); input.max=String(parameter.upper);
       input.id=`bodyStart-${prefix}-${index}`; label.htmlFor=input.id;
       input.value=Object.is(values[index],-0)?"-0":String(values[index]);
-      text.textContent=`${parameter.name} (${parameter.unit}); ${parameter.lower} < value < ${parameter.upper} `;
+      input.readOnly=Object.hasOwn(fixedPose?.values ?? {},parameter.name);
+      text.textContent=input.readOnly
+        ? `${parameter.name} (${parameter.unit}); fixed for this frame. ${fixedPose.evidence} `
+        : `${parameter.name} (${parameter.unit}); ${parameter.lower} < value < ${parameter.upper} `;
       input.addEventListener("input",()=>{
-        if(bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
+        if(input.readOnly || bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
         values[index]=input.value; pendingBodyStarts();
       });
       label.append(text,input); fieldset.append(label); bodyStartsInputs.push(input);
@@ -890,7 +893,7 @@ function renderBodyStarts() {
   };
   group("Shared shape — same across every frame",bodyStartsView.shape,start.shape,"shape");
   for(const frame of bodyStartsView.frames) {
-    group(frame.label,bodyStartsView.pose,start.poses.find(pose=>pose.frame_index===frame.frame_index).values,"pose-"+frame.frame_index);
+    group(frame.label,bodyStartsView.pose,start.poses.find(pose=>pose.frame_index===frame.frame_index).values,"pose-"+frame.frame_index,frame.fixed_pose);
   }
   controls();
 }
@@ -915,6 +918,15 @@ function checkedBodyStartsView(text,input,edits) {
         typeof frame.identity.timestamp_us!=="string" || !/^(0|[1-9]\d*)$/.test(frame.identity.timestamp_us)) {
       throw Error("The engine returned invalid original frame identities.");
     }
+    if(Object.hasOwn(frame,"fixed_pose")) {
+      const fixed=frame.fixed_pose;
+      if(!fixed || typeof fixed!=="object" || Array.isArray(fixed) || Object.keys(fixed).some(key=>!["values","evidence"].includes(key)) ||
+          typeof fixed.evidence!=="string" || !fixed.evidence.trim() || !fixed.values || typeof fixed.values!=="object" || Array.isArray(fixed.values) ||
+          !Object.keys(fixed.values).length || Object.entries(fixed.values).some(([name,value])=>{
+            const parameter=view.pose.find(p=>p.name===name);
+            return !parameter || !Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper;
+          })) throw Error("The engine returned invalid fixed pose controls.");
+    }
   }
   const validVector=(values,parameters)=>Array.isArray(values) && values.length===parameters.length &&
     values.every((value,i)=>Number.isFinite(value) && value>parameters[i].lower && value<parameters[i].upper);
@@ -923,6 +935,12 @@ function checkedBodyStartsView(text,input,edits) {
         new Set(start.poses.map(p=>p.frame_index)).size!==view.frames.length ||
         start.poses.some(p=>!Number.isSafeInteger(p.frame_index) || p.frame_index<0 || p.frame_index>=view.frames.length || !validVector(p.values,view.pose))) {
       throw Error("The engine returned incomplete initialization values.");
+    }
+    for(const pose of start.poses) {
+      const fixed=view.frames[pose.frame_index].fixed_pose?.values ?? {};
+      if(view.pose.some((parameter,index)=>Object.hasOwn(fixed,parameter.name) && pose.values[index]!==fixed[parameter.name])) {
+        throw Error("The engine returned a start that disagrees with its fixed pose controls.");
+      }
     }
   }
   if(edits && (JSON.stringify(view.shape)!==JSON.stringify(bodyStartsView.shape) ||
@@ -933,17 +951,20 @@ function checkedBodyStartsView(text,input,edits) {
 }
 function bodyStartsEdits() {
   if(bodyStartsDraft.length<1 || bodyStartsDraft.length>4) throw Error("Supply 1–4 complete starts; fitting needs at least two.");
-  const vector=(values,parameters)=>"["+values.map((raw,i)=>{
+  const vector=(values,parameters,fixedPose)=>"["+values.map((raw,i)=>{
     const value=Number(raw), parameter=parameters[i];
     if(typeof raw==="string" && !raw.trim() || !Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper) {
       throw Error(`Enter a finite ${parameter.name} strictly between ${parameter.lower} and ${parameter.upper}.`);
+    }
+    if(Object.hasOwn(fixedPose?.values ?? {},parameter.name) && value!==fixedPose.values[parameter.name]) {
+      throw Error(`${parameter.name} is fixed for this frame; retain the original declared value.`);
     }
     // These tokens contain only validated numbers; source JSON and full-width identities stay native.
     return Object.is(value,-0)?"-0.0":JSON.stringify(value);
   }).join(",")+"]";
   return '{"input_sha256":'+JSON.stringify(bodyStartsView.input_sha256)+',"model_sha256":'+JSON.stringify(bodyStartsView.model_sha256)+',"starts":['+
     bodyStartsDraft.map(start=>'{"shape":'+vector(start.shape,bodyStartsView.shape)+',"poses":['+
-    start.poses.map(pose=>'{"frame_index":'+pose.frame_index+',"values":'+vector(pose.values,bodyStartsView.pose)+'}').join(",")+"]}").join(",")+"]}";
+    start.poses.map(pose=>'{"frame_index":'+pose.frame_index+',"values":'+vector(pose.values,bodyStartsView.pose,bodyStartsView.frames[pose.frame_index].fixed_pose)+'}').join(",")+"]}").join(",")+"]}";
 }
 async function runBodyStarts(apply=false) {
   if(bodyCaptureBusy || bodyTargetsBusy || bodyTargetsView || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || (!apply && (bodyStartsView || bodyStartsPending)) ||
@@ -2438,7 +2459,9 @@ $("bodyStartsSelect").addEventListener("change",()=>{
 $("bodyStartsAdd").onclick=()=>{
   if(!bodyStartsView || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || bodyStartsDraft.length>=4) return;
   bodyStartsDraft.push({shape:bodyStartsView.shape.map(()=>""),
-    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:bodyStartsView.pose.map(()=>"")}))});
+    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,
+      values:bodyStartsView.pose.map(parameter=>Object.hasOwn(frame.fixed_pose?.values ?? {},parameter.name)
+        ? frame.fixed_pose.values[parameter.name] : "")}))});
   bodyStartsSelected=bodyStartsDraft.length-1; pendingBodyStarts(); renderBodyStarts();
 };
 $("bodyStartsCopy").onclick=()=>{
@@ -2452,9 +2475,10 @@ $("bodyStartsRemove").onclick=()=>{
 };
 $("bodyStartsMidpoint").onclick=()=>{
   if(bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || !bodyStartsDraft[bodyStartsSelected]) return;
-  const middle=parameters=>parameters.map(p=>p.lower/2+p.upper/2);
+  const middle=(parameters,fixedPose)=>parameters.map(p=>Object.hasOwn(fixedPose?.values ?? {},p.name)
+    ? fixedPose.values[p.name] : p.lower/2+p.upper/2);
   bodyStartsDraft[bodyStartsSelected]={shape:middle(bodyStartsView.shape),
-    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:middle(bodyStartsView.pose)}))};
+    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:middle(bodyStartsView.pose,frame.fixed_pose)}))};
   pendingBodyStarts(); renderBodyStarts();
 };
 $("bodyStartsCancel").onclick=()=>{

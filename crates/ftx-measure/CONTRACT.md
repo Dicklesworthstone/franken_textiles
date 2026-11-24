@@ -286,6 +286,14 @@ With zero pose controls, each start still binds one empty pose vector to every o
 starts must differ in shared shape. The same undamped rank, strict-bound, held-out, multistart and
 global work-budget checks apply. Reports retain empty pose/spread vectors and explicitly disclose
 that fixed pose and placement are caller assumptions, not recovered values.
+An optional per-frame `fixed_pose: {values, evidence}` fixes a nonempty named subset of the
+declared pose controls to finite strictly interior values. Complete starts must retain those
+values exactly. Only free coordinates enter differentiation, rank, optimization and the
+128-variable budget; complete physical pose vectors and zero constrained spread remain in
+reports. Distinct frames can therefore retain distinct known poses, including CHECK-only
+frames whose every pose coordinate is fixed. Held-out evidence still cannot identify free
+coordinates or change the fitted trajectory. Zero constrained spread is not an uncertainty
+estimate. Native/portable frame review rejects altered fixed values and constrained spreads.
 `prepare_start_authoring` uses that same admission with a zero-start minimum so an operator can
 begin with an empty or one-start draft. The four-start cap, validation of every supplied start,
 identity association, bounds and distinctness remain unchanged. It supplies no initialization
