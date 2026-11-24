@@ -669,21 +669,22 @@ impl SymbolicLdlt {
         };
         #[cfg(feature = "parallel")]
         let tasks = {
-            // A solve touches each entry of L about twice. A subtree with fewer than
-            // SOLVE_TASK_ENTRIES finishes sooner than a thread wakes for it (WebAssembly workers
-            // especially), so it stays in the serial part of the solves, which is always correct:
-            // only ancestors and earlier supernodes are read, whichever thread runs a subtree.
-            let tasks: Vec<SolveTask> = self
-                .subtree_tasks()
+            // A solve touches each entry of L about twice, and runs far more often than the
+            // factorization, so its subtrees are coarser: about one per thread, by entries of L. A
+            // subtree with fewer than SOLVE_TASK_ENTRIES finishes sooner than a thread wakes for it
+            // (WebAssembly workers especially), so it stays in the serial part of the solves, which is
+            // always correct: only ancestors and earlier supernodes are read, whichever thread runs a
+            // subtree.
+            let threads = rayon::current_num_threads();
+            let ranges = if threads < 2 {
+                Vec::new()
+            } else {
+                self.subtree_ranges(|sid| snodes_num[sid].l.len() as f64, threads)
+            };
+            let tasks: Vec<SolveTask> = ranges
                 .into_iter()
-                .filter(|&(first, last)| {
-                    snodes_num[first..=last]
-                        .iter()
-                        .map(|s| s.l.len())
-                        .sum::<usize>()
-                        >= SOLVE_TASK_ENTRIES
-                })
-                .map(|(first, last)| SolveTask {
+                .filter(|&(_, _, entries)| entries >= SOLVE_TASK_ENTRIES as f64)
+                .map(|(first, last, _)| SolveTask {
                     sids: (first, last),
                     vars: (
                         self.snodes[first].col_start,
@@ -826,15 +827,36 @@ impl SymbolicLdlt {
     #[cfg(feature = "parallel")]
     fn subtree_tasks(&self) -> Vec<(usize, usize)> {
         let threads = rayon::current_num_threads();
+        if threads < 2 {
+            return Vec::new();
+        }
+        self.subtree_ranges(
+            |sid| {
+                let s = &self.snodes[sid];
+                let (w, m) = (s.width as f64, (s.width + s.panel.len()) as f64);
+                w * m * m - m * w * (w - 1.0) + (w - 1.0) * w * (2.0 * w - 1.0) / 6.0
+            },
+            4 * threads,
+        )
+        .into_iter()
+        .map(|(start, end, _)| (start, end))
+        .collect()
+    }
+
+    /// Consecutive supernode ranges `(first, last, work)` that are unions of whole subtrees of the
+    /// assembly tree, each with at most `1/parts` of the total of `own(sid)` (a supernode's own work)
+    /// where the tree allows, in order; every supernode outside them is an ancestor of one. Empty when
+    /// fewer than two ranges result.
+    #[cfg(feature = "parallel")]
+    fn subtree_ranges(&self, own: impl Fn(usize) -> f64, parts: usize) -> Vec<(usize, usize, f64)> {
         let ns = self.snodes.len();
-        if threads < 2 || ns < 2 {
+        if parts < 2 || ns < 2 {
             return Vec::new();
         }
         let mut first: Vec<usize> = (0..ns).collect();
         let mut subtree = vec![0.0f64; ns];
         for (sid, s) in self.snodes.iter().enumerate() {
-            let (w, m) = (s.width as f64, (s.width + s.panel.len()) as f64);
-            subtree[sid] += w * m * m - m * w * (w - 1.0) + (w - 1.0) * w * (2.0 * w - 1.0) / 6.0;
+            subtree[sid] += own(sid);
             if s.parent != NONE {
                 subtree[s.parent] += subtree[sid];
                 first[s.parent] = first[s.parent].min(first[sid]);
@@ -842,7 +864,7 @@ impl SymbolicLdlt {
         }
         let roots: Vec<usize> = (0..ns).filter(|&s| self.snodes[s].parent == NONE).collect();
         let total: f64 = roots.iter().map(|&r| subtree[r]).sum();
-        let target = total / (4 * threads) as f64;
+        let target = total / parts as f64;
         let mut whole = Vec::new();
         let mut stack = roots;
         while let Some(s) = stack.pop() {
@@ -870,9 +892,6 @@ impl SymbolicLdlt {
             return Vec::new();
         }
         tasks
-            .into_iter()
-            .map(|(start, end, _)| (start, end))
-            .collect()
     }
 
     /// One supernode's front: assembly of its original entries and its children's updates (in
