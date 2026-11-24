@@ -794,17 +794,17 @@ pub fn build_geom(
             if item.get("closed").is_some_and(truthy) {
                 let mut ring: Vec<Vec2> = Vec::with_capacity(pts.len());
                 for &pt in &pts {
-                    if ring
-                        .last()
-                        .is_none_or(|&prev| (pt.x - prev.x).hypot(pt.y - prev.y) > 1e-6)
-                    {
+                    if ring.last().is_none_or(|&prev| {
+                        ftx_core::det::hypot(pt.x - prev.x, pt.y - prev.y) > 1e-6
+                    }) {
                         ring.push(pt);
                     }
                 }
                 if ring.len() > 1
-                    && (ring[0].x - ring.last().unwrap().x)
-                        .hypot(ring[0].y - ring.last().unwrap().y)
-                        <= 1e-6
+                    && ftx_core::det::hypot(
+                        ring[0].x - ring.last().unwrap().x,
+                        ring[0].y - ring.last().unwrap().y,
+                    ) <= 1e-6
                 {
                     ring.pop();
                 }

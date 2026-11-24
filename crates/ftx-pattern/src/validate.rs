@@ -888,15 +888,19 @@ pub fn validate(pat: &Pattern, spec: &Value, body: &dyn BodyMeasure) -> Report {
                                                 Vec::with_capacity(pts.len());
                                             for pt in pts {
                                                 if ring.last().is_none_or(|prev| {
-                                                    (pt[0] - prev[0]).hypot(pt[1] - prev[1]) > 1e-6
+                                                    ftx_core::det::hypot(
+                                                        pt[0] - prev[0],
+                                                        pt[1] - prev[1],
+                                                    ) > 1e-6
                                                 }) {
                                                     ring.push(pt);
                                                 }
                                             }
                                             if ring.len() > 1
-                                                && (ring[0][0] - ring.last().unwrap()[0])
-                                                    .hypot(ring[0][1] - ring.last().unwrap()[1])
-                                                    <= 1e-6
+                                                && ftx_core::det::hypot(
+                                                    ring[0][0] - ring.last().unwrap()[0],
+                                                    ring[0][1] - ring.last().unwrap()[1],
+                                                ) <= 1e-6
                                             {
                                                 ring.pop();
                                             }
