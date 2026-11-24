@@ -2833,7 +2833,7 @@ impl Solver {
                     "Generalized-alpha integration is not admitted for backward-Euler material-history fields; use TimeIntegrator::ImplicitEuler",
                 ));
             }
-            return self.relaxing_step(h, body_start);
+            return self.relaxing_step(h, body_start, None);
         }
         let mut trial = self.clone();
         let report = trial.step_inner(h, body_start)?;
@@ -2850,8 +2850,8 @@ impl Solver {
     /// [`Solver::step_at_body`] whose Newton solve starts from `guess` (fixed components keep their
     /// positions) instead of the accepted positions; the inertia predictor, velocities and friction
     /// lag still come from the accepted state. The caller must have admitted `guess` against the
-    /// body at the step's end (a barrier-infeasible start refuses like any other). Material-history
-    /// fields and Generalized-alpha take the plain step, without the guess.
+    /// body at the step's end (a barrier-infeasible start refuses like any other). Implicit-Euler
+    /// material histories advance only after convergence; Generalized-alpha keeps its plain step.
     ///
     /// # Errors
     /// As [`Solver::step_at_body`], and a guess whose length is not the vertex count.
@@ -2867,16 +2867,18 @@ impl Solver {
                 "step warm-start length must match vertex count",
             ));
         }
-        if self.integrator != TimeIntegrator::ImplicitEuler
-            || self.relaxation.is_some()
-            || self.plasticity.is_some()
-            || self.membrane_plasticity.is_some()
-        {
+        if self.integrator != TimeIntegrator::ImplicitEuler {
             return self.step_at_body(h, body_start);
         }
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
         self.check_constitutive_models()?;
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
+            return self.relaxing_step(h, body_start, Some(guess));
+        }
         let mut trial = self.clone();
         let report = trial.step_inner_with_guess(h, body_start, Some(guess))?;
         if trial.v.iter().any(|v| !v.is_finite()) || trial.a.iter().any(|a| !a.is_finite()) {
@@ -2943,7 +2945,7 @@ impl Solver {
                     "Generalized-alpha integration is not admitted for backward-Euler material-history fields; use TimeIntegrator::ImplicitEuler",
                 ));
             }
-            return self.relaxing_step(h, None);
+            return self.relaxing_step(h, None, None);
         }
         let mut trial = self.clone();
         let report = trial.step_inner_with_guess(h, None, guess)?;
@@ -3016,6 +3018,11 @@ impl Solver {
                 c.update_lag(&x0, &x0, h);
             }
         }
+        let ctx = StepContext::ImplicitEuler {
+            xt: &xt,
+            h,
+            damping: damping_step.as_ref(),
+        };
         // A guess only seeds the minimizer (the friction lag and the inertia predictor above use
         // x₀). With contact it arrives only from `step_at_body_with_guess`, whose caller has
         // admitted it against the body (`step_with_guess` drops it whenever contact is present).
@@ -3025,6 +3032,17 @@ impl Solver {
                     RefusalCode::InvalidDocument,
                     "step warm-start length must match vertex count",
                 ));
+            }
+            if self.model.bending_model == BendingModel::DiscreteShells
+                || self.damping.rayleigh_bending_s > 0.0
+            {
+                let dx: Vec<Vec3> = g.iter().zip(&x0).map(|(g, x)| *g - *x).collect();
+                if self.dihedral_step_bound(&self.pack_free(&dx), ctx) < 1.0 {
+                    return Err(Refusal::new(
+                        RefusalCode::NotConverged,
+                        "carried starting guess crosses a bending branch; shorten the body-motion substep",
+                    ));
+                }
             }
             for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
                 if self.free[3 * i].is_some() {
@@ -3038,11 +3056,6 @@ impl Solver {
                 }
             }
         }
-        let ctx = StepContext::ImplicitEuler {
-            xt: &xt,
-            h,
-            damping: damping_step.as_ref(),
-        };
         let mut rep = match self.minimize_ctx(ctx) {
             Ok(rep) => rep,
             Err(e) => {
@@ -4305,6 +4318,19 @@ mod strategy_and_integrator_tests {
             assert_eq!(guessed_report.iterations, report.iterations);
             assert_eq!(guessed_report.ccd_limited, 0);
         }
+    }
+
+    #[test]
+    fn carried_start_refuses_a_bending_branch_jump_before_newton() {
+        let mut solver = creased_hinge(170.0, 170.0);
+        let before = format!("{solver:?}");
+        let guess = creased_hinge(-170.0, 170.0).x;
+        let error = solver
+            .step_at_body_with_guess(0.001, None, &guess)
+            .unwrap_err();
+        assert_eq!(error.code, RefusalCode::NotConverged);
+        assert!(error.message.contains("bending branch"));
+        assert_eq!(format!("{solver:?}"), before);
     }
 
     #[test]

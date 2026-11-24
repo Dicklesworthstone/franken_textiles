@@ -293,9 +293,11 @@ Newton start in ordinary material studies, including source-pose subdivisions an
 liquid/thermal coupling. The nearest body's barycentric displacement supplies only a starting
 guess, with the existing distance fade and fixed-DOF handling; it neither prescribes cloth motion
 nor changes mass, forces or physical velocity. The same body/cloth continuous contact, endpoint,
-material-domain and convergence gates remain mandatory. The existing kernel uses the guess for
-history-free `ImplicitEuler`; `GeneralizedAlpha` and relaxation/plasticity histories retain their
-ordinary physical solves. Captured material dissipation comes
+material-domain and convergence gates remain mandatory. `ImplicitEuler` uses the guess with
+supported Maxwell relaxation, membrane plasticity and bending plasticity, advancing each memory
+once after convergence. Inertia, damping and friction remain anchored at the accepted state;
+the accepted-to-guess path cannot cross a finite-angle or Rayleigh-bending branch.
+`GeneralizedAlpha` retains its ordinary physical solve. Captured material dissipation comes
 only from accepted solves, and a late mechanical or coupled refusal restores the complete initial
 solver and histories. The exact opt-in radius is retained at the motion result's top level and
 in its source identity. Omission preserves the existing policy and output; explicit null, zero,

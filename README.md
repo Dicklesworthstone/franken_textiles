@@ -144,8 +144,8 @@ starting guess with `motion.carry_radius_m` (for example, `0.02` for 20 mm). Thi
 near the moving limb while the existing physical solve and collision checks still determine the
 cloth response. It works with source-pose sampling, material-work capture and liquid-coupled
 motion; whole-trajectory rollback and work limits stay in force. The starting guess currently
-applies to history-free Implicit Euler; other supported models retain their ordinary solve.
-The guided motion editor exposes
+applies to Implicit Euler, including supported relaxation and plasticity models;
+Generalized-alpha retains its ordinary solve. The guided motion editor exposes
 the same policy. See [motion scenarios](docs/material-scenario-studies.md#starting-nearby-cloth-with-a-moving-body).
 
 Photo/video body fitting requires prepared, calibrated frames and reviewed correspondences or masks.

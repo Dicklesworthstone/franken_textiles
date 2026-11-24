@@ -6230,8 +6230,9 @@ starting guess through the requested body displacement; the same variational sol
 contact checks, constitutive laws and convergence requirements determine each accepted state.
 Omission preserves the existing policy and report format. Source-pose sampling, captured
 material work and coupled liquid/momentum transfers use the same kernel and complete rollback.
-The existing kernel uses the guess for history-free Implicit Euler; other supported models
-retain their ordinary physical solve.
+Implicit Euler uses the guess with supported relaxation and plasticity histories, committing
+each memory once after convergence. A starting guess cannot jump a bending-angle branch.
+Generalized-alpha retains its ordinary physical solve.
 
 The guided editor authors the whole-motion radius and freezes it into named cases. Results
 retain the exact requested radius, and motion comparison reconciles this numerical policy

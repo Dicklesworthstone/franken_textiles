@@ -213,8 +213,8 @@ pub fn advance_body_with_work(
 /// instead of the body sweeping into cloth that stands still; that is what lets a limb move more
 /// than the current cloth gap per substep. Positions, velocities and every post-solve check are
 /// the solver's own, exactly as in [`advance_body`]: the carry is only where Newton starts.
-/// Material-history fields and Generalized-alpha keep their ordinary physical solve without the
-/// guess; the carried start does not extend that existing kernel domain.
+/// Implicit-Euler material histories advance once after the converged solve; inertia, damping and
+/// friction still use the accepted state. Generalized-alpha keeps its ordinary solve without a guess.
 ///
 /// # Errors
 /// As [`advance_body`], and a radius that is not finite and positive.
@@ -238,8 +238,8 @@ pub fn advance_body_carried(
 /// [`advance_body_carried`] with explicitly requested accepted material-work channels.
 /// Carry changes only the checked Newton starting guess; reference geometry, physical velocities,
 /// constitutive history and captured work still come from the converged mechanical solve.
-/// As in the existing carried API, material-history fields and Generalized-alpha retain the plain
-/// physical step without the guess; capturing work does not change that integrator/model domain.
+/// Implicit-Euler material histories use the same transactional solve and commit; Generalized-alpha
+/// retains the plain physical step without the guess.
 ///
 /// # Errors
 /// As [`advance_body_with_work`], plus a non-finite or non-positive carry radius. A refused

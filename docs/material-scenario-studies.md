@@ -317,8 +317,9 @@ The existing solver still determines positions, velocities, contact, friction an
 history. The joint body/cloth path is checked, and all post-solve contact and convergence
 checks remain required. A useful starting guess can admit larger limb movements within the
 existing trial budget; it does not guarantee convergence or establish a physical-fit claim.
-The starting guess currently applies to Implicit Euler without relaxation or plasticity history.
-Generalized-alpha and materials with those histories retain their ordinary physical solve.
+The starting guess applies to Implicit Euler, including supported relaxation and plasticity
+histories. Each memory advances once after convergence; an invalid bending-angle branch is
+rejected before Newton starts. Generalized-alpha retains its ordinary physical solve.
 
 The same policy applies to every authored interval and generated source-pose segment. Material
 work capture and liquid-coupled motion retain their normal accepted-step transactions: a

@@ -249,6 +249,7 @@ impl Solver {
         &mut self,
         h: f64,
         body_start: Option<&[Vec3]>,
+        guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
         if !h.is_finite()
             || h <= 0.0
@@ -269,7 +270,9 @@ impl Solver {
             field.check(&self.model, &self.x)?;
         }
         let mut trial = self.clone();
-        let report = trial.step_inner(h, body_start)?;
+        // Check and freeze accepted material history before seeding Newton. The inner step keeps
+        // inertia and friction anchored at x_n; only its converged endpoint advances the memories.
+        let report = trial.step_inner_with_guess(h, body_start, guess)?;
         if !report.converged {
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
@@ -394,5 +397,220 @@ impl Solver {
             });
         }
         Ok(Some(report))
+    }
+}
+
+#[cfg(test)]
+mod carried_start_tests {
+    use super::*;
+    use crate::{Body, ContactParams};
+    use ftx_core::Vec2;
+    use ftx_pattern::{material_catalog::Selection, materials::Catalog};
+
+    fn sheet(parallel_plasticity: bool) -> Solver {
+        let selection: Selection = serde_json::from_str(if parallel_plasticity {
+            include_str!("../../../../tests/fixtures/materials/synthetic-parallel-membrane.json")
+        } else {
+            include_str!("../../../../tests/fixtures/materials/synthetic-relaxation.json")
+        })
+        .unwrap();
+        let material = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+        let m = material.mechanics().unwrap();
+        let model = ClothModel::new(
+            vec![Vec2::ZERO, Vec2::new(0.1, 0.), Vec2::new(0., 0.1)],
+            &[[0, 1, 2]],
+            Membrane::orthotropic(m.warp_n_m, m.weft_n_m, m.poisson, m.shear_n_m, 1.),
+            0.,
+            m.areal_kg_m2,
+        )
+        .unwrap();
+        let body = Body::new(
+            vec![
+                Vec3::new(-1., -1., 0.),
+                Vec3::new(1., -1., 0.),
+                Vec3::new(0., 1., 0.),
+            ],
+            vec![[0, 1, 2]],
+            0.1,
+        )
+        .unwrap();
+        let mut solver = Solver::new(
+            model,
+            vec![
+                Vec3::new(0., 0., 0.0007),
+                Vec3::new(0.11, 0., 0.0007),
+                Vec3::new(0., 0.1, 0.0007),
+            ],
+            &[[true; 3], [false, true, true], [true; 3]],
+            Vec3::ZERO,
+        )
+        .with_membrane_histories(
+            &[material.membrane_relaxation().unwrap()],
+            &[material.membrane_plasticity().unwrap()],
+        )
+        .unwrap()
+        .with_contact(
+            body,
+            ContactParams {
+                dhat: 0.001,
+                thickness: 0.0005,
+                kappa: 100.,
+                mu: 0.4,
+                eps_v: 0.001,
+            },
+        )
+        .unwrap();
+        solver.v[1].x = 0.02;
+        solver.tol = 1e-10;
+        solver.max_newton = 100;
+        solver.friction_rounds = 1;
+        solver
+    }
+
+    #[test]
+    fn carried_history_guess_keeps_physical_inertia_friction_and_single_memory_commit() {
+        let h = 0.0005;
+        let translation = Vec3::new(0.0003, 0., 0.);
+        for plastic in [false, true] {
+            let mut original = sheet(plastic);
+            let x0 = original.x.clone();
+            let body_start = original.contact.as_ref().unwrap().body.vertices.clone();
+            let body_end: Vec<_> = body_start.iter().map(|p| *p + translation).collect();
+            let raw_guess: Vec<_> = x0.iter().map(|p| *p + translation).collect();
+            let guess = original.keep_fixed(&raw_guess);
+            assert_eq!(
+                original
+                    .contact
+                    .as_ref()
+                    .unwrap()
+                    .motion_bound(&x0, &guess, &body_end, 1000)
+                    .unwrap()
+                    .fraction,
+                1.0
+            );
+            original
+                .contact
+                .as_mut()
+                .unwrap()
+                .body
+                .refit_vertices(body_end)
+                .unwrap();
+
+            // Independently evaluate the initial incremental potential using accepted x_n and v_n.
+            // Changing the friction origin to the guess must give a different answer.
+            let xt: Vec<_> = x0
+                .iter()
+                .zip(&original.v)
+                .map(|(x, v)| *x + *v * h)
+                .collect();
+            let mut expected = original.clone();
+            expected
+                .contact
+                .as_mut()
+                .unwrap()
+                .update_lag_motion(&x0, &x0, h, Some(&body_start));
+            let expected_energy = expected.potential(&guess, Some((&xt, h))).unwrap();
+            expected.contact.as_mut().unwrap().update_lag_motion(
+                &guess,
+                &guess,
+                h,
+                Some(&body_start),
+            );
+            let wrong_origin_energy = expected.potential(&guess, Some((&xt, h))).unwrap();
+            assert!((expected_energy - wrong_origin_energy).abs() > 1e-10);
+
+            let mut plain = original.clone();
+            let plain_report = plain.step_at_body(h, Some(&body_start)).unwrap();
+            let mut carried = original.clone();
+            let report = carried
+                .step_at_body_with_guess(h, Some(&body_start), &raw_guess)
+                .unwrap();
+            assert!(report.converged);
+            assert!((report.energy_start - expected_energy).abs() < 1e-12);
+            assert!(
+                (report.energy_start - plain_report.energy_start).abs() > 1e-10,
+                "the free-DOF guess must actually seed Newton"
+            );
+            assert_ne!(carried.x[1], x0[1]);
+            for (i, &start) in x0.iter().enumerate() {
+                assert!((carried.x[i] - plain.x[i]).norm() < 1e-8);
+                assert!((carried.v[i] - (carried.x[i] - start) / h).norm() < 1e-10);
+            }
+            assert_eq!(carried.x[0], x0[0]);
+            assert_eq!(carried.x[2], x0[2]);
+
+            let mut memory = original.relaxation.clone().unwrap();
+            memory.advance(&carried.x, h).unwrap();
+            assert_eq!(
+                format!("{:?}", carried.relaxation.as_ref().unwrap()),
+                format!("{memory:?}")
+            );
+            assert_eq!(memory.steps, 1);
+            assert_eq!(memory.time_seconds, h);
+            assert!(memory.dissipated_j > 0.);
+            if let Some(mut memory) = original.membrane_plasticity.clone() {
+                memory.advance(&carried.x).unwrap();
+                assert_eq!(
+                    format!("{:?}", carried.membrane_plasticity.as_ref().unwrap()),
+                    format!("{memory:?}")
+                );
+                assert!(carried.membrane_plastic_dissipation_j().unwrap().unwrap()[0] > 0.);
+            }
+        }
+    }
+
+    #[test]
+    fn carried_history_failure_restores_the_entire_solver_and_replays() {
+        let original = sheet(true);
+        let valid_guess: Vec<_> = original
+            .x
+            .iter()
+            .map(|x| *x + Vec3::new(0.0003, 0., 0.))
+            .collect();
+        let h = 0.0005;
+        let mut expected = original.clone();
+        expected
+            .step_at_body_with_guess(h, None, &valid_guess)
+            .unwrap();
+        for fault in [
+            "length",
+            "domain",
+            "non_finite",
+            "newton",
+            "history_commit",
+            "integrator",
+        ] {
+            let mut solver = original.clone();
+            let mut guess = valid_guess.clone();
+            match fault {
+                "length" => {
+                    guess.pop();
+                }
+                "domain" => guess[1].x = 1.,
+                "non_finite" => guess[1].x = f64::NAN,
+                "newton" => solver.max_newton = 0,
+                "history_commit" => solver.relaxation.as_mut().unwrap().steps = usize::MAX,
+                "integrator" => {
+                    solver.integrator = crate::TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 }
+                }
+                _ => unreachable!(),
+            }
+            let before = format!("{solver:?}");
+            let error = solver.step_at_body_with_guess(h, None, &guess).unwrap_err();
+            if fault == "history_commit" {
+                assert!(
+                    error.message.contains("Maxwell step count overflow"),
+                    "{error:?}"
+                );
+            }
+            assert_eq!(format!("{solver:?}"), before, "{fault}");
+            solver.max_newton = original.max_newton;
+            solver.integrator = original.integrator;
+            solver.relaxation.as_mut().unwrap().steps = 0;
+            solver
+                .step_at_body_with_guess(h, None, &valid_guess)
+                .unwrap();
+            assert_eq!(format!("{solver:?}"), format!("{expected:?}"), "{fault}");
+        }
     }
 }

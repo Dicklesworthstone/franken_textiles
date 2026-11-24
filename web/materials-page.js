@@ -2068,8 +2068,8 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
       const info = document.createElement("p");
       info.textContent = `${row.key}: carried Newton start within ${metric(typeof result.carry_radius_m === "number" ? result.carry_radius_m * 1000 : null)} mm of the body. ` +
         "This changes only the starting guess; the mechanical solve determines cloth positions and velocities with unchanged collision and physical checks. " +
-        "This guess is used only by Implicit Euler without material relaxation or plasticity history. " +
-        "Generalized-α and materials with those histories use the ordinary solve.";
+        "Implicit Euler uses this guess with supported relaxation and plasticity models. " +
+        "Generalized-α uses the ordinary solve.";
       parent.append(info);
     }
     if (result.source_pose_sampling) {
