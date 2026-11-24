@@ -748,3 +748,90 @@ fn moving_body_adapts_barrier_stiffness_between_substeps_and_rolls_back_on_refus
     let err = advance_body(&mut bad_solver, &target, 0.01, opts).unwrap_err();
     assert_eq!(err.code, RefusalCode::InvalidDocument);
 }
+
+#[test]
+fn carried_motion_subdivides_when_guess_exits_characterized_membrane_domain() {
+    use ftx_drape::TimeIntegrator;
+    use ftx_pattern::material_response::StrainDomain;
+
+    // Right triangle above a flat frictionless body translating +6 mm in x.
+    // Vertices 0 and 2 are fixed while vertex 1 is free and sits within carry_radius_m.
+    // On the initial full substep (share = 1.0), the geometric carry stretches the 50 mm
+    // edge by 6 mm (Green strain E11 = +0.1272 > 0.08), exiting the characterized domain,
+    // while the real frictionless equilibrium stays unstretched (E11 ≈ 0). Adaptive motion
+    // must halve the substep (share = 0.5, carry E11 = +0.0618 < 0.08) and succeed rather
+    // than aborting the whole motion with OutOfRange.
+    let rest = [
+        ftx_core::Vec2::new(0.0, 0.0),
+        ftx_core::Vec2::new(0.05, 0.0),
+        ftx_core::Vec2::new(0.025, 0.05),
+    ];
+    let x0 = vec![
+        Vec3::new(0.0, 0.0, 0.002),
+        Vec3::new(0.05, 0.0, 0.002),
+        Vec3::new(0.025, 0.05, 0.002),
+    ];
+    let domain = StrainDomain::new([[-0.08, 0.08]; 3]).unwrap();
+    let make_solver = |integrator: TimeIntegrator, start_x: Vec<Vec3>| {
+        let mut model = ClothModel::from_triangles(
+            3,
+            &[[0, 1, 2]],
+            &[[rest[0], rest[1], rest[2]]],
+            Membrane::orthotropic(1000.0, 1000.0, 0.0, 100.0, 1.0),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        model.set_membrane_domains(&[Some(domain)]).unwrap();
+        let mut s = Solver::new(
+            model,
+            start_x,
+            &[[true; 3], [false; 3], [true; 3]],
+            Vec3::ZERO,
+        )
+        .with_contact(
+            Body::new(triangle(0.0, 1.0), vec![[0, 1, 2]], 0.1).unwrap(),
+            parameters(0.0),
+        )
+        .unwrap();
+        s.integrator = integrator;
+        s.tol = 1e-8;
+        s.max_newton = 200;
+        s
+    };
+
+    let target: Vec<_> = triangle(0.0, 1.0)
+        .into_iter()
+        .map(|p| p + Vec3::new(0.006, 0.0, 0.0))
+        .collect();
+    let opts = MotionOptions {
+        max_step_s: 0.02,
+        ..MotionOptions::default()
+    };
+    for integrator in [
+        TimeIntegrator::ImplicitEuler,
+        TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+    ] {
+        let mut solver = make_solver(integrator, x0.clone());
+        let rep = advance_body_carried(&mut solver, &target, 0.02, opts, 0.01).unwrap();
+        assert!(
+            rep.rejected_unsolved >= 1,
+            "{integrator:?}: expected initial out-of-domain carry guess to trigger substep halving, got {rep:?}"
+        );
+        assert!(
+            rep.samples.len() >= 2,
+            "{integrator:?}: expected subdivided motion, got {rep:?}"
+        );
+        solver.model.check_membrane_domains(&solver.x).unwrap();
+
+        // Fail-closed: an accepted start state x0 that is ALREADY outside the domain must
+        // refuse with OutOfRange rather than being masked as NotConverged.
+        let mut bad_x0 = x0.clone();
+        bad_x0[1].x = 0.056;
+        let mut invalid = make_solver(integrator, bad_x0);
+        let before = format!("{invalid:?}");
+        let err = advance_body_carried(&mut invalid, &target, 0.02, opts, 0.01).unwrap_err();
+        assert_eq!(err.code, RefusalCode::OutOfRange, "{integrator:?}: {err}");
+        assert_eq!(format!("{invalid:?}"), before);
+    }
+}

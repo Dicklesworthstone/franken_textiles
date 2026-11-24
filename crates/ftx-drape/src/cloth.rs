@@ -3153,6 +3153,81 @@ impl Solver {
         Ok(report)
     }
 
+    /// Verifies that a geometric warm-start `carried` (already respecting fixed DOFs, from an
+    /// already-validated accepted state `x0`) stays within every active constitutive, history, and
+    /// bending-rate domain. An out-of-domain guess returns [`RefusalCode::NotConverged`] so
+    /// adaptive body-motion subdivision shortens the substep instead of aborting on the guess.
+    fn check_carried_guess_domains(
+        &self,
+        carried: &[Vec3],
+        ctx: StepContext<'_>,
+    ) -> Result<(), Refusal> {
+        if carried.iter().any(|p| !p.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "carried starting guess contains non-finite coordinates",
+            ));
+        }
+        let remap = |err: Refusal| {
+            if err.code == RefusalCode::OutOfRange {
+                Refusal::new(
+                    RefusalCode::NotConverged,
+                    format!(
+                        "carried starting guess exits constitutive or bending domain ({}); shorten the body-motion substep",
+                        err.message
+                    ),
+                )
+            } else {
+                err
+            }
+        };
+        let check_pose = |pose: &[Vec3]| -> Result<(), Refusal> {
+            self.model.check_membrane_domains(pose).map_err(&remap)?;
+            self.model
+                .check_panel_bending_domains(pose)
+                .map_err(&remap)?;
+            self.model.check_dihedral_domains(pose).map_err(&remap)?;
+            Ok(())
+        };
+        check_pose(carried)?;
+        let eval_buf = match ctx {
+            StepContext::GeneralizedAlpha { x0, params, .. } => {
+                let x_eval: Vec<Vec3> = carried
+                    .iter()
+                    .zip(x0)
+                    .map(|(&xn, &xo)| params.eval_pos(xn, xo))
+                    .collect();
+                check_pose(&x_eval)?;
+                Some(x_eval)
+            }
+            StepContext::Static | StepContext::ImplicitEuler { .. } => None,
+        };
+        let x_el = eval_buf.as_deref().unwrap_or(carried);
+        let dynamic = ctx.is_dynamic();
+        if let Some(field) = &self.plasticity {
+            field.energy(&self.model, x_el, dynamic).map_err(&remap)?;
+        }
+        if let Some(field) = &self.membrane_plasticity {
+            field.energy(&self.model, x_el, dynamic).map_err(&remap)?;
+        }
+        if let Some(field) = &self.relaxation {
+            field.energy(x_el, ctx.time_step()).map_err(&remap)?;
+        }
+        match ctx {
+            StepContext::ImplicitEuler {
+                damping: Some(d), ..
+            }
+            | StepContext::GeneralizedAlpha {
+                damping: Some(d), ..
+            } => {
+                d.check_bending_rate_domains(&self.model, carried)
+                    .map_err(&remap)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn step_inner(&mut self, h: f64, body_start: Option<&[Vec3]>) -> Result<SolveReport, Refusal> {
         self.step_inner_with_guess(h, body_start, None)
     }
@@ -3164,6 +3239,7 @@ impl Solver {
         guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
         self.check_integrator_history()?;
+        self.model.check_membrane_domains(&self.x)?;
         self.model.check_panel_bending_domains(&self.x)?;
         self.model.check_dihedral_domains(&self.x)?;
         if !h.is_finite() || h <= 0.0 {
@@ -3227,10 +3303,12 @@ impl Solver {
                     "step warm-start length must match vertex count",
                 ));
             }
+            let carried = self.keep_fixed(g);
+            self.check_carried_guess_domains(&carried, ctx)?;
             if self.model.bending_model == BendingModel::DiscreteShells
                 || self.damping.rayleigh_bending_s > 0.0
             {
-                let dx: Vec<Vec3> = g.iter().zip(&x0).map(|(g, x)| *g - *x).collect();
+                let dx: Vec<Vec3> = carried.iter().zip(&x0).map(|(g, x)| *g - *x).collect();
                 if self.dihedral_step_bound(&self.pack_free(&dx), ctx) < 1.0 {
                     return Err(Refusal::new(
                         RefusalCode::NotConverged,
@@ -3238,17 +3316,7 @@ impl Solver {
                     ));
                 }
             }
-            for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
-                if self.free[3 * i].is_some() {
-                    pos.x = cand.x;
-                }
-                if self.free[3 * i + 1].is_some() {
-                    pos.y = cand.y;
-                }
-                if self.free[3 * i + 2].is_some() {
-                    pos.z = cand.z;
-                }
-            }
+            self.x = carried;
         }
         let mut rep = match self.minimize_ctx(ctx) {
             Ok(rep) => rep,
@@ -3466,10 +3534,12 @@ impl Solver {
         // Newton coordinates use the carried guess. Both the endpoint and elastic midpoint
         // must stay on their admitted finite-angle branch, including bending-rate damping.
         if let Some(g) = guess {
+            let carried = self.keep_fixed(g);
+            self.check_carried_guess_domains(&carried, ctx)?;
             if self.model.bending_model == BendingModel::DiscreteShells
                 || self.damping.rayleigh_bending_s > 0.0
             {
-                let dx: Vec<Vec3> = g.iter().zip(&x0).map(|(g, x)| *g - *x).collect();
+                let dx: Vec<Vec3> = carried.iter().zip(&x0).map(|(g, x)| *g - *x).collect();
                 if self.dihedral_step_bound(&self.pack_free(&dx), ctx) < 1.0 {
                     return Err(Refusal::new(
                         RefusalCode::NotConverged,
@@ -3477,17 +3547,7 @@ impl Solver {
                     ));
                 }
             }
-            for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
-                if self.free[3 * i].is_some() {
-                    pos.x = cand.x;
-                }
-                if self.free[3 * i + 1].is_some() {
-                    pos.y = cand.y;
-                }
-                if self.free[3 * i + 2].is_some() {
-                    pos.z = cand.z;
-                }
-            }
+            self.x = carried;
         }
         let mut rep = match self.minimize_ctx(ctx) {
             Ok(rep) => rep,

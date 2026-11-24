@@ -2028,7 +2028,13 @@ impl Contact {
         if self.body.triangles.is_empty() {
             return Vec::new();
         }
-        let largest = |m: f64, d: Vec3| m.max(d.x.abs()).max(d.y.abs()).max(d.z.abs());
+        let largest = |m: f64, d: Vec3| {
+            if m.is_finite() && d.is_finite() {
+                m.max(d.x.abs()).max(d.y.abs()).max(d.z.abs())
+            } else {
+                f64::NAN
+            }
+        };
         let sweep = p.map_or(0.0, |p| p.iter().copied().fold(0.0, largest));
         if let Some(list) = self.near.current()
             && list.body == self.body.generation
@@ -2041,15 +2047,21 @@ impl Contact {
                 .zip(&list.anchor)
                 .map(|(&a, &b)| a - b)
                 .fold(0.0, largest);
-            // NaN anywhere fails the comparison and takes the fresh query below.
+            // Any non-finite displacement or sweep yields NaN, failing the reach check and
+            // falling through to the fresh query below.
             if pad + moved + sweep <= list.pad - NEAR_MARGIN_M {
                 return self.body_pairs_within(&list.pairs, x, p, pad);
             }
         }
-        if p.is_some() || !pad.is_finite() || !x.iter().all(|q| q.is_finite()) {
+        let reach = pad + NEAR_SKIN_M;
+        if p.is_some()
+            || !pad.is_finite()
+            || pad < 0.0
+            || !reach.is_finite()
+            || !x.iter().all(|q| q.is_finite())
+        {
             return self.body_candidates(x, p, pad);
         }
-        let reach = pad + NEAR_SKIN_M;
         let pairs = self.body_candidates(x, None, reach);
         let out = self.body_pairs_within(&pairs, x, None, pad);
         self.near.store(NearList {
@@ -2793,6 +2805,45 @@ mod tests {
             moved.candidates(&x, None, 1.5e-3),
             moved.body_candidates(&x, None, 1.5e-3)
         );
+
+        // Any NaN or infinite coordinate in `x` or `p` must bypass the cached near list and fall
+        // through to the fresh query rather than being absorbed into 0.0 by `f64::max`.
+        let c_nan = Contact::new(
+            Body::new(c.body.vertices.clone(), c.body.triangles.clone(), 0.005).unwrap(),
+            params(),
+            c.cloth.triangles.clone(),
+            |_, _| 0.025,
+        );
+        // Install an empty cached list anchored at `cloth` with huge reach: a buggy cache hit on
+        // NaN would return empty instead of the real fresh pairs of the remaining finite vertices.
+        c_nan.near.store(NearList {
+            body: c_nan.body.generation,
+            triangles: c_nan.cloth.triangles.clone(),
+            edges: c_nan.cloth.edges.clone(),
+            anchor: cloth.clone(),
+            pad: 1.0,
+            pairs: Vec::new(),
+        });
+        let cached_ptr = c_nan.near.current().unwrap();
+        let mut x_nan = cloth.clone();
+        x_nan[0].x = f64::NAN;
+        let expected_x_nan = c_nan.body_candidates(&x_nan, None, 8e-3);
+        assert!(!expected_x_nan.is_empty());
+        assert_eq!(c_nan.candidates(&x_nan, None, 8e-3), expected_x_nan);
+        assert!(std::sync::Arc::ptr_eq(
+            &cached_ptr,
+            &c_nan.near.current().unwrap()
+        ));
+
+        let mut p_nan = vec![Vec3::ZERO; cloth.len()];
+        p_nan[0].y = f64::NAN;
+        let expected_p_nan = c_nan.body_candidates(&cloth, Some(&p_nan), 8e-3);
+        assert!(!expected_p_nan.is_empty());
+        assert_eq!(c_nan.candidates(&cloth, Some(&p_nan), 8e-3), expected_p_nan);
+        assert!(std::sync::Arc::ptr_eq(
+            &cached_ptr,
+            &c_nan.near.current().unwrap()
+        ));
     }
 
     #[test]
