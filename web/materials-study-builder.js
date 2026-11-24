@@ -886,9 +886,30 @@ function motionCompressionSource(raw, keyframes) {
   // Original JSON is inserted unchanged, including the source acquisition's numeric tokens.
 }
 
+function motionAirVelocitySchedule(value, keyframes, airDrag = undefined) {
+  if (value === null) return;
+  if (!Array.isArray(value) || value.length !== keyframes.length) {
+    throw Error("Motion wind needs one explicit air_velocity_schedule_m_s vector per authored endpoint interval.");
+  }
+  for (const wind of value) {
+    if (!Array.isArray(wind) || wind.length !== 3 ||
+        [0, 1, 2].some(axis => typeof wind[axis] !== "number" || !Number.isFinite(wind[axis]))) {
+      throw Error("Each motion wind interval needs exactly three finite world-space air velocities in m/s.");
+    }
+    if (wind.every(component => component === 0)) continue;
+    const speed2 = wind[0] * wind[0] + wind[1] * wind[1] + wind[2] * wind[2];
+    const speed3 = speed2 * Math.sqrt(speed2);
+    if (!Number.isFinite(speed2) || !Number.isFinite(speed3) ||
+        (airDrag !== undefined && !Number.isFinite(airDrag.rho_air_kg_m3 *
+          (airDrag.c_normal + airDrag.c_tangent) * speed3))) {
+      throw Error("Motion wind overflows aerodynamic drag arithmetic.");
+    }
+  }
+}
+
 /** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
 export function buildMaterialMotionRequest(state, liquid = undefined, compression = undefined, compressionTarget = undefined) {
-  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "source_pose_sampling", "transient_surface", "transient_coverage"],
+  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "air_velocity_schedule_m_s", "source_pose_sampling", "transient_surface", "transient_coverage"],
     ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
   if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
     throw Error("Motion needs 1–16 explicitly authored endpoints.");
@@ -928,6 +949,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
     previous = frame.time_s;
   }
   if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  if (own(state, "air_velocity_schedule_m_s")) motionAirVelocitySchedule(state.air_velocity_schedule_m_s, state.keyframes);
   motionPoseSampling(state.source_pose_sampling, state.keyframes);
   const heatingFields = ["plastic_dissipation_heat", "relaxation_dissipation_heat", "bending_plastic_dissipation_heat"];
   for (const [consumer, coverage] of [["transient_surface", false], ["transient_coverage", true]]) {
@@ -1109,7 +1131,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
 function motionPolicy(value) {
   const required = ["schema", "keyframes", "max_step_s", "max_trials", "max_pairs"];
   const advanced = ["transient_surface", "transient_coverage", "vapor_coverage_history"];
-  object(value, [...required, "max_sample_vertices", "source_pose_sampling", ...advanced], required, "Prescribed motion");
+  object(value, [...required, "max_sample_vertices", "air_velocity_schedule_m_s", "source_pose_sampling", ...advanced], required, "Prescribed motion");
   if (value.schema !== "ftx-drape-motion/1" || !Array.isArray(value.keyframes) ||
     !value.keyframes.length || value.keyframes.length > 16) {
     throw Error("Prescribed motion needs ftx-drape-motion/1 with 1–16 keyframes.");
@@ -1143,6 +1165,7 @@ function motionPolicy(value) {
     previous = frame.time_s;
   }
   if (minimumTrials > value.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  if (own(value, "air_velocity_schedule_m_s")) motionAirVelocitySchedule(value.air_velocity_schedule_m_s, value.keyframes);
   motionPoseSampling(value.source_pose_sampling, value.keyframes);
   for (const key of advanced) {
     if (value[key] != null && (typeof value[key] !== "object" || Array.isArray(value[key]))) {
@@ -1486,12 +1509,18 @@ export function buildMaterialScenarioRequest(state) {
   }
   let motion;
   if (own(state, "motion")) {
+    const motionValue = typeof state.motion === "string" ? sourceObject(state.motion, "Prescribed motion") : state.motion;
     if (typeof state.motion === "string") {
       if (own(state, "motionLiquid")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose separate liquid sources.");
       if (own(state, "motionCompression") || own(state, "motionCompressionTarget")) throw Error("Original motion requests retain their complete policies; choose authored motion to compose a separate compression source.");
-      motionPolicy(sourceObject(state.motion, "Prescribed motion"));
+      motionPolicy(motionValue);
       motion = state.motion;
     } else motion = buildMaterialMotionRequest(state.motion, state.motionLiquid, state.motionCompression, state.motionCompressionTarget);
+    if (motionValue.air_velocity_schedule_m_s != null) {
+      const airDrag = options.damping?.air_drag;
+      if (airDrag == null) throw Error("A motion wind schedule requires scenario damping.air_drag with explicit drag coefficients.");
+      motionAirVelocitySchedule(motionValue.air_velocity_schedule_m_s, motionValue.keyframes, airDrag);
+    }
     if (!own(state, "maxMotionTrials")) {
       throw Error("Prescribed motion and its explicit integer scenario motion-trial budget must be supplied together.");
     }
