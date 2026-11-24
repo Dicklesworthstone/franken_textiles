@@ -2851,7 +2851,8 @@ impl Solver {
     /// positions) instead of the accepted positions; the inertia predictor, velocities and friction
     /// lag still come from the accepted state. The caller must have admitted `guess` against the
     /// body at the step's end (a barrier-infeasible start refuses like any other). Implicit-Euler
-    /// material histories advance only after convergence; Generalized-alpha keeps its plain step.
+    /// material histories advance only after convergence; Generalized-alpha still refuses those
+    /// history laws, but can seed its elastic solve without changing accepted acceleration.
     ///
     /// # Errors
     /// As [`Solver::step_at_body`], and a guess whose length is not the vertex count.
@@ -2867,12 +2868,10 @@ impl Solver {
                 "step warm-start length must match vertex count",
             ));
         }
-        if self.integrator != TimeIntegrator::ImplicitEuler {
-            return self.step_at_body(h, body_start);
-        }
         self.check_liquid_mass()?;
         self.model.check_attached_mass()?;
         self.check_constitutive_models()?;
+        self.check_integrator_history()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -3126,8 +3125,7 @@ impl Solver {
         }
         let x0 = self.x.clone();
         let v0 = self.v.clone();
-        if self.contact.is_none()
-            && let Some(g) = guess
+        if let Some(g) = guess
             && g.len() != self.x.len()
         {
             return Err(Refusal::new(
@@ -3141,7 +3139,25 @@ impl Solver {
             // Consistent initial acceleration M a₀ = M g − ∇Ψ(x₀) − F_drag(x₀, v₀) − F_rayleigh(x₀, v₀)
             // on free DOFs so Generalized-α starts without an O(1) acceleration discontinuity from step 1
             // without mutating state before accept.
+            // Motion has already installed the endpoint collider, but a cold a₀ belongs to the
+            // accepted body pose. This also applies after a wind or liquid-transfer reset. Refit
+            // a copy before swapping it in, then restore the exact endpoint body and query indices
+            // before damping, friction lag or Newton use them. Candidate caches key on body generation.
+            let endpoint_body =
+                if let (Some(start), Some(contact)) = (body_start, &mut self.contact) {
+                    let mut accepted_body = contact.body.clone();
+                    accepted_body.refit_vertices(start.to_vec())?;
+                    Some(std::mem::replace(&mut contact.body, accepted_body))
+                } else {
+                    None
+                };
             let (mut g0, _) = self.assemble_ctx(&x0, StepContext::Static, false, false);
+            if let Some(endpoint) = endpoint_body {
+                self.contact
+                    .as_mut()
+                    .expect("retained endpoint collider")
+                    .body = endpoint;
+            }
             if let Some(drag) = self.damping.air_drag {
                 for e in &self.model.membranes {
                     let cross = (x0[e.v[1]] - x0[e.v[0]]).cross(x0[e.v[2]] - x0[e.v[0]]);
@@ -3236,13 +3252,35 @@ impl Solver {
                 },
             )?
         };
+        let ctx = StepContext::GeneralizedAlpha {
+            x0: &x0,
+            xt: &xt,
+            h,
+            params,
+            damping: damping_step.as_ref(),
+        };
         if let Some(c) = &mut self.contact {
             if let Some(b) = body_start {
                 c.update_lag_motion(&x0, &x0, h, Some(b));
             } else {
                 c.update_lag(&x0, &x0, h);
             }
-        } else if let Some(g) = guess {
+        }
+        // Friction, inertia and the velocity corrector retain accepted x₀/v₀/a₀; only the
+        // Newton coordinates use the carried guess. Both the endpoint and elastic midpoint
+        // must stay on their admitted finite-angle branch, including bending-rate damping.
+        if let Some(g) = guess {
+            if self.model.bending_model == BendingModel::DiscreteShells
+                || self.damping.rayleigh_bending_s > 0.0
+            {
+                let dx: Vec<Vec3> = g.iter().zip(&x0).map(|(g, x)| *g - *x).collect();
+                if self.dihedral_step_bound(&self.pack_free(&dx), ctx) < 1.0 {
+                    return Err(Refusal::new(
+                        RefusalCode::NotConverged,
+                        "carried starting guess crosses a bending branch; shorten the body-motion substep",
+                    ));
+                }
+            }
             for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
                 if self.free[3 * i].is_some() {
                     pos.x = cand.x;
@@ -3255,13 +3293,6 @@ impl Solver {
                 }
             }
         }
-        let ctx = StepContext::GeneralizedAlpha {
-            x0: &x0,
-            xt: &xt,
-            h,
-            params,
-            damping: damping_step.as_ref(),
-        };
         let mut rep = match self.minimize_ctx(ctx) {
             Ok(rep) => rep,
             Err(e) => {
@@ -4322,15 +4353,21 @@ mod strategy_and_integrator_tests {
 
     #[test]
     fn carried_start_refuses_a_bending_branch_jump_before_newton() {
-        let mut solver = creased_hinge(170.0, 170.0);
-        let before = format!("{solver:?}");
-        let guess = creased_hinge(-170.0, 170.0).x;
-        let error = solver
-            .step_at_body_with_guess(0.001, None, &guess)
-            .unwrap_err();
-        assert_eq!(error.code, RefusalCode::NotConverged);
-        assert!(error.message.contains("bending branch"));
-        assert_eq!(format!("{solver:?}"), before);
+        for integrator in [
+            TimeIntegrator::ImplicitEuler,
+            TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+        ] {
+            let mut solver = creased_hinge(170.0, 170.0);
+            solver.integrator = integrator;
+            let before = format!("{solver:?}");
+            let guess = creased_hinge(-170.0, 170.0).x;
+            let error = solver
+                .step_at_body_with_guess(0.001, None, &guess)
+                .unwrap_err();
+            assert_eq!(error.code, RefusalCode::NotConverged);
+            assert!(error.message.contains("bending branch"));
+            assert_eq!(format!("{solver:?}"), before);
+        }
     }
 
     #[test]
@@ -4527,8 +4564,7 @@ mod strategy_and_integrator_tests {
         assert_eq!(rep.factorizations, 0);
     }
 
-    #[test]
-    fn generalized_alpha_steps_cleanly_with_contact_without_penetration() {
+    fn generalized_alpha_contact_sheet() -> Solver {
         let body = Body::new(
             vec![
                 Vec3::new(-0.05, -0.05, -0.004),
@@ -4561,16 +4597,240 @@ mod strategy_and_integrator_tests {
             .unwrap();
         s.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.7 };
         s.tol = 1e-9;
+        s
+    }
+
+    #[test]
+    fn generalized_alpha_steps_cleanly_with_contact_without_penetration() {
+        let mut s = generalized_alpha_contact_sheet();
+        let thickness = s.contact.as_ref().unwrap().params.thickness;
         for _ in 0..15 {
             let rep = s.step(0.004).unwrap();
             assert!(rep.converged, "{rep:?}");
             for p in &s.x {
                 assert!(
-                    p.z > -0.004 + params.thickness,
+                    p.z > -0.004 + thickness,
                     "cloth penetrated body under GeneralizedAlpha: z={}",
                     p.z
                 );
             }
+        }
+    }
+
+    #[test]
+    fn generalized_alpha_carried_start_uses_accepted_body_acceleration_and_preserves_resets() {
+        let mut actual = generalized_alpha_contact_sheet();
+        let near_body: Vec<_> = actual
+            .contact
+            .as_ref()
+            .unwrap()
+            .body
+            .vertices
+            .iter()
+            .map(|p| *p + Vec3::new(0., 0., 0.0033))
+            .collect();
+        actual
+            .contact
+            .as_mut()
+            .unwrap()
+            .body
+            .refit_vertices(near_body)
+            .unwrap();
+        actual.v.fill(Vec3::new(0.02, -0.01, 0.01));
+        let params = GeneralizedAlphaParams::new(0.7).unwrap();
+        let h = 0.0002;
+        let delta = Vec3::new(0.0001, 0., 0.00005);
+        for phase in 0..4 {
+            if phase == 1 {
+                actual.damping.air_drag = Some(crate::damping::AirDrag {
+                    air_velocity_m_s: [0.5, -0.25, 0.4],
+                    ..crate::damping::AirDrag::standard()
+                });
+                actual.reset_acceleration();
+                assert!(!actual.accel_initialized);
+            } else if phase == 2 {
+                let old_mass = actual.model.mass.clone();
+                let old_velocity = actual.v.clone();
+                let incoming = old_mass.iter().sum::<f64>() * 0.25;
+                crate::liquid_mass::tests::initialize_prescribed(
+                    &mut actual,
+                    &[0.],
+                    &[Vec3::new(-0.1, 0.05, 0.02)],
+                );
+                actual
+                    .exchange_liquid(&[incoming], &[incoming], &[0.], &[vec![20.]])
+                    .unwrap();
+                assert_ne!(actual.model.mass, old_mass);
+                assert_ne!(actual.v, old_velocity);
+                assert!(!actual.accel_initialized);
+                assert!(actual.acceleration().iter().all(|a| *a == Vec3::ZERO));
+            } else if phase == 3 {
+                // Explicitly initialized acceleration is an accepted state, even when it differs
+                // from the instantaneous force. Carry must not silently recompute it.
+                actual
+                    .set_acceleration(vec![Vec3::new(0.3, -0.2, 0.1); actual.x.len()])
+                    .unwrap();
+            }
+            let x0 = actual.x.clone();
+            let v0 = actual.v.clone();
+            // Independent full nodal residual evaluated BEFORE moving the body, then known drag.
+            // Static initialization deliberately retains the existing friction-free convention.
+            let a0 = if actual.accel_initialized {
+                actual.acceleration().to_vec()
+            } else {
+                let mut force = actual.nodal_reactions();
+                if let Some(drag) = actual.damping.air_drag {
+                    for e in &actual.model.membranes {
+                        let normal = (x0[e.v[1]] - x0[e.v[0]]).cross(x0[e.v[2]] - x0[e.v[0]]);
+                        let norm = normal.norm();
+                        let velocity = (v0[e.v[0]] + v0[e.v[1]] + v0[e.v[2]]) * (1. / 3.);
+                        let resistance = drag.triangle_resistance_force(
+                            0.5 * norm,
+                            normal * (1. / norm),
+                            velocity,
+                        ) * (1. / 3.);
+                        for &vertex in &e.v {
+                            force[vertex] += resistance;
+                        }
+                    }
+                }
+                force
+                    .iter()
+                    .zip(&actual.model.mass)
+                    .map(|(f, m)| -*f / *m)
+                    .collect()
+            };
+            let body_start = actual.contact.as_ref().unwrap().body.vertices.clone();
+            let body_end: Vec<_> = body_start.iter().map(|p| *p + delta).collect();
+            let guess: Vec<_> = x0.iter().map(|p| *p + delta).collect();
+            let mut initialized = actual.clone();
+            initialized.set_acceleration(a0.clone()).unwrap();
+            actual
+                .contact
+                .as_mut()
+                .unwrap()
+                .body
+                .refit_vertices(body_end.clone())
+                .unwrap();
+            initialized
+                .contact
+                .as_mut()
+                .unwrap()
+                .body
+                .refit_vertices(body_end.clone())
+                .unwrap();
+            let endpoint_body = format!("{:?}", actual.contact.as_ref().unwrap().body);
+            let expected_energy = if phase == 0 {
+                let endpoint_acceleration = -actual.nodal_reactions()[0] / actual.model.mass[0];
+                assert!((endpoint_acceleration - a0[0]).norm() > 1.);
+                let xt: Vec<_> = (0..x0.len())
+                    .map(|i| params.predictor(x0[i], v0[i], a0[i], actual.gravity, h))
+                    .collect();
+                let ctx = StepContext::GeneralizedAlpha {
+                    x0: &x0,
+                    xt: &xt,
+                    h,
+                    params,
+                    damping: None,
+                };
+                initialized.contact.as_mut().unwrap().update_lag_motion(
+                    &x0,
+                    &x0,
+                    h,
+                    Some(&body_start),
+                );
+                let seeded = initialized.potential_ctx(&guess, ctx).unwrap();
+                assert!((seeded - initialized.potential_ctx(&x0, ctx).unwrap()).abs() > 1e-10);
+                Some(seeded)
+            } else {
+                None
+            };
+            let reference = initialized
+                .step_at_body_with_guess(h, Some(&body_start), &guess)
+                .unwrap();
+            let report = actual
+                .step_at_body_with_guess(h, Some(&body_start), &guess)
+                .unwrap();
+            assert!(report.converged);
+            if let Some(energy) = expected_energy {
+                assert!((report.energy_start - energy).abs() < 1e-12);
+            }
+            assert!((report.energy_start - reference.energy_start).abs() < 1e-12);
+            assert_ne!(actual.x, x0);
+            for i in 0..x0.len() {
+                assert!(
+                    (actual.x[i] - initialized.x[i]).norm() < 1e-12,
+                    "phase {phase}"
+                );
+                assert!(
+                    (actual.v[i] - initialized.v[i]).norm() < 1e-9,
+                    "phase {phase}"
+                );
+                assert!(
+                    (actual.a[i] - initialized.a[i]).norm() < 1e-6,
+                    "phase {phase}"
+                );
+                let (velocity, acceleration) =
+                    params.corrector(x0[i], v0[i], a0[i], actual.x[i], h);
+                assert!((actual.v[i] - velocity).norm() < 1e-9);
+                assert!((actual.a[i] - acceleration).norm() < 1e-6);
+            }
+            assert_eq!(
+                format!("{:?}", actual.contact.as_ref().unwrap().body),
+                endpoint_body
+            );
+            assert_eq!(actual.contact.as_ref().unwrap().body.vertices, body_end);
+            assert!(actual.accel_initialized);
+        }
+    }
+
+    #[test]
+    fn generalized_alpha_carried_refusal_restores_endpoint_body_and_cold_acceleration() {
+        let mut original = generalized_alpha_contact_sheet();
+        let body_start = original.contact.as_ref().unwrap().body.vertices.clone();
+        let delta = Vec3::new(0.0001, 0., 0.00005);
+        let target: Vec<_> = body_start.iter().map(|p| *p + delta).collect();
+        let valid_guess: Vec<_> = original.x.iter().map(|p| *p + delta).collect();
+        original
+            .contact
+            .as_mut()
+            .unwrap()
+            .body
+            .refit_vertices(target)
+            .unwrap();
+        let mut expected = original.clone();
+        expected
+            .step_at_body_with_guess(0.001, Some(&body_start), &valid_guess)
+            .unwrap();
+        for fault in ["length", "body_start", "non_finite", "newton"] {
+            let mut solver = original.clone();
+            let mut guess = valid_guess.clone();
+            let mut start = body_start.clone();
+            match fault {
+                "length" => {
+                    guess.pop();
+                }
+                "body_start" => {
+                    start.pop();
+                }
+                "non_finite" => guess[1].z = f64::NAN,
+                "newton" => solver.max_newton = 0,
+                _ => unreachable!(),
+            }
+            let before = format!("{solver:?}");
+            assert!(
+                solver
+                    .step_at_body_with_guess(0.001, Some(&start), &guess)
+                    .is_err(),
+                "{fault}"
+            );
+            assert_eq!(format!("{solver:?}"), before, "{fault}");
+            assert!(!solver.accel_initialized);
+            solver.max_newton = original.max_newton;
+            solver
+                .step_at_body_with_guess(0.001, Some(&body_start), &valid_guess)
+                .unwrap();
+            assert_eq!(format!("{solver:?}"), format!("{expected:?}"), "{fault}");
         }
     }
 

@@ -1786,7 +1786,7 @@ impl Solver {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::elements::{ELASTIC_ONSET, ElasticSegment};
     use ftx_core::Vec2;
@@ -1862,7 +1862,11 @@ mod tests {
         .unwrap()
     }
 
-    fn initialize_prescribed(solver: &mut Solver, masses: &[f64], velocities: &[Vec3]) -> Report {
+    pub(crate) fn initialize_prescribed(
+        solver: &mut Solver,
+        masses: &[f64],
+        velocities: &[Vec3],
+    ) -> Report {
         assert_eq!(masses.len(), velocities.len());
         let mut q = exchange_qualification();
         q.schema = "ftx-coupled-liquid-mechanics/2".into();

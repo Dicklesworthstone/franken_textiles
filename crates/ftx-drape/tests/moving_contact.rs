@@ -250,8 +250,26 @@ fn raising_collider_lifts_cloth_with_checked_continuous_substeps() {
 
 #[test]
 fn carried_start_lifts_cloth_through_a_larger_checked_body_move() {
+    checked_carried_lift(ftx_drape::TimeIntegrator::ImplicitEuler);
+}
+
+#[test]
+fn generalized_alpha_carried_start_lifts_cloth_and_rolls_back_late_motion() {
+    checked_carried_lift(ftx_drape::TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 });
+}
+
+fn checked_carried_lift(integrator: ftx_drape::TimeIntegrator) {
     let mut s = sliding_patch(0.0, false);
     s.gravity = Vec3::new(0.0, 0.0, -9.81);
+    s.integrator = integrator;
+    let options = MotionOptions {
+        max_step_s: if integrator.is_default() {
+            1. / 60.
+        } else {
+            0.001
+        },
+        ..MotionOptions::default()
+    };
     let original = s.clone();
     let mut x0 = s.x.clone();
     let mut c0 = s.contact.as_ref().unwrap().clone();
@@ -265,7 +283,7 @@ fn carried_start_lifts_cloth_through_a_larger_checked_body_move() {
         &mut s,
         &target,
         0.2,
-        MotionOptions::default(),
+        options,
         DissipationCapture::default(),
         0.02,
     )
@@ -280,17 +298,25 @@ fn carried_start_lifts_cloth_through_a_larger_checked_body_move() {
         );
         c0.body = Body::new(frame.body.clone(), c0.body.triangles.clone(), 0.1).unwrap();
         assert!(c0.first_intersection(&frame.cloth).is_none());
-        assert!(c0.min_gap(&frame.cloth, 0.01).unwrap() > 0.0);
+        // The entire collider lies in this horizontal plane. Positive normal clearance at
+        // every cloth vertex bounds every affine cloth face, even beyond a proximity-query window.
+        let body_height = frame.body[0].z;
+        assert!(frame.body.iter().all(|p| p.z == body_height));
+        assert!(
+            frame
+                .cloth
+                .iter()
+                .all(|p| p.z > body_height + c0.params.thickness)
+        );
         x0 = frame.cloth.clone();
     }
     assert!(s.x.iter().all(|p| p.z > 0.0045));
     assert_eq!(s.contact.as_ref().unwrap().body.vertices, target);
     assert_eq!(report.samples.last().unwrap().time_s, 0.2);
 
-    // The pre-existing public carried API keeps precisely its original arithmetic/allocation.
+    // Geometry-only capture and the public carried wrapper produce the same accepted solve.
     let mut legacy = original.clone();
-    let old =
-        advance_body_carried(&mut legacy, &target, 0.2, MotionOptions::default(), 0.02).unwrap();
+    let old = advance_body_carried(&mut legacy, &target, 0.2, options, 0.02).unwrap();
     assert_eq!(format!("{old:?}"), format!("{report:?}"));
     assert_eq!(format!("{legacy:?}"), format!("{s:?}"));
 
@@ -303,7 +329,7 @@ fn carried_start_lifts_cloth_through_a_larger_checked_body_move() {
             0.2,
             MotionOptions {
                 max_sample_vertices: 6,
-                ..MotionOptions::default()
+                ..options
             },
             DissipationCapture::default(),
             0.02,

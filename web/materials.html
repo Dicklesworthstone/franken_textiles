@@ -1941,8 +1941,7 @@ Disabling motion keeps this draft for return. Saving a named case freezes its ow
 </div>
 <p class="note">This radius applies to the whole movement. Carry changes only the Newton starting guess;
 cloth positions and velocities still come from the mechanical solve. It adds no attachment and retains the same collision and physical checks.
-Implicit Euler uses this guess with supported relaxation and plasticity models.
-Generalized-α uses the ordinary solve.</p>
+Both integrators use this guess; material relaxation and plasticity require Implicit Euler.</p>
 </fieldset>
 <fieldset><legend>Body poses between saved endpoints</legend>
 <label><input id="guidedMotionPoseSampling" type="checkbox"> Evaluate intermediate poses from the selected body model</label>

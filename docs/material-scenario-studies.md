@@ -317,9 +317,15 @@ The existing solver still determines positions, velocities, contact, friction an
 history. The joint body/cloth path is checked, and all post-solve contact and convergence
 checks remain required. A useful starting guess can admit larger limb movements within the
 existing trial budget; it does not guarantee convergence or establish a physical-fit claim.
-The starting guess applies to Implicit Euler, including supported relaxation and plasticity
-histories. Each memory advances once after convergence; an invalid bending-angle branch is
-rejected before Newton starts. Generalized-alpha retains its ordinary physical solve.
+Both Implicit Euler and Generalized-alpha use the starting guess. Relaxation and plasticity
+histories continue to require Implicit Euler, with each memory advancing once after convergence.
+Invalid bending-angle branches are rejected before Newton starts; Generalized-alpha checks
+both the endpoint and its elastic evaluation point.
+
+When Generalized-alpha needs an initial acceleration, including after a wind or liquid-transfer
+reset, it evaluates the force against the accepted body pose before solving at the endpoint.
+Already initialized acceleration is retained. This also corrects cold moving-body steps when
+carry is omitted, so those Generalized-alpha trajectories can differ from earlier engine versions.
 
 The same policy applies to every authored interval and generated source-pose segment. Material
 work capture and liquid-coupled motion retain their normal accepted-step transactions: a

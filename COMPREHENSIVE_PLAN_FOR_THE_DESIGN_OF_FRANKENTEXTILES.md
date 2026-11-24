@@ -6232,7 +6232,11 @@ Omission preserves the existing policy and report format. Source-pose sampling, 
 material work and coupled liquid/momentum transfers use the same kernel and complete rollback.
 Implicit Euler uses the guess with supported relaxation and plasticity histories, committing
 each memory once after convergence. A starting guess cannot jump a bending-angle branch.
-Generalized-alpha retains its ordinary physical solve.
+Generalized-alpha also accepts the carried guess, preserving accepted positions, velocity and
+acceleration while guarding both endpoint and elastic evaluation branches. Cold acceleration
+uses the accepted body pose, including after wind or liquid-transfer resets; this corrects the
+same initial-force boundary in ordinary moving-body steps. Material histories still require
+Implicit Euler.
 
 The guided editor authors the whole-motion radius and freezes it into named cases. Results
 retain the exact requested radius, and motion comparison reconciles this numerical policy

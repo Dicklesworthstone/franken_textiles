@@ -297,7 +297,11 @@ material-domain and convergence gates remain mandatory. `ImplicitEuler` uses the
 supported Maxwell relaxation, membrane plasticity and bending plasticity, advancing each memory
 once after convergence. Inertia, damping and friction remain anchored at the accepted state;
 the accepted-to-guess path cannot cross a finite-angle or Rayleigh-bending branch.
-`GeneralizedAlpha` retains its ordinary physical solve. Captured material dissipation comes
+`GeneralizedAlpha` also uses the guess, with both endpoint and elastic-midpoint branch guards;
+its cold acceleration uses the accepted body pose, and initialized acceleration stays unchanged.
+The accepted-body force boundary applies to plain moving-body steps too, including after wind
+or coupled-liquid resets. Generalized-alpha still refuses material-history fields.
+Captured material dissipation comes
 only from accepted solves, and a late mechanical or coupled refusal restores the complete initial
 solver and histories. The exact opt-in radius is retained at the motion result's top level and
 in its source identity. Omission preserves the existing policy and output; explicit null, zero,

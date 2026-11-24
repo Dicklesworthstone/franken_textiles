@@ -139,7 +139,7 @@ pub struct Request {
     pub max_sample_vertices: usize,
     /// Optional nearest-body carry radius in metres, finite and in (0, 0.1]. This changes
     /// only the Newton starting guess, never prescribes cloth positions or velocities.
-    /// ImplicitEuler uses the guess with supported material histories; GeneralizedAlpha does not.
+    /// Both integrators use the guess; material histories continue to require ImplicitEuler.
     /// Omission retains the existing stationary-cloth start and its serialized policy.
     #[serde(
         default,
