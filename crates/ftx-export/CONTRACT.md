@@ -489,10 +489,17 @@ garment/fixture retention; setup and local holds persist across gaps. Exact phas
 unoccupied delay and complete sources survive replay through stitches, thread purchasing,
 recipe selection and material comparisons. Plan `/37`, production `/25` and parallel `/10`
 identify the extension; omitted calendars preserve prior serialization and arithmetic.
-Allocation uses retained serial incumbents, named explicitly by `calendar_order_scope`.
-An unavailable order has a null finish, remains unresolved under an admissible independent
-lower bound, and never supplies partial work or an unrestricted infeasibility/optimality claim.
-Tests: `sewing_parallel::independent_cell_calendars_*` and ordinary workbench consumer views.
+After the admitted serial-work seed, the remainder of the same prefix cap searches complete
+dependency/resource-feasible orders through the actual openings, including final unloading.
+`calendar_order_scope: "bounded_calendar_order_search/1"` and the optional cell-ordering
+`calendar_timing` report distinguish calendar completion proof from productive-work optimality;
+an earlier calendar finish can require more handling work without proving that work minimal.
+Complete incumbents survive a cap. A missing order stays unresolved unless exhausted calendar
+search or an independent bound proves its exclusion; excluded cell/counts do not disable other
+cells. Allocation propagates valid calendar bounds, and reconstruction shares the existing work
+reservation. Omitted-policy clocks and wire output remain unchanged. Tests:
+`sewing_parallel::independent_cell_calendars_*`, real native/portable stitch replay in
+`sewing_production_workflow`, and ordinary workbench consumer views.
 
 **One shared operator** (`production.parallel.shared_operator`). The explicit
 `exclusive_setup_handling_autonomous_feed/1` protocol shares one qualified person across otherwise

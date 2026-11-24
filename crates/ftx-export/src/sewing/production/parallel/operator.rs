@@ -383,7 +383,7 @@ pub(super) fn phases(
     Ok(result)
 }
 
-pub(super) fn feed_milliseconds(seconds: f64) -> Result<u64, Refusal> {
+pub(in crate::sewing::production) fn feed_milliseconds(seconds: f64) -> Result<u64, Refusal> {
     let rounded = (seconds * 1000.0).ceil();
     if !rounded.is_finite() || !(0.0..=MAX_EXACT_MILLISECONDS as f64).contains(&rounded) {
         return Err(budget(

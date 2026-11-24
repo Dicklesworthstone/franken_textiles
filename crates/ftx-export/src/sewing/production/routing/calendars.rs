@@ -147,7 +147,7 @@ impl Policy {
         self.resources.get(id).map(Vec::as_slice)
     }
 
-    pub(in crate::sewing::production) fn earliest_start(
+    pub(in crate::sewing) fn earliest_start(
         &self,
         id: &str,
         earliest: u64,

@@ -2204,12 +2204,12 @@ fn independent_cell_calendars_keep_complete_phases_and_final_unloading_inside_op
         assert_eq!(report.schema, "ftx-sewing-parallel/10");
         assert_eq!(
             report.calendar_order_scope,
-            Some("retained_serial_incumbents/1")
+            Some("bounded_calendar_order_search/1")
         );
         assert_eq!(report.selected.makespan_milliseconds, finish);
         assert_eq!(report.selected.scheduled_feed_milliseconds, 8000);
-        assert_eq!(report.lower_bound_makespan_milliseconds, 5300);
-        assert_eq!(report.optimality_proven, finish == 5300);
+        assert_eq!(report.lower_bound_makespan_milliseconds, finish);
+        assert!(report.optimality_proven);
         assert!(report.availability.as_ref().unwrap().baseline_replaced);
         assert_eq!(program.stitches.len(), 80);
         assert!(!report.hardware_execution_authorized);
@@ -2241,7 +2241,7 @@ fn independent_cell_calendars_keep_complete_phases_and_final_unloading_inside_op
         }
         for cell in &report.availability.as_ref().unwrap().cells {
             assert_eq!(cell.counts[1].incumbent_finish_milliseconds, None);
-            assert!(!cell.counts[1].feasible && !cell.counts[1].infeasibility_proven);
+            assert!(!cell.counts[1].feasible && cell.counts[1].infeasibility_proven);
         }
         assert_eq!(
             serde_json::to_value(&program).unwrap(),
@@ -2306,7 +2306,7 @@ fn independent_cell_calendars_preserve_idle_sources_and_refuse_unavailable_compl
     );
     assert_eq!(
         build(&pattern, options).unwrap_err().code,
-        RefusalCode::NotConverged
+        RefusalCode::InvalidDocument
     );
 }
 
@@ -2346,8 +2346,7 @@ fn independent_cell_calendars_charge_each_feed_and_preserve_legacy_rounding() {
     }
 }
 
-#[test]
-fn independent_cell_calendars_keep_unsearched_operation_orders_unresolved() {
+fn calendar_order_fixture(last_end: u64) -> (Pattern, Value) {
     let (pattern, mut options) = fixture(1);
     options["passes"][0]["stitches_per_minute"] = json!(1000.0);
     options["passes"][1]["after"] = json!([]);
@@ -2375,23 +2374,164 @@ fn independent_cell_calendars_keep_unsearched_operation_orders_unresolved() {
     independent_calendars(
         &mut options,
         json!({
-            "cell-a":windows(&[[0,4000],[10000,12400]]), "cell-b":windows(&[[0,0]])
+            "cell-a":windows(&[[0,4000],[10000,last_end]]), "cell-b":windows(&[[0,0]])
         }),
     );
+    (pattern, options)
+}
+
+#[test]
+fn independent_cell_calendars_search_alternative_orders_and_replay_actual_stitches() {
+    let (pattern, options) = calendar_order_fixture(12400);
     // The tied uninterrupted incumbent is join (2400 ms), reinforce (4000 ms). Neither
     // opening can hold the second operation after that first choice, but reversing them fits.
-    let refusal = build(&pattern, options.clone()).unwrap_err();
+    let mut bounded = options.clone();
+    for cell in bounded["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["ordering"]["max_search_nodes"] = json!(1);
+    }
+    let refusal = build(&pattern, bounded).unwrap_err();
     assert_eq!(refusal.code, RefusalCode::NotConverged);
-    assert!(
-        refusal
-            .message
-            .contains("other operation orders remain unsearched")
-    );
-    options["passes"][0]["after"] = json!(["reinforce"]);
-    let plan = build(&pattern, options).unwrap();
-    let report = plan.production.unwrap().parallel.unwrap();
+    assert!(refusal.message.contains("unfinished calendar searches"));
+
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
     assert_eq!(report.selected.makespan_milliseconds, 12400);
+    assert_eq!(report.lower_bound_makespan_milliseconds, 12400);
+    assert!(report.optimality_proven);
+    let schedule = report.selected.cells[0].schedule.as_ref().unwrap();
+    assert_eq!(schedule.ordering.selected_order, ["0/reinforce", "0/join"]);
+    let calendar = schedule.ordering.calendar_timing.as_ref().unwrap();
+    assert_eq!(calendar.serial_incumbent_finish_milliseconds, None);
+    assert_eq!(calendar.selected_finish_milliseconds, Some(12400));
+    assert!(calendar.optimality_proven && calendar.search_complete);
+    assert!(!calendar.budget_exhausted);
+    assert!(
+        schedule.ordering.search_nodes
+            <= typed
+                .production
+                .as_ref()
+                .unwrap()
+                .parallel
+                .as_ref()
+                .unwrap()
+                .cells[0]
+                .ordering
+                .max_search_nodes
+    );
+    assert_eq!(program.stitches.len(), 80);
+    assert!(
+        program.stitches[..40]
+            .iter()
+            .all(|step| step.operation == 1)
+    );
+    assert!(
+        program.stitches[40..]
+            .iter()
+            .all(|step| step.operation == 0)
+    );
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn independent_cell_calendars_separate_productive_work_and_complete_finish_proofs() {
+    let (pattern, mut options) = calendar_order_fixture(20000);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        for transition in cell["handling"]["transitions"].as_array_mut().unwrap() {
+            if transition["from"] == "reinforce" && transition["to"] == "join" {
+                transition["milliseconds"] = json!(100);
+            }
+        }
+    }
+    // Both complete orders are independently enumerable: join/reinforce uses 6400 ms of
+    // productive work but ends at 14000; reinforce/join uses 6500 and ends at 12500.
+    let plan = build(&pattern, options.clone()).unwrap();
+    let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 12500);
+    assert!(report.optimality_proven);
+    let ordering = &report.selected.cells[0].schedule.as_ref().unwrap().ordering;
+    assert_eq!(ordering.selected_order, ["0/reinforce", "0/join"]);
+    assert!(!ordering.optimality_proven);
+    let handling = ordering.handling_timing.as_ref().unwrap();
+    assert_eq!(handling.selected_handling_milliseconds, 100);
+    assert_eq!(handling.lower_bound_setup_and_handling_milliseconds, 0);
+    assert!((handling.selected_modeled_production_seconds - 6.5).abs() < 1e-12);
+    let calendar = ordering.calendar_timing.as_ref().unwrap();
+    assert_eq!(calendar.serial_incumbent_finish_milliseconds, Some(14000));
+    assert_eq!(calendar.selected_finish_milliseconds, Some(12500));
+    assert!(calendar.optimality_proven);
+
+    options["production"]["parallel"]["cells"][0]["ordering"]["max_search_nodes"] = json!(1);
+    let limited = build(&pattern, options).unwrap();
+    let report = limited
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, 14000);
     assert!(!report.optimality_proven);
+    assert!(report.budget_exhausted);
+    let calendar = report.selected.cells[0]
+        .schedule
+        .as_ref()
+        .unwrap()
+        .ordering
+        .calendar_timing
+        .as_ref()
+        .unwrap();
+    assert!(calendar.budget_exhausted && !calendar.optimality_proven);
+    assert_eq!(calendar.lower_bound_finish_milliseconds, 6400);
+}
+
+#[test]
+fn independent_cell_calendars_preserve_workholding_dependencies_and_prove_exclusions() {
+    let (pattern, mut options) = calendar_order_fixture(12400);
+    let (_, original) = fixture(1);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["workholding"] = original["production"]["workholding"].clone();
+    }
+    // The release-after-acquire edge prevents the tempting calendar-feasible reversal.
+    let refusal = build(&pattern, options.clone()).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+    options["production"]["parallel"]["availability_calendars"]["resources"]["cell-b"] =
+        windows(&[[0, 6400]]);
+    let plan = build(&pattern, options).unwrap();
+    let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    assert!(report.selected.cells[0].copies.is_empty());
+    assert_eq!(report.selected.makespan_milliseconds, 6400);
+    assert!(report.optimality_proven);
+    let counts = &report.availability.as_ref().unwrap().cells[0].counts;
+    assert!(counts[0].infeasibility_proven && !counts[0].feasible);
+    assert_eq!(
+        report.selected.cells[1]
+            .schedule
+            .as_ref()
+            .unwrap()
+            .ordering
+            .selected_order,
+        ["0/join", "0/reinforce"]
+    );
 }
 
 #[test]

@@ -201,6 +201,15 @@ pub(super) fn evaluate(
     policy: &Policy,
     pattern: &Pattern,
 ) -> Result<Report, Refusal> {
+    evaluate_in_calendar(plan, policy, pattern, None)
+}
+
+fn evaluate_in_calendar(
+    plan: &SewPlan,
+    policy: &Policy,
+    pattern: &Pattern,
+    calendar: Option<(&parallel::Cell, &routing::calendars::Policy)>,
+) -> Result<Report, Refusal> {
     let copies = count(policy.production_copies.unwrap_or(1))?;
     let expanded = plan.seams.len().checked_mul(copies).ok_or_else(|| {
         Refusal::new(
@@ -260,14 +269,36 @@ pub(super) fn evaluate(
             }
         })
         .collect();
+    let calendar = calendar
+        .map(|(cell, policy)| {
+            Ok::<_, Refusal>(ordering::Calendar {
+                policy,
+                cell: &cell.id,
+                available_at_milliseconds: u64::from(cell.available_at_milliseconds),
+                available_until_milliseconds: cell.available_until_milliseconds,
+                feed_milliseconds: operations
+                    .iter()
+                    .map(|operation| {
+                        Ok((
+                            operation.id.as_str(),
+                            parallel::operator::feed_milliseconds(operation.feed_seconds)?,
+                        ))
+                    })
+                    .collect::<Result<_, Refusal>>()?,
+            })
+        })
+        .transpose()?;
     let mut ordering = ordering::optimize_operations_with_resources(
         &policy.ordering,
         &views,
         feed_seconds,
         workholding.as_ref().map(|compiled| &compiled.limits),
         handling.as_ref().map(|compiled| &compiled.costs),
+        calendar.as_ref(),
     )?;
-    ordering.tie_break = if ordering.baseline_replaced {
+    ordering.tie_break = if calendar.is_some() {
+        "Seed with the complete serial-work incumbent, then minimize complete calendar finishing time inside the remaining shared prefix cap. Equal finishes retain the incumbent; prerequisites and finite fixture lifecycles remain enforced. Serial productive-work proof and calendar-completion proof are separate."
+    } else if ordering.baseline_replaced {
         "The original copy-order seed violates qualified resources or lifecycle prerequisites; retain the first complete feasible replacement, then improve only on strictly lower objective. Feasibility and optimization share the same node cap; explore by immediate objective cost and scoped operation ID."
     } else if handling.is_some() {
         "Retain the incumbent on equal integer setup-plus-handling milliseconds; start with complete garments in ascending copy order, then explore by immediate duration and scoped operation ID."

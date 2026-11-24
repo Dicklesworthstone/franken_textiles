@@ -6191,6 +6191,23 @@ final unloading and unresolved counts. Omission preserves prior clocks and outpu
 `ftx-pb2.2`; synthetic scheduling regressions do not establish measured factory performance or
 safe workholding through a break. The contract is in `docs/sewing-production.md`.
 
+### 25.223 Search operation orders against independent cell calendars
+
+Qualified shifts and breaks now participate in each cell/count's bounded operation-order search.
+The uninterrupted productive-work incumbent supplies a seed, and the remaining original prefix
+allowance explores dependency- and fixture-feasible orders with exact per-operation feed clocks.
+Loading, setup and feed remain one nonpreemptive block; final unloading must also fit an opening.
+A different order can therefore recover a feasible job or finish earlier even when its productive
+setup/handling time is greater. No additional unbounded search or timing authority is introduced.
+
+The report keeps calendar completion and productive-work optimality separate. A complete bounded
+incumbent remains usable; an unfinished search does not prove infeasibility. Exhaustively impossible
+cell/count choices can be excluded while other cells remain available. Exact schedules, stitch
+programs, recipe selection and material comparisons use the newly selected order. Focused synthetic
+regressions cover the previously missed two-operation schedule, finite fixtures, final unloading,
+work caps and distinct timing proofs. This advances `ftx-pb2.2` through `ftx-pb2.calendar-search`;
+physical factory timing, seam quality and hardware authorization still require independent evidence.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

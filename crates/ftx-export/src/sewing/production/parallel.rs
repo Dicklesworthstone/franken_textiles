@@ -433,8 +433,8 @@ pub struct Report {
     /// Exact independent cell calendar source, including qualifications for finally idle cells.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability_calendars: Option<calendars::Policy>,
-    /// Calendars replay each cell/count's retained serial order. Another order can finish sooner;
-    /// only the independent lower bound can establish an unrestricted completion optimum.
+    /// Calendars search admitted operation orders inside each cell/count's original prefix cap.
+    /// Complete calendar bounds remain separate from uninterrupted productive-work bounds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calendar_order_scope: Option<&'static str>,
     /// Exact exclusive operator and concurrent autonomous-feed replay, when explicitly qualified.
@@ -776,6 +776,7 @@ struct Trial {
     search_nodes: usize,
     search_complete: bool,
     budget_exhausted: bool,
+    calendar_infeasibility_proven: bool,
     schedule_sha256: [u8; 32],
     // Compact integer phase durations and operation indices, never duplicated station/history data.
     phases: Vec<operator::Phase>,
@@ -854,7 +855,15 @@ fn trial(
         parallel: None,
         routing: None,
     };
-    let schedule = super::evaluate(plan, &policy, pattern)?;
+    let schedule = super::evaluate_in_calendar(
+        plan,
+        &policy,
+        pattern,
+        parallel
+            .availability_calendars
+            .as_ref()
+            .map(|calendar| (cell, calendar)),
+    )?;
     let feed = schedule.feed_seconds * 1000.0;
     let per_operation =
         parallel.shared_operator.is_some() || parallel.availability_calendars.is_some();
@@ -892,7 +901,11 @@ fn trial(
             handling.selected_handling_milliseconds,
         )?,
     )?;
-    let lower = sum_time(start, handling.lower_bound_setup_and_handling_milliseconds)?;
+    let calendar_timing = schedule.ordering.calendar_timing.as_ref();
+    let lower = calendar_timing.map_or_else(
+        || sum_time(start, handling.lower_bound_setup_and_handling_milliseconds),
+        |calendar| Ok(calendar.lower_bound_finish_milliseconds),
+    )?;
     let phases = if per_operation {
         operator::phases(
             plan,
@@ -910,6 +923,11 @@ fn trial(
     } else {
         Some(finish)
     };
+    if calendar_timing.is_some_and(|calendar| calendar.selected_finish_milliseconds != finish) {
+        return Err(bad(
+            "calendar order search did not replay its complete phase timing",
+        ));
+    }
     let receipt = Trial {
         node_limit,
         feed_seconds: schedule.feed_seconds,
@@ -921,8 +939,12 @@ fn trial(
         lower,
         attended_lower: handling.lower_bound_setup_and_handling_milliseconds,
         search_nodes: schedule.ordering.search_nodes,
-        search_complete: schedule.ordering.search_complete,
+        search_complete: calendar_timing.map_or(schedule.ordering.search_complete, |calendar| {
+            calendar.search_complete
+        }),
         budget_exhausted: schedule.ordering.budget_exhausted,
+        calendar_infeasibility_proven: calendar_timing
+            .is_some_and(|calendar| calendar.infeasibility_proven),
         schedule_sha256: schedule_sha256(&schedule)?,
         phases: if parallel.shared_operator.is_some() {
             phases
@@ -956,6 +978,8 @@ fn allocate(
                 }
                 let finish = if count == 0 {
                     Some(0)
+                } else if row[count - 1].calendar_infeasibility_proven {
+                    None
                 } else if lower {
                     Some(row[count - 1].lower)
                 } else {
@@ -1020,7 +1044,9 @@ fn unresolved_cell_counts(cells: &[&Cell], trials: &[Vec<Trial>], deadline: Opti
                 .min(deadline.unwrap_or(MAX_EXACT_MILLISECONDS));
             row.iter()
                 .filter(|trial| {
-                    trial.finish.is_none_or(|finish| finish > limit) && trial.lower <= limit
+                    !trial.calendar_infeasibility_proven
+                        && trial.finish.is_none_or(|finish| finish > limit)
+                        && trial.lower <= limit
                 })
                 .count()
         })
@@ -1469,16 +1495,12 @@ pub(super) fn evaluate(
             Refusal::new(
                 RefusalCode::NotConverged,
                 if policy.availability_calendars.is_some() {
-                    "no retained complete serial order fits the qualified cell calendars; other operation orders remain unsearched, so production infeasibility is not proved"
+                    "no complete operation order was found inside the qualified cell calendars; unfinished calendar searches still permit a feasible assignment, so production infeasibility is not proved"
                 } else {
                     "no complete parallel assignment was found inside the qualified cell availability windows; unfinished serial searches still permit a feasible assignment, so infeasibility is not proved"
                 },
             )
-            .repair(if policy.availability_calendars.is_some() {
-                "review the qualified operating windows, alternative cells and explicit operation prerequisites; a larger serial node cap does not search calendar-specific orders"
-            } else {
-                "increase the bounded serial and shared parallel search allowances"
-            })
+            .repair("increase the bounded serial and shared parallel search allowances")
             .repair("supply independently qualified longer availability windows or additional cells")
         } else {
             bad("qualified cell availability windows cannot accommodate all garment copies: even the complete allocation over valid serial finish lower bounds is infeasible")
@@ -1547,16 +1569,12 @@ pub(super) fn evaluate(
                     Refusal::new(
                     RefusalCode::NotConverged,
                     if policy.availability_calendars.is_some() {
-                        "no retained complete cell allocation meets the calendar-constrained feed deadline; other calendar-specific operation orders remain unsearched"
+                        "no retained complete cell allocation meets the calendar-constrained feed deadline; unfinished calendar-specific operation orders remain unresolved"
                     } else {
                         "no retained complete cell allocation meets the feed search deadline; unfinished serial orders remain unresolved"
                     },
                 )
-                .repair(if policy.availability_calendars.is_some() {
-                    "review the qualified windows, eligible configurations and deadline; increasing serial search does not search calendar-specific orders"
-                } else {
-                    "increase the bounded serial/parallel schedule allowance or supply a longer completion deadline"
-                })
+                .repair("increase the bounded serial/parallel schedule allowance or supply a longer completion deadline")
                 },
             );
         }
@@ -1716,9 +1734,10 @@ pub(super) fn evaluate(
                             cell.available_until_milliseconds
                                 .is_none_or(|end| finish <= end)
                         }),
-                        infeasibility_proven: cell
-                            .available_until_milliseconds
-                            .is_some_and(|end| trial.lower > end),
+                        infeasibility_proven: trial.calendar_infeasibility_proven
+                            || cell
+                                .available_until_milliseconds
+                                .is_some_and(|end| trial.lower > end),
                     })
                     .collect(),
             })
@@ -1774,7 +1793,7 @@ pub(super) fn evaluate(
         calendar_order_scope: policy
             .availability_calendars
             .as_ref()
-            .map(|_| "retained_serial_incumbents/1"),
+            .map(|_| "bounded_calendar_order_search/1"),
         shared_operator,
         shared_workholding,
         thread_order_search,

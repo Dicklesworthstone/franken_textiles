@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use ftx_core::{Refusal, RefusalCode};
 use serde::{Deserialize, Serialize};
 
+use super::production::routing::calendars;
 use super::{PlannedSeam, bad, qualified_text};
 
 const MAX_PASSES: usize = 20;
@@ -154,8 +155,60 @@ pub struct Report {
     /// Complete serial handling objective, including the first load and final unload.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handling_timing: Option<HandlingTimingReport>,
+    /// Separate complete-calendar objective and proof for independently staffed parallel cells.
+    /// Serial timing above still reports productive work, excluding calendar waiting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_timing: Option<CalendarTimingReport>,
     /// Deterministic incumbent and traversal tie policy; no hidden secondary objective.
     pub tie_break: &'static str,
+}
+
+/// Bounded operation-order search through qualified openings, including final unloading.
+#[derive(Clone, Debug, Serialize)]
+pub struct CalendarTimingReport {
+    /// `all_dependency_and_resource_feasible_orders/1`; every extension uses the admitted graph.
+    pub search_scope: &'static str,
+    /// Calendar replay of the ordinary serial-work incumbent before calendar-specific search.
+    pub serial_incumbent_finish_milliseconds: Option<u64>,
+    /// Complete selected finishing instant; absent when no calendar-feasible order was found.
+    pub selected_finish_milliseconds: Option<u64>,
+    /// Valid finish lower bound; an exhausted search never promotes its incumbent to a bound.
+    pub lower_bound_finish_milliseconds: u64,
+    /// Calendar prefix extensions, charged to the remainder of the original serial node cap.
+    pub search_nodes: usize,
+    /// All better orders were exhausted or excluded by a valid finish lower bound.
+    pub search_complete: bool,
+    /// The complete selected order attains its valid bound; separate from serial-work optimality.
+    pub optimality_proven: bool,
+    /// Exhaustive calendar search found no complete dependency/resource-feasible order.
+    pub infeasibility_proven: bool,
+    /// Unvisited calendar prefixes remain after the shared serial/calendar allowance is spent.
+    pub budget_exhausted: bool,
+}
+
+/// Already source-qualified parallel-cell calendar and exact per-operation feed clocks.
+pub(super) struct Calendar<'a> {
+    pub policy: &'a calendars::Policy,
+    pub cell: &'a str,
+    pub available_at_milliseconds: u64,
+    pub available_until_milliseconds: Option<u64>,
+    pub feed_milliseconds: BTreeMap<&'a str, u64>,
+}
+
+impl Calendar<'_> {
+    fn finish(&self, ready: u64, duration: u64) -> Result<Option<u64>, Refusal> {
+        let Some(start) = self.policy.earliest_start(self.cell, ready, duration)? else {
+            return Ok(None);
+        };
+        let end = self
+            .available_until_milliseconds
+            .unwrap_or(9_007_199_254_740_991);
+        Ok(if start <= end && duration <= end - start {
+            Some(start + duration)
+        } else {
+            None
+        })
+    }
 }
 
 /// Borrowed identity/dependency view of an already admitted operation. Geometry stays with its plan.
@@ -425,6 +478,125 @@ impl Search<'_> {
             next: 0,
         }
     }
+
+    fn calendar_order(
+        &self,
+        calendar: &Calendar<'_>,
+        serial_order: &[usize],
+        serial_lower_bound: u64,
+        node_limit: usize,
+    ) -> Result<(Vec<usize>, CalendarTimingReport), Refusal> {
+        let feed: Vec<_> = self
+            .tasks
+            .iter()
+            .map(|task| {
+                calendar
+                    .feed_milliseconds
+                    .get(task.id)
+                    .copied()
+                    .ok_or_else(|| {
+                        bad("calendar feed clocks do not cover the admitted operation graph")
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        let total_feed = feed.iter().try_fold(0_u64, |sum, &value| {
+            sum.checked_add(value)
+                .filter(|&sum| sum <= 9_007_199_254_740_991)
+                .ok_or_else(|| bad("calendar feed exceeds the exact millisecond clock"))
+        })?;
+        let root_bound = calendar.available_at_milliseconds + total_feed + serial_lower_bound;
+        if root_bound > 9_007_199_254_740_991 {
+            return Err(bad(
+                "calendar completion lower bound exceeds the exact millisecond clock",
+            ));
+        }
+        let mut serial_finish = Some(calendar.available_at_milliseconds);
+        let mut last = None;
+        for &next in serial_order {
+            serial_finish = match serial_finish {
+                Some(ready) => calendar.finish(ready, self.cost(last, next) + feed[next])?,
+                None => None,
+            };
+            last = Some(next);
+        }
+        serial_finish = match serial_finish {
+            Some(ready) => calendar.finish(ready, self.final_cost(last))?,
+            None => None,
+        };
+        let mut best_finish = serial_finish;
+        let mut best = serial_finish.map(|_| serial_order.to_vec());
+        let mut nodes = 0;
+        let mut exhausted = false;
+        let mut stack = vec![self.frame(
+            OperationSet::default(),
+            None,
+            calendar.available_at_milliseconds,
+        )];
+        let mut path = Vec::with_capacity(self.tasks.len());
+        // A fixed operation order starts each nonpreemptive block as early as possible. Earlier
+        // completion can never hurt a later block, so no intentional-idling branch is required.
+        while best_finish.is_none_or(|finish| finish > root_bound) && !stack.is_empty() {
+            let frame = stack.last_mut().expect("nonempty calendar search");
+            if frame.next == frame.candidates.len() {
+                stack.pop();
+                path.pop();
+                continue;
+            }
+            if nodes == node_limit {
+                exhausted = true;
+                break;
+            }
+            let next = frame.candidates[frame.next];
+            frame.next += 1;
+            nodes += 1;
+            let duration = self.cost(frame.last, next) + feed[next];
+            let Some(ready) = calendar.finish(frame.cost, duration)? else {
+                continue;
+            };
+            let mask = frame.mask.with(next);
+            let remaining_feed: u64 = feed
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !mask.contains(*i))
+                .map(|(_, value)| value)
+                .sum();
+            let bound = ready + remaining_feed + self.lower_bound(mask, Some(next));
+            if best_finish.is_some_and(|finish| bound >= finish) {
+                continue;
+            }
+            if mask == self.all {
+                if let Some(finish) = calendar.finish(ready, self.final_cost(Some(next)))?
+                    && best_finish.is_none_or(|old| finish < old)
+                {
+                    let mut complete = path.clone();
+                    complete.push(next);
+                    best = Some(complete);
+                    best_finish = Some(finish);
+                }
+            } else {
+                path.push(next);
+                stack.push(self.frame(mask, Some(next), ready));
+            }
+        }
+        let report = CalendarTimingReport {
+            search_scope: "all_dependency_and_resource_feasible_orders/1",
+            serial_incumbent_finish_milliseconds: serial_finish,
+            selected_finish_milliseconds: best_finish,
+            lower_bound_finish_milliseconds: if exhausted {
+                root_bound
+            } else {
+                best_finish.unwrap_or(root_bound)
+            },
+            search_nodes: nodes,
+            search_complete: !exhausted,
+            optimality_proven: best_finish.is_some() && !exhausted,
+            infeasibility_proven: best_finish.is_none() && !exhausted,
+            budget_exhausted: exhausted,
+        };
+        // Preserve the admitted resource-feasible serial schedule for unavailable count receipts.
+        // Its null calendar finish excludes it from every feasible parallel assignment.
+        Ok((best.unwrap_or_else(|| serial_order.to_vec()), report))
+    }
 }
 
 pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report, Refusal> {
@@ -450,7 +622,7 @@ pub(super) fn optimize_operations(
     baseline_passes: &[Operation<'_>],
     feed_seconds: f64,
 ) -> Result<Report, Refusal> {
-    optimize_operations_with_resources(policy, baseline_passes, feed_seconds, None, None)
+    optimize_operations_with_resources(policy, baseline_passes, feed_seconds, None, None, None)
 }
 
 // Resource-qualified callers admit the graph and source evidence. A source-order seed can violate
@@ -462,6 +634,7 @@ pub(super) fn optimize_operations_with_resources(
     feed_seconds: f64,
     resources: Option<&ResourceLimits>,
     handling: Option<&HandlingCosts>,
+    calendar: Option<&Calendar<'_>>,
 ) -> Result<Report, Refusal> {
     let mut passes = baseline_passes.to_vec();
     passes.sort_by_key(|p| p.id);
@@ -494,6 +667,9 @@ pub(super) fn optimize_operations_with_resources(
         return Err(bad(
             "production-time ordering needs matching qualified handling costs",
         ));
+    }
+    if calendar.is_some() && handling.is_none() {
+        return Err(bad("calendar ordering needs qualified production handling"));
     }
     let setup_times = policy
         .setup_times
@@ -615,7 +791,7 @@ pub(super) fn optimize_operations_with_resources(
             stack.push(search.frame(mask, Some(next), cost));
         }
     }
-    let Some(best) = best else {
+    let Some(mut best) = best else {
         return Err(if budget_exhausted {
             Refusal::new(
                 RefusalCode::NotConverged,
@@ -632,7 +808,27 @@ pub(super) fn optimize_operations_with_resources(
     let baseline = baseline.expect("a complete incumbent supplies a feasible baseline");
     let baseline_changes = search.count(&baseline);
     let baseline_cost = search.total_cost(&baseline);
-    let best_cost = best_cost.expect("a complete incumbent supplies its objective");
+    let serial_lower_bound = if budget_exhausted {
+        root_bound
+    } else {
+        best_cost.expect("a complete incumbent supplies its objective")
+    };
+    let calendar_timing = calendar
+        .map(|calendar| {
+            let (selected, report) = search.calendar_order(
+                calendar,
+                &best,
+                serial_lower_bound,
+                policy.max_search_nodes - search_nodes,
+            )?;
+            best = selected;
+            search_nodes += report.search_nodes;
+            budget_exhausted |= report.budget_exhausted;
+            Ok::<_, Refusal>(report)
+        })
+        .transpose()?;
+    let best_cost = search.total_cost(&best);
+    let serial_optimality_proven = best_cost == serial_lower_bound;
     let names = |order: &[usize]| {
         order
             .iter()
@@ -664,8 +860,8 @@ pub(super) fn optimize_operations_with_resources(
         baseline_changes,
         selected_changes: search.count(&best),
         search_nodes,
-        search_complete: !budget_exhausted,
-        optimality_proven: !budget_exhausted,
+        search_complete: !budget_exhausted && serial_optimality_proven,
+        optimality_proven: serial_optimality_proven,
         budget_exhausted,
         lower_bound_total_changes: if search.times.is_some() {
             search.count_lower_bound(OperationSet::default(), None)
@@ -695,12 +891,9 @@ pub(super) fn optimize_operations_with_resources(
                 + search.final_cost(best.last().copied()),
             baseline_modeled_production_seconds: feed_seconds + baseline_cost as f64 / 1000.0,
             selected_modeled_production_seconds: feed_seconds + best_cost as f64 / 1000.0,
-            lower_bound_setup_and_handling_milliseconds: if budget_exhausted {
-                root_bound
-            } else {
-                best_cost
-            },
+            lower_bound_setup_and_handling_milliseconds: serial_lower_bound,
         }),
+        calendar_timing,
         tie_break: if handling.is_some() {
             "Retain the incumbent on equal integer setup-plus-handling milliseconds; explore by immediate duration and operation ID."
         } else if search.times.is_some() {

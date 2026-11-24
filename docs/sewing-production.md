@@ -797,20 +797,40 @@ Unnamed cells retain their contiguous outer window. Source validation includes i
 This independent-cell policy is exclusive with shared-operator mode, which keeps its own
 worker/cell calendar authority.
 
-For every retained serial cell order, the complete handling transition, setup and operation feed
+For every candidate cell order, the complete handling transition, setup and operation feed
 must fit one opening. Final unloading is another complete block. No operation is paused across
 a break, and each positive feed receives its own integer-millisecond ceiling. Setup state,
 garment ownership and local fixture holds persist through gaps; an opening never frees inventory.
 The report separates productive work from `calendar_delay_milliseconds` and retains each exact
 phase boundary in `cells[].calendar_timeline`.
 
-The allocation search uses only complete calendar-feasible cell/count schedules. A retained order
-that cannot fit has `incumbent_finish_milliseconds: null`; it cannot supply a partial garment or
-a false finishing time. Other serial orders may still be feasible, so the report declares
-`calendar_order_scope: "retained_serial_incumbents/1"`. A missing complete allocation returns
-`not_converged` when independent lower bounds still permit one. Exhausting retained orders does
-not prove unrestricted infeasibility or optimality. Makespan, feed and thread-cost proofs remain
-separate, with valid lower-bound equality required where applicable.
+Each cell/count first obtains its admitted serial-work incumbent and productive-work lower bound.
+The remaining portion of that **same original prefix-node allowance** then searches operation orders
+against the actual calendar, preserving every prerequisite and finite fixture lifecycle. It minimizes
+complete finishing time, including final unloading. The two searches and subsequent reconstruction
+stay inside the existing per-cell and whole-job work reservations; calendar search adds no unbounded
+permutation pass. Omission preserves the ordinary serial optimizer.
+
+This matters even for two operations. With zero setup/handling, feed durations of 2400 and 4000 ms,
+and openings `[0, 4000]` and `[10000, 12400]`, the uninterrupted order that puts 2400 ms first
+cannot finish. The calendar search finds the reverse order and finishes at 12400 ms. These are
+synthetic scheduling inputs, not machine observations.
+
+The allocation search uses only complete calendar-feasible cell/count schedules and declares
+`calendar_order_scope: "bounded_calendar_order_search/1"`. If the cap stops search, a complete
+incumbent remains usable; otherwise the count retains `incumbent_finish_milliseconds: null` and
+stays unresolved. No prefix supplies partial garments. Exhaustive search can prove one count
+infeasible without excluding a usable alternative cell. A missing complete allocation is
+`not_converged` while valid bounds and unfinished searches still admit one; a complete exclusion
+requires exhausted orders or independent bounds for every relevant allocation.
+
+Every used cell's `schedule.ordering.calendar_timing` retains the serial incumbent's nullable
+calendar finish, selected complete finish, finish lower bound, additional charged nodes, and
+separate search-completion, budget, optimality and infeasibility fields. A calendar optimum may
+use more productive setup/handling work to finish earlier; in that case the ordinary
+`ordering.optimality_proven` remains false while the calendar proof can be true. Existing timing
+totals still exclude calendar waiting. The parallel allocation propagates valid calendar finish
+bounds; makespan, feed and thread-cost proofs remain separate.
 
 Plan `/37`, production `/25` and parallel `/10` retain the policy and exact selected timelines.
 Stitch generation, cell-qualified thread purchasing, recipe selection and material comparisons

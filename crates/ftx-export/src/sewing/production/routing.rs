@@ -2180,6 +2180,7 @@ pub(in crate::sewing) fn build(
         lower_bound_total_changes: 0,
         timing: None,
         handling_timing: None,
+        calendar_timing: None,
         tie_break: "Routed dispatch identities and summed per-cell setup changes only. No serial ordering was optimized; execution, timing, search and proof are exclusively in production.routing.",
     };
     let mut operations = Vec::with_capacity(copies * count);

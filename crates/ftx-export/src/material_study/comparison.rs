@@ -3121,7 +3121,7 @@ fn scheduled_sewing_feed(row: &Alternative) -> Option<f64> {
                                     && production.schema == "ftx-sewing-production/25"
                                     && plan.schema == "ftx-sewing-plan/37"
                                     && parallel.calendar_order_scope
-                                        == Some("retained_serial_incumbents/1")
+                                        == Some("bounded_calendar_order_search/1")
                                     && search.search_scope == "complete_cell_count_assignments/1"
                             } else {
                                 request.time_basis == "ceil_cell_feed_milliseconds/1"

@@ -195,6 +195,94 @@ fn refresh_routed_locks(options: &mut Value) {
 }
 
 #[test]
+fn independent_cell_calendar_order_search_reaches_native_and_portable_stitches() {
+    let mut options: Value = serde_json::from_str(PARALLEL).unwrap();
+    options["production"]["production_copies"] = json!(1);
+    options["passes"][0]["stitches_per_minute"] = json!(1000.0);
+    options["passes"][1]["after"] = json!([]);
+    options["production"]["workholding"] = Value::Null;
+    let parallel = &mut options["production"]["parallel"];
+    parallel["time_basis"] = json!("ceil_operation_feed_milliseconds/1");
+    parallel["availability_calendars"] = json!({
+        "model":"nonpreemptive_resource_windows/1", "resources":{
+            "cell-a":[{"start_milliseconds":0,"end_milliseconds":4000},
+                {"start_milliseconds":10000,"end_milliseconds":12400}],
+            "cell-b":[{"start_milliseconds":0,"end_milliseconds":0}]},
+        "source":{"reference":"test:calendar-order-native-replay","accessed_on":"2026-11-23",
+            "note":"Synthetic source-qualified windows and retained fixture state; no physical measurement"},
+        "method":"Nonpreemptive complete phases with explicitly retained setup between openings",
+        "conditions":{},"evidence":"estimate","allow_estimates":true
+    });
+    for cell in parallel["cells"].as_array_mut().unwrap() {
+        cell["workholding"] = Value::Null;
+        for transition in cell["ordering"]["setup_times"]["transitions"]
+            .as_array_mut()
+            .unwrap()
+        {
+            transition["milliseconds"] = json!(0);
+        }
+        for key in ["initial_milliseconds", "final_milliseconds"] {
+            for value in cell["handling"][key].as_object_mut().unwrap().values_mut() {
+                *value = json!(0);
+            }
+        }
+        for transition in cell["handling"]["transitions"].as_array_mut().unwrap() {
+            transition["milliseconds"] = json!(0);
+        }
+    }
+    let text = options.to_string();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &text).unwrap());
+    let plan = &program["plan"];
+    let report = &plan["production"]["parallel"];
+    assert_eq!(
+        report["calendar_order_scope"],
+        "bounded_calendar_order_search/1"
+    );
+    assert_eq!(report["selected"]["makespan_milliseconds"], 12400);
+    assert_eq!(report["optimality_proven"], true);
+    let ordering = &report["selected"]["cells"][0]["schedule"]["ordering"];
+    assert_eq!(ordering["selected_order"], json!(["0/reinforce", "0/join"]));
+    assert!(ordering["calendar_timing"]["serial_incumbent_finish_milliseconds"].is_null());
+    assert_eq!(
+        ordering["calendar_timing"]["selected_finish_milliseconds"],
+        12400
+    );
+    let stitches = program["stitches"].as_array().unwrap();
+    assert_eq!(stitches.len(), 80);
+    assert!(stitches[..40].iter().all(|step| step["operation"] == 1));
+    assert!(stitches[40..].iter().all(|step| step["operation"] == 0));
+    let replay = plan["options"].to_string();
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &replay).unwrap()),
+        *plan
+    );
+    assert_eq!(
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &replay).unwrap()),
+        program
+    );
+    let directory = workspace();
+    fs::write(directory.join("pattern.json"), PATTERN).unwrap();
+    fs::write(directory.join("options.json"), &text).unwrap();
+    fs::write(directory.join("replay.json"), &replay).unwrap();
+    for main in [false, true] {
+        assert_eq!(
+            run(main, &directory, "sew-plan", "pattern.json", "options.json"),
+            *plan
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "replay.json"
+            ),
+            program
+        );
+    }
+}
+
+#[test]
 fn copy_deadlines_replay_exact_native_and_portable_plans_and_refusals() {
     let mut options = routed_specialist_options();
     options["production"]["routing"]["copy_windows"] = json!({
