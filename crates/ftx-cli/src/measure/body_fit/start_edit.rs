@@ -4,12 +4,22 @@ use std::path::Path;
 
 use ftx_body::{AnnyData, AnnyModel};
 use ftx_core::{Refusal, receipt::sha256_hex};
-use ftx_measure::body_fit::{BodyFitInput, BodyModel, FitStart, FramePose, prepare_input};
+use ftx_measure::body_fit::{
+    BodyFitInput, BodyModel, FitStart, FixedPose, FramePose, prepare_input,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{Adapter, Request, capture, import_masks, review, targets};
 use crate::{Args, bad_input, known_options, required, workspace};
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FrameFixedPoseEdit {
+    frame_index: usize,
+    #[serde(default)]
+    fixed_pose: Option<FixedPose>,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +52,8 @@ struct Annotations {
     capture_sources_sha256: Option<String>,
     silhouettes: Option<SilhouetteImport>,
     starts: Vec<StartValues>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fixed_poses: Option<Vec<FrameFixedPoseEdit>>,
 }
 
 fn receipt_hash(receipt: &Value) -> Result<String, Refusal> {
@@ -111,6 +123,7 @@ pub(super) fn attach(
             .map(str::to_owned),
         silhouettes,
         starts,
+        fixed_poses: None,
     };
     let frames: Vec<_> = original_fit
         .frames
@@ -309,6 +322,27 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
             Ok(receipt)
         })
         .transpose()?;
+    let has_fixed_pose_edits = annotations.fixed_poses.is_some();
+    if let Some(fixed_edits) = annotations.fixed_poses {
+        if fixed_edits.len() != request.fit.frames.len() {
+            return Err(bad_input(
+                "fixed_poses needs exactly one entry per source frame",
+            ));
+        }
+        let mut updated = vec![None; request.fit.frames.len()];
+        for entry in fixed_edits {
+            let slot = updated
+                .get_mut(entry.frame_index)
+                .ok_or_else(|| bad_input("fixed pose frame_index is out of range"))?;
+            if slot.replace(entry.fixed_pose).is_some() {
+                return Err(bad_input("duplicate fixed pose frame_index"));
+            }
+        }
+        for (frame, fixed_pose) in request.fit.frames.iter_mut().zip(updated) {
+            frame.fixed_pose =
+                fixed_pose.ok_or_else(|| bad_input("missing fixed pose frame_index"))?;
+        }
+    }
     request.fit.starts = decoded_starts(annotations.starts, &request.fit)?;
     // One validator: the exact same complete-start contract used by ordinary fitting.
     prepare_input(&request.fit, adapter.layout())?;
@@ -316,6 +350,24 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ftx_measure::body_fit::validate_capture_images(images, &request.fit.frames)?;
     }
     input["fit"]["starts"] = json!(request.fit.starts);
+    if has_fixed_pose_edits {
+        let raw_frames = input["fit"]["frames"]
+            .as_array_mut()
+            .ok_or_else(|| bad_input("source input is missing fit.frames"))?;
+        if raw_frames.len() != request.fit.frames.len() {
+            return Err(bad_input("source input frames disagree with parsed input"));
+        }
+        for (raw_frame, frame) in raw_frames.iter_mut().zip(&request.fit.frames) {
+            let obj = raw_frame
+                .as_object_mut()
+                .ok_or_else(|| bad_input("source input frame must be an object"))?;
+            if let Some(fixed) = &frame.fixed_pose {
+                obj.insert("fixed_pose".into(), json!(fixed));
+            } else {
+                obj.remove("fixed_pose");
+            }
+        }
+    }
     targets::rebase_capture(&mut input, source_path)?;
     let mut bundle = review::Bundle::new();
     let original = bundle.push("original-input.json".into(), original_bytes)?;
@@ -332,6 +384,11 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "prepared-input.json".into(),
         workspace::json_bytes(&portable)?,
     )?;
+    let no_claim = if has_fixed_pose_edits {
+        "Explicit initializations and per-frame fixed pose constraints passed ordinary native validation. Only starts, declared per-frame fixed poses, rebased local capture paths and separately requested silhouette imports were materialized. Supplied pose assumptions do not establish measured anatomy, observability, accepted body or real-wearer fit."
+    } else {
+        "Explicit initializations passed ordinary native validation. Only starts, rebased local capture paths and separately requested silhouette imports were materialized. No optimization, anatomy, observability, accepted body or real-wearer fit claim."
+    };
     let report = json!({"schema":"ftx-body-start-materialization/1","status":"STARTS_APPLIED",
         "body_fitted":false,"source_input":annotations.source_input,
         "input_sha256":annotations.source_input_sha256,"model_sha256":hash,
@@ -340,7 +397,7 @@ pub(super) fn apply(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "start_count":request.fit.starts.len(),"frame_count":request.fit.frames.len(),
         "original_input":original,"annotations":annotation,"replay_input":replay,
         "prepared_input":prepared,
-        "no_claim":"Explicit initializations passed ordinary native validation. Only starts, rebased local capture paths and separately requested silhouette imports were materialized. No optimization, anatomy, observability, accepted body or real-wearer fit claim."});
+        "no_claim":no_claim});
     bundle.publish_report(output, &report, "starts.json")?;
     Ok((
         report,

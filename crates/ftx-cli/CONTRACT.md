@@ -113,7 +113,9 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
 - `ftx measure fit-starts ANNOTATIONS --model MODEL --out NEW_DIR [--json]`: apply a complete
   `ftx-body-starts/1` annotation through the same native fitter admission. Exact source bytes,
   model and capture/mask evidence bind the values; original-order frame ordinals preserve full
-  native timestamps without a browser round trip. Only starts and rebased capture paths change,
+  native timestamps without a browser round trip. Only starts, optional complete per-frame
+  `fixed_poses` (`{frame_index, fixed_pose}` prescribing bounded named values with evidence or
+  `null` to release), and rebased capture paths change,
   plus explicit inline materialization of separately imported review-mask slices. All observations,
   FIT/CHECK roles, model targets and parameter bounds remain intact. `input.json` is an ordinary
   capture/prepared-fit input; `starts.json` records private create-only publication. Regenerate a

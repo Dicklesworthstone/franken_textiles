@@ -2163,3 +2163,128 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
         );
     }
 }
+
+#[test]
+fn native_fit_starts_materializes_and_releases_per_frame_fixed_poses_with_refusals() {
+    let dir = setup();
+    let mut input = read(&dir, "input.json");
+    long_frame_ids(&mut input, u64::MAX - 200_000);
+    input["fit"]["frames"].as_array_mut().unwrap().reverse();
+    input["fit"]["starts"][0]["poses"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    write(&dir, "input.json", &input);
+
+    let rev = review(&dir, "rev", 0);
+    assert_eq!(rev["status"], "OK");
+    let mut ann = read(&dir, "rev/body-starts.json");
+    // Reversed frame 0 is fixture pose[1] (true root_x_m = 0.2 m).
+    let fixed_val = 0.2_f64;
+    for start in ann["starts"].as_array_mut().unwrap() {
+        for pose in start["poses"].as_array_mut().unwrap() {
+            if pose["frame_index"] == 0 {
+                pose["values"][0] = json!(fixed_val);
+            }
+        }
+    }
+    // Reverse order to prove joining uses original frame_index ordinals.
+    ann["fixed_poses"] = json!([
+        {"frame_index": 1, "fixed_pose": Value::Null},
+        {
+            "frame_index": 0,
+            "fixed_pose": {
+                "values": {"root_x_m": fixed_val},
+                "evidence": "CLI floor tape mark for frame 1"
+            }
+        }
+    ]);
+    write(&dir, "annotations.json", &ann);
+    let applied = apply(&dir, "applied", 0);
+    assert_eq!(applied["result"]["status"], "STARTS_APPLIED");
+    assert!(
+        applied["result"]["no_claim"]
+            .as_str()
+            .unwrap()
+            .contains("fixed pose")
+    );
+    let materialized = read(&dir, "applied/input.json");
+    assert_eq!(
+        materialized["fit"]["frames"][0]["fixed_pose"],
+        json!({"values": {"root_x_m": fixed_val}, "evidence": "CLI floor tape mark for frame 1"})
+    );
+    assert!(materialized["fit"]["frames"][1].get("fixed_pose").is_none());
+    assert_eq!(
+        materialized["fit"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        materialized["fit"]["frames"][1]["keypoints"][3]["partition"],
+        json!("held_out")
+    );
+
+    // Release fixed pose from the materialized input and confirm fixed_pose is removed.
+    let rev2 = command(
+        &dir,
+        &[
+            "measure",
+            "fit-start-review",
+            "applied/input.json",
+            "--model",
+            "model.ftxbody",
+            "--out",
+            "rev2",
+        ],
+        0,
+    );
+    assert_eq!(rev2["status"], "OK");
+    let mut release = read(&dir, "rev2/body-starts.json");
+    release["fixed_poses"] = json!([
+        {"frame_index": 0, "fixed_pose": Value::Null},
+        {"frame_index": 1, "fixed_pose": Value::Null},
+    ]);
+    write(&dir, "annotations.json", &release);
+    apply(&dir, "released", 0);
+    let released_input = read(&dir, "released/input.json");
+    assert!(
+        released_input["fit"]["frames"][0]
+            .get("fixed_pose")
+            .is_none()
+    );
+    assert_eq!(
+        released_input["fit"]["frames"], input["fit"]["frames"],
+        "releasing fixed_pose must restore exact original frame records"
+    );
+
+    // Refusals: blank evidence, missing frame entry, duplicate ordinal, unreconciled start disagreement.
+    for (idx, bad) in [
+        {
+            let mut v = ann.clone();
+            v["fixed_poses"][1]["fixed_pose"]["evidence"] = json!("   ");
+            v
+        },
+        {
+            let mut v = ann.clone();
+            v["fixed_poses"].as_array_mut().unwrap().pop();
+            v
+        },
+        {
+            let mut v = ann.clone();
+            v["fixed_poses"][0]["frame_index"] = json!(0);
+            v
+        },
+        {
+            let mut v = ann.clone();
+            v["starts"][1]["poses"][0]["values"][0] = json!(0.25);
+            v
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        write(&dir, "annotations.json", &bad);
+        let out_name = format!("bad-{idx}");
+        apply(&dir, &out_name, 3);
+        assert!(!dir.join(&out_name).exists());
+    }
+}
