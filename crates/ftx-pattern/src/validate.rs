@@ -865,27 +865,53 @@ pub fn validate(pat: &Pattern, spec: &Value, body: &dyn BodyMeasure) -> Report {
                                     "{pid}: internal[{idx}] cut mark cannot carry crease_angle_deg"
                                 ));
                             } else {
-                                let valid_pts = item
+                                let parsed_pts: Option<Vec<[f64; 2]>> = item
                                     .get("pts")
                                     .and_then(Value::as_array)
-                                    .is_some_and(|pts| {
-                                        pts.len() >= 2
-                                            && pts.iter().all(|pt| {
-                                                pt.as_array().is_some_and(|xy| {
-                                                    xy.len() == 2
-                                                        && xy[0]
-                                                            .as_f64()
-                                                            .is_some_and(f64::is_finite)
-                                                        && xy[1]
-                                                            .as_f64()
-                                                            .is_some_and(f64::is_finite)
-                                                })
+                                    .and_then(|pts| {
+                                        pts.iter()
+                                            .map(|pt| {
+                                                let xy = pt.as_array()?;
+                                                if xy.len() != 2 {
+                                                    return None;
+                                                }
+                                                let x = xy[0].as_f64().filter(|v| v.is_finite())?;
+                                                let y = xy[1].as_f64().filter(|v| v.is_finite())?;
+                                                Some([x, y])
                                             })
+                                            .collect::<Option<Vec<[f64; 2]>>>()
                                     });
-                                if !valid_pts {
-                                    completeness.push(format!(
-                                        "{pid}: internal[{idx}] crease requires pts with at least 2 finite [x, y] points"
-                                    ));
+                                match parsed_pts {
+                                    Some(pts) if pts.len() >= 2 => {
+                                        if item.get("closed").is_some_and(crate::doc::truthy) {
+                                            let mut ring: Vec<[f64; 2]> =
+                                                Vec::with_capacity(pts.len());
+                                            for pt in pts {
+                                                if ring.last().is_none_or(|prev| {
+                                                    (pt[0] - prev[0]).hypot(pt[1] - prev[1]) > 1e-6
+                                                }) {
+                                                    ring.push(pt);
+                                                }
+                                            }
+                                            if ring.len() > 1
+                                                && (ring[0][0] - ring.last().unwrap()[0])
+                                                    .hypot(ring[0][1] - ring.last().unwrap()[1])
+                                                    <= 1e-6
+                                            {
+                                                ring.pop();
+                                            }
+                                            if ring.len() < 3 {
+                                                completeness.push(format!(
+                                                    "{pid}: internal[{idx}] closed crease requires at least 3 distinct finite [x, y] points"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        completeness.push(format!(
+                                            "{pid}: internal[{idx}] crease requires pts with at least 2 finite [x, y] points"
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -1324,11 +1350,13 @@ mod raw_point_tests {
             assert_eq!(seams[0].status, "ERROR");
         }
 
-        // Invalid internal crease_angle_deg (cut mark, <2 pts, out-of-range, non-numeric)
-        // records a completeness error -> NOT_CONVERGED.
+        // Invalid internal crease_angle_deg (cut mark, <2 pts, degenerate closed loop,
+        // out-of-range, non-numeric) records a completeness error -> NOT_CONVERGED.
         for bad_mark in [
             json!({"kind": "cut", "pts": [[50, 0], [50, 80]], "crease_angle_deg": 45.0}),
             json!({"kind": "draw", "pts": [[50, 0]], "crease_angle_deg": 45.0}),
+            json!({"kind": "draw", "pts": [[50, 0], [50, 80]], "closed": true, "crease_angle_deg": 45.0}),
+            json!({"kind": "draw", "pts": [[50, 0], [50, 80], [50, 0]], "closed": true, "crease_angle_deg": 45.0}),
             json!({"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": 180.0}),
             json!({"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": "90"}),
         ] {

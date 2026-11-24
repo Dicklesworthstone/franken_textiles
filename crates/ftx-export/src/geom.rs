@@ -781,16 +781,43 @@ pub fn build_geom(
         }
         let raw_pts_len = item["pts"].as_array().map_or(0, Vec::len);
         let pts = points(&item["pts"]);
-        if crease_deg.is_some()
-            && (raw_pts_len < 2 || pts.len() != raw_pts_len || pts.iter().any(|p| !p.is_finite()))
-        {
-            return Err(Refusal::new(
-                RefusalCode::InvalidDocument,
-                format!(
-                    "{}: internal crease requires pts with at least 2 finite [x, y] points",
-                    g.iid
-                ),
-            ));
+        if crease_deg.is_some() {
+            if raw_pts_len < 2 || pts.len() != raw_pts_len || pts.iter().any(|p| !p.is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!(
+                        "{}: internal crease requires pts with at least 2 finite [x, y] points",
+                        g.iid
+                    ),
+                ));
+            }
+            if item.get("closed").is_some_and(truthy) {
+                let mut ring: Vec<Vec2> = Vec::with_capacity(pts.len());
+                for &pt in &pts {
+                    if ring
+                        .last()
+                        .is_none_or(|&prev| (pt.x - prev.x).hypot(pt.y - prev.y) > 1e-6)
+                    {
+                        ring.push(pt);
+                    }
+                }
+                if ring.len() > 1
+                    && (ring[0].x - ring.last().unwrap().x)
+                        .hypot(ring[0].y - ring.last().unwrap().y)
+                        <= 1e-6
+                {
+                    ring.pop();
+                }
+                if ring.len() < 3 {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!(
+                            "{}: closed internal crease requires at least 3 distinct finite [x, y] points",
+                            g.iid
+                        ),
+                    ));
+                }
+            }
         }
         if pts.is_empty() {
             continue;
@@ -1689,6 +1716,14 @@ mod tests {
             ),
             (
                 json!({"kind": "draw", "pts": [[25, 10]], "crease_angle_deg": 45.0}),
+                RefusalCode::InvalidDocument,
+            ),
+            (
+                json!({"kind": "draw", "pts": [[25, 10], [25, 70]], "closed": true, "crease_angle_deg": 45.0}),
+                RefusalCode::InvalidDocument,
+            ),
+            (
+                json!({"kind": "draw", "pts": [[25, 10], [25, 70], [25, 10]], "closed": true, "crease_angle_deg": 45.0}),
                 RefusalCode::InvalidDocument,
             ),
             (
