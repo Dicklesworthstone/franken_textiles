@@ -1631,6 +1631,17 @@ fn extract_piece_creases(
             }
             drafted_poly.push(Vec2::new(x, y));
         }
+        if mark.get("closed").is_some_and(truthy) {
+            if drafted_poly.len() < 3 {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("{context}: closed crease requires at least 3 [x, y] points"),
+                ));
+            }
+            if norm2(drafted_poly[0] - *drafted_poly.last().expect("len >= 3")) > 1e-6 {
+                drafted_poly.push(drafted_poly[0]);
+            }
+        }
         let mut copies = vec![drafted_poly.clone()];
         if let Some((fa, fb)) = fold_axis {
             let off_fold = drafted_poly
@@ -3127,6 +3138,59 @@ mod tests {
         // A second overlapping crease over the same split path with a different angle must refuse.
         let conflicting = [([5, 2], 0.5_f64), ([5, 2], -0.5_f64)];
         let err = triangulate_with_creases(&pts, nb, &conflicting, "strip").unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+    }
+
+    #[test]
+    fn closed_internal_crease_includes_closing_segment_and_refuses_two_point_loop() {
+        let mut piece = rect("panel", 100.0, 100.0);
+        piece["internal"] = json!([{
+            "kind": "draw",
+            "pts": [[25.0, 25.0], [75.0, 25.0], [50.0, 75.0]],
+            "closed": true,
+            "crease_angle_deg": 45.0
+        }]);
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [piece],
+            "seams": []
+        }));
+        let mesh = build_garment(&pat, 25.0).unwrap();
+        let expected_rad = 45.0_f64.to_radians();
+        assert!(!mesh.creases.is_empty());
+        assert!(
+            mesh.creases
+                .iter()
+                .all(|c| (c.rest_angle_rad - expected_rad).abs() < 1e-12)
+        );
+        // Every side of the closed triangle — including the closing edge (50, 75) -> (25, 25) —
+        // must be represented in mesh.creases.
+        let closing_mid = Vec2::new(37.5, 50.0);
+        let has_closing = mesh.creases.iter().any(|c| {
+            let a = mesh.verts2d[c.verts[0]];
+            let b = mesh.verts2d[c.verts[1]];
+            dist_point_segment(closing_mid, a, b) <= 1e-3
+        });
+        assert!(
+            has_closing,
+            "closed internal crease must mesh its closing edge (50, 75) -> (25, 25)"
+        );
+
+        let mut bad_piece = rect("panel", 100.0, 100.0);
+        bad_piece["internal"] = json!([{
+            "kind": "draw",
+            "pts": [[25.0, 25.0], [75.0, 25.0]],
+            "closed": true,
+            "crease_angle_deg": 45.0
+        }]);
+        let bad_pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [bad_piece],
+            "seams": []
+        }));
+        let err = build_garment(&bad_pat, 25.0).unwrap_err();
         assert_eq!(err.code, RefusalCode::InvalidDocument);
     }
 }
