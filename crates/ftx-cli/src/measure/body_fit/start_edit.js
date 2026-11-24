@@ -516,7 +516,7 @@
   }
 
   function begin(value) {
-    if (pending || starts.length >= 4) return;
+    if (pending || fixedPending || starts.length >= 4) return;
     draft = value;
     adding = true;
     pending = true;
@@ -534,7 +534,7 @@
     if (selected !== null) begin(copy(starts[selected]));
   });
   byId('midpointStart').addEventListener('click', () => {
-    if (draft === null) return;
+    if (fixedPending || draft === null) return;
     [...shapeInputs, ...poseInputs.flatMap(frame => frame.controls)].forEach(control => {
       const p = control.parameter;
       control.input.value = String(control.fixed ? control.fixedValue : p.lower + 0.5 * (p.upper - p.lower));
@@ -543,7 +543,7 @@
     status.textContent = 'Bounds midpoints entered as an explicit guess for free controls; declared fixed poses are retained. Inspect every value and apply when ready; no body or pose was estimated.';
   });
   byId('applyStart').addEventListener('click', () => {
-    if (draft === null) return;
+    if (fixedPending || draft === null) return;
     withdraw();
     try {
       const candidate = readDraft();
@@ -571,9 +571,11 @@
     }
   });
   list.addEventListener('change', () => {
-    if (pending) {
+    if (pending || fixedPending) {
       list.value = adding || selected === null ? '' : String(selected);
-      status.textContent = 'Apply or cancel the pending edit before selecting another start.';
+      status.textContent = fixedPending
+        ? 'Apply or cancel the pending frame constraints before selecting another start.'
+        : 'Apply or cancel the pending edit before selecting another start.';
       return;
     }
     const index = Number(list.value);
@@ -584,7 +586,7 @@
     status.textContent = `Editing Start ${selected + 1}. Existing previews still show the original input.`;
   });
   byId('removeStart').addEventListener('click', () => {
-    if (pending || selected === null) return;
+    if (pending || fixedPending || selected === null) return;
     starts.splice(selected, 1);
     selected = starts.length ? Math.min(selected, starts.length - 1) : null;
     draft = selected === null ? null : copy(starts[selected]);

@@ -20350,6 +20350,12 @@ test('guided interval wind forwards explicit vectors through both saved motion a
   assert.equal(p.e.guidedMotionWind.checked, false);
   assert.ok(['X', 'Y', 'Z'].every(axis => p.e['guidedMotionWind' + axis].value === '' && p.e['guidedMotionWind' + axis].disabled));
   p.e.guidedMotionWind.checked = true; p.e.guidedMotionWind.handlers.change();
+  assert.ok(['X', 'Y', 'Z'].every(axis => !p.e['guidedMotionWind' + axis].disabled));
+  p.e.scenarioMode.value = 'file'; p.e.scenarioMode.handlers.change();
+  assert.equal(p.e.guidedMotionWind.disabled, true);
+  assert.ok(['X', 'Y', 'Z'].every(axis => p.e['guidedMotionWind' + axis].disabled));
+  p.e.scenarioMode.value = 'guided'; p.e.scenarioMode.handlers.change();
+  assert.ok(['X', 'Y', 'Z'].every(axis => !p.e['guidedMotionWind' + axis].disabled));
   p.e.guidedScenarioAirDrag.checked = true; p.e.guidedScenarioAirDrag.handlers.change();
   p.e.guidedScenarioAirWindX.value = '-0.25'; p.e.guidedScenarioAirWindY.value = '1'; p.e.guidedScenarioAirWindZ.value = '0';
   p.e.guidedMotionPoseSampling.checked = true; p.e.guidedMotionPoseStep.value = '0.001'; p.e.guidedMotionPoseSegments.value = '32';

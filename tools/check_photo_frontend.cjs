@@ -1550,6 +1550,13 @@ test('native review authors frame constraints, reconciles all starts and reopens
   first.evidence.value='Independent fixture position λ';first.evidence.handlers.input();
   second.prescribe.checked=false;second.prescribe.handlers.change();
   assert.equal(p.e.applyStart.disabled,true);assert.equal(p.e.startDraftDownload.hidden,true);
+  // Start actions invoked while frame constraints are pending must preserve unapplied constraint edits.
+  p.e.newStart.handlers.click();p.e.duplicateStart.handlers.click();p.e.midpointStart.handlers.click();
+  p.e.applyStart.handlers.click();p.e.removeStart.handlers.click();
+  p.e.startList.value='1';p.e.startList.handlers.change();
+  assert.equal(p.e.startList.value,'0');
+  assert.equal(nativeFixedControls(p,0).value.value,'0.83');
+  assert.equal(p.e.applyFixedStarts.disabled,false);
   p.e.applyFixedStarts.handlers.click();
   assert.equal(p.e.startDownload.hidden,false,p.e.startStatus.textContent);
   assert.equal(nativeStartField(p,'start-pose-0-0').disabled,true);

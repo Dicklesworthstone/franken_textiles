@@ -378,7 +378,7 @@ function controls() {
   const motionWind = motionMode === "form" && $("guidedMotionWind").checked;
   $("guidedMotionWind").disabled = !source || !guidedScenarioMode() || motionMode !== "form";
   $("guidedMotionWindFields").hidden = !motionWind;
-  for (const axis of ["X", "Y", "Z"]) $("guidedMotionWind" + axis).disabled = !motionWind;
+  for (const axis of ["X", "Y", "Z"]) $("guidedMotionWind" + axis).disabled = !source || !guidedScenarioMode() || !motionWind;
   for (const side of ["Left", "Right"]) {
     $("guidedMotionArm" + side).disabled = motionMode !== "form" || !$("guidedMotionIndependentArms").checked;
   }

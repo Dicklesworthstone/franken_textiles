@@ -5501,27 +5501,40 @@ mod strategy_and_integrator_tests {
             areal,
         )
         .unwrap();
-        let mut solver = Solver::new(model, x0, &fixed, g);
-        solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
-        solver.damping = DampingOptions {
-            air_drag: Some(drag),
-            rayleigh_membrane_s: 0.0,
-            rayleigh_bending_s: 0.0,
-        };
-        solver.tol = 1e-13;
-
         // Flat unconstrained sheet at rest in uniform wind has exact initial acceleration:
         // a_true = g - F_res(0 - v_air) / (areal * area) on every vertex.
         let f_res = drag.triangle_resistance_force(1.0, Vec3::new(0.0, 0.0, 1.0), Vec3::ZERO);
         let a_true = g - f_res * (1.0 / areal);
-        solver.step(1e-6).unwrap();
-        for (i, &a1) in solver.acceleration().iter().enumerate() {
-            let rel_err = (a1 - a_true).norm() / a_true.norm();
-            assert!(
-                rel_err < 1e-4,
-                "vertex {i}: Generalized-alpha a1={a1:?} must match wind continuum limit {a_true:?} (rel_err={rel_err})"
-            );
-        }
+
+        // Keep step tolerance well above IEEE-754 position ULP (~1.4e-17 m at x = 0.10 m) so
+        // h * tol = 1e-15 m converges cleanly while proving O(h) approach to a_true with no step-1 jump.
+        let max_rel_err = |h: f64, tol: f64| -> f64 {
+            let mut solver = Solver::new(model.clone(), x0.clone(), &fixed, g);
+            solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
+            solver.damping = DampingOptions {
+                air_drag: Some(drag),
+                rayleigh_membrane_s: 0.0,
+                rayleigh_bending_s: 0.0,
+            };
+            solver.tol = tol;
+            solver.step(h).unwrap();
+            solver
+                .acceleration()
+                .iter()
+                .map(|&a1| (a1 - a_true).norm() / a_true.norm())
+                .fold(0.0_f64, f64::max)
+        };
+
+        let err_coarse = max_rel_err(1e-4, 1e-11);
+        let err_fine = max_rel_err(1e-5, 1e-10);
+        assert!(
+            err_fine < 1e-3,
+            "Generalized-alpha a1 must match wind continuum limit: err_fine={err_fine:.3e}, err_coarse={err_coarse:.3e}"
+        );
+        assert!(
+            err_fine < 0.2 * err_coarse,
+            "Generalized-alpha wind limit must refine cleanly with h: err_fine={err_fine:.3e}, err_coarse={err_coarse:.3e}"
+        );
     }
 
     #[test]
