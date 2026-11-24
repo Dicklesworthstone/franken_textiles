@@ -11,8 +11,10 @@ mkdir -p "$dest/pkg" "$dest/calibration" "$dest/atelier-assets"
 cp web/*.js web/*.html web/*.css "$dest/"
 cp web/atelier-assets/* "$dest/atelier-assets/"
 cp web/calibration/* "$dest/calibration/"
+# --out-name fixes the file names whatever the artifact is called: wasm-bindgen otherwise names them after
+# it (serial.wasm -> serial_bg.wasm) and the gzip below would compress a stale ftx_wasm_bg.wasm.
 wasm-bindgen --target web --no-typescript --remove-name-section --remove-producers-section \
-  --out-dir "$dest/pkg" "$artifact"
+  --out-name ftx_wasm --out-dir "$dest/pkg" "$artifact"
 gzip -6n -c "$dest/pkg/ftx_wasm_bg.wasm" > "$dest/pkg/ftx_wasm_bg.wasm.gz"
 # The posing room's threaded engine (ftx-wasm `threads`, public/labs/studio-engine-threads.mjs): std rebuilt
 # with atomics into shared memory (1 GiB at most), in its own target directory. It only runs where the page
@@ -26,6 +28,6 @@ if [ -z "${FTX_WASM_THREADS_ARTIFACT:-}" ]; then
     -p ftx-wasm --features threads --target-dir "${CARGO_TARGET_DIR:-target}/threads"
 fi
 wasm-bindgen --target web --no-typescript --remove-name-section --remove-producers-section \
-  --out-dir "$dest/pkg-threads" "$threads"
+  --out-name ftx_wasm --out-dir "$dest/pkg-threads" "$threads"
 gzip -6n -c "$dest/pkg-threads/ftx_wasm_bg.wasm" > "$dest/pkg-threads/ftx_wasm_bg.wasm.gz"
 (cd showcase && bun scripts/workbench-share.tsx)

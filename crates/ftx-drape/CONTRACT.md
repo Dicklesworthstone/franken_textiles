@@ -807,7 +807,7 @@ result lands in an index-ordered vector or a disjoint slice and every reduction 
 penetrating pair, the first smallest gap, a refusal) is the serial pass's, in its order, so the output is
 bit for bit the serial build's at any thread count. The serial parts bound the gain: in the posing room's
 browser sew (ftx-wasm `threads`, 8-core EPYC) 17.3 s became 12.1 s on 6 threads; the small LDLT solves
-(the PCG preconditioner, hundreds per substep) and the line search stay serial.
+(the PCG preconditioner, hundreds per substep) and the line search's per-pair CCD loop stay serial.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).

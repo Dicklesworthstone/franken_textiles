@@ -2,9 +2,12 @@
 //!
 //! [`map`] returns `[f(0), f(1), …, f(n − 1)]` in index order. With the `parallel` feature the items
 //! are computed on rayon's pool; without it, on the calling thread. Callers do every reduction (sums,
-//! scatters into the Hessian, early exits) serially over that vector in index order, so a parallel run
-//! performs the same floating-point operations in the same order as a serial one: the results are the
-//! same bits whatever the thread count (plan §6 determinism; no mandatory pool).
+//! early exits) serially over that vector in index order. [`for_each_chunk_mut`] hands disjoint pieces
+//! of one array to tasks, each element receiving the operations a serial pass gives it (the Hessian's
+//! slot gather, an LDLT panel update), and `map_tasks` (with the feature) and [`map_owned`] run a few
+//! large independent tasks (LDLT subtrees). A parallel run therefore performs the same floating-point
+//! operations in the same order as a serial one: the results are the same bits whatever the thread
+//! count (plan §6 determinism; no mandatory pool).
 
 /// Below this many items the work stays on the calling thread: a fork-join costs more than it saves.
 #[cfg(feature = "parallel")]
@@ -33,7 +36,6 @@ pub(crate) fn map_tasks<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send)
 
 /// `[f(0, items[0]), …]` for a few large tasks that each own their item (such as disjoint `&mut`
 /// slices of one array), each its own rayon task with the `parallel` feature, in order without it.
-#[cfg_attr(not(feature = "parallel"), allow(dead_code))]
 pub(crate) fn map_owned<T: Send, R: Send>(
     items: Vec<T>,
     f: impl Fn(usize, T) -> R + Sync + Send,
@@ -81,7 +83,6 @@ pub(crate) fn filter_ranges<T: Send>(
 /// `f(c, chunk)` for every consecutive `chunk`-sized piece of `data` (the last may be shorter), `c`
 /// counting pieces from zero. Each call owns its piece alone, so the pieces may run in parallel (with
 /// the `parallel` feature) and every element still sees exactly the operations a serial pass gives it.
-#[cfg_attr(not(feature = "parallel"), allow(dead_code))]
 pub(crate) fn for_each_chunk_mut<T: Send>(
     data: &mut [T],
     chunk: usize,

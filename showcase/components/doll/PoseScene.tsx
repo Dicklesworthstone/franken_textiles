@@ -66,7 +66,7 @@ const FIT = "/exhibits/poses/fit-spec.json";
 // of the body carried along with it (ftx_drape::motion::advance_body_carried).
 const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_steps: 48, time_subdivision: true, self_contact_mm: 0,
   motion_carry_mm: 20, motion_step_s: 0.05 };
-// A change of pose up to the spacing of the arm's samples moves the arm under the sewn jacket with the
+// A change of pose up to 10° (the arm is sampled every 10-15°) moves the arm under the sewn jacket with the
 // solver's checked moving-body step; a larger one sews the jacket on again in the nearest sampled pose, the
 // faster of the two there (measured in Node on one thread, 2026-11-24: a 5° move at 20°/s about 6-7 s, a 10°
 // move about 14 s, a fresh sew about 17 s).

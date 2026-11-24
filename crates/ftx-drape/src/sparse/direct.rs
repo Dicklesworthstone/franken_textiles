@@ -8,9 +8,10 @@
 //! or shifted indefinite with 2×2 and delayed pivots); and a backward solve that sums each column's
 //! panel rows first, by four partial sums ([`dot4`]), instead of one serial chain from the diagonal
 //! (solve 2.1× faster again; different rounding, the same on every target); and, with the crate's
-//! `parallel` feature, independent assembly subtrees factored as tasks and a large front's panel
-//! columns updated at once (each front's arithmetic unchanged, so bit-identical to the serial pass,
-//! refusals and statistics included). The original module documentation follows.
+//! `parallel` feature, independent assembly subtrees factored as tasks, a large front's panel
+//! columns updated at once, and the solves' large subtrees run as tasks too (each front's and each
+//! solve step's arithmetic unchanged, so bit-identical to the serial pass, refusals and statistics
+//! included). The original module documentation follows.
 //!
 //! Sparse symmetric direct factorization: supernodal multifrontal LDLᵀ with
 //! AMD fill-reducing ordering, restricted (within-supernode) 1×1/2×2
@@ -821,9 +822,9 @@ impl SymbolicLdlt {
     }
 
     /// Consecutive supernode ranges `(first, last)` that are unions of whole subtrees of the assembly
-    /// tree, each about a quarter of the factorization's work per thread or less, in order; every
-    /// supernode outside them is an ancestor of one. Empty on a single thread. Work is each front's
-    /// elimination count `Σ (m − k)²` from the symbolic structure (delays not foreseen).
+    /// tree, each about a quarter of the factorization's work per thread or less, in order (see
+    /// [`SymbolicLdlt::subtree_ranges`]). Empty on a single thread. Work is each front's elimination
+    /// count `Σ (m − k)²` from the symbolic structure (delays not foreseen).
     #[cfg(feature = "parallel")]
     fn subtree_tasks(&self) -> Vec<(usize, usize)> {
         let threads = rayon::current_num_threads();
@@ -844,9 +845,9 @@ impl SymbolicLdlt {
     }
 
     /// Consecutive supernode ranges `(first, last, work)` that are unions of whole subtrees of the
-    /// assembly tree, each with at most `1/parts` of the total of `own(sid)` (a supernode's own work)
-    /// where the tree allows, in order; every supernode outside them is an ancestor of one. Empty when
-    /// fewer than two ranges result.
+    /// assembly tree, each with at most `1/parts` of the total of `own(sid)` (a supernode's own work),
+    /// in order. Every supernode outside them heads a subtree too heavy for one range; no range depends
+    /// on one, so they run after the ranges, in supernode order. Empty when fewer than two ranges result.
     #[cfg(feature = "parallel")]
     fn subtree_ranges(&self, own: impl Fn(usize) -> f64, parts: usize) -> Vec<(usize, usize, f64)> {
         let ns = self.snodes.len();
