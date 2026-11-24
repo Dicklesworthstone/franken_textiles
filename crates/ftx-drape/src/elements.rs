@@ -1110,11 +1110,11 @@ impl Hinge {
     /// Finite-angle Discrete Shells bending energy `½·B·w_d·(θ − θ₀)²` for bending stiffness `b` (N·m).
     #[must_use]
     pub fn dihedral_energy(&self, x: &[Vec3], b: f64) -> f64 {
-        if self.check_dihedral_domain(x).is_err() {
-            return f64::NAN;
-        }
         if b == 0.0 {
             return 0.0;
+        }
+        if self.check_dihedral_domain(x).is_err() {
+            return f64::NAN;
         }
         let d = self.dihedral_angle(x) - self.rest_angle;
         0.5 * b * self.dihedral_weight() * d * d
@@ -1160,20 +1160,20 @@ impl Hinge {
     /// `½·B·w_d·(θ − θ₀)²`.
     #[must_use]
     pub fn dihedral_local(&self, x: &[Vec3], b: f64) -> Local<12, 144> {
-        if self.check_dihedral_domain(x).is_err() {
-            return Local {
-                energy: f64::NAN,
-                grad: [f64::NAN; 12],
-                hess: [f64::NAN; 144],
-                psd: false,
-            };
-        }
         if b == 0.0 {
             return Local {
                 energy: 0.0,
                 grad: [0.0; 12],
                 hess: [0.0; 144],
                 psd: true,
+            };
+        }
+        if self.check_dihedral_domain(x).is_err() {
+            return Local {
+                energy: f64::NAN,
+                grad: [f64::NAN; 12],
+                hess: [f64::NAN; 144],
+                psd: false,
             };
         }
         self.dihedral_quadratic_local(x, self.rest_angle, b * self.dihedral_weight())
@@ -1729,6 +1729,14 @@ mod tests {
         );
         assert!(hinge.dihedral_energy(&hairpin, 1e-5).is_nan());
         assert!(hinge.dihedral_local(&hairpin, 1e-5).energy.is_nan());
+        // Inactive zero-rigidity hinges (such as scalar hinges replaced by panel bending)
+        // contribute exact zero without poisoning a fold with NaN.
+        assert_eq!(hinge.dihedral_energy(&hairpin, 0.0), 0.0);
+        let zero_local = hinge.dihedral_local(&hairpin, 0.0);
+        assert_eq!(zero_local.energy, 0.0);
+        assert!(zero_local.psd);
+        assert!(zero_local.grad.iter().all(|&v| v == 0.0));
+        assert!(zero_local.hess.iter().all(|&v| v == 0.0));
 
         // Simultaneously reversing both face normals leaves theta=0 at the endpoints.
         // An endpoint angle comparison misses the intervening collapse of BOTH triangles.

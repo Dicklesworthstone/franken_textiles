@@ -318,6 +318,9 @@ impl ClothModel {
     pub(crate) fn check_dihedral_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
         if self.bending_model == BendingModel::DiscreteShells {
             for (i, hinge) in self.hinges.iter().enumerate() {
+                if self.hinge_rigidity(i) == 0.0 {
+                    continue;
+                }
                 hinge.check_dihedral_domain(x).map_err(|mut refusal| {
                     refusal.message = format!("hinge {i}: {}", refusal.message);
                     refusal
@@ -1841,7 +1844,11 @@ impl Solver {
                 self.model
                     .hinges
                     .iter()
-                    .fold(1.0_f64, |b, hinge| b.min(hinge.dihedral_step_bound(x, dx)))
+                    .enumerate()
+                    .filter(|&(i, _)| self.model.hinge_rigidity(i) != 0.0)
+                    .fold(1.0_f64, |b, (_, hinge)| {
+                        b.min(hinge.dihedral_step_bound(x, dx))
+                    })
             };
             bound = bound.min(bound_at(&self.x, &dx));
             if let StepContext::GeneralizedAlpha { x0, params, .. } = ctx {
@@ -2830,12 +2837,14 @@ impl Solver {
         }
         let x0 = self.x.clone();
         let v0 = self.v.clone();
-        if let Some(c) = &mut self.contact {
-            if let Some(b) = body_start {
-                c.update_lag_motion(&x0, &x0, h, Some(b));
-            } else {
-                c.update_lag(&x0, &x0, h);
-            }
+        if self.contact.is_none()
+            && let Some(g) = guess
+            && g.len() != self.x.len()
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "step warm-start length must match vertex count",
+            ));
         }
         let a0 = if self.accel_initialized {
             self.a.clone()
@@ -2914,27 +2923,6 @@ impl Solver {
                 p
             })
             .collect();
-        if self.contact.is_none()
-            && let Some(g) = guess
-        {
-            if g.len() != self.x.len() {
-                return Err(Refusal::new(
-                    RefusalCode::InvalidDocument,
-                    "step warm-start length must match vertex count",
-                ));
-            }
-            for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
-                if self.free[3 * i].is_some() {
-                    pos.x = cand.x;
-                }
-                if self.free[3 * i + 1].is_some() {
-                    pos.y = cand.y;
-                }
-                if self.free[3 * i + 2].is_some() {
-                    pos.z = cand.z;
-                }
-            }
-        }
         let damping_step = if self.damping.is_default() {
             None
         } else {
@@ -2959,6 +2947,25 @@ impl Solver {
                 },
             )?
         };
+        if let Some(c) = &mut self.contact {
+            if let Some(b) = body_start {
+                c.update_lag_motion(&x0, &x0, h, Some(b));
+            } else {
+                c.update_lag(&x0, &x0, h);
+            }
+        } else if let Some(g) = guess {
+            for (i, (pos, cand)) in self.x.iter_mut().zip(g).enumerate() {
+                if self.free[3 * i].is_some() {
+                    pos.x = cand.x;
+                }
+                if self.free[3 * i + 1].is_some() {
+                    pos.y = cand.y;
+                }
+                if self.free[3 * i + 2].is_some() {
+                    pos.z = cand.z;
+                }
+            }
+        }
         let ctx = StepContext::GeneralizedAlpha {
             x0: &x0,
             xt: &xt,
@@ -4895,6 +4902,83 @@ mod strategy_and_integrator_tests {
             err_small < 2e-3,
             "consistent Generalized-alpha a1 must match continuum limit as h->0: rel_err={err_small}, a1={:?}, a_true={a_true:?}",
             s_small.acceleration()[3]
+        );
+    }
+
+    #[test]
+    fn discrete_shells_ignores_inactive_zero_rigidity_hinges_for_domain_and_step_bound() {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.02),
+            Vec2::new(-0.02, 0.01),
+            Vec2::new(0.02, 0.01),
+        ];
+        let tris = [[0, 1, 2], [1, 0, 3]];
+        let mut model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(400.0, 300.0, 0.2, 80.0, 1.0),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        model.bending_model = BendingModel::DiscreteShells;
+        // Exact ±pi hairpin fold where vertex 3 coincides with vertex 2.
+        let hairpin = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.02, 0.0),
+            Vec3::new(-0.02, 0.01, 0.0),
+            Vec3::new(-0.02, 0.01, 0.0),
+        ];
+        assert!(model.check_dihedral_domains(&hairpin).is_ok());
+        assert_eq!(model.hinge_energy(0, &hairpin), 0.0);
+        let fixed = [[true; 3], [true; 3], [true; 3], [false; 3]];
+        let solver = Solver::new(model, hairpin, &fixed, Vec3::ZERO);
+        let p = vec![0.0, 0.0, 0.01];
+        assert_eq!(solver.dihedral_step_bound(&p, StepContext::Static), 1.0);
+    }
+
+    #[test]
+    fn generalized_alpha_warm_start_preserves_state_on_damping_refusal() {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.02),
+            Vec2::new(-0.02, 0.01),
+            Vec2::new(0.02, 0.01),
+        ];
+        let tris = [[0, 1, 2], [1, 0, 3]];
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(400.0, 300.0, 0.2, 80.0, 1.0),
+            5e-4,
+            0.2,
+        )
+        .unwrap();
+        // Vertex 3 lies on edge (0, 1), making triangle 1 degenerate at step start while
+        // default Quadratic bending passes check_dihedral_domains and v0==0 skips
+        // initial_rayleigh_resistance, so DampingStep::build is what refuses.
+        let x0 = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.02, 0.0),
+            Vec3::new(-0.02, 0.01, 0.0),
+            Vec3::new(0.0, 0.01, 0.0),
+        ];
+        let fixed = [[true; 3], [true; 3], [true; 3], [false; 3]];
+        let mut solver = Solver::new(model, x0.clone(), &fixed, Vec3::new(0.0, 0.0, -9.81));
+        solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 };
+        solver.damping = DampingOptions {
+            air_drag: None,
+            rayleigh_membrane_s: 0.0,
+            rayleigh_bending_s: 0.01,
+        };
+        let mut guess = x0.clone();
+        guess[3] += Vec3::new(0.02, 0.0, 0.004);
+        let err = solver.step_with_guess(0.01, &guess).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
+        assert_eq!(
+            solver.x, x0,
+            "failed Generalized-alpha warm start must leave solver.x unchanged at x0"
         );
     }
 }
