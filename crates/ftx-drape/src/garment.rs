@@ -1632,15 +1632,23 @@ fn extract_piece_creases(
             drafted_poly.push(Vec2::new(x, y));
         }
         if mark.get("closed").is_some_and(truthy) {
-            if drafted_poly.len() < 3 {
+            let mut ring: Vec<Vec2> = Vec::with_capacity(drafted_poly.len());
+            for pt in drafted_poly {
+                if ring.last().is_none_or(|&prev| norm2(pt - prev) > 1e-6) {
+                    ring.push(pt);
+                }
+            }
+            if ring.len() > 1 && norm2(ring[0] - *ring.last().unwrap()) <= 1e-6 {
+                ring.pop();
+            }
+            if ring.len() < 3 {
                 return Err(Refusal::new(
                     RefusalCode::InvalidDocument,
-                    format!("{context}: closed crease requires at least 3 [x, y] points"),
+                    format!("{context}: closed crease requires at least 3 distinct [x, y] points"),
                 ));
             }
-            if norm2(drafted_poly[0] - *drafted_poly.last().expect("len >= 3")) > 1e-6 {
-                drafted_poly.push(drafted_poly[0]);
-            }
+            ring.push(ring[0]);
+            drafted_poly = ring;
         }
         let mut copies = vec![drafted_poly.clone()];
         if let Some((fa, fb)) = fold_axis {
@@ -3177,20 +3185,49 @@ mod tests {
             "closed internal crease must mesh its closing edge (50, 75) -> (25, 25)"
         );
 
-        let mut bad_piece = rect("panel", 100.0, 100.0);
-        bad_piece["internal"] = json!([{
+        for bad_pts in [
+            json!([[25.0, 25.0], [75.0, 25.0]]),
+            json!([[25.0, 25.0], [75.0, 25.0], [25.0, 25.0]]),
+            json!([[25.0, 25.0], [25.0, 25.0], [75.0, 25.0]]),
+        ] {
+            let mut bad_piece = rect("panel", 100.0, 100.0);
+            bad_piece["internal"] = json!([{
+                "kind": "draw",
+                "pts": bad_pts,
+                "closed": true,
+                "crease_angle_deg": 45.0
+            }]);
+            let bad_pat = Pattern::new(json!({
+                "schema": "fabric-pattern/1",
+                "units": "mm",
+                "pieces": [bad_piece],
+                "seams": []
+            }));
+            let err = build_garment(&bad_pat, 25.0).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument);
+        }
+
+        // An already-closed 4-point triangle (explicit closing point) still succeeds cleanly.
+        let mut closed_piece = rect("panel", 100.0, 100.0);
+        closed_piece["internal"] = json!([{
             "kind": "draw",
-            "pts": [[25.0, 25.0], [75.0, 25.0]],
+            "pts": [[25.0, 25.0], [75.0, 25.0], [50.0, 75.0], [25.0, 25.0]],
             "closed": true,
             "crease_angle_deg": 45.0
         }]);
-        let bad_pat = Pattern::new(json!({
+        let closed_pat = Pattern::new(json!({
             "schema": "fabric-pattern/1",
             "units": "mm",
-            "pieces": [bad_piece],
+            "pieces": [closed_piece],
             "seams": []
         }));
-        let err = build_garment(&bad_pat, 25.0).unwrap_err();
-        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        let closed_mesh = build_garment(&closed_pat, 25.0).unwrap();
+        assert!(closed_mesh.creases.iter().any(|c| {
+            dist_point_segment(
+                closing_mid,
+                closed_mesh.verts2d[c.verts[0]],
+                closed_mesh.verts2d[c.verts[1]],
+            ) <= 1e-3
+        }));
     }
 }

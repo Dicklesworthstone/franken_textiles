@@ -267,7 +267,13 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   tests do not certify an Anny garment's fit or solve at every requested arm angle.
 - `ftx qualify [WS | --ws WS | --measurements M --out DIR] [--pattern P] [--fabric F] [--model PATH]
   [--body-fit PATH] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs]
-  [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--json]`:
+  [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--compression F]
+  [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha]
+  [--rho-inf F] [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal]
+  [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
+  [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]]
+  [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F]
+  [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F] [--json]`:
   runs the three known-answer chest bands (`-20`, `0`,
   `+20` mm ease) at zero gravity (70 sew steps, no drape steps) for the uniform garment fabric or for
   every distinct active simulated `piece.fabric` selection. Band widths use the torso girth
@@ -506,7 +512,11 @@ controls and full-model fresh/poisoned-cache comparisons live in the existing wo
   Strain comparisons use the saved strain colours and require the plain and strain meshes to
   have the same geometry.
 - `ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM]
-  [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--res WxH] [--json]`: where a pattern
+  [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
+  [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F]
+  [--start-repulsion-period N] [--start-repulsion-max-checks N]
+  [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs]
+  [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--res WxH] [--shading standard|legible] [--json]`: where a pattern
   starts on the body, for a person or an agent authoring placements and judging a cut by eye. It runs the
   drape's own scope admission, mesh, isometric wrap, pre-sew and relaxation (spec 04 §2–4) and **stops
   before contact admission and dynamics**, so it answers in seconds and also shows a start `ftx drape`
