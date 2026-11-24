@@ -18,8 +18,15 @@ replay = run_path(str(HERE/"prepare-drape-room.py"))
 FTX = replay["FTX"]
 CUTS = {"column": 1260, "flare": 1680}
 WAISTS = [650, 680, 700, 710, 740, 800]
-# These two endpoints use the 27 mm triangulations from the visual fitting rounds.
-SPACING_MM = {("column", 650): 27, ("flare", 740): 27}
+# The cloth model for every size (2026-11-24): a 14 mm mesh; compression softened to 5 % of the
+# tensile stiffness on the principal strains, so loose cloth folds instead of standing out as a
+# shell; finite-angle (discrete-shell) bending; and the solver's uncalibrated construction
+# approximation for hems and seam allowances (heavier, stiffer bands). These are numerical model
+# choices, not measured fabric values. Trial on flare-680: settled, no gating flags, every recorded
+# frame clear of the full displayed body (ftx viewer --check-contact).
+DRAPE_ARGS = ["--arm-deg", "45", "--spacing-mm", "14", "--self-contact-mm", "1", "--time-subdivision",
+              "--sew", "20", "--drape", "64", "--max-settle-steps", "240", "--compression", "0.05",
+              "--compression-model", "principal", "--bending-model", "discrete-shells", "--construction-standard"]
 
 
 def pattern(cut, waist=680):
@@ -102,9 +109,7 @@ def inputs(folder):
 def solve(folder,cut,w):
     name=f"{cut}-{w}"
     result=subprocess.run([FTX,"drape",folder/(name+"-pattern.json"),"--measurements",folder/f"form-{w}.json",
-        "--fit",folder/"fit.json","--arm-deg","45","--spacing-mm",str(SPACING_MM.get((cut,w),25)),"--self-contact-mm","1",
-        "--time-subdivision","--sew","20","--drape","64","--max-settle-steps","240",
-        "--out",folder/name,"--json"],capture_output=True)
+        "--fit",folder/"fit.json",*DRAPE_ARGS,"--out",folder/name,"--json"],capture_output=True)
     (folder/(name+"-run.json")).write_bytes(result.stdout)
     (folder/(name+".log")).write_bytes(result.stderr)
     if not result.stdout:raise RuntimeError(result.stderr.decode())
@@ -254,7 +259,7 @@ def waist_section(body, body_faces, cloth, cloth_faces, waist_edges, waist_heigh
 
 def package(folder,output):
     output.mkdir(exist_ok=True,parents=True)
-    summary={"runs":{},"refusals":{},"provisional":{},"cuts":CUTS}
+    summary={"runs":{},"refusals":{},"provisional":{},"cuts":CUTS,"solverArguments":DRAPE_ARGS}
     read=replay["read_obj"]
     verify=run_path(str(HERE/"prepare-study-patterns.py"))["verify_paper"]
     for cut in CUTS:

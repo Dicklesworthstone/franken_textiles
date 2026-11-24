@@ -38,7 +38,7 @@ try{
   await poster("form.webp");
   await page.addStyleTag({content:`
     .sa-room{position:fixed!important;inset:0!important;z-index:1000}.sa-inside{height:100%;max-width:none;padding:0 50px;grid-template-columns:43% 57%}
-    .sa-intro{display:block;padding:0}.sa-intro fieldset,.sa-view-controls,.sa-deck,.sa-fit,.sa-display figcaption,nextjs-portal{display:none}
+    .sa-intro{display:block;padding:0}.sa-intro fieldset,.sa-view-controls,.sa-deck,.sa-fit,.sa-display figcaption,nextjs-portal,.view-tools,.view-hint{display:none}
     .sa-intro h1{font-size:94px}.sa-intro .sa-label{font-size:12px}.sa-intro .film-reading{margin-top:24px;color:#fff0ce;font:18px var(--sans);line-height:1.5}
   `});
   await page.locator(".sa-intro").evaluate(el=>{
