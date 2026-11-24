@@ -2498,7 +2498,53 @@ fn independent_cell_calendars_separate_productive_work_and_complete_finish_proof
         .as_ref()
         .unwrap();
     assert!(calendar.budget_exhausted && !calendar.optimality_proven);
-    assert_eq!(calendar.lower_bound_finish_milliseconds, 6400);
+    // Even divisible work needs the first 4000 ms opening plus 2400 ms after the break.
+    assert_eq!(calendar.lower_bound_finish_milliseconds, 12400);
+}
+
+#[test]
+fn independent_cell_calendars_prove_capacity_exclusions_inside_a_single_node_budget() {
+    let (pattern, mut options) = calendar_order_fixture(12399);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["ordering"]["max_search_nodes"] = json!(1);
+    }
+    // A offers 6399 ms across two shifts for 6400 ms of feed alone. B cannot sew at all.
+    // The previous uninterrupted bound needed more prefixes to distinguish this from a timeout.
+    assert_eq!(
+        build(&pattern, options.clone()).unwrap_err().code,
+        RefusalCode::InvalidDocument
+    );
+
+    options["production"]["parallel"]["availability_calendars"]["resources"]["cell-b"] =
+        windows(&[[1000, 7400]]);
+    let program = SewProgram::build(&pattern, &serde_json::from_value(options).unwrap()).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    let counts = &report.availability.as_ref().unwrap().cells;
+    assert!(counts[0].counts[0].infeasibility_proven);
+    assert_eq!(counts[0].counts[0].incumbent_finish_milliseconds, None);
+    assert_eq!(report.selected.makespan_milliseconds, 7400);
+    assert!(report.optimality_proven);
+    let timing = report.selected.cells[1]
+        .schedule
+        .as_ref()
+        .unwrap()
+        .ordering
+        .calendar_timing
+        .as_ref()
+        .unwrap();
+    assert_eq!(timing.lower_bound_finish_milliseconds, 7400);
+    assert_eq!(timing.search_nodes, 0);
+    assert_eq!(program.stitches.len(), 80);
 }
 
 #[test]
@@ -3881,6 +3927,33 @@ fn parallel_feed_preserves_each_cell_ceiling_and_unused_cell_zero_work() {
             assert_eq!(cell.scheduled_feed_milliseconds, 0);
             assert!(cell.finish_milliseconds.is_none());
         }
+    }
+    // Both consolidated jobs consume 15661 ms of feed. The fastest overall job splits the
+    // copies, but uses 15662 ms. Among the two feed minima, use the cell that opens first.
+    for late in [0, 1] {
+        let mut staggered = options.clone();
+        staggered["production"]["parallel"]["cells"][late]["available_at_milliseconds"] =
+            json!(1000);
+        let program =
+            SewProgram::build(&pattern, &serde_json::from_value(staggered).unwrap()).unwrap();
+        let chosen = program
+            .plan
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap();
+        assert_eq!(chosen.selected.scheduled_feed_milliseconds, 15661);
+        assert_eq!(
+            chosen.selected.makespan_milliseconds,
+            parallel.selected.makespan_milliseconds
+        );
+        assert!(chosen.selected.cells[late].copies.is_empty());
+        assert_eq!(chosen.selected.cells[1 - late].copies, [0, 1]);
+        assert!(program.stitches.iter().all(
+            |step| step.cell.as_deref() == Some(chosen.selected.cells[1 - late].cell.as_str())
+        ));
     }
     options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
         json!(12000);

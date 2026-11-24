@@ -37,11 +37,26 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
       lens model, unchanged capture settings, actual frame identities and FIT/CHECK assignments before fitting.
       Use different out-of-plane tilts. The shared calibration engine keeps every acquired corner and reports failed gates.</p>
     <label>Acquisition <select id="cameraMode"><option value="images">Local ChArUco photos</option><option value="coordinates">Existing reference coordinates</option></select></label>
-    <label><span id="cameraInputLabel">Image manifest</span> <input id="cameraInput" type="file" accept="application/json,.json"></label>
+    <label id="cameraInputControl"><span id="cameraInputLabel">Image manifest</span> <input id="cameraInput" type="file" accept="application/json,.json"></label>
     <div id="cameraImageControls">
+      <label><input id="cameraAuthor" type="checkbox"> Declare calibration views here using the selected photographs</label>
       <label>Original sheet description <input id="cameraSheet" type="file" accept="application/json,.json"></label>
       <label>Calibration photos <input id="cameraImages" type="file" multiple accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
       <label>Or choose their directory <input id="cameraDirectory" type="file" webkitdirectory multiple></label>
+      <fieldset id="cameraAuthorFields" hidden><legend>Capture and image geometry</legend>
+        <label>Lens and settings ID <input id="cameraAuthorLens" maxlength="256"></label>
+        <label>Capture stream ID <input id="cameraAuthorStream" maxlength="256"></label>
+        <label>Stored image width (px) <input id="cameraAuthorWidth" type="number" min="16" step="1"></label>
+        <label>Stored image height (px) <input id="cameraAuthorHeight" type="number" min="16" step="1"></label>
+        <label>Rotation already applied to stored pixels <select id="cameraAuthorRotation"><option value="">Choose</option><option>0</option><option>90</option><option>180</option><option>270</option></select></label>
+        <label>Image model <select id="cameraAuthorModel"><option value="">Choose</option><option value="pinhole_zero_skew">Rectified or negligible distortion (pinhole)</option><option value="brown5_zero_skew">Raw photographs (Brown lens distortion)</option></select></label>
+        <label id="cameraAuthorRadiusControl" hidden>Maximum undistorted normalized radius <input id="cameraAuthorRadius" type="number" min="0" max="10" step="any"></label>
+        <label>Evidence for the selected lens model and unchanged capture settings <textarea id="cameraAuthorEvidence"></textarea></label>
+        <label>Board flatness and measured scale evidence <textarea id="cameraAuthorReference"></textarea></label>
+        <label>Independent CHECK corner IDs, comma separated <input id="cameraAuthorCorners"></label>
+        <p>Assign each photograph its decoded timestamp in microseconds and its independent role before fitting. Pinhole needs three FIT views and Brown needs four. Both need at least one CHECK view.</p>
+        <div id="cameraAuthorViews"></div>
+      </fieldset>
       <p><small>The manifest uses <code>ftx-camera-calibration-images/1</code>. Each <code>views[].image</code>
         must exactly match a selected filename, or a path relative to the chosen directory. Select either files or a directory.
         All selected PNG/JPEG photos must be declared; other directory files are ignored. Up to 32 images are read

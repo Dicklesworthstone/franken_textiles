@@ -1788,6 +1788,19 @@ An unchecked endpoint returns to that origin. Use Add or Replace to save the off
 For example, [0, 0, 0.1] turns 0.1 radians around world +Z. Rotation is about the selected body's root origin,
 before its displacement. Each endpoint has an absolute orientation; an unchecked rotation returns to the original orientation.
 Use short turn increments because the solver follows checked vertex chords between saved endpoints.</p>
+<label><input id="guidedMotionWind" type="checkbox"> Prescribe wind separately for each motion interval</label>
+<fieldset id="guidedMotionWindFields" hidden><legend>Wind for the interval ending at this endpoint</legend>
+<div class="study-fields">
+<label>World X air velocity (m/s) <input id="guidedMotionWindX" type="number" step="any" placeholder="Explicit velocity" disabled></label>
+<label>World Y air velocity (m/s) <input id="guidedMotionWindY" type="number" step="any" placeholder="Explicit velocity" disabled></label>
+<label>World Z air velocity (m/s, up) <input id="guidedMotionWindZ" type="number" step="any" placeholder="Explicit velocity" disabled></label>
+</div>
+<p class="note">Enable aerodynamic drag in the scenario options before evaluating. Save all three components with each endpoint,
+including explicit zeros for still air. Each vector applies from the preceding endpoint to this endpoint in world coordinates.
+It stays constant across the solver's smaller steps and source-pose samples. The initial drape uses the scenario's ordinary wind.
+Use Add or Replace to save changes; older endpoints need their own explicit velocities. Turning this schedule off retains saved
+vectors without applying them. This prescribes aerodynamic loading; thermal convection still uses its separately qualified conditions.</p>
+</fieldset>
 <fieldset id="guidedMotionHeatBoundary" hidden><legend>Heat conditions for the interval ending at this endpoint</legend>
 <div class="study-fields">
 <label>Inside reservoir temperature (°C) <input id="guidedMotionHeatInside" type="number" min="-273.15" step="any" placeholder="Explicit temperature"></label>

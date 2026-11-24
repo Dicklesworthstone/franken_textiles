@@ -893,6 +893,236 @@ fn source_pose_sampling_must_match_the_policy_and_retained_mechanical_sequence()
     );
 }
 
+fn wind_descriptor() -> Value {
+    let mut descriptor = motion_descriptor();
+    descriptor["scenario"]["motion"]["max_trials"] = json!(6);
+    descriptor["scenario"]["motion"]["source_pose_sampling"] =
+        json!({"max_step_s":0.25,"max_segments":4});
+    descriptor["scenario"]["motion"]["air_velocity_schedule_m_s"] =
+        json!([[1.0, 0.0, 0.0], [-0.5, 0.25, 0.0]]);
+    descriptor["scenario"]["options"] = json!({"damping":{"air_drag":{
+        "rho_air_kg_m3":1.225,"c_normal":1.2,"c_tangent":0.05,"eps_v_m_s":0.001,
+        "air_velocity_m_s":[0.125,0.0,0.0]}}});
+    descriptor
+}
+
+fn synthetic_wind_motion(pattern: &Pattern, descriptor: &Value) -> Value {
+    let mut result = synthetic_motion(pattern, 5.);
+    let motion = &mut result["motion"]["result"];
+    let template = motion["samples"][0].clone();
+    let schedule = &descriptor["scenario"]["motion"]["air_velocity_schedule_m_s"];
+    // Source endpoints at .25/.75 and additional mechanical samples at .125/.625
+    // retain the same original interval as its inclusive authored endpoint.
+    motion["samples"] = json!([0.125, 0.25, 0.5, 0.625, 0.75, 1.].map(|time| {
+        let interval = usize::from(time > 0.5);
+        let mut sample = template.clone();
+        sample["time_s"] = json!(time);
+        sample["air_velocity_m_s"] = schedule[interval].clone();
+        sample["authored_interval_index"] = json!(interval);
+        sample
+    }));
+    motion["trials"] = json!(6);
+    for (interval, index) in [2, 5].into_iter().enumerate() {
+        motion["keyframes"][interval]["sample_index"] = json!(index);
+        motion["keyframes"][interval]["air_velocity_m_s"] = schedule[interval].clone();
+    }
+    motion["air_velocity_schedule_m_s"] = schedule.clone();
+    motion["air_velocity_basis"] = json!("Synthetic prescribed interval velocities");
+    motion["initial_sample"] = json!({"time_s":0.0,"air_velocity_m_s":
+        descriptor["scenario"]["options"]["damping"]["air_drag"]
+            .get("air_velocity_m_s").cloned().unwrap_or_else(|| json!([0.0,0.0,0.0]))});
+    motion["source_pose_sampling"] = json!({"max_step_s":0.25,"max_segments":4,
+        "generated_segments":4,"source_times_s":[0.25,0.5,0.75,1.],
+        "authored_interval_indices":[0,0,1,1]});
+    result
+}
+
+#[test]
+fn scheduled_wind_must_match_every_original_interval_before_comparison() {
+    let mut request = motion_request();
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let descriptor = wind_descriptor();
+    for fault in [
+        "none",
+        "schedule_missing",
+        "schedule_null",
+        "schedule_changed",
+        "initial_missing",
+        "initial_changed",
+        "sample_missing",
+        "sample_velocity",
+        "sample_interval",
+        "endpoint_missing",
+        "endpoint_velocity",
+        "boundary_advanced",
+    ] {
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                let mut result = synthetic_wind_motion(pattern, &descriptor);
+                if key == "a" {
+                    let motion = &mut result["motion"]["result"];
+                    match fault {
+                        "schedule_missing" => {
+                            motion
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("air_velocity_schedule_m_s");
+                        }
+                        "schedule_null" => motion["air_velocity_schedule_m_s"] = Value::Null,
+                        "schedule_changed" => {
+                            motion["air_velocity_schedule_m_s"][1][0] = json!(0.5);
+                        }
+                        "initial_missing" => {
+                            motion["initial_sample"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("air_velocity_m_s");
+                        }
+                        "initial_changed" => {
+                            motion["initial_sample"]["air_velocity_m_s"] = json!([1.0,0.0,0.0]);
+                        }
+                        "sample_missing" => {
+                            motion["samples"][0]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("air_velocity_m_s");
+                        }
+                        "sample_velocity" => {
+                            motion["samples"][0]["air_velocity_m_s"] = json!([-0.5,0.25,0.0]);
+                        }
+                        "sample_interval" => {
+                            motion["samples"][3]["authored_interval_index"] = json!(0);
+                        }
+                        "endpoint_missing" => {
+                            motion["keyframes"][1]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("air_velocity_m_s");
+                        }
+                        "endpoint_velocity" => {
+                            motion["keyframes"][1]["air_velocity_m_s"] = json!([1.0,0.0,0.0]);
+                        }
+                        "boundary_advanced" => {
+                            motion["samples"][2]["air_velocity_m_s"] = json!([-0.5,0.25,0.0]);
+                            motion["samples"][2]["authored_interval_index"] = json!(1);
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a", "b"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}"
+        );
+        if fault != "none" {
+            assert!(
+                report["comparison"]["alternatives"][0]["exclusions"]
+                    .to_string()
+                    .contains("wind"),
+                "{fault}"
+            );
+        }
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
+fn scheduled_wind_admits_stationary_initial_air_and_requires_declared_drag() {
+    let request = motion_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    for mode in ["omitted", "explicit_zero", "missing_drag"] {
+        let mut descriptor = wind_descriptor();
+        let drag = &mut descriptor["scenario"]["options"]["damping"]["air_drag"];
+        drag.as_object_mut().unwrap().remove("air_velocity_m_s");
+        if mode == "explicit_zero" {
+            drag["air_velocity_m_s"] = json!([0.0,0.0,0.0]);
+        } else if mode == "missing_drag" {
+            *drag = Value::Null;
+        }
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |_, pattern| {
+                Ok(synthetic_wind_motion(pattern, &descriptor))
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(report).unwrap()["comparison"]["frontier"],
+            if mode == "missing_drag" {
+                json!([])
+            } else {
+                json!(["a", "b"])
+            },
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn legacy_motion_refuses_injected_wind_receipts_with_omitted_or_null_schedule() {
+    let request = motion_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    for explicit_null in [false, true] {
+        let mut descriptor = motion_descriptor();
+        if explicit_null {
+            descriptor["scenario"]["motion"]["air_velocity_schedule_m_s"] = Value::Null;
+        }
+        for fault in [
+            "none", "schedule", "basis", "initial", "sample", "interval", "endpoint",
+        ] {
+            let report = request
+                .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                    let mut result = synthetic_motion(pattern, 5.);
+                    if key == "a" {
+                        let motion = &mut result["motion"]["result"];
+                        match fault {
+                            "schedule" => {
+                                motion["air_velocity_schedule_m_s"] =
+                                    json!([[1.0,0.0,0.0],[1.0,0.0,0.0]]);
+                            }
+                            "basis" => motion["air_velocity_basis"] = json!("Unrequested wind"),
+                            "initial" => {
+                                motion["initial_sample"] =
+                                    json!({"air_velocity_m_s":[0.0,0.0,0.0]});
+                            }
+                            "sample" => {
+                                motion["samples"][0]["air_velocity_m_s"] = json!([1.0,0.0,0.0]);
+                            }
+                            "interval" => {
+                                motion["samples"][0]["authored_interval_index"] = json!(0);
+                            }
+                            "endpoint" => {
+                                motion["keyframes"][0]["air_velocity_m_s"] = json!([1.0,0.0,0.0]);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(result)
+                })
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(report).unwrap()["comparison"]["frontier"],
+                if fault == "none" {
+                    json!(["a", "b"])
+                } else {
+                    json!(["b"])
+                },
+                "{explicit_null}/{fault}"
+            );
+        }
+    }
+}
+
 #[test]
 fn motion_comparison_requires_every_requested_leg_posture_and_fraction() {
     let request = motion_request();

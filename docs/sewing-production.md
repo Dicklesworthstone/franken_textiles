@@ -627,9 +627,10 @@ Two complete count-allocation dynamic programs reuse the original cell/count sch
 admits only retained schedules that actually finish within all limits and selects the least feed.
 The other uses valid finish lower bounds to relax feasibility while keeping the same exact feed
 costs. Both are reserved within the original aggregate scheduling budget, alongside the retained
-makespan programs and schedule replays. When the fastest retained complete allocation already
-achieves the minimum feed, it is preserved: an equal-feed tie cannot unnecessarily delay completion
-or discard its makespan proof. Otherwise the feed search retains its first deterministic minimum.
+makespan programs and schedule replays. Among allocations with the same minimum feed, the
+planner selects the earliest complete finish. If the original fastest allocation also attains
+that feed minimum, it keeps its original assignment. Remaining ties use the existing deterministic
+cell/count order. Feed proof and the independent makespan proof retain their separate meanings.
 
 Plan `/35`, production `/23` and parallel `/8` retain the chosen physical cell schedules plus
 `parallel.feed_time_search`. Its `selected_feed_milliseconds`,
@@ -810,6 +811,12 @@ against the actual calendar, preserving every prerequisite and finite fixture li
 complete finishing time, including final unloading. The two searches and subsequent reconstruction
 stay inside the existing per-cell and whole-job work reservations; calendar search adds no unbounded
 permutation pass. Omission preserves the ordinary serial optimizer.
+
+The finish lower bound spends the minimum remaining feed, setup and handling time only in
+qualified openings. For the bound alone this work can split at any break, so no real order can
+finish earlier. When the remaining openings cannot hold even that much work, every order extending
+the prefix is infeasible. This can rule out an entire cell/count before spending search nodes.
+Only a replay of complete, nonpreemptive blocks supplies an actual finishing time.
 
 This matters even for two operations. With zero setup/handling, feed durations of 2400 and 4000 ms,
 and openings `[0, 4000]` and `[10000, 12400]`, the uninterrupted order that puts 2400 ms first

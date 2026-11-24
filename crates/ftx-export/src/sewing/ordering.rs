@@ -180,7 +180,7 @@ pub struct CalendarTimingReport {
     pub search_complete: bool,
     /// The complete selected order attains its valid bound; separate from serial-work optimality.
     pub optimality_proven: bool,
-    /// Exhaustive calendar search found no complete dependency/resource-feasible order.
+    /// The availability bound or exhaustive calendar search excluded every complete order.
     pub infeasibility_proven: bool,
     /// Unvisited calendar prefixes remain after the shared serial/calendar allowance is spent.
     pub budget_exhausted: bool,
@@ -196,6 +196,29 @@ pub(super) struct Calendar<'a> {
 }
 
 impl Calendar<'_> {
+    // Relax the remaining operation blocks to divisible work. Even with arbitrary preemption,
+    // the cell cannot perform work during closures. This clock is only a lower bound.
+    fn relaxed_finish(&self, ready: u64, mut work: u64) -> Option<u64> {
+        let Some(windows) = self.policy.resources.get(self.cell) else {
+            let end = self
+                .available_until_milliseconds
+                .unwrap_or(9_007_199_254_740_991);
+            return ready.checked_add(work).filter(|&finish| finish <= end);
+        };
+        for window in windows {
+            let start = ready.max(window.start_milliseconds);
+            if start > window.end_milliseconds {
+                continue;
+            }
+            let capacity = window.end_milliseconds - start;
+            if work <= capacity {
+                return Some(start + work);
+            }
+            work -= capacity;
+        }
+        None
+    }
+
     fn finish(&self, ready: u64, duration: u64) -> Result<Option<u64>, Refusal> {
         let Some(start) = self.policy.earliest_start(self.cell, ready, duration)? else {
             return Ok(None);
@@ -504,12 +527,14 @@ impl Search<'_> {
                 .filter(|&sum| sum <= 9_007_199_254_740_991)
                 .ok_or_else(|| bad("calendar feed exceeds the exact millisecond clock"))
         })?;
-        let root_bound = calendar.available_at_milliseconds + total_feed + serial_lower_bound;
-        if root_bound > 9_007_199_254_740_991 {
+        let minimum_work = total_feed + serial_lower_bound;
+        let uninterrupted_bound = calendar.available_at_milliseconds + minimum_work;
+        if uninterrupted_bound > 9_007_199_254_740_991 {
             return Err(bad(
                 "calendar completion lower bound exceeds the exact millisecond clock",
             ));
         }
+        let root_bound = calendar.relaxed_finish(calendar.available_at_milliseconds, minimum_work);
         let mut serial_finish = Some(calendar.available_at_milliseconds);
         let mut last = None;
         for &next in serial_order {
@@ -535,7 +560,9 @@ impl Search<'_> {
         let mut path = Vec::with_capacity(self.tasks.len());
         // A fixed operation order starts each nonpreemptive block as early as possible. Earlier
         // completion can never hurt a later block, so no intentional-idling branch is required.
-        while best_finish.is_none_or(|finish| finish > root_bound) && !stack.is_empty() {
+        while root_bound.is_some_and(|bound| best_finish.is_none_or(|finish| finish > bound))
+            && !stack.is_empty()
+        {
             let frame = stack.last_mut().expect("nonempty calendar search");
             if frame.next == frame.candidates.len() {
                 stack.pop();
@@ -560,7 +587,11 @@ impl Search<'_> {
                 .filter(|(i, _)| !mask.contains(*i))
                 .map(|(_, value)| value)
                 .sum();
-            let bound = ready + remaining_feed + self.lower_bound(mask, Some(next));
+            let Some(bound) =
+                calendar.relaxed_finish(ready, remaining_feed + self.lower_bound(mask, Some(next)))
+            else {
+                continue;
+            };
             if best_finish.is_some_and(|finish| bound >= finish) {
                 continue;
             }
@@ -583,9 +614,9 @@ impl Search<'_> {
             serial_incumbent_finish_milliseconds: serial_finish,
             selected_finish_milliseconds: best_finish,
             lower_bound_finish_milliseconds: if exhausted {
-                root_bound
+                root_bound.expect("unfinished orders have residual calendar capacity")
             } else {
-                best_finish.unwrap_or(root_bound)
+                best_finish.or(root_bound).unwrap_or(uninterrupted_bound)
             },
             search_nodes: nodes,
             search_complete: !exhausted,

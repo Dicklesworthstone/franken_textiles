@@ -276,6 +276,8 @@ impl Solver {
             ));
         }
         self.check_liquid_mass()?;
+        self.damping.validate()?;
+        self.check_static_air_load()?;
         self.check_constitutive_models()?;
         self.model.check_membrane_domains(&self.x)?;
         self.model.check_panel_bending_domains(&self.x)?;
@@ -809,6 +811,58 @@ mod tests {
             "IFT reaction-force/torque gradient failed FD gate: {verdict:?}"
         );
         assert_eq!(verdict.informative_directions, dirs.len());
+    }
+
+    #[test]
+    fn static_sensitivities_admit_only_wind_loads_that_vanish_at_rest() {
+        let mut base = sagging_sheet(320.0, 210.0, 0.24, 55.0, 4e-4);
+        base.static_solve().unwrap();
+        let weights = vec![Vec3::new(0.1, -0.3, 1.0); base.x.len()];
+        let gradient = |s: &mut Solver| {
+            s.constitutive_gradient_with_reactions(&weights, &weights, [0.0; 4], 0.0)
+        };
+        let expected = gradient(&mut base.clone()).unwrap();
+        let air = crate::AirDrag::standard();
+        let moving = crate::AirDrag {
+            air_velocity_m_s: [0.0, 3.0, 0.0],
+            ..air
+        };
+        for drag in [
+            air,
+            crate::AirDrag {
+                rho_air_kg_m3: 0.0,
+                ..moving
+            },
+            crate::AirDrag {
+                c_normal: 0.0,
+                c_tangent: 0.0,
+                ..moving
+            },
+        ] {
+            let mut solver = base.clone();
+            solver.damping = crate::DampingOptions {
+                air_drag: Some(drag),
+                rayleigh_membrane_s: 0.01,
+                rayleigh_bending_s: 0.02,
+            };
+            let grad = gradient(&mut solver).unwrap();
+            assert_eq!(grad.dq, expected.dq);
+            assert_eq!(grad.d_bending, expected.d_bending);
+            assert!(solver.static_solve().unwrap().converged);
+        }
+
+        base.damping.air_drag = Some(moving);
+        let zeros = vec![Vec3::ZERO; base.x.len()];
+        for error in [
+            base.equilibrium_adjoint(&zeros).unwrap_err(),
+            base.equilibrium_adjoint(&weights).unwrap_err(),
+            gradient(&mut base).unwrap_err(),
+            base.reaction_gradient(&weights).unwrap_err(),
+            base.static_solve().unwrap_err(),
+        ] {
+            assert_eq!(error.code, RefusalCode::OutOfRange);
+            assert!(error.message.contains("wind"));
+        }
     }
 
     #[test]

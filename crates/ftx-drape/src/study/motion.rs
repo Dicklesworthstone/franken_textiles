@@ -134,6 +134,11 @@ pub struct Request {
     /// Defaults to 500000; endpoint receipts also consume the session's geometry allowance.
     #[serde(default = "default_sample_vertices")]
     pub max_sample_vertices: usize,
+    /// Optional prescribed world-space air velocity in m/s for each original keyframe interval.
+    /// Entry i applies after the preceding keyframe through keyframes[i], including all source-pose
+    /// subdivisions. Requires aerodynamic drag; never derives a convection coefficient or airflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air_velocity_schedule_m_s: Option<Vec<[f64; 3]>>,
     /// Optional evaluation of intermediate poses on the same source body. Joint angles follow
     /// their fixed source axes, root rotation follows the shortest quaternion arc, and root
     /// translation is linear. The solver still checks short vertex chords between these poses.
@@ -154,6 +159,50 @@ pub struct Request {
 }
 
 impl Request {
+    /// Validate the motion and every prescribed wind against the actual aerodynamic law.
+    pub(super) fn validate_damping(
+        &self,
+        damping: &crate::damping::DampingOptions,
+    ) -> Result<(), Refusal> {
+        self.validate()?;
+        let Some(schedule) = &self.air_velocity_schedule_m_s else {
+            return Ok(());
+        };
+        let mut drag = damping.air_drag.ok_or_else(|| {
+            invalid("a motion air velocity schedule requires aerodynamic air_drag options")
+        })?;
+        for &velocity in schedule {
+            drag.air_velocity_m_s = velocity;
+            drag.validate()?;
+        }
+        Ok(())
+    }
+
+    fn apply_air_velocity(
+        &self,
+        interval: usize,
+        solver: &mut crate::Solver,
+    ) -> Result<(), Refusal> {
+        let Some(schedule) = &self.air_velocity_schedule_m_s else {
+            return Ok(());
+        };
+        let velocity = *schedule.get(interval).ok_or_else(|| {
+            invalid("motion step does not name a prescribed air velocity interval")
+        })?;
+        let mut drag = solver.damping.air_drag.ok_or_else(|| {
+            invalid("a motion air velocity schedule requires aerodynamic air_drag options")
+        })?;
+        if drag.air_velocity_m_s != velocity {
+            drag.air_velocity_m_s = velocity;
+            drag.validate()?;
+            solver.damping.air_drag = Some(drag);
+            // The old generalized-alpha acceleration belongs to the previous forcing boundary.
+            // Positions, velocity and accepted material/contact histories remain continuous.
+            solver.reset_acceleration();
+        }
+        Ok(())
+    }
+
     /// Validate finite, ordered time/pose inputs and whole-trajectory budgets before model work.
     ///
     /// # Errors
@@ -171,6 +220,23 @@ impl Request {
             return Err(invalid(
                 "invalid motion schema, keyframe count or work/sample limits",
             ));
+        }
+        if let Some(schedule) = &self.air_velocity_schedule_m_s {
+            if schedule.len() != self.keyframes.len() {
+                return Err(invalid(
+                    "motion air velocity schedule needs exactly one vector per keyframe interval",
+                ));
+            }
+            for velocity in schedule {
+                for &component in velocity {
+                    Refusal::finite("motion air velocity component", component)?;
+                }
+                let speed2 = velocity[0] * velocity[0]
+                    + velocity[1] * velocity[1]
+                    + velocity[2] * velocity[2];
+                Refusal::finite("motion air speed squared", speed2)?;
+                Refusal::finite("motion air speed cubed", speed2 * speed2.sqrt())?;
+            }
         }
         let mut previous = 0.0;
         let mut minimum_trials = 0.0;
@@ -415,6 +481,7 @@ fn evaluate_path(
     mut contact_loads: Option<Result<super::contact_loads::History, Refusal>>,
     mut progress: impl FnMut(&str),
 ) -> Result<Value, Refusal> {
+    request.validate_damping(&run.scene.solver.damping)?;
     path.validate_for(request, body)?;
     if run
         .scene
@@ -437,6 +504,16 @@ fn evaluate_path(
     let initial_positions_sha256 = hash(&run.scene.solver.x)?;
     let mut initial_sample = json!({"time_s":0.0,"positions_m":run.scene.solver.x,
         "body_positions_m":body.collision.0});
+    if request.air_velocity_schedule_m_s.is_some() {
+        initial_sample["air_velocity_m_s"] = json!(
+            run.scene
+                .solver
+                .damping
+                .air_drag
+                .expect("wind schedule requires validated air drag")
+                .air_velocity_m_s
+        );
+    }
     let initial_membrane_history = run.scene.solver.relaxation_report()?;
     let initial_bending_history = run.scene.solver.bending_plasticity_report()?;
     let initial_permanent_history = run.scene.solver.membrane_plasticity_report()?;
@@ -561,6 +638,7 @@ fn evaluate_path(
                 "whole-trajectory motion budget exhausted; no partial motion published",
             ));
         }
+        request.apply_air_velocity(i, &mut run.scene.solver)?;
         progress(&format!(
             "motion endpoint {}/{}",
             i + 1,
@@ -682,6 +760,10 @@ fn evaluate_path(
                     "residual_n":sample.solve.residual,"last_step_m":sample.solve.last_step,
                     "energy_start_j":sample.solve.energy_start,"energy_end_j":sample.solve.energy_end,
                     "factorizations":sample.solve.factorizations,"ccd_limited":sample.solve.ccd_limited}});
+            if let Some(schedule) = &request.air_velocity_schedule_m_s {
+                retained["air_velocity_m_s"] = json!(schedule[i]);
+                retained["authored_interval_index"] = json!(i);
+            }
             if let Some(dissipation) = sample.membrane_plastic_dissipation_j {
                 retained["membrane_plastic_dissipation_j"] = json!(dissipation);
             }
@@ -715,6 +797,9 @@ fn evaluate_path(
             "sample_index":samples.len()-1,"positions_sha256":hash(&run.scene.solver.x)?,
             "body_collision_sha256":hash(&(target,body.collision.1))?,
             "surface":surface,"coverage":coverage});
+        if let Some(schedule) = &request.air_velocity_schedule_m_s {
+            endpoint["air_velocity_m_s"] = json!(schedule[i]);
+        }
         if let Some(arms) = frame.arm_pose {
             endpoint["arm_pose"] = json!(arms);
         }
@@ -760,6 +845,12 @@ fn evaluate_path(
         "fit_claim":false,"settledness_claim":false,
         "thermal_basis":"Independent steady endpoint snapshots, not transient temperatures or heat during motion.",
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
+    if let Some(schedule) = &request.air_velocity_schedule_m_s {
+        result["air_velocity_schedule_m_s"] = json!(schedule);
+        result["air_velocity_basis"] = json!(
+            "Prescribed uniform world-space air velocity is constant on each original authored interval (previous time, endpoint time], including all source-pose and mechanical subdivisions. The initial drape retains its own ambient velocity. Drag coefficients and density stay fixed; no turbulence, shielding or thermal convection is inferred."
+        );
+    }
     if let Some(policy) = request.source_pose_sampling {
         result["source_pose_sampling"] = json!({
             "max_step_s":policy.max_step_s,"max_segments":policy.max_segments,
@@ -868,6 +959,150 @@ fn evaluate_path(
 mod tests {
     use super::*;
     use crate::{PartFrame, scene::PartFrames};
+
+    #[test]
+    fn prescribed_wind_schedule_preserves_defaults_and_validates_actual_drag() {
+        let baseline: Request = serde_json::from_value(json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [
+                {"time_s": 0.002, "arm_abduction_deg": 35.0},
+                {"time_s": 0.004, "arm_abduction_deg": 36.0}
+            ],
+            "max_step_s": 0.001,
+            "max_trials": 16,
+            "max_pairs": 100000,
+            "max_sample_vertices": 500000
+        }))
+        .unwrap();
+        let encoded = serde_json::to_value(&baseline).unwrap();
+        assert!(encoded.get("air_velocity_schedule_m_s").is_none());
+        let mut explicit_null = encoded.clone();
+        explicit_null["air_velocity_schedule_m_s"] = Value::Null;
+        let parsed: Request = serde_json::from_value(explicit_null).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), encoded);
+        baseline
+            .validate_damping(&crate::damping::DampingOptions::default())
+            .unwrap();
+
+        for malformed in [
+            json!([[0.0, 0.0]]),
+            json!([[0.0, 0.0, 0.0, 0.0]]),
+            json!("wind"),
+        ] {
+            let mut value = encoded.clone();
+            value["air_velocity_schedule_m_s"] = malformed;
+            assert!(serde_json::from_value::<Request>(value).is_err());
+        }
+        let mut request: Request = serde_json::from_value(encoded.clone()).unwrap();
+        for wrong_length in [vec![], vec![[0.0; 3]], vec![[0.0; 3]; 3]] {
+            request.air_velocity_schedule_m_s = Some(wrong_length);
+            assert!(request.validate().is_err());
+        }
+        request.air_velocity_schedule_m_s = Some(vec![[0.0; 3], [0.5, -0.25, 0.1]]);
+        request.validate().unwrap();
+        let error = request
+            .validate_damping(&crate::damping::DampingOptions::default())
+            .unwrap_err();
+        assert!(error.message.contains("air_drag"));
+        let mut damping = crate::damping::DampingOptions {
+            air_drag: Some(crate::damping::AirDrag::standard()),
+            ..crate::damping::DampingOptions::default()
+        };
+        request.validate_damping(&damping).unwrap();
+        let roundtrip: Request =
+            serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+        assert_eq!(
+            roundtrip.air_velocity_schedule_m_s,
+            request.air_velocity_schedule_m_s
+        );
+        for invalid_velocity in [
+            [f64::NAN, 0.0, 0.0],
+            [0.0, f64::INFINITY, 0.0],
+            [0.0, 0.0, f64::NEG_INFINITY],
+            [1e200, 0.0, 0.0],
+            [1e110, 0.0, 0.0],
+        ] {
+            request.air_velocity_schedule_m_s = Some(vec![[0.0; 3], invalid_velocity]);
+            assert!(request.validate().is_err());
+        }
+        request.air_velocity_schedule_m_s = Some(vec![[0.0; 3], [0.5, -0.25, 0.1]]);
+        let drag = damping.air_drag.as_mut().unwrap();
+        drag.rho_air_kg_m3 = f64::MAX;
+        drag.c_normal = f64::MAX;
+        assert!(request.validate_damping(&damping).is_err());
+    }
+
+    #[test]
+    fn prescribed_wind_follows_original_intervals_without_resetting_unchanged_acceleration() {
+        let first_wind = [0.5, -0.25, 0.1];
+        let second_wind = [-0.25, 0.5, 0.25];
+        let request: Request = serde_json::from_value(json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [
+                {"time_s": 0.002, "arm_abduction_deg": 35.0},
+                {"time_s": 0.005, "arm_abduction_deg": 36.0}
+            ],
+            "max_step_s": 0.003,
+            "max_trials": 5,
+            "max_pairs": 1000,
+            "max_sample_vertices": 10000,
+            "source_pose_sampling": {"max_step_s": 0.001, "max_segments": 5},
+            "air_velocity_schedule_m_s": [first_wind, second_wind]
+        }))
+        .unwrap();
+        let steps = request.source_steps().unwrap();
+        assert_eq!(
+            steps.iter().map(|step| step.interval).collect::<Vec<_>>(),
+            vec![0, 0, 1, 1, 1]
+        );
+        let rest = vec![
+            ftx_core::Vec2::ZERO,
+            ftx_core::Vec2::new(0.1, 0.0),
+            ftx_core::Vec2::new(0.0, 0.1),
+        ];
+        let vertices: Vec<_> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let triangles = [[0, 1, 2]];
+        let model = crate::ClothModel::new(
+            rest,
+            &triangles,
+            crate::elements::Membrane::orthotropic(500.0, 300.0, 0.2, 60.0, 1.0),
+            0.0,
+            0.18,
+        )
+        .unwrap();
+        let mut actual = crate::Solver::new(
+            model,
+            vertices,
+            &[[false; 3]; 3],
+            Vec3::new(0.0, 0.0, -9.81),
+        );
+        actual.integrator = crate::TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 };
+        actual.damping.air_drag = Some(crate::damping::AirDrag::standard());
+        actual.tol = 1e-11;
+        request.validate_damping(&actual.damping).unwrap();
+        let mut expected = actual.clone();
+        let mut previous_time = 0.0;
+        for (index, step) in steps.iter().enumerate() {
+            request
+                .apply_air_velocity(step.interval, &mut actual)
+                .unwrap();
+            let expected_wind = if index < 2 { first_wind } else { second_wind };
+            assert_eq!(
+                actual.damping.air_drag.unwrap().air_velocity_m_s,
+                expected_wind
+            );
+            if index == 0 || index == 2 {
+                expected.damping.air_drag.as_mut().unwrap().air_velocity_m_s = expected_wind;
+                expected.reset_acceleration();
+            }
+            let dt = step.time_s - previous_time;
+            assert!(actual.step(dt).unwrap().converged);
+            assert!(expected.step(dt).unwrap().converged);
+            assert_eq!(actual.x, expected.x, "sample {index}");
+            assert_eq!(actual.v, expected.v, "sample {index}");
+            previous_time = step.time_s;
+        }
+    }
 
     #[test]
     fn source_pose_sampling_preserves_legacy_identity_and_bounds_all_generated_work() {
@@ -1243,6 +1478,155 @@ mod tests {
         fn section_radius(&self, _: &str, _: f64) -> f64 {
             30.
         }
+    }
+
+    #[test]
+    fn prescribed_wind_drives_actual_motion_and_rolls_back_after_late_failure() {
+        let pattern = ftx_pattern::Pattern::from_json(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+        ))
+        .unwrap();
+        let mut scenario: Scenario = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scenario.json"
+        ))
+        .unwrap();
+        scenario.options.damping.air_drag = Some(crate::damping::AirDrag::standard());
+        let mut vertices = Vec::new();
+        for z in [-0.02, 0.12] {
+            for i in 0..16 {
+                let (s, c) = ftx_core::det::sin_cos(i as f64 * std::f64::consts::TAU / 16.);
+                vertices.push(Vec3::new(0.03 * c, 0.03 * s, z));
+            }
+        }
+        let triangles: Vec<_> = (0..16)
+            .flat_map(|i| {
+                let j = (i + 1) % 16;
+                [[i, j, j + 16], [i, j + 16, i + 16]]
+            })
+            .collect();
+        let body = DrapeBody {
+            frames: &Form,
+            collision: (&vertices, &triangles),
+            display: (&vertices, &triangles),
+            arm_deg: 35.,
+        };
+        let mut run = crate::run::drape(
+            &pattern,
+            &scenario.fit_spec,
+            &body,
+            &scenario.options,
+            |_| {},
+        )
+        .unwrap();
+        let original = run.scene.solver.clone();
+        let count = vertices.len() + original.x.len();
+        let first_wind = [0.5, -0.25, 0.1];
+        let second_wind = [-0.25, 0.5, 0.25];
+        let request: Request = serde_json::from_value(json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [
+                {"time_s": 0.002, "arm_abduction_deg": 35.0},
+                {"time_s": 0.004, "arm_abduction_deg": 36.0}
+            ],
+            "max_step_s": 0.001,
+            "max_trials": 16,
+            "max_pairs": 100000,
+            "max_sample_vertices": 5 * count,
+            "air_velocity_schedule_m_s": [first_wind, second_wind]
+        }))
+        .unwrap();
+        let endpoints: Vec<Vec<_>> = [0.0001, 0.0002]
+            .into_iter()
+            .map(|z| vertices.iter().map(|p| *p + Vec3::new(0., 0., z)).collect())
+            .collect();
+        let path = Path::new(&request, body.collision, endpoints.clone()).unwrap();
+        let mut changed = request.clone();
+        changed.air_velocity_schedule_m_s.as_mut().unwrap()[1][0] += 0.25;
+        assert!(path.validate_for(&changed, &body).is_err());
+        let options = MotionOptions {
+            max_step_s: 0.001,
+            max_trials: 16,
+            max_pairs: 100000,
+            max_sample_vertices: 2 * count,
+        };
+        let mut expected = original.clone();
+        expected.damping.air_drag.as_mut().unwrap().air_velocity_m_s = first_wind;
+        expected.reset_acceleration();
+        advance_body(&mut expected, &endpoints[0], 0.002, options).unwrap();
+        expected.damping.air_drag.as_mut().unwrap().air_velocity_m_s = second_wind;
+        expected.reset_acceleration();
+        advance_body(&mut expected, &endpoints[1], 0.002, options).unwrap();
+        let result = evaluate(
+            &request,
+            &path,
+            &scenario,
+            &body,
+            &mut run,
+            &mut heat::Budget::default(),
+            None,
+            None,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(run.scene.solver.x, expected.x);
+        assert_eq!(run.scene.solver.v, expected.v);
+        assert_eq!(run.scene.solver.damping, expected.damping);
+        assert_eq!(
+            result["initial_sample"]["air_velocity_m_s"],
+            json!([0.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            result["air_velocity_schedule_m_s"],
+            json!([first_wind, second_wind])
+        );
+        assert_eq!(result["samples"].as_array().unwrap().len(), 4);
+        for (index, sample) in result["samples"].as_array().unwrap().iter().enumerate() {
+            let interval = index / 2;
+            let wind = if interval == 0 { first_wind } else { second_wind };
+            assert_eq!(sample["authored_interval_index"], json!(interval));
+            assert_eq!(sample["air_velocity_m_s"], json!(wind));
+        }
+        assert_eq!(result["keyframes"][0]["air_velocity_m_s"], json!(first_wind));
+        assert_eq!(result["keyframes"][1]["air_velocity_m_s"], json!(second_wind));
+
+        // The second interval installs its new wind before its second sample exceeds the budget.
+        run.scene.solver = original.clone();
+        let mut failed = request.clone();
+        failed.max_sample_vertices = 4 * count;
+        let failed_path = Path::new(&failed, body.collision, endpoints).unwrap();
+        let error = evaluate(
+            &failed,
+            &failed_path,
+            &scenario,
+            &body,
+            &mut run,
+            &mut heat::Budget::default(),
+            None,
+            None,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(error.message.contains("body motion sample budget exceeded"));
+        assert_eq!(run.scene.solver.x, original.x);
+        assert_eq!(run.scene.solver.v, original.v);
+        assert_eq!(run.scene.solver.damping, original.damping);
+        assert_eq!(
+            run.scene.solver.contact.as_ref().unwrap().body.vertices,
+            original.contact.as_ref().unwrap().body.vertices
+        );
+        let replay = evaluate(
+            &request,
+            &path,
+            &scenario,
+            &body,
+            &mut run,
+            &mut heat::Budget::default(),
+            None,
+            None,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(replay, result);
     }
 
     #[test]

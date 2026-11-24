@@ -594,6 +594,64 @@ test('coordinate camera calibration preserves the exact noise request and reject
   assert.deepEqual(w.calls,[{kind:'coordinates',input,noise}]);assert.deepEqual(JSON.parse(result.report),report);assert.equal(w.instances.length,0);
 });
 
+async function guidedCamera(model='pinhole_zero_skew') {
+  const p=await photoPage();p.selectCamera();
+  p.e.cameraAuthor.checked=true;
+  p.e.cameraInput.files=[];
+  p.e.cameraImages.files=Array.from({length:5},(_,i)=>file('synthetic',`view-${i}.png`));
+  p.e.cameraAuthor.handlers.change();
+  const values={cameraAuthorLens:'lens λ',cameraAuthorStream:'tripod stream',cameraAuthorWidth:'1600',
+    cameraAuthorHeight:'1200',cameraAuthorRotation:'90',cameraAuthorModel:model,cameraAuthorEvidence:'Known camera pipeline',
+    cameraAuthorReference:'Rigid flat board scale checked',cameraAuthorCorners:'0, 6, 28, 34',cameraAuthorRadius:'0.83'};
+  for(const [id,value] of Object.entries(values))p.e[id].value=value;
+  for(const [i,group] of p.e.cameraAuthorViews.children.entries()) {
+    group.children[1].children[0].value=(18446744073709551611n+BigInt(i)).toString();
+    group.children[2].children[0].value=i===0?'held_out':'fit';
+  }
+  return p;
+}
+
+test('guided camera calibration authors replayable pinhole and Brown views with exact identities and independent CHECK roles',async()=>{
+  for(const model of ['pinhole_zero_skew','brown5_zero_skew']){
+    const p=await guidedCamera(model);
+    assert.equal(p.e.cameraRun.disabled,false);assert.equal(p.e.cameraInputControl.hidden,true);
+    const report=cameraReport(),frame={stream:'tripod stream',timestamp_us:JSON.rawJSON('18446744073709551615')};
+    report.input.views=[{frame}];report.checks[0].frame=frame;
+    const w=await p.calibrate(report),m=w.messages[0];
+    const manifest=JSON.parse(m.input,(key,value,ctx)=>key==='timestamp_us'?ctx.source:value);
+    assert.equal(m.op,'calibrate-images');assert.equal(manifest.schema,'ftx-camera-calibration-images/1');
+    assert.equal(manifest.lens_id,'lens λ');assert.deepEqual(manifest.image_size_px,[1600,1200]);
+    assert.deepEqual(manifest.views.map(v=>v.image),Array.from(m.images,v=>v.id));
+    assert.equal(manifest.views[0].partition,'held_out');assert.equal(manifest.views.at(-1).frame.timestamp_us,'18446744073709551615');
+    assert.ok(manifest.views.every(v=>v.frame.stream==='tripod stream'));
+    assert.deepEqual(manifest.held_out_corner_ids,[0,6,28,34]);
+    if(model==='brown5_zero_skew'){
+      assert.deepEqual(manifest.distortion_fit,{model_evidence:'Known camera pipeline',max_radius:0.83});assert.equal(manifest.pinhole_evidence,undefined);
+    } else {assert.equal(manifest.pinhole_evidence,'Known camera pipeline');assert.equal(manifest.distortion_fit,undefined);}
+    const saved=p.e.cameraDownloads.children.find(a=>a.download==='camera-image-manifest.json');
+    assert.equal(await p.urls.get(saved.href).text(),m.input);
+    const coordinateFile=p.e.cameraDownloads.children.find(a=>a.download==='camera-detected-coordinates.json');
+    assert.match(await p.urls.get(coordinateFile.href).text(),/"timestamp_us": 18446744073709551615/);
+    assert.match(p.e.cameraChecks.children[0].children[0].textContent,/18446744073709551615/);
+    p.e.cameraAuthorViews.children[1].children[2].children[0].handlers.change();
+    assert.equal(p.e.cameraResult.hidden,true);assert.equal(p.e.cameraDownloads.children.length,0);
+  }
+});
+
+test('guided camera calibration refuses guessed identities, incomplete partitions and stale selections before worker acquisition',async()=>{
+  const p=await guidedCamera(),first=p.e.cameraAuthorViews.children[0],last=p.e.cameraAuthorViews.children.at(-1);
+  const ts=last.children[1].children[0],valid=ts.value;
+  for(const invalid of ['',first.children[1].children[0].value,'18446744073709551616','1.5']){
+    ts.value=invalid;await p.e.cameraRun.onclick();
+    assert.equal(p.workers.length,0);assert.match(p.e.cameraError.textContent,/timestamp/);
+  }
+  ts.value=valid;
+  first.children[2].children[0].value='fit';await p.e.cameraRun.onclick();assert.match(p.e.cameraError.textContent,/independent CHECK/);
+  p.e.cameraImages.files[0]=file('replacement','view-0.png');await p.e.cameraRun.onclick();
+  assert.match(p.e.cameraError.textContent,/declare their views again/);assert.equal(p.workers.length,0);
+  p.e.cameraImages.handlers.change();assert.equal(p.e.cameraAuthorViews.children[0].children[1].children[0].value,'');
+});
+
 test('browser calibration keeps exact source and noise downloads and can immediately calibrate the current photo',async()=>{
   const p=await photoPage();p.select(false);p.selectCamera();
   let imageReads=0;for(const f of p.e.cameraImages.files)f.arrayBuffer=async()=>{imageReads++;throw Error('page must not decode images');};
@@ -1474,6 +1532,78 @@ function nativeStartField(p,id) {
 function editNativeStart(p,id,value) {
   const input=nativeStartField(p,id);input.value=value;input.handlers.input();
 }
+
+function nativeFixedControls(p,frame,index=0) {
+  const group=p.e.startFixedFields.children[frame];
+  return {prescribe:group.children[1+2*index].children[0],value:group.children[2+2*index].children[1],
+    evidence:group.children.at(-1).children[1]};
+}
+
+test('native review authors frame constraints, reconciles all starts and reopens both source-bound handoffs',async()=>{
+  const data=nativeStartsData();
+  delete data.frames[0].fixed_pose;
+  for(const [i,start] of data.annotations.starts.entries()) start.poses[0].values[0]=0.1+i/10;
+  const p=nativeStartsEditor(data);
+  const first=nativeFixedControls(p,0),second=nativeFixedControls(p,1);
+  first.prescribe.checked=true;first.prescribe.handlers.change();
+  first.value.value='0.83';first.value.handlers.input();
+  first.evidence.value='Independent fixture position λ';first.evidence.handlers.input();
+  second.prescribe.checked=false;second.prescribe.handlers.change();
+  assert.equal(p.e.applyStart.disabled,true);assert.equal(p.e.startDraftDownload.hidden,true);
+  p.e.applyFixedStarts.handlers.click();
+  assert.equal(p.e.startDownload.hidden,false,p.e.startStatus.textContent);
+  assert.equal(nativeStartField(p,'start-pose-0-0').disabled,true);
+  assert.equal(nativeStartField(p,'start-pose-1-0').disabled,false);
+  const annotations=JSON.parse(await p.urls.get(p.e.startDownload.href).text());
+  const fixed={values:{root_x_m:0.83},evidence:'Independent fixture position λ'};
+  assert.deepEqual(annotations.fixed_poses,[{frame_index:0,fixed_pose:fixed},{frame_index:1,fixed_pose:null}]);
+  assert.deepEqual(annotations.starts.map(s=>s.poses.map(p=>p.values)),[[[0.83],[-0.4]],[[0.83],[-0.4]]]);
+  const exported=JSON.parse(await p.urls.get(p.e.startPreparedDownload.href).text(),
+    (key,value,context)=>key==='timestamp_us'?context.source:value);
+  assert.deepEqual(exported.fit.frames[0].fixed_pose,fixed);
+  assert.equal(Object.hasOwn(exported.fit.frames[1],'fixed_pose'),false);
+  for(const [i,frame] of exported.fit.frames.entries()){
+    assert.deepEqual(frame.frame,data.frames[i].identity);
+    assert.deepEqual(frame.keypoints,[{name:'anchor',pixel_px:[10,20],sigma_px:1,partition:'held_out'}]);
+  }
+  for(const start of exported.fit.starts)assert.deepEqual(start.poses.map(p=>p.frame),data.frames.map(f=>f.identity));
+  p.e.resetStarts.handlers.click();
+  annotations.fixed_poses.reverse();
+  p.e.startDraftFile.files=[file(JSON.stringify(annotations))];await p.e.startDraftFile.handlers.change();
+  assert.equal(nativeFixedControls(p,0).evidence.value,fixed.evidence);
+  assert.equal(nativeFixedControls(p,1).prescribe.checked,false);
+  assert.equal(p.e.startDownload.hidden,true);
+  p.e.applyStart.handlers.click();assert.equal(p.e.startDownload.hidden,false);
+  const stale=structuredClone(annotations);stale.source_input_sha256='0'.repeat(64);
+  p.e.startDraftFile.files=[file(JSON.stringify(stale))];await p.e.startDraftFile.handlers.change();
+  assert.match(p.e.startStatus.textContent,/different source/);
+  assert.equal(p.e.startPreparedDownload.hidden,true);
+  p.e.cancelStart.handlers.click();assert.equal(p.e.startPreparedDownload.hidden,false);
+});
+
+test('native review refuses invalid prescriptions and duplicate starts atomically and saves constraints before initializing',async()=>{
+  const data=nativeStartsData();
+  delete data.frames[0].fixed_pose;
+  data.annotations.starts[1].shape=[0.4];
+  data.annotations.starts[1].poses[0].values=[0.9];
+  const p=nativeStartsEditor(data),control=nativeFixedControls(p,0);
+  control.prescribe.checked=true;control.prescribe.handlers.change();control.value.value='0.51';
+  for(const [evidence,value,expected] of [[' ','0.51',/evidence/],['λ'.repeat(2049),'0.51',/4096/],
+    ['fixture','2',/inside the bounds/],['fixture','0.51',/duplicates/]]){
+    control.evidence.value=evidence;control.value.value=value;p.e.applyFixedStarts.handlers.click();
+    assert.match(p.e.startStatus.textContent,expected);assert.equal(p.e.startDownload.hidden,true);
+  }
+  p.e.cancelStart.handlers.click();
+  assert.equal(nativeFixedControls(p,0).prescribe.checked,false);
+  assert.equal(nativeStartField(p,'start-pose-0-0').value,'0.7');
+  const empty=nativeStartsEditor(nativeStartsData({starts:0})),early=nativeFixedControls(empty,0);
+  early.value.value='0.88';early.value.handlers.input();empty.e.applyFixedStarts.handlers.click();
+  assert.equal(empty.e.startDownload.hidden,true);assert.equal(empty.e.startPreparedDownload.hidden,true);
+  const draft=await empty.urls.get(empty.e.startDraftDownload.href).text();
+  empty.e.resetStarts.handlers.click();
+  empty.e.startDraftFile.files=[file(draft)];await empty.e.startDraftFile.handlers.change();
+  empty.e.newStart.handlers.click();assert.equal(nativeStartField(empty,'start-pose-0-0').value,'0.88');
+});
 
 test('native body-start editor preserves fixed declarations through blanks midpoints copies and exact prepared exports',async()=>{
   const p=nativeStartsEditor(nativeStartsData({starts:0}));

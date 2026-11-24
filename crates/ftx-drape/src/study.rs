@@ -191,7 +191,7 @@ impl Scenario {
     pub fn validate(&self) -> Result<(), Refusal> {
         self.options.validate()?;
         if let Some(motion) = &self.motion {
-            motion.validate()?;
+            motion.validate_damping(&self.options.damping)?;
         }
         if self.schema != "ftx-drape-scenario/1" {
             return Err(invalid("expected ftx-drape-scenario/1"));
@@ -758,4 +758,49 @@ fn mesh_bound(pattern: &Pattern, spacing: f64, limit: usize) -> Result<usize, Re
         ));
     }
     Ok(bound.ceil() as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn motion_wind_uses_actual_scenario_drag_during_preflight() {
+        let mut scenario: Scenario = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-scenario.json"
+        ))
+        .unwrap();
+        scenario.motion = Some(
+            serde_json::from_value(json!({
+                "schema": "ftx-drape-motion/1",
+                "keyframes": [{"time_s": 0.002, "arm_abduction_deg": 35.0}],
+                "max_step_s": 0.001,
+                "max_trials": 4,
+                "max_pairs": 1000,
+                "air_velocity_schedule_m_s": [[2.0, 0.0, 0.0]]
+            }))
+            .unwrap(),
+        );
+        scenario.options.damping.air_drag = None;
+        let missing_drag = scenario.validate().unwrap_err();
+        assert!(missing_drag.message.contains("air_drag"));
+
+        scenario.options.damping.air_drag = Some(crate::damping::AirDrag::standard());
+        scenario.validate().unwrap();
+        let encoded = serde_json::to_value(&scenario).unwrap();
+        assert_eq!(
+            encoded["motion"]["air_velocity_schedule_m_s"],
+            json!([[2.0, 0.0, 0.0]])
+        );
+
+        let drag = scenario.options.damping.air_drag.as_mut().unwrap();
+        drag.rho_air_kg_m3 = f64::MAX;
+        drag.c_normal = f64::MAX;
+        // The initial still-air law remains admitted. Its scheduled nonzero boundary must
+        // be refused here, without constructing a body, meshing or starting a solver.
+        scenario.options.validate().unwrap();
+        assert!(scenario.validate().is_err());
+        scenario.motion.as_mut().unwrap().air_velocity_schedule_m_s = None;
+        scenario.validate().unwrap();
+    }
 }

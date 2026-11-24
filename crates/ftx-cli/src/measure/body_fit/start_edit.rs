@@ -428,6 +428,11 @@ fn page(data: &Value, prepared: &Value) -> Result<String, Refusal> {
 <label>Reopen an applied start draft for this source <input id="startDraftFile" type="file" accept=".json,application/json"></label>
 <p>A draft replaces the applied start list after its source bindings and values are checked. Review loaded starts before preparing completed annotations. Invalid files leave current work intact.</p>
 <div id="startEditor" hidden>
+<fieldset id="startFixedEditor"><legend>Fixed pose by photograph</legend>
+<p>Prescribe controls only when you have independent evidence for that frame. Leave a control unchecked to let the fitter estimate it. A fixed value is a supplied assumption. All FIT and CHECK observations still apply.</p>
+<div id="startFixedFields"></div>
+<button id="applyFixedStarts" type="button" disabled>Apply constraints and reconcile all starts</button>
+</fieldset>
 <label>Applied initialization <select id="startList" aria-label="Applied initialization"></select></label>
 <p><button id="newStart" type="button">Add blank start</button> <button id="duplicateStart" type="button">Duplicate selected start</button> <button id="removeStart" type="button">Remove selected start</button></p>
 <p><button id="midpointStart" type="button">Use bounds midpoints as a guess</button></p>
@@ -436,7 +441,7 @@ fn page(data: &Value, prepared: &Value) -> Result<String, Refusal> {
 <p id="startStatus" role="status"></p>
 <p><button id="resetStarts" type="button">Reset all start changes</button> · <a id="startDownload" download="body-starts.json" hidden>Download body-starts.json</a> · <a id="startPreparedDownload" download="prepared-input-edited.json" hidden>Download prepared input for browser fitting</a></p>
 <p id="startPreparedNotice"></p>
-<p><a id="startDraftDownload" download="body-starts-draft.json" hidden>Save applied start draft</a>. Save one valid applied start and reopen it here later. Pending edits must be applied or canceled first. A draft is not a fitted body; native materialization still requires 2–4 distinct starts.</p>
+<p><a id="startDraftDownload" download="body-starts-draft.json" hidden>Save applied start draft</a>. Save prescribed constraints even before adding a start, or save a partial set of complete starts. Reopen the draft here to continue. Native materialization requires 2–4 distinct starts.</p>
 <p>Fit prepared-input-edited.json on the local photo page with the same model, or apply annotations with <code>ftx measure fit-starts body-starts.json --model MODEL --out NEW_DIR</code>. To inspect updated previews and recheck source files, run <code>ftx measure fit-start-review NEW_DIR/input.json --model MODEL --out NEW_REVIEW</code>. Keep observations and FIT/CHECK roles fixed; do not tune starts to held-out residuals.</p>
 </div><noscript><p>The supplied local script is required to edit starts. Original input and previews remain available.</p></noscript>
 <script type="application/json" id="startData">{payload}</script><script type="application/json" id="startPreparedInput">{prepared_payload}</script><script src="start-editor.js" defer></script></section>

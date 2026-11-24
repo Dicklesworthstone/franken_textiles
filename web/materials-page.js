@@ -375,6 +375,10 @@ function controls() {
   const motion = $("guidedScenarioMotion").checked, motionMode = guidedMotionMode();
   $("guidedMotionControls").hidden = !motion;
   $("guidedMotionLegFraction").disabled = $("guidedMotionLegs").value === "standing";
+  const motionWind = motionMode === "form" && $("guidedMotionWind").checked;
+  $("guidedMotionWind").disabled = !source || !guidedScenarioMode() || motionMode !== "form";
+  $("guidedMotionWindFields").hidden = !motionWind;
+  for (const axis of ["X", "Y", "Z"]) $("guidedMotionWind" + axis).disabled = !motionWind;
   for (const side of ["Left", "Right"]) {
     $("guidedMotionArm" + side).disabled = motionMode !== "form" || !$("guidedMotionIndependentArms").checked;
   }
@@ -6923,7 +6927,7 @@ function guidedMotionHeatingInput(domain) {
   return Object.fromEntries(guidedMotionHeating.filter(([suffix]) => $("guidedMotion" + domain + suffix).checked)
     .map(([, field]) => [field, "uniform_reference_thickness"]));
 }
-function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true) {
+function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true, includeWind = true) {
   const number = (id, label) => {
     const raw = $(id).value.trim();
     if (!raw || !Number.isFinite(Number(raw))) throw Error(`Supply a finite ${label}.`);
@@ -6931,7 +6935,7 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
   };
   const motion = {
     keyframes: keyframes.map(({ heat_boundary, heat_exterior, coverage_boundary, coverage_exterior,
-      coverage_bare_boundary, coverage_exposed_boundary, coverage_exposed_exterior, ...frame }) =>
+      coverage_bare_boundary, coverage_exposed_boundary, coverage_exposed_exterior, air_velocity_m_s, ...frame }) =>
       ({ ...frame, ...(frame.arm_pose ? { arm_pose: { ...frame.arm_pose } } : {}),
         ...(frame.leg_pose ? { leg_pose: { ...frame.leg_pose } } : {}),
         ...(frame.root_translation_m ? { root_translation_m: frame.root_translation_m.slice() } : {}),
@@ -6941,6 +6945,14 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     max_pairs: number("guidedMotionPairs", "collision candidate allowance"),
     max_sample_vertices: number("guidedMotionVertices", "retained motion vertex allowance"),
   };
+  if (includeWind && $("guidedMotionWind").checked) {
+    motion.air_velocity_schedule_m_s = keyframes.map((frame, index) => {
+      if (!Array.isArray(frame.air_velocity_m_s) || frame.air_velocity_m_s.length !== 3) {
+        throw Error(`Save explicit X, Y and Z wind velocities for motion endpoint ${index + 1}; replace that endpoint to complete its interval.`);
+      }
+      return frame.air_velocity_m_s.slice();
+    });
+  }
   if ($("guidedMotionPoseSampling").checked) {
     motion.source_pose_sampling = {
       max_step_s: number("guidedMotionPoseStep", "maximum interval between source body poses"),
@@ -7097,6 +7109,10 @@ function showGuidedMotionKeyframes() {
       (frame.leg_pose ? `${frame.leg_pose.posture} at fraction ${frame.leg_pose.fraction}.` : "standing legs.");
     if (frame.root_translation_m) label.textContent += ` World offset (m): ${frame.root_translation_m.join(", ")}.`;
     if (frame.root_rotation_rad) label.textContent += ` Root rotation vector (rad): ${frame.root_rotation_rad.join(", ")}.`;
+    if (frame.air_velocity_m_s) {
+      const start = index ? guidedMotionKeyframes[index - 1].time_s : 0;
+      label.textContent += ` Saved wind for ${start}–${frame.time_s} s: [${frame.air_velocity_m_s.join(", ")}] m/s${$("guidedMotionWind").checked ? "." : " (inactive)."}`;
+    } else if ($("guidedMotionWind").checked) label.textContent += " Wind not saved; replace this endpoint to supply X, Y and Z.";
     if (frame.heat_boundary) {
       const film = frame.heat_boundary, start = index ? guidedMotionKeyframes[index - 1].time_s : 0;
       label.textContent += ` Saved heat for ${start}–${frame.time_s} s: inside ${film.inside_c} °C / ${film.inside_resistance_m2_k_w} m² K/W; ` +
@@ -7250,6 +7266,12 @@ function saveGuidedMotionKeyframe(replacing = null) {
       .map(axis => number("guidedMotionRoot" + axis, `world ${axis} displacement in metres`));
     if ($("guidedMotionRotate").checked) frame.root_rotation_rad = ["X", "Y", "Z"]
       .map(axis => number("guidedMotionRotation" + axis, `root rotation-vector ${axis} component in radians`));
+    if ($("guidedMotionWind").checked) {
+      frame.air_velocity_m_s = ["X", "Y", "Z"]
+        .map(axis => number("guidedMotionWind" + axis, `world ${axis} air velocity in metres per second`));
+    } else if (replacing?.air_velocity_m_s) {
+      frame.air_velocity_m_s = replacing.air_velocity_m_s.slice();
+    }
     if ($("guidedMotionHeat").checked) {
       const exterior = exteriorInput("guidedMotionHeatExterior", number);
       frame.heat_boundary = filmInput("guidedMotionHeat", number, exterior);
@@ -7282,9 +7304,11 @@ function saveGuidedMotionKeyframe(replacing = null) {
     const keyframes = guidedMotionKeyframes.slice(), index = replacing ? keyframes.indexOf(replacing) : -1;
     if (replacing && index < 0) throw Error("Choose a current keyframe to replace.");
     if (replacing) keyframes[index] = frame; else keyframes.push(frame);
-    buildMaterialMotionRequest(guidedMotionInput(keyframes, false).motion);
+    buildMaterialMotionRequest(guidedMotionInput(keyframes, false, false).motion);
     // Validate the new boundary independently so older endpoints can be filled explicitly one at a time.
-    if ($("guidedMotionHeat").checked || $("guidedMotionCoverage").checked) buildMaterialMotionRequest(guidedMotionInput([frame]).motion);
+    if ($("guidedMotionWind").checked || $("guidedMotionHeat").checked || $("guidedMotionCoverage").checked) {
+      buildMaterialMotionRequest(guidedMotionInput([frame]).motion);
+    }
     guidedMotionKeyframes.splice(0, guidedMotionKeyframes.length, ...keyframes);
     changedGuidedMotionDraft();
   } catch (e) { error(String(e.message || e)); }
@@ -7483,6 +7507,7 @@ function showGuidedScenarioDrafts() {
       `${value.coverage ? "retained steady body/layer heat" : "no steady body/layer heat"}; ` +
       `${value.vapor_surface ? "retained independent-sheet vapor" : "no sheet vapor"}; ` +
       `${value.vapor_coverage ? "retained covered-body vapor" : "no covered-body vapor"}; ` +
+      `${value.motion?.air_velocity_schedule_m_s ? `${value.motion.air_velocity_schedule_m_s.length} prescribed wind intervals` : "no interval wind schedule"}; ` +
       `${value.motion?.vapor_coverage_history ? "requested complete-motion vapor history" : "no motion vapor history"}; ` +
       `${value.motion?.vapor_coverage_history?.wet_film != null ? "retained finite body-water policy" : "no body-water inventory"}; ` +
       `${value.motion?.transient_surface ? "retained independent-sheet heat history" : "no sheet heat history"}; ` +
@@ -8183,6 +8208,9 @@ $("clearMotionHeatProfiles").onclick = () => {
   guidedMotionHeatProfiles.clear(); showGuidedMotionHeatProfiles(); changedGuidedMotionDraft();
 };
 $("guidedScenarioMotion").addEventListener("change", changedGuidedMotionDraft);
+$("guidedMotionWind").addEventListener("change", () => {
+  if (guidedMotionMode() === "form") changedGuidedMotionDraft(); else controls();
+});
 for (const domain of ["Heat", "Coverage"]) {
   const prefix = "guidedMotion" + domain;
   for (const suffix of ["", "Initial", "Step", "Budget", ...(domain === "Heat" ? ["Cells"] : ["GeometryBudget"]),
@@ -8215,6 +8243,7 @@ for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "gu
   "guidedMotionIndependentArms", "guidedMotionArmLeft", "guidedMotionArmRight",
   "guidedMotionTranslate", "guidedMotionRootX", "guidedMotionRootY", "guidedMotionRootZ",
   "guidedMotionRotate", "guidedMotionRotationX", "guidedMotionRotationY", "guidedMotionRotationZ",
+  "guidedMotionWindX", "guidedMotionWindY", "guidedMotionWindZ",
   "guidedMotionHeatInside", "guidedMotionHeatOutside", "guidedMotionHeatInsideFilm", "guidedMotionHeatOutsideFilm",
   "guidedMotionHeatInstance", "guidedMotionHeatInstanceInitial", "guidedMotionCoverageInstance", "guidedMotionCoverageInstanceInitial",
   "guidedMotionHeatProfileInstance", "guidedMotionHeatProfileValues",
@@ -8722,6 +8751,8 @@ function resetGuidedScenarios() {
   $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
   guidedMotionKeyframes.length = 0; $("guidedScenarioMotion").checked = false; $("guidedMotionSource").value = "form";
   $("guidedMotionPoseSampling").checked = false;
+  $("guidedMotionWind").checked = false;
+  for (const axis of ["X", "Y", "Z"]) $("guidedMotionWind" + axis).value = "";
   $("guidedMotionHeatInitialMode").value = "uniform"; guidedMotionHeatProfiles.clear(); showGuidedMotionHeatProfiles();
   $("guidedMotionHeatProfileInstance").value = ""; $("guidedMotionHeatProfileValues").value = "";
   for (const [domain, initials] of [["Heat", guidedMotionHeatInitials], ["Coverage", guidedMotionCoverageInitials]]) {

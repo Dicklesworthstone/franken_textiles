@@ -69,10 +69,11 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   air velocity `air_velocity_m_s`, supporting both `ImplicitEuler` and `GeneralizedAlpha`) and
   stiffness-proportional Green-strain-rate / dihedral-rate Rayleigh damping (`DampingOptions`).
   Stationary air (`air_velocity_m_s = [0, 0, 0]`) bypasses subtraction and omits the JSON key so
-  stationary-air arithmetic, receipts, and qualification digests remain bit-identical. Nonzero
-  prescribed wind refuses `Solver::static_solve` fail-closed (conservative static minimization
-  omits non-conservative steady aerodynamic follower loading) while retaining the dynamic drape;
-  drag coefficients remain uncalibrated reference defaults and prescribed wind does not claim
+  stationary-air arithmetic, receipts, and qualification digests remain bit-identical. An active
+  wind load refuses both the conservative static solve and its adjoint, including material and
+  reaction gradients. Still air, zero density, and zero drag coefficients exert no steady load.
+  Rayleigh damping also vanishes at equilibrium and permits the same static sensitivities.
+  Drag coefficients remain uncalibrated reference defaults and prescribed wind does not claim
   measured airflow or real garment fit. Internal damping also follows characterized panel curvature:
   normal-projected patches use signed raw curvature increments; vector-Hessian patches use a
   differentiated corotating source-triangle frame. Both preserve the source tensor and reference
@@ -251,6 +252,19 @@ standing workflows and identities, and motion endpoints reuse the same skinning 
 occupancy stay fixed while the initial garment placement uses the requested posture. The existing
 surface and collision gates still decide whether that setup can run. No implicit standing substitute,
 anatomical correction or empirical rise/seat-fit claim is introduced.
+
+**Changing prescribed wind.** A motion request may supply `air_velocity_schedule_m_s`, exactly
+one finite world-space velocity vector per original authored keyframe interval. Scenario admission
+requires existing aerodynamic drag and validates every vector against its actual coefficients
+before model work. Initial draping retains its ordinary wind; each motion interval holds its
+prescribed vector through source-pose and mechanical subdivisions. A changed vector refreshes
+cached generalized-alpha acceleration while preserving positions, velocities and material/contact
+history. Unchanged vectors keep that acceleration history. The whole-solver motion transaction
+restores forcing as well as cloth state after failure; after success, the final wind remains active.
+Optional initial, accepted-sample and endpoint receipts identify the applied velocities, while the
+complete request continues to bind the motion path identity. Omission preserves constant wind.
+No turbulence, shielding, thermal convection or measured drag calibration is inferred. See
+`docs/motion-wind.md` for the original JSON and guided authoring workflow.
 
 **Articulated garment continuation.** A material-study motion keyframe may add
 `leg_pose: {posture: "seated" | "squat", fraction: 0..1}`. It scales the existing body model's
