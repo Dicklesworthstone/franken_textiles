@@ -291,6 +291,7 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
         ])
     };
     let mut v = [0.0f64, 0.0];
+    let mut converged = false;
     for _ in 0..25 {
         let r = leg_resid(v)?;
         if !r[0].is_finite() || !r[1].is_finite() {
@@ -300,6 +301,7 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
             ));
         }
         if r[0].abs().max(r[1].abs()) < 0.05 {
+            converged = true;
             break;
         }
         let c0 = leg_resid([v[0] + 0.5, v[1] + 0.0])?;
@@ -326,6 +328,27 @@ fn build(m: &dyn DraftBody, s: Map<String, Value>) -> Result<(Value, Value), Ref
             v[0] + step[0].clamp(-40.0, 40.0),
             v[1] + step[1].clamp(-40.0, 40.0),
         ];
+    }
+    if !converged {
+        let r = leg_resid(v)?;
+        if !r[0].is_finite() || !r[1].is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "trouser leg truing residual is not finite",
+            ));
+        }
+        if r[0].abs().max(r[1].abs()) >= 0.05 {
+            return Err(Refusal::new(
+                RefusalCode::NotConverged,
+                format!(
+                    "trouser leg truing did not converge after 25 iterations (inseam residual {:+.3} mm, outseam residual {:+.3} mm)",
+                    r[0], r[1]
+                ),
+            )
+            .repair(
+                "check leg fullness, rise_ease, front_ext_frac, or crotch/hip measurements",
+            ));
+        }
     }
     let bk = back_piece(ext_b, v[0], v[1])?;
 
@@ -529,5 +552,16 @@ mod tests {
             let err = zouave_trousers(&meas, Some(&bad_style)).unwrap_err();
             assert_eq!(err.code, RefusalCode::OutOfRange, "style={bad_style}");
         }
+    }
+
+    #[test]
+    fn zouave_trousers_refuses_unconverged_leg_truing_instead_of_emitting_untrued_back() {
+        let meas = sample_meas();
+        // Extreme front_ext_frac stretches front inseam/outseam far beyond what 25 clamped 40 mm
+        // Newton steps on the back hem can match; the drafter must refuse NotConverged rather than
+        // silently emitting an untrued back leg.
+        let err = zouave_trousers(&meas, Some(&json!({"front_ext_frac": 20.0}))).unwrap_err();
+        assert_eq!(err.code, RefusalCode::NotConverged, "{err}");
+        assert!(err.message.contains("trouser leg truing did not converge"));
     }
 }
