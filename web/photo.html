@@ -514,12 +514,23 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#came
     <pre id="bodyPointsError" role="alert"></pre><div id="bodyPointsDownloads" class="files"></div>
   </details>
   <details>
-    <summary>Edit shared-shape and per-frame starting values</summary>
-    <p>Load the prepared input's named controls, then enter each start's shared shape and each frame's
-      pose. Cameras, observations, FIT/CHECK roles and parameter bounds stay fixed. Values must lie
+    <summary>Edit shared-shape, per-frame fixed pose constraints and starting values</summary>
+    <p>Load the prepared input's named controls, then optionally prescribe or release per-frame fixed
+      pose controls with explicit evidence and enter each start's shared shape and each frame's pose.
+      Cameras, observations, FIT/CHECK roles and parameter bounds stay fixed. Values must lie
       strictly inside the declared bounds; no values are inferred or fitted by this editor.</p>
     <p><button id="bodyStartsLoad" disabled>Load starting values</button></p>
     <div id="bodyStartsEditor" hidden>
+      <div id="bodyStartsFixedSection" hidden>
+        <h4>Per-frame fixed pose constraints (optional)</h4>
+        <p><small>Prescribe or release any named subset of pose controls on individual frames with
+          explicit evidence. Fixed controls stay constant across every start and are excluded from
+          optimization; all FIT and CHECK observations still apply. Supplied pose assumptions do not
+          establish measured anatomy or physical fit.</small></p>
+        <div id="bodyStartsFixedPoses"></div>
+        <p id="bodyStartsReconcileStatus" role="status" aria-live="polite"></p>
+        <p><button id="bodyStartsReconcile" type="button" disabled>Apply fixed pose values to all starts</button></p>
+      </div>
       <label>Initialization <select id="bodyStartsSelect"></select></label>
       <p><button id="bodyStartsAdd">Add blank start</button>
         <button id="bodyStartsCopy">Copy selected start</button>

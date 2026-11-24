@@ -1253,7 +1253,12 @@ world-space body through its own calibrated camera. Each start still lists every
 `values: []` for that frame's pose; two to four distinct shared-shape starts remain required.
 A fixed pose is a caller assumption, not a pose recovered from the photographs. Use free pose
 controls for unknown movement, or per-frame `fixed_pose` values for explicitly prescribed
-movement between views. With an empty pose catalogue, the output retains empty pose and pose-spread
+movement between views. In the Photo Workbench initialization editor, users can prescribe or
+release named per-frame fixed pose controls with explicit evidence, explicitly reconcile all
+complete starts to those values (`Apply fixed pose values to all starts`), and apply edits through
+`body_fit_starts` without hand-editing JSON—preserving exact frame identities, cameras,
+observations and CHECK-only roles. Supplied pose assumptions do not establish measured anatomy or
+physical fit. With an empty pose catalogue, the output retains empty pose and pose-spread
 vectors and states that pose was not fitted. Incorrect fixed placement still faces every original
 pixel, silhouette and tape check, and insufficient shape information still returns `UNOBSERVABLE`.
 

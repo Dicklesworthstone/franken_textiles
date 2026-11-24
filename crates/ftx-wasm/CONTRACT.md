@@ -199,18 +199,24 @@ measurement evidence or readiness. Existing accepted-body reuse still needs its 
 **Local initialization authoring.** `body_fit::body_fit_starts(model_bytes, input, edits)` and its
 wasm32 export prepare named shape/pose controls from the same checked model and input. Empty edit
 text returns the original input bytes unchanged, including zero-start drafts. Explicit edits
-replace only one to four starts, joining original frame ordinals to native full-width identities.
+replace one to four starts—or zero to four starts together with an optional complete `fixed_poses`
+array—joining original frame ordinals to native full-width identities. Each `fixed_poses` entry
+binds one `frame_index` to either `null` (releasing per-frame fixed pose constraints) or a
+`FixedPose` (`values` + non-blank `evidence`) validated through ordinary native admission, and
+requires both `input_sha256` and `model_sha256` matching the exact supplied source bytes.
 All observations, bounds, cameras, source images and FIT/CHECK roles stay fixed. Duplicate starts,
-missing or repeated frame ordinals, nonfinite values and boundary/out-of-domain values refuse
-through ordinary native admission. The returned input can immediately be previewed, downloaded
-and fitted; a one-start draft is inspectable but fitting still requires two to four distinct starts.
-Edits are limited to 64 KiB alongside the existing 16 MiB input and 512 MiB model limits. Every
-result names both original and returned input hashes, with no optimization or accepted body.
-Edit requests may bind `input_sha256` and `model_sha256` to the exact supplied source bytes; the
-pair must be complete and match when present. Older callers may omit both. The browser always
-sends both, retains drafts across cancelled file choices, and invalidates in-flight applications
-when a newer edit arrives. Reset and actual source selection discard the editor; a cancelled
-file choice never silently reloads the original input over applied values.
+missing or repeated frame ordinals, nonfinite values, blank/oversized fixed-pose evidence,
+start/fixed-pose disagreement, free-parameter budget overflow and boundary/out-of-domain values
+refuse through ordinary native admission. The returned input can immediately be previewed,
+downloaded and fitted; a one-start draft is inspectable but fitting still requires two to four
+distinct starts. Edits are limited to 64 KiB alongside the existing 16 MiB input and 512 MiB model
+limits. Every result names both original and returned input hashes, with no optimization,
+anatomical measurement or accepted body. Legacy start-only edit requests may omit both source
+hashes; when present, both must match. The browser always sends both, lets users prescribe or
+release per-frame fixed pose controls and explicitly reconcile complete starts before applying,
+retains drafts across cancelled file choices, and invalidates in-flight applications when a newer
+edit arrives. Reset and actual source selection discard the editor; a cancelled file choice never
+silently reloads the original input over applied values.
 
 **Manual prepared observations.** `body_fit::body_fit_observations(model_bytes, input, edits)` and
 its wasm32 export open empty or populated keypoint/contour drafts and replace explicitly supplied

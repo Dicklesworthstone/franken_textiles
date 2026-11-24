@@ -4176,3 +4176,158 @@ test('blank photo uncertainty inputs serialize as null rather than zero and refu
   assert.equal(p.e.draftDownloads.children.length,0);
   assert.match(p.e.error.textContent,/finite measurement settings/);
 });
+
+test('body-start editor authors and releases per-frame fixed poses with explicit reconciliation, refusals and invalidation',async()=>{
+  const findById=(root,id)=>{
+    if(!root) return null;
+    if(root.id===id) return root;
+    for(const child of root.children || []){const found=findById(child,id);if(found)return found;}
+    return null;
+  };
+  const p=await photoPage();selectBodyFit(p);
+  const view=await loadBodyStarts(p);
+  assert.equal(p.e.bodyStartsFixedSection.hidden,false);
+  assert.equal(p.e.bodyStartsReconcile.disabled,true);
+  assert.match(p.e.bodyStartsReconcileStatus.textContent,/No per-frame fixed pose constraints prescribed/);
+
+  // Establish an accepted fit and workbench handoff so we prove fixed-pose edits withdraw both.
+  await p.e.bodyFitRun.onclick();
+  let w=p.current();
+  await w.emit({type:'result',request:w.messages[0].request,report:JSON.stringify(bodyFitReport())});
+  p.e.bodyFitWorkbench.onclick();
+  const popup=p.popups[0];
+
+  // Prescribe Frame 1 root_x_m = 0.25 (Start 1 has 0.1, Start 2 has 0.2 -> 2 mismatches).
+  const toggle0=findById(p.e.bodyStartsFixedPoses,'bodyFixed-toggle-0-0');
+  assert.equal(toggle0.checked,false);
+  toggle0.checked=true;toggle0.handlers.change();
+  // Toggling fixed pose withdraws fit results, handoff and downloads.
+  assert.equal(p.e.bodyFitResult.hidden,true);assert.equal(p.e.bodyFitWorkbench.disabled,true);assert.equal(p.urls.size,0);
+  p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,
+    data:{type:'ftx-body-fit-sources-ready',token:new URL(popup.url).searchParams.get('bodyFitImport')}});
+  assert.equal(popup.messages[0].data.type,'ftx-body-fit-sources-cancelled');
+
+  // Fixed value initialized from Start 1 (0.1); Start 2 still has 0.2 -> 1 mismatch detected.
+  const val0=findById(p.e.bodyStartsFixedPoses,'bodyFixed-value-0-0');
+  const ev0=findById(p.e.bodyStartsFixedPoses,'bodyFixed-evidence-0');
+  assert.equal(val0.value,'0.1');assert.equal(val0.disabled,false);assert.equal(ev0.disabled,false);
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').disabled,true);
+  assert.equal(p.e.bodyStartsReconcile.disabled,false);
+  assert.match(p.e.bodyStartsReconcileStatus.textContent,/1 start pose coordinate\(s\) disagree/);
+
+  // Change fixed value to 0.25 -> now both starts disagree (2 mismatches).
+  val0.value='0.25';val0.handlers.input();
+  assert.match(p.e.bodyStartsReconcileStatus.textContent,/2 start pose coordinate\(s\) disagree/);
+
+  // Applying with blank evidence refuses before worker creation.
+  let workersBefore=p.workers.length;
+  await p.e.bodyStartsApply.onclick();
+  assert.equal(p.workers.length,workersBefore);
+  assert.match(p.e.bodyStartsError.textContent,/explicit fixed-pose evidence/);
+
+  // Supply evidence but do NOT reconcile starts yet -> refuses unreconciled disagreement before worker creation.
+  ev0.value='Floor tape mark on Frame 1';ev0.handlers.input();
+  await p.e.bodyStartsApply.onclick();
+  assert.equal(p.workers.length,workersBefore);
+  assert.match(p.e.bodyStartsError.textContent,/reconcile all starts explicitly/);
+
+  // Boundary value refuses reconciliation and disables button.
+  val0.value='3';val0.handlers.input();
+  assert.equal(p.e.bodyStartsReconcile.disabled,true);
+  assert.match(p.e.bodyStartsReconcileStatus.textContent,/strictly inside declared bounds/);
+  await p.e.bodyStartsApply.onclick();
+  assert.equal(p.workers.length,workersBefore);
+  assert.match(p.e.bodyStartsError.textContent,/strictly between/);
+
+  // Restore valid 0.25 and click explicit reconcile button -> updates all starts while keeping free coordinates untouched.
+  val0.value='0.25';val0.handlers.input();
+  assert.equal(p.e.bodyStartsReconcile.disabled,false);
+  p.e.bodyStartsReconcile.onclick();
+  assert.equal(p.e.bodyStartsReconcile.disabled,true);
+  assert.match(p.e.bodyStartsReconcileStatus.textContent,/All starts agree/);
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').value,'0.25');
+  assert.equal(bodyStartField(p,'bodyStart-pose-1-0').value,'0.2');
+
+  // Apply -> sends exact { input_sha256, model_sha256, starts, fixed_poses } payload.
+  await p.e.bodyStartsApply.onclick();
+  w=p.current();const msg=w.messages[0], sent=JSON.parse(msg.edits);
+  assert.equal(sent.input_sha256,view.input_sha256);assert.equal(sent.model_sha256,view.model_sha256);
+  assert.deepEqual(sent.fixed_poses,[
+    {frame_index:0,fixed_pose:{values:{root_x_m:0.25},evidence:'Floor tape mark on Frame 1'}},
+    {frame_index:1,fixed_pose:null},
+  ]);
+  assert.deepEqual(sent.starts.map(s=>s.poses[0].values[0]),[0.25,0.25]);
+  assert.deepEqual(sent.starts.map(s=>s.poses[1].values[0]),[0.2,0.25]);
+
+  // Tampered worker response with mismatched evidence is rejected fail-closed.
+  const tamperedFrames=JSON.parse(JSON.stringify(view.frames));
+  tamperedFrames[0].fixed_pose={values:{root_x_m:0.25},evidence:'tampered evidence'};
+  await w.emit({type:'result',request:msg.request,report:JSON.stringify({...view,
+    input:'{"tampered":true}',input_sha256:'b'.repeat(64),starts:sent.starts,frames:tamperedFrames})});
+  assert.match(p.e.bodyStartsError.textContent,/controls or frames/);
+  assert.equal(p.urls.size,0);
+
+  // Genuine worker response succeeds and locks Frame 1 pose control.
+  await p.e.bodyStartsApply.onclick();
+  w=p.current();const msg2=w.messages[0];
+  const appliedFrames=JSON.parse(JSON.stringify(view.frames));
+  appliedFrames[0].fixed_pose={values:{root_x_m:0.25},evidence:'Floor tape mark on Frame 1'};
+  const appliedInput='{"authored_fixed_pose":true,"timestamp_us":18446744073709551615}\n';
+  await w.emit({type:'result',request:msg2.request,report:JSON.stringify({...view,
+    input:appliedInput,input_sha256:'c'.repeat(64),starts:sent.starts,frames:appliedFrames})});
+  assert.equal(p.e.bodyStartsError.textContent,'');
+  assert.equal(p.e.bodyFitRun.disabled,false);
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').disabled,true);
+  assert.equal(await p.urls.get(p.e.bodyStartsDownloads.children[0].href).text(),appliedInput);
+
+  // Cancel restores previous applied fixed poses after pending release.
+  const releaseBtn=findById(p.e.bodyStartsFixedPoses,'bodyFixed-release-0');
+  assert.equal(releaseBtn.disabled,false);
+  releaseBtn.onclick();
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').disabled,false);
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').value,'0.25');
+  p.e.bodyStartsCancel.onclick();
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').disabled,true);
+  assert.equal(findById(p.e.bodyStartsFixedPoses,'bodyFixed-toggle-0-0').checked,true);
+
+  // Actually release Frame 1 fixed pose and apply -> sends fixed_pose: null and unlocks control.
+  findById(p.e.bodyStartsFixedPoses,'bodyFixed-release-0').onclick();
+  await p.e.bodyStartsApply.onclick();
+  w=p.current();const relMsg=w.messages[0], relSent=JSON.parse(relMsg.edits);
+  assert.deepEqual(relSent.fixed_poses,[{frame_index:0,fixed_pose:null},{frame_index:1,fixed_pose:null}]);
+  const releasedInput='{"released_fixed_pose":true}\n';
+  await w.emit({type:'result',request:relMsg.request,report:JSON.stringify({...view,
+    original_input_sha256:'c'.repeat(64),input:releasedInput,input_sha256:'d'.repeat(64),
+    starts:relSent.starts,frames:view.frames})});
+  assert.equal(p.e.bodyStartsError.textContent,'');
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').disabled,false);
+
+  // Zero-start draft can prescribe and apply per-frame fixed pose constraints while keeping preview/fit disabled.
+  const p0=await photoPage();selectBodyFit(p0);
+  const v0=await loadBodyStarts(p0,{starts:[]});
+  assert.equal(p0.e.bodyStartsApply.disabled,true);
+  const t0=findById(p0.e.bodyStartsFixedPoses,'bodyFixed-toggle-0-0');
+  t0.checked=true;t0.handlers.change();
+  const fv0=findById(p0.e.bodyStartsFixedPoses,'bodyFixed-value-0-0');
+  const fe0=findById(p0.e.bodyStartsFixedPoses,'bodyFixed-evidence-0');
+  fv0.value='0.35';fv0.handlers.input();
+  fe0.value='Calibration mark on zero-start draft';fe0.handlers.input();
+  assert.equal(p0.e.bodyStartsApply.disabled,false);
+  await p0.e.bodyStartsApply.onclick();
+  const w0=p0.current(), m0=w0.messages[0], e0=JSON.parse(m0.edits);
+  assert.deepEqual(e0.starts,[]);
+  assert.deepEqual(e0.fixed_poses,[
+    {frame_index:0,fixed_pose:{values:{root_x_m:0.35},evidence:'Calibration mark on zero-start draft'}},
+    {frame_index:1,fixed_pose:null},
+  ]);
+  const f0=JSON.parse(JSON.stringify(v0.frames));
+  f0[0].fixed_pose={values:{root_x_m:0.35},evidence:'Calibration mark on zero-start draft'};
+  await w0.emit({type:'result',request:m0.request,report:JSON.stringify({...v0,
+    input:'{"zero_start_fixed":true}\n',input_sha256:'e'.repeat(64),starts:[],frames:f0})});
+  assert.equal(p0.e.bodyStartsError.textContent,'');
+  assert.equal(p0.e.bodyFitStartRun.disabled,true);assert.equal(p0.e.bodyFitRun.disabled,true);
+  // Adding a blank start now pre-populates the authored fixed pose coordinate automatically.
+  p0.e.bodyStartsAdd.onclick();
+  assert.equal(bodyStartField(p0,'bodyStart-pose-0-0').value,'0.35');
+  assert.equal(bodyStartField(p0,'bodyStart-pose-0-0').disabled,true);
+});

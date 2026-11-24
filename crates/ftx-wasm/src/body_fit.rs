@@ -15,8 +15,8 @@ use ftx_body::{
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::{
     body_fit::{
-        self, BodyFitInput, BodyModel, CaptureImage, FitFrame, FitOptions, FitStart, FramePose,
-        Keypoint, ModelLayout, Parameter,
+        self, BodyFitInput, BodyModel, CaptureImage, FitFrame, FitOptions, FitStart, FixedPose,
+        FramePose, Keypoint, ModelLayout, Parameter,
     },
     silhouette::{self, MaskSample, Silhouette, SurfaceMesh},
 };
@@ -235,6 +235,16 @@ struct StartEdits {
     #[serde(default)]
     model_sha256: Option<String>,
     starts: Vec<StartValues>,
+    #[serde(default)]
+    fixed_poses: Option<Vec<FrameFixedPoseEdit>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameFixedPoseEdit {
+    frame_index: usize,
+    #[serde(default)]
+    fixed_pose: Option<FixedPose>,
 }
 
 #[derive(Deserialize)]
@@ -251,16 +261,20 @@ struct PoseValues {
     values: Vec<f64>,
 }
 
-/// Prepare named initialization controls, or replace starts in an otherwise unchanged input.
-/// Empty edit text retains the original input bytes. Edits use original frame ordinals; native
-/// identities never pass through JavaScript numbers. One start is an inspectable draft, while
-/// the ordinary fitter still requires two to four distinct initializations.
-/// Source hashes may be omitted together for older callers; when supplied, both must match the
-/// exact original input and model bytes. The browser always supplies this binding.
+/// Prepare named initialization controls, or replace starts (and optionally per-frame fixed pose
+/// constraints) in an otherwise unchanged input. Empty edit text retains the original input bytes.
+/// Edits use original frame ordinals; native identities never pass through JavaScript numbers.
+/// One start is an inspectable draft, while the ordinary fitter still requires two to four
+/// distinct initializations. Source hashes may be omitted together for legacy start-only callers;
+/// when supplied—or whenever `fixed_poses` is present—both must match the exact original input and
+/// model bytes. Prescribing or releasing `fixed_poses` permits 0..=4 complete starts while enforcing
+/// exact start/fixed-pose agreement, evidence, bounds and free-parameter budget through ordinary
+/// native admission. The browser always supplies source hashes.
 ///
 /// # Errors
 /// Oversized input/model/edits, wrong model identity or edit binding, malformed observations or fields,
-/// incomplete frame poses, duplicate starts, or values outside the original exclusive bounds.
+/// incomplete frame poses or fixed-pose ordinals, blank/oversized fixed-pose evidence, duplicate starts,
+/// start/fixed-pose disagreement, or values outside the original exclusive bounds.
 pub fn body_fit_starts(
     model_bytes: &[u8],
     input_text: &str,
@@ -314,8 +328,39 @@ pub fn body_fit_starts(
                 ));
             }
         }
-        if !(1..=4).contains(&edits.starts.len()) {
-            return Err(invalid("initialization edits need one to four starts"));
+        let has_fixed_pose_edits = edits.fixed_poses.is_some();
+        if let Some(fixed_edits) = edits.fixed_poses {
+            if edits.input_sha256.is_none() || edits.model_sha256.is_none() {
+                return Err(invalid(
+                    "fixed pose edits require both input_sha256 and model_sha256",
+                ));
+            }
+            if fixed_edits.len() != request.fit.frames.len() {
+                return Err(invalid(
+                    "fixed_poses needs exactly one entry per source frame",
+                ));
+            }
+            let mut updated = vec![None; request.fit.frames.len()];
+            for entry in fixed_edits {
+                let slot = updated
+                    .get_mut(entry.frame_index)
+                    .ok_or_else(|| invalid("fixed pose frame_index is out of range"))?;
+                if slot.replace(entry.fixed_pose).is_some() {
+                    return Err(invalid("duplicate fixed pose frame_index"));
+                }
+            }
+            for (frame, fixed_pose) in request.fit.frames.iter_mut().zip(updated) {
+                frame.fixed_pose =
+                    fixed_pose.ok_or_else(|| invalid("missing fixed pose frame_index"))?;
+            }
+        }
+        let min_starts = usize::from(!has_fixed_pose_edits);
+        if !(min_starts..=4).contains(&edits.starts.len()) {
+            return Err(invalid(if has_fixed_pose_edits {
+                "initialization edits accept at most four starts"
+            } else {
+                "initialization edits need one to four starts"
+            }));
         }
         request.fit.starts = edits
             .starts
@@ -360,6 +405,26 @@ pub fn body_fit_starts(
         let mut value: Value = serde_json::from_str(input_text)
             .map_err(|error| invalid(format!("invalid initialization source: {error}")))?;
         value["fit"]["starts"] = json!(request.fit.starts);
+        if has_fixed_pose_edits {
+            let raw_frames = value["fit"]["frames"]
+                .as_array_mut()
+                .ok_or_else(|| invalid("prepared initialization input is missing fit.frames"))?;
+            if raw_frames.len() != request.fit.frames.len() {
+                return Err(invalid(
+                    "prepared initialization frames disagree with parsed input",
+                ));
+            }
+            for (raw_frame, frame) in raw_frames.iter_mut().zip(&request.fit.frames) {
+                let obj = raw_frame
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("prepared initialization frame must be an object"))?;
+                if let Some(fixed) = &frame.fixed_pose {
+                    obj.insert("fixed_pose".into(), json!(fixed));
+                } else {
+                    obj.remove("fixed_pose");
+                }
+            }
+        }
         let edited = serde_json::to_string_pretty(&value).map_err(|error| {
             invalid(format!("cannot serialize edited initializations: {error}"))
         })?;

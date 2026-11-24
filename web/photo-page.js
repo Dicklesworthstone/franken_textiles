@@ -31,9 +31,9 @@ let bodyTargetsWorker = null, bodyTargetsTicket = 0, bodyTargetsBusy = false;
 let bodyTargetsView = null, bodyTargetsSource = null, bodyTargetsToken = null;
 const bodyTargetsUrls = [];
 let bodyStartsWorker = null, bodyStartsTicket = 0, bodyStartsBusy = false;
-let bodyStartsSource = null, bodyStartsView = null, bodyStartsDraft = [], bodyStartsSelected = 0, bodyStartsPending = false;
+let bodyStartsSource = null, bodyStartsView = null, bodyStartsDraft = [], bodyStartsFixedDraft = [], bodyStartsSelected = 0, bodyStartsPending = false;
 const bodyStartsUrls = [];
-let bodyStartsInputs = [];
+let bodyStartsInputs = [], bodyStartsFixedInputs = [];
 let bodyPointsWorker = null, bodyPointsTicket = 0, bodyPointsBusy = false, bodyPointsPending = false;
 let bodyPointsSource = null, bodyPointsView = null, bodyPointsDraft = [], bodyPointsSelected = 0;
 let bodyPointsReviewText = null;
@@ -119,14 +119,28 @@ function controls() {
   $("bodyStartsLoad").disabled=startsBlocked || pointsBlocked || bodyFitBusy || bodyStartsView!==null || !$("bodyFitModel").files.length || !bodyInputFile();
   $("bodyStartsEditor").hidden=bodyStartsView===null;
   const startsLocked=bodyStartsBusy || bodyFitBusy || pointsBlocked, hasStart=!!bodyStartsDraft[bodyStartsSelected];
+  const hasPoseParams=Boolean(bodyStartsView?.pose?.length), fixedChanged=bodyStartsFixedChanged();
+  const fixedCheck=hasPoseParams?bodyStartsFixedMismatches():{mismatches:0,invalidFixedCount:0,fixedCount:0};
+  $("bodyStartsFixedSection").hidden=!hasPoseParams;
   $("bodyStartsSelect").disabled=startsLocked || !bodyStartsDraft.length;
   for(const id of ["bodyStartsCopy","bodyStartsRemove","bodyStartsMidpoint"]) $(id).disabled=startsLocked || !hasStart;
   $("bodyStartsCopy").disabled ||= bodyStartsDraft.length>=4;
   $("bodyStartsAdd").disabled=startsLocked || !bodyStartsView || bodyStartsDraft.length>=4;
-  $("bodyStartsApply").disabled=startsLocked || !bodyStartsPending || !bodyStartsDraft.length;
+  $("bodyStartsApply").disabled=startsLocked || !bodyStartsPending || (!bodyStartsDraft.length && !fixedChanged);
   $("bodyStartsCancel").disabled=!bodyStartsPending && !bodyStartsBusy;
   $("bodyStartsReset").disabled=!bodyStartsView && !bodyStartsBusy;
+  $("bodyStartsReconcile").disabled=startsLocked || !hasPoseParams || !bodyStartsDraft.length || fixedCheck.mismatches===0 || fixedCheck.invalidFixedCount>0;
+  if(hasPoseParams) {
+    $("bodyStartsReconcileStatus").textContent=fixedCheck.invalidFixedCount>0
+      ? "Enter finite fixed pose values strictly inside declared bounds before reconciling starts."
+      : fixedCheck.mismatches>0
+        ? `${fixedCheck.mismatches} start pose coordinate(s) disagree with prescribed fixed pose values. Reconcile all starts explicitly before applying.`
+        : fixedCheck.fixedCount>0
+          ? (bodyStartsDraft.length ? "All starts agree with the prescribed fixed pose values." : "Fixed pose constraints prescribed; add complete starts or apply constraints now.")
+          : "No per-frame fixed pose constraints prescribed; all declared pose controls are free.";
+  }
   for(const input of bodyStartsInputs) input.disabled=startsLocked || input.readOnly;
+  for(const entry of bodyStartsFixedInputs) entry.control.disabled=startsLocked || entry.whenDisabled();
   const pointsLocked=bodyPointsBusy || bodyFitBusy || startsBlocked, pointName=$("bodyPointsTarget").value;
   const pointFrame=bodyPointsView?.frames[bodyPointsSelected], originalPoint=pointFrame?.keypoints.find(p=>p.name===pointName);
   $("bodyPointsLoad").disabled=pointsBlocked || bodyFitBusy || startsBlocked || !!bodyPointsView || !$("bodyFitModel").files.length || !bodyInputFile();
@@ -831,6 +845,56 @@ async function runBodyTargets(annotations=null) {
 function copyBodyStarts(starts) {
   return starts.map(start=>({shape:[...start.shape],poses:start.poses.map(pose=>({frame_index:pose.frame_index,values:[...pose.values]}))}));
 }
+function copyBodyFixedPoses(frames) {
+  return frames.map(frame=>({
+    frame_index:frame.frame_index,
+    values:Object.fromEntries(Object.entries(frame.fixed_pose?.values ?? {}).map(([name,value])=>[name,Object.is(value,-0)?"-0":String(value)])),
+    evidence:frame.fixed_pose?.evidence ?? "",
+  }));
+}
+function validFixedNumber(raw,parameter) {
+  if(typeof raw==="string" && !raw.trim()) return null;
+  const value=Number(raw);
+  if(!Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper) return null;
+  return value;
+}
+function bodyStartsFixedChanged() {
+  if(!bodyStartsView || !bodyStartsFixedDraft.length) return false;
+  return bodyStartsView.frames.some((frame,index)=>{
+    const draft=bodyStartsFixedDraft[index];
+    const origValues=frame.fixed_pose?.values ?? {}, origKeys=Object.keys(origValues).sort();
+    const draftValues=draft?.values ?? {}, draftKeys=Object.keys(draftValues).sort();
+    if(origKeys.length!==draftKeys.length || origKeys.some((key,i)=>key!==draftKeys[i])) return true;
+    if(!draftKeys.length) return false;
+    if((draft.evidence ?? "")!==(frame.fixed_pose?.evidence ?? "")) return true;
+    return draftKeys.some(name=>{
+      const parameter=bodyStartsView.pose.find(p=>p.name===name);
+      const value=parameter?validFixedNumber(draftValues[name],parameter):null;
+      return value===null || value!==origValues[name];
+    });
+  });
+}
+function bodyStartsFixedMismatches() {
+  let mismatches=0, invalidFixedCount=0, fixedCount=0;
+  if(!bodyStartsView) return {mismatches,invalidFixedCount,fixedCount};
+  for(const frame of bodyStartsView.frames) {
+    const draft=bodyStartsFixedDraft[frame.frame_index];
+    if(!draft) continue;
+    for(const [paramIndex,parameter] of bodyStartsView.pose.entries()) {
+      if(!Object.hasOwn(draft.values,parameter.name)) continue;
+      ++fixedCount;
+      const fixed=validFixedNumber(draft.values[parameter.name],parameter);
+      if(fixed===null) {++invalidFixedCount; continue;}
+      for(const start of bodyStartsDraft) {
+        const pose=start.poses.find(p=>p.frame_index===frame.frame_index);
+        const raw=pose?.values[paramIndex];
+        const current=typeof raw==="string" && !raw.trim()?NaN:Number(raw);
+        if(!Number.isFinite(current) || current!==fixed) ++mismatches;
+      }
+    }
+  }
+  return {mismatches,invalidFixedCount,fixedCount};
+}
 function stopBodyStarts() {
   ++bodyStartsTicket; bodyStartsWorker?.terminate(); bodyStartsWorker=null; bodyStartsBusy=false;
 }
@@ -846,8 +910,9 @@ function bodyStartsDownload() {
 }
 function withdrawBodyStarts() {
   stopBodyStarts(); withdrawBodyStartsDownloads();
-  bodyStartsSource=null; bodyStartsView=null; bodyStartsDraft=[]; bodyStartsInputs=[]; bodyStartsPending=false; bodyStartsSelected=0;
-  $("bodyStartsFields").replaceChildren(); $("bodyStartsSelect").replaceChildren();
+  bodyStartsSource=null; bodyStartsView=null; bodyStartsDraft=[]; bodyStartsFixedDraft=[]; bodyStartsInputs=[]; bodyStartsFixedInputs=[]; bodyStartsPending=false; bodyStartsSelected=0;
+  $("bodyStartsFields").replaceChildren(); $("bodyStartsFixedPoses").replaceChildren(); $("bodyStartsSelect").replaceChildren();
+  $("bodyStartsReconcileStatus").textContent="";
   $("bodyStartsError").textContent="";
   $("bodyStartsStatus").textContent="Load the selected prepared input to edit its starts.";
   controls();
@@ -857,13 +922,85 @@ function pendingBodyStarts() {
   stopBodyStarts();
   bodyStartsPending=true; withdrawBodyStartsDownloads(); withdrawBodyFit();
   $("bodyStartsError").textContent="";
-  $("bodyStartsStatus").textContent="Pending starting values: check and apply all starts, or cancel the edits. Previous fit results and previews are withdrawn.";
-  $("bodyFitStatus").textContent="Starting values changed; apply or cancel pending edits before previewing or fitting.";
+  $("bodyStartsStatus").textContent="Pending starting values or fixed pose constraints: check and apply edits, or cancel. Previous fit results and previews are withdrawn.";
+  $("bodyFitStatus").textContent="Starting values or fixed pose constraints changed; apply or cancel pending edits before previewing or fitting.";
   controls();
+}
+function renderBodyStartsFixedPoses() {
+  const container=$("bodyStartsFixedPoses");
+  container.replaceChildren(); bodyStartsFixedInputs=[];
+  if(!bodyStartsView || !bodyStartsView.pose.length) return;
+  for(const frame of bodyStartsView.frames) {
+    const draft=bodyStartsFixedDraft[frame.frame_index];
+    const fixedNames=Object.keys(draft.values);
+    const fieldset=document.createElement("fieldset"), legend=document.createElement("legend");
+    legend.textContent=`${frame.label} — fixed pose constraints`;
+    const summary=document.createElement("p");
+    summary.textContent=fixedNames.length===bodyStartsView.pose.length
+      ? `${fixedNames.length} of ${bodyStartsView.pose.length} pose controls fixed (fully fixed frame; all FIT/CHECK observations still apply).`
+      : `${fixedNames.length} of ${bodyStartsView.pose.length} pose controls fixed.`;
+    fieldset.append(legend,summary);
+    bodyStartsView.pose.forEach((parameter,index)=>{
+      const row=document.createElement("div");
+      const toggleLabel=document.createElement("label"), toggle=document.createElement("input"), toggleText=document.createElement("span");
+      toggle.type="checkbox"; toggle.id=`bodyFixed-toggle-${frame.frame_index}-${index}`; toggleLabel.htmlFor=toggle.id;
+      toggle.checked=Object.hasOwn(draft.values,parameter.name);
+      toggleText.textContent=`Fix ${parameter.name} (${parameter.unit}) `;
+      toggleLabel.append(toggle,toggleText);
+      const valueLabel=document.createElement("label"), valueInput=document.createElement("input"), valueText=document.createElement("span");
+      valueInput.type="number"; valueInput.step="any"; valueInput.min=String(parameter.lower); valueInput.max=String(parameter.upper);
+      valueInput.id=`bodyFixed-value-${frame.frame_index}-${index}`; valueLabel.htmlFor=valueInput.id;
+      valueInput.value=toggle.checked?String(draft.values[parameter.name]):"";
+      valueText.textContent=`Fixed value (${parameter.lower} < value < ${parameter.upper}) `;
+      valueLabel.append(valueText,valueInput);
+      toggle.addEventListener("change",()=>{
+        if(bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
+        if(toggle.checked) {
+          const currentStart=bodyStartsDraft[bodyStartsSelected];
+          const raw=currentStart?.poses.find(p=>p.frame_index===frame.frame_index)?.values[index];
+          const valid=raw===undefined?null:validFixedNumber(raw,parameter);
+          draft.values[parameter.name]=valid!==null?(Object.is(valid,-0)?"-0":String(valid)):"";
+        } else {
+          delete draft.values[parameter.name];
+        }
+        pendingBodyStarts(); renderBodyStarts();
+      });
+      valueInput.addEventListener("input",()=>{
+        if(!Object.hasOwn(draft.values,parameter.name) || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
+        draft.values[parameter.name]=valueInput.value; pendingBodyStarts();
+      });
+      row.append(toggleLabel,valueLabel);
+      fieldset.append(row);
+      bodyStartsFixedInputs.push({control:toggle,whenDisabled:()=>false},
+        {control:valueInput,whenDisabled:()=>!Object.hasOwn(draft.values,parameter.name)});
+    });
+    const evidenceLabel=document.createElement("label"), evidenceInput=document.createElement("input"), evidenceText=document.createElement("span");
+    evidenceInput.type="text"; evidenceInput.id=`bodyFixed-evidence-${frame.frame_index}`; evidenceLabel.htmlFor=evidenceInput.id;
+    evidenceInput.value=draft.evidence;
+    evidenceText.textContent=`Evidence for fixed pose on Frame ${frame.frame_index+1} `;
+    evidenceLabel.append(evidenceText,evidenceInput);
+    evidenceInput.addEventListener("input",()=>{
+      if(!Object.keys(draft.values).length || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
+      draft.evidence=evidenceInput.value; pendingBodyStarts();
+    });
+    const release=document.createElement("button");
+    release.type="button"; release.id=`bodyFixed-release-${frame.frame_index}`;
+    release.textContent=`Release all fixed controls on Frame ${frame.frame_index+1}`;
+    release.onclick=()=>{
+      if(!Object.keys(draft.values).length || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
+      draft.values={}; pendingBodyStarts(); renderBodyStarts();
+    };
+    fieldset.append(evidenceLabel,release);
+    container.append(fieldset);
+    bodyStartsFixedInputs.push(
+      {control:evidenceInput,whenDisabled:()=>!Object.keys(draft.values).length},
+      {control:release,whenDisabled:()=>!Object.keys(draft.values).length});
+  }
 }
 function renderBodyStarts() {
   const list=$("bodyStartsSelect"), fields=$("bodyStartsFields");
   list.replaceChildren(); fields.replaceChildren(); bodyStartsInputs=[];
+  renderBodyStartsFixedPoses();
   bodyStartsSelected=Math.min(bodyStartsSelected,Math.max(0,bodyStartsDraft.length-1));
   for(let i=0;i<bodyStartsDraft.length;i++) {
     const option=document.createElement("option"); option.value=String(i); option.textContent="Start "+(i+1); list.append(option);
@@ -881,7 +1018,7 @@ function renderBodyStarts() {
       input.value=Object.is(values[index],-0)?"-0":String(values[index]);
       input.readOnly=Object.hasOwn(fixedPose?.values ?? {},parameter.name);
       text.textContent=input.readOnly
-        ? `${parameter.name} (${parameter.unit}); fixed for this frame. ${fixedPose.evidence} `
+        ? `${parameter.name} (${parameter.unit}); fixed for this frame. ${fixedPose.evidence?.trim() || "Supply fixed-pose evidence above."} `
         : `${parameter.name} (${parameter.unit}); ${parameter.lower} < value < ${parameter.upper} `;
       input.addEventListener("input",()=>{
         if(input.readOnly || bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
@@ -893,18 +1030,19 @@ function renderBodyStarts() {
   };
   group("Shared shape — same across every frame",bodyStartsView.shape,start.shape,"shape");
   for(const frame of bodyStartsView.frames) {
-    group(frame.label,bodyStartsView.pose,start.poses.find(pose=>pose.frame_index===frame.frame_index).values,"pose-"+frame.frame_index,frame.fixed_pose);
+    group(frame.label,bodyStartsView.pose,start.poses.find(pose=>pose.frame_index===frame.frame_index).values,"pose-"+frame.frame_index,bodyStartsFixedDraft[frame.frame_index] ?? frame.fixed_pose);
   }
   controls();
 }
 function checkedBodyStartsView(text,input,edits) {
   const view=JSON.parse(text), hash=value=>typeof value==="string" && /^[0-9a-f]{64}$/.test(value);
+  const parsedEdits=edits?JSON.parse(edits):null, hasFixedEdits=Array.isArray(parsedEdits?.fixed_poses);
   if(view.schema!=="ftx-body-starts-review/1" || typeof view.input!=="string" || new Blob([view.input]).size>16*1024*1024 ||
       !hash(view.input_sha256) || !hash(view.original_input_sha256) || !hash(view.model_sha256) ||
       !Array.isArray(view.shape) || !Array.isArray(view.pose) || !Array.isArray(view.frames) ||
       !view.frames.length || view.frames.length>8 || !Array.isArray(view.starts) || view.starts.length>4 ||
       (!edits && (view.input!==input || view.input_sha256!==view.original_input_sha256)) ||
-      (edits && (!view.starts.length || view.original_input_sha256!==bodyStartsView?.input_sha256 || view.model_sha256!==bodyStartsView?.model_sha256))) {
+      (edits && ((!hasFixedEdits && !view.starts.length) || view.original_input_sha256!==bodyStartsView?.input_sha256 || view.model_sha256!==bodyStartsView?.model_sha256))) {
     throw Error("The engine did not return a source-bound initialization editor.");
   }
   for(const parameters of [view.shape,view.pose]) {
@@ -943,28 +1081,79 @@ function checkedBodyStartsView(text,input,edits) {
       }
     }
   }
-  if(edits && (JSON.stringify(view.shape)!==JSON.stringify(bodyStartsView.shape) ||
-      JSON.stringify(view.pose)!==JSON.stringify(bodyStartsView.pose) || JSON.stringify(view.frames)!==JSON.stringify(bodyStartsView.frames))) {
-    throw Error("Initialization editing changed the original controls or frames.");
+  if(edits) {
+    if(JSON.stringify(view.shape)!==JSON.stringify(bodyStartsView.shape) ||
+        JSON.stringify(view.pose)!==JSON.stringify(bodyStartsView.pose)) {
+      throw Error("Initialization editing changed the original controls or frames.");
+    }
+    if(!hasFixedEdits) {
+      if(JSON.stringify(view.frames)!==JSON.stringify(bodyStartsView.frames)) {
+        throw Error("Initialization editing changed the original controls or frames.");
+      }
+    } else {
+      if(view.frames.length!==bodyStartsView.frames.length || view.frames.some((frame,index)=>{
+        const orig=bodyStartsView.frames[index], expectedEntry=parsedEdits.fixed_poses.find(item=>item.frame_index===index);
+        if(!expectedEntry || frame.frame_index!==orig.frame_index || frame.label!==orig.label ||
+            JSON.stringify(frame.identity)!==JSON.stringify(orig.identity)) return true;
+        const expected=expectedEntry.fixed_pose ?? null;
+        if(expected===null) return Object.hasOwn(frame,"fixed_pose");
+        if(!Object.hasOwn(frame,"fixed_pose") || frame.fixed_pose.evidence!==expected.evidence) return true;
+        const actualKeys=Object.keys(frame.fixed_pose.values).sort(), expectedKeys=Object.keys(expected.values).sort();
+        return actualKeys.length!==expectedKeys.length || actualKeys.some((key,i)=>key!==expectedKeys[i] || frame.fixed_pose.values[key]!==expected.values[key]);
+      })) {
+        throw Error("Initialization editing changed the original controls or frames.");
+      }
+    }
   }
   return view;
 }
 function bodyStartsEdits() {
-  if(bodyStartsDraft.length<1 || bodyStartsDraft.length>4) throw Error("Supply 1–4 complete starts; fitting needs at least two.");
-  const vector=(values,parameters,fixedPose)=>"["+values.map((raw,i)=>{
+  const fixedChanged=bodyStartsFixedChanged();
+  const minStarts=fixedChanged?0:1;
+  if(bodyStartsDraft.length<minStarts || bodyStartsDraft.length>4) {
+    throw Error(fixedChanged?"Supply 0–4 complete starts when updating fixed pose constraints; fitting still needs at least two.":"Supply 1–4 complete starts; fitting needs at least two.");
+  }
+  const jsonNum=value=>Object.is(value,-0)?"-0.0":JSON.stringify(value);
+  const effectiveFixed=bodyStartsView.frames.map(frame=>{
+    if(!fixedChanged) return frame.fixed_pose ?? null;
+    const draft=bodyStartsFixedDraft[frame.frame_index], names=Object.keys(draft.values).sort();
+    if(!names.length) return null;
+    const values={};
+    for(const name of names) {
+      const parameter=bodyStartsView.pose.find(p=>p.name===name);
+      const value=parameter?validFixedNumber(draft.values[name],parameter):null;
+      if(value===null) {
+        throw Error(`Enter a finite fixed ${name} for Frame ${frame.frame_index+1} strictly between ${parameter.lower} and ${parameter.upper}.`);
+      }
+      values[name]=value;
+    }
+    if(!draft.evidence.trim() || new Blob([draft.evidence]).size>4096) {
+      throw Error(`Supply explicit fixed-pose evidence for Frame ${frame.frame_index+1} (at most 4096 UTF-8 bytes).`);
+    }
+    return {values,evidence:draft.evidence};
+  });
+  const vector=(values,parameters,fixedPose,startIndex,frameIndex)=>"["+values.map((raw,i)=>{
     const value=Number(raw), parameter=parameters[i];
     if(typeof raw==="string" && !raw.trim() || !Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper) {
       throw Error(`Enter a finite ${parameter.name} strictly between ${parameter.lower} and ${parameter.upper}.`);
     }
     if(Object.hasOwn(fixedPose?.values ?? {},parameter.name) && value!==fixedPose.values[parameter.name]) {
-      throw Error(`${parameter.name} is fixed for this frame; retain the original declared value.`);
+      throw Error(fixedChanged
+        ? `Start ${startIndex+1} Frame ${frameIndex+1} ${parameter.name} disagrees with its fixed pose value (${fixedPose.values[parameter.name]}); reconcile all starts explicitly before applying.`
+        : `${parameter.name} is fixed for this frame; retain the original declared value.`);
     }
     // These tokens contain only validated numbers; source JSON and full-width identities stay native.
-    return Object.is(value,-0)?"-0.0":JSON.stringify(value);
+    return jsonNum(value);
   }).join(",")+"]";
+  const fixedJson=fixedChanged?',"fixed_poses":['+bodyStartsView.frames.map(frame=>{
+    const fixed=effectiveFixed[frame.frame_index];
+    if(!fixed) return '{"frame_index":'+frame.frame_index+',"fixed_pose":null}';
+    const entries=Object.keys(fixed.values).sort().map(name=>JSON.stringify(name)+":"+jsonNum(fixed.values[name])).join(",");
+    return '{"frame_index":'+frame.frame_index+',"fixed_pose":{"values":{'+entries+'},"evidence":'+JSON.stringify(fixed.evidence)+'}}';
+  }).join(",")+"]":"";
   return '{"input_sha256":'+JSON.stringify(bodyStartsView.input_sha256)+',"model_sha256":'+JSON.stringify(bodyStartsView.model_sha256)+',"starts":['+
-    bodyStartsDraft.map(start=>'{"shape":'+vector(start.shape,bodyStartsView.shape)+',"poses":['+
-    start.poses.map(pose=>'{"frame_index":'+pose.frame_index+',"values":'+vector(pose.values,bodyStartsView.pose,bodyStartsView.frames[pose.frame_index].fixed_pose)+'}').join(",")+"]}").join(",")+"]}";
+    bodyStartsDraft.map((start,startIndex)=>'{"shape":'+vector(start.shape,bodyStartsView.shape,null,startIndex,-1)+',"poses":['+
+    start.poses.map(pose=>'{"frame_index":'+pose.frame_index+',"values":'+vector(pose.values,bodyStartsView.pose,effectiveFixed[pose.frame_index],startIndex,pose.frame_index)+'}').join(",")+"]}").join(",")+"]"+fixedJson+"}";
 }
 async function runBodyStarts(apply=false) {
   if(bodyCaptureBusy || bodyTargetsBusy || bodyTargetsView || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || (!apply && (bodyStartsView || bodyStartsPending)) ||
@@ -975,7 +1164,7 @@ async function runBodyStarts(apply=false) {
   const fail=error=>{
     if(id!==bodyStartsTicket) return;
     stopBodyStarts(); $("bodyStartsError").textContent=String(error.message || error);
-    $("bodyStartsStatus").textContent="Starting values were not applied. Correct them or cancel pending edits."; controls();
+    $("bodyStartsStatus").textContent="Starting values or fixed pose constraints were not applied. Correct them or cancel pending edits."; controls();
   };
   try {
     if(!inputFile || inputFile.size>16*1024*1024 || !modelFile || modelFile.size===0 || modelFile.size>512*1024*1024 ||
@@ -999,11 +1188,11 @@ async function runBodyStarts(apply=false) {
         withdrawBodyTargets(); withdrawBodyPoints(); keepBodyInput(view,input,inputFile,modelFile);
         stopBodyStarts();
         bodyStartsSource ??= {input,inputFile,modelFile,input_sha256:view.original_input_sha256};
-        bodyStartsView=view; bodyStartsDraft=copyBodyStarts(view.starts); bodyStartsPending=false;
+        bodyStartsView=view; bodyStartsDraft=copyBodyStarts(view.starts); bodyStartsFixedDraft=copyBodyFixedPoses(view.frames); bodyStartsPending=false;
         renderBodyStarts(); bodyStartsDownload();
         $("bodyStartsStatus").textContent=`${apply?"Applied":"Loaded"} ${view.starts.length} checked starts. `+
           (view.starts.length===0?"Add an explicitly authored start to preview it.":view.starts.length===1?"Preview this start; add a distinct second start before fitting.":"Preview the declared poses or fit from these exact values.");
-        if(apply) $("bodyFitStatus").textContent="Checked starting values applied. Preview them or run the fit again.";
+        if(apply) $("bodyFitStatus").textContent="Checked starting values and pose constraints applied. Preview them or run the fit again.";
       } catch(error) {fail(error);}
     };
     current.onerror=error=>{if(current===bodyStartsWorker)fail(error);};
@@ -2460,8 +2649,14 @@ $("bodyStartsAdd").onclick=()=>{
   if(!bodyStartsView || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || bodyStartsDraft.length>=4) return;
   bodyStartsDraft.push({shape:bodyStartsView.shape.map(()=>""),
     poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,
-      values:bodyStartsView.pose.map(parameter=>Object.hasOwn(frame.fixed_pose?.values ?? {},parameter.name)
-        ? frame.fixed_pose.values[parameter.name] : "")}))});
+      values:bodyStartsView.pose.map(parameter=>{
+        const fixedDraft=bodyStartsFixedDraft[frame.frame_index];
+        if(Object.hasOwn(fixedDraft?.values ?? {},parameter.name)) {
+          const fixed=validFixedNumber(fixedDraft.values[parameter.name],parameter);
+          return fixed!==null?fixed:"";
+        }
+        return "";
+      })}))});
   bodyStartsSelected=bodyStartsDraft.length-1; pendingBodyStarts(); renderBodyStarts();
 };
 $("bodyStartsCopy").onclick=()=>{
@@ -2475,15 +2670,47 @@ $("bodyStartsRemove").onclick=()=>{
 };
 $("bodyStartsMidpoint").onclick=()=>{
   if(bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || !bodyStartsDraft[bodyStartsSelected]) return;
-  const middle=(parameters,fixedPose)=>parameters.map(p=>Object.hasOwn(fixedPose?.values ?? {},p.name)
-    ? fixedPose.values[p.name] : p.lower/2+p.upper/2);
+  const middle=(parameters,fixedDraft)=>parameters.map(p=>{
+    if(Object.hasOwn(fixedDraft?.values ?? {},p.name)) {
+      const fixed=validFixedNumber(fixedDraft.values[p.name],p);
+      return fixed!==null?fixed:"";
+    }
+    return p.lower/2+p.upper/2;
+  });
   bodyStartsDraft[bodyStartsSelected]={shape:middle(bodyStartsView.shape),
-    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:middle(bodyStartsView.pose,frame.fixed_pose)}))};
+    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:middle(bodyStartsView.pose,bodyStartsFixedDraft[frame.frame_index])}))};
   pendingBodyStarts(); renderBodyStarts();
+};
+$("bodyStartsReconcile").onclick=()=>{
+  if(!bodyStartsView || !bodyStartsDraft.length || bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending) return;
+  const parsed=[];
+  for(const frame of bodyStartsView.frames) {
+    const draft=bodyStartsFixedDraft[frame.frame_index];
+    const entries=[];
+    for(const [paramIndex,parameter] of bodyStartsView.pose.entries()) {
+      if(!Object.hasOwn(draft?.values ?? {},parameter.name)) continue;
+      const fixed=validFixedNumber(draft.values[parameter.name],parameter);
+      if(fixed===null) {
+        $("bodyStartsError").textContent=`Enter a finite fixed ${parameter.name} for Frame ${frame.frame_index+1} strictly between ${parameter.lower} and ${parameter.upper} before reconciling starts.`;
+        return;
+      }
+      entries.push([paramIndex,fixed]);
+    }
+    parsed.push([frame.frame_index,entries]);
+  }
+  for(const start of bodyStartsDraft) {
+    for(const [frameIndex,entries] of parsed) {
+      const pose=start.poses.find(p=>p.frame_index===frameIndex);
+      for(const [paramIndex,fixed] of entries) pose.values[paramIndex]=fixed;
+    }
+  }
+  pendingBodyStarts(); renderBodyStarts();
+  $("bodyStartsStatus").textContent=`Reconciled all ${bodyStartsDraft.length} starts to the prescribed fixed pose values; free coordinates are unchanged. Check and apply when ready.`;
 };
 $("bodyStartsCancel").onclick=()=>{
   stopBodyStarts(); bodyStartsPending=false;
   bodyStartsDraft=bodyStartsView?copyBodyStarts(bodyStartsView.starts):[];
+  bodyStartsFixedDraft=bodyStartsView?copyBodyFixedPoses(bodyStartsView.frames):[];
   $("bodyStartsError").textContent=""; renderBodyStarts(); bodyStartsDownload();
   $("bodyStartsStatus").textContent="Loading or pending edits cancelled; the last checked input is unchanged.";
   $("bodyFitStatus").textContent="Pending start edits cancelled. Preview or fit the last checked input again.";

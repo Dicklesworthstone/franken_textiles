@@ -1868,3 +1868,301 @@ fn start_edits_preserve_mixed_inline_and_imported_masks_and_refuse_stale_evidenc
     assert!(!dir.join("stale-mask-pixels").exists());
     assert_eq!(read(&dir, "input.json"), input);
 }
+
+#[test]
+fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_refusals() {
+    use ftx_wasm::body_fit::{
+        body_fit_starts, fit_body, review_body_fit_frame, review_body_fit_start,
+    };
+
+    let (model, mut original) = fixture();
+    long_frame_ids(&mut original, u64::MAX - 200_000);
+    original["fit"]["frames"].as_array_mut().unwrap().reverse();
+    original["fit"]["starts"][0]["poses"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    // Retain the fixture's predeclared held-out CHECK keypoint (`p3`) to confirm fixed-pose
+    // authoring never alters CHECK roles or full-width frame identities.
+    assert_eq!(
+        original["fit"]["frames"][1]["keypoints"][3]["partition"],
+        json!("held_out")
+    );
+    let frame_count = original["fit"]["frames"].as_array().unwrap().len();
+    let original_frames = original["fit"]["frames"].clone();
+    let desired_starts = annotations_for(&original);
+
+    // 1. Zero-start draft can prescribe per-frame fixed poses before any start exists.
+    let mut zero_draft = original.clone();
+    zero_draft["fit"]["starts"] = json!([]);
+    let zero_text = serde_json::to_string_pretty(&zero_draft).unwrap();
+    let opened_zero = body_fit_starts(&model, &zero_text, "").unwrap();
+    let pose_name = opened_zero["pose"][0]["name"].as_str().unwrap().to_owned();
+    let pose_lower = opened_zero["pose"][0]["lower"].as_f64().unwrap();
+    let pose_upper = opened_zero["pose"][0]["upper"].as_f64().unwrap();
+    // Reversed frame 0 is fixture pose[1], whose true root_x_m is 0.2 m.
+    let fixed_val = 0.2_f64;
+    let mut fixed_entries: Vec<Value> = (0..frame_count)
+        .map(|idx| {
+            if idx == 0 {
+                json!({
+                    "frame_index": idx,
+                    "fixed_pose": {
+                        "values": { &pose_name: fixed_val },
+                        "evidence": "Caller floor tape mark for frame 1"
+                    }
+                })
+            } else {
+                json!({"frame_index": idx, "fixed_pose": Value::Null})
+            }
+        })
+        .collect();
+    // Reverse edit array order to prove joining happens strictly by original frame_index ordinal.
+    fixed_entries.reverse();
+    let zero_fixed_edits = json!({
+        "input_sha256": opened_zero["input_sha256"],
+        "model_sha256": opened_zero["model_sha256"],
+        "starts": [],
+        "fixed_poses": fixed_entries,
+    });
+    let applied_zero = body_fit_starts(&model, &zero_text, &zero_fixed_edits.to_string()).unwrap();
+    assert_eq!(applied_zero["starts"], json!([]));
+    assert_eq!(
+        applied_zero["frames"][0]["fixed_pose"],
+        json!({"values": { &pose_name: fixed_val }, "evidence": "Caller floor tape mark for frame 1"})
+    );
+    assert!(applied_zero["frames"][1].get("fixed_pose").is_none());
+    let zero_edited_text = applied_zero["input"].as_str().unwrap();
+    let zero_edited_val: Value = serde_json::from_str(zero_edited_text).unwrap();
+    assert_eq!(
+        zero_edited_val["fit"]["frames"][0]["frame"]["timestamp_us"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        zero_edited_val["fit"]["frames"][1]["keypoints"][3]["partition"],
+        json!("held_out")
+    );
+
+    // 2. Apply reconciled starts on top of the fixed pose, verify preview, fit, and frame review.
+    let mut reconciled = desired_starts.clone();
+    for start in &mut reconciled {
+        for pose in start["poses"].as_array_mut().unwrap() {
+            if pose["frame_index"] == 0 {
+                pose["values"][0] = json!(fixed_val);
+            }
+        }
+    }
+    let with_starts_edits = json!({
+        "input_sha256": applied_zero["input_sha256"],
+        "model_sha256": applied_zero["model_sha256"],
+        "starts": reconciled,
+    });
+    let with_starts =
+        body_fit_starts(&model, zero_edited_text, &with_starts_edits.to_string()).unwrap();
+    let fitted_input = with_starts["input"].as_str().unwrap();
+    let start_preview = review_body_fit_start(&model, fitted_input, "0", "0").unwrap();
+    assert_eq!(
+        start_preview["fixed_pose"],
+        json!({"values": { &pose_name: fixed_val }, "evidence": "Caller floor tape mark for frame 1"})
+    );
+    let fitted = fit_body(&model, fitted_input, "60", "20000").unwrap();
+    assert_eq!(fitted["status"], "ACCEPTED");
+    // Fixed coordinate retains zero spread by constraint, not inferred measurement precision.
+    let frame0_spread = fitted["pose_spread_fraction"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["frame"]["timestamp_us"].as_u64() == Some(u64::MAX))
+        .unwrap();
+    assert_eq!(frame0_spread["fractions"][0], json!(0.0));
+    // review_body_fit_frame uses the canonical sorted frame order (reversed frame 0 has u64::MAX -> index 1).
+    let canonical_idx = fitted["input"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|f| f["frame"]["timestamp_us"].as_u64() == Some(u64::MAX))
+        .unwrap();
+    let frame_review = review_body_fit_frame(
+        &model,
+        &serde_json::to_string(&fitted).unwrap(),
+        &canonical_idx.to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        frame_review["fixed_pose"],
+        json!({"values": { &pose_name: fixed_val }, "evidence": "Caller floor tape mark for frame 1"})
+    );
+
+    // 2b. A wrong caller-supplied fixed pose still passes authoring (it is a caller assumption)
+    //     but is rejected by the real image checks during fitting.
+    let wrong_val = 0.35_f64;
+    let mut wrong_starts = desired_starts.clone();
+    for start in &mut wrong_starts {
+        for pose in start["poses"].as_array_mut().unwrap() {
+            if pose["frame_index"] == 0 {
+                pose["values"][0] = json!(wrong_val);
+            }
+        }
+    }
+    let wrong_fixed: Vec<Value> = (0..frame_count)
+        .map(|idx| {
+            if idx == 0 {
+                json!({
+                    "frame_index": idx,
+                    "fixed_pose": {
+                        "values": { &pose_name: wrong_val },
+                        "evidence": "Misplaced caller mark"
+                    }
+                })
+            } else {
+                json!({"frame_index": idx, "fixed_pose": Value::Null})
+            }
+        })
+        .collect();
+    let wrong_applied = body_fit_starts(
+        &model,
+        fitted_input,
+        &json!({
+            "input_sha256": with_starts["input_sha256"],
+            "model_sha256": with_starts["model_sha256"],
+            "starts": wrong_starts,
+            "fixed_poses": wrong_fixed,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let wrong_fit = fit_body(
+        &model,
+        wrong_applied["input"].as_str().unwrap(),
+        "60",
+        "20000",
+    )
+    .unwrap();
+    assert_ne!(
+        wrong_fit["status"], "ACCEPTED",
+        "wrong caller-supplied fixed pose must not pass image residual acceptance"
+    );
+
+    // 3. Releasing fixed_pose removes the field from raw JSON and preserves every other field.
+    let release_entries: Vec<Value> = (0..frame_count)
+        .map(|idx| json!({"frame_index": idx, "fixed_pose": Value::Null}))
+        .collect();
+    let release_edits = json!({
+        "input_sha256": with_starts["input_sha256"],
+        "model_sha256": with_starts["model_sha256"],
+        "starts": desired_starts,
+        "fixed_poses": release_entries,
+    });
+    let released = body_fit_starts(&model, fitted_input, &release_edits.to_string()).unwrap();
+    assert!(released["frames"][0].get("fixed_pose").is_none());
+    let released_val: Value = serde_json::from_str(released["input"].as_str().unwrap()).unwrap();
+    assert!(released_val["fit"]["frames"][0].get("fixed_pose").is_none());
+    assert_eq!(released_val["fit"]["frames"], original_frames);
+
+    // 4. Refusals: missing/stale hashes, blank/oversized evidence, empty/unknown/out-of-domain
+    //    fixed values, bad frame ordinals, and unreconciled start disagreement.
+    let base_text = serde_json::to_string_pretty(&original).unwrap();
+    let opened = body_fit_starts(&model, &base_text, "").unwrap();
+    let ok_fixed: Vec<Value> = (0..frame_count)
+        .map(|idx| {
+            if idx == 0 {
+                json!({
+                    "frame_index": idx,
+                    "fixed_pose": {
+                        "values": { &pose_name: fixed_val },
+                        "evidence": "Explicit mark"
+                    }
+                })
+            } else {
+                json!({"frame_index": idx, "fixed_pose": Value::Null})
+            }
+        })
+        .collect();
+    let valid_fixed_req = json!({
+        "input_sha256": opened["input_sha256"],
+        "model_sha256": opened["model_sha256"],
+        "starts": reconciled,
+        "fixed_poses": ok_fixed,
+    });
+    assert!(body_fit_starts(&model, &base_text, &valid_fixed_req.to_string()).is_ok());
+
+    for (label, bad) in [
+        ("missing_hashes", {
+            let mut v = valid_fixed_req.clone();
+            v.as_object_mut().unwrap().remove("input_sha256");
+            v.as_object_mut().unwrap().remove("model_sha256");
+            v
+        }),
+        ("stale_input_hash", {
+            let mut v = valid_fixed_req.clone();
+            v["input_sha256"] = json!("0".repeat(64));
+            v
+        }),
+        ("stale_model_hash", {
+            let mut v = valid_fixed_req.clone();
+            v["model_sha256"] = json!("0".repeat(64));
+            v
+        }),
+        ("blank_evidence", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["fixed_pose"]["evidence"] = json!("   ");
+            v
+        }),
+        ("oversized_evidence", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["fixed_pose"]["evidence"] = json!("x".repeat(4097));
+            v
+        }),
+        ("empty_values", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["fixed_pose"]["values"] = json!({});
+            v
+        }),
+        ("unknown_pose_param", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["fixed_pose"]["values"] = json!({"not_a_pose_param": 0.0});
+            v
+        }),
+        ("boundary_lower", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["fixed_pose"]["values"] = json!({ &pose_name: pose_lower });
+            v
+        }),
+        ("boundary_upper", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["fixed_pose"]["values"] = json!({ &pose_name: pose_upper });
+            v
+        }),
+        ("missing_frame_entry", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"].as_array_mut().unwrap().pop();
+            v
+        }),
+        ("duplicate_frame_index", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][1]["frame_index"] = json!(0);
+            v
+        }),
+        ("oob_frame_index", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["frame_index"] = json!(frame_count);
+            v
+        }),
+        ("unreconciled_start_disagreement", {
+            let mut v = valid_fixed_req.clone();
+            let shifted = (fixed_val + 0.05).min(pose_upper - 0.01);
+            v["starts"][1]["poses"][0]["values"][0] = json!(shifted);
+            v
+        }),
+        ("extra_fixed_pose_field", {
+            let mut v = valid_fixed_req.clone();
+            v["fixed_poses"][0]["extra"] = json!(true);
+            v
+        }),
+    ] {
+        assert!(
+            body_fit_starts(&model, &base_text, &bad.to_string()).is_err(),
+            "fixed pose refusal case must fail closed: {label}"
+        );
+    }
+}
