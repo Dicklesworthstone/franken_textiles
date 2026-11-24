@@ -72,7 +72,7 @@ const USAGE: &str = "usage:
             [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
-            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N]
+            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
@@ -86,7 +86,7 @@ const USAGE: &str = "usage:
             [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
-            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N]
+            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
@@ -99,7 +99,7 @@ const USAGE: &str = "usage:
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
-            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N]
+            [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--res 960x540] [--shading standard|legible] [--json] (start-state stills and numbers; no drape)
   ftx render DRAPE_DIR [--res 960x540] [--shading standard|legible] [--json]
              (legible: a second set, still_<view>_legible.png, drawn for reading folds and edges; describes no fabric)
@@ -1135,11 +1135,17 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
                 .parse()
                 .map_err(|_| bad_input("--start-repulsion-period must be a positive integer"))?;
         }
+        if let Some(v) = args.options.get("start-repulsion-max-checks") {
+            rep.max_candidate_checks = v.parse().map_err(|_| {
+                bad_input("--start-repulsion-max-checks must be a positive integer")
+            })?;
+        }
         opts.start_self_repulsion = Some(rep);
     } else if let Some(name) = [
         "start-repulsion-mm",
         "start-repulsion-stiffness",
         "start-repulsion-period",
+        "start-repulsion-max-checks",
     ]
     .into_iter()
     .find(|key| args.options.contains_key(*key))
@@ -1324,6 +1330,7 @@ fn cmd_drape_bound(
             "start-repulsion-mm",
             "start-repulsion-stiffness",
             "start-repulsion-period",
+            "start-repulsion-max-checks",
             "model",
             "time-step-s",
             "newton-tol-m-s",
@@ -2835,6 +2842,8 @@ mod tests {
                     "0.6",
                     "--start-repulsion-period",
                     "2",
+                    "--start-repulsion-max-checks",
+                    "1000000",
                 ]
                 .map(String::from),
             )
@@ -2888,6 +2897,7 @@ mod tests {
         assert!((rep.min_separation_m - 0.0035).abs() < 1e-12);
         assert_eq!(rep.stiffness, 0.6);
         assert_eq!(rep.period, 2);
+        assert_eq!(rep.max_candidate_checks, 1_000_000);
 
         // Non-physical command without --self-contact-mm must refuse --self-stick-slip-*.
         let no_sc = drape_options(
@@ -2954,6 +2964,8 @@ mod tests {
                 "0.5",
                 "--start-repulsion-period",
                 "2",
+                "--start-repulsion-max-checks",
+                "500000",
             ],
             vec![
                 "round",
@@ -3002,6 +3014,8 @@ mod tests {
                 "0.5",
                 "--start-repulsion-period",
                 "2",
+                "--start-repulsion-max-checks",
+                "500000",
             ],
         ] {
             let parsed = parse(&cmd_argv.iter().map(|s| (*s).into()).collect::<Vec<_>>()).unwrap();
@@ -3052,8 +3066,24 @@ mod tests {
             vec!["--hem-mass-mult", "0.5"],
             vec!["--seam-width-mm", "10.0"],
             vec!["--start-repulsion-mm", "3.0"],
+            vec!["--start-repulsion-max-checks", "1000"],
             vec!["--start-self-repulsion", "--start-repulsion-mm", "0.0"],
             vec!["--start-self-repulsion", "--start-repulsion-period", "0"],
+            vec![
+                "--start-self-repulsion",
+                "--start-repulsion-max-checks",
+                "0",
+            ],
+            vec![
+                "--start-self-repulsion",
+                "--start-repulsion-max-checks",
+                "128000001",
+            ],
+            vec![
+                "--start-self-repulsion",
+                "--start-repulsion-max-checks",
+                "many",
+            ],
         ] {
             let mut argv = vec!["drape", "absent-pattern.json"];
             argv.extend(bad.iter().copied());

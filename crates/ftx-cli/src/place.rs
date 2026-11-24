@@ -1267,6 +1267,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "start-repulsion-mm",
             "start-repulsion-stiffness",
             "start-repulsion-period",
+            "start-repulsion-max-checks",
             "arm-deg",
             "thumb-pose",
             "legs",
@@ -2526,13 +2527,16 @@ mod tests {
                 "0.6",
                 "--start-repulsion-period",
                 "5",
+                "--start-repulsion-max-checks",
+                "500000",
             ]
             .map(String::from),
         )
         .unwrap();
         let err = super::run(&args).unwrap_err();
+        assert_eq!(err.code, ftx_core::RefusalCode::Io, "{}", err.message);
         assert!(
-            !err.message.contains("unknown option"),
+            !err.message.contains("has no option") && !err.message.contains("unknown option"),
             "ftx place must recognize mesh and start-self-repulsion options: {}",
             err.message
         );
@@ -2552,8 +2556,15 @@ mod tests {
         )
         .unwrap();
         let legible_err = super::run(&legible_args).unwrap_err();
+        assert_eq!(
+            legible_err.code,
+            ftx_core::RefusalCode::Io,
+            "{}",
+            legible_err.message
+        );
         assert!(
-            !legible_err.message.contains("unknown option")
+            !legible_err.message.contains("has no option")
+                && !legible_err.message.contains("unknown option")
                 && !legible_err.message.contains("--shading"),
             "ftx place must recognize --shading legible: {}",
             legible_err.message

@@ -644,9 +644,13 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             {
                 let _ = write!(
                     out,
-                    " Start self-repulsion: {:.1} mm (stiffness {stiff}, period {period}).",
+                    " Start self-repulsion: {:.1} mm (stiffness {stiff}, period {period}",
                     sep_m * 1e3
                 );
+                if let Some(max_checks) = rep.get("max_candidate_checks").and_then(Value::as_u64) {
+                    let _ = write!(out, ", max checks {max_checks}");
+                }
+                out.push_str(").");
             }
             if let Some(creases) = sim["numerical"]["authored_crease_hinges"]
                 .as_u64()
@@ -1031,7 +1035,8 @@ mod tests {
                     "start_self_repulsion": {
                         "min_separation_m": 0.004,
                         "stiffness": 0.5,
-                        "period": 5
+                        "period": 5,
+                        "max_candidate_checks": 500000
                     },
                     "authored_crease_hinges": 14,
                     "settling": {"steps": 4, "max_steps": 12, "stop_reason": "quiet_window"},
@@ -1064,7 +1069,9 @@ mod tests {
         assert!(ext_html.contains(
             "Construction (uncalibrated): hem 20 mm (2.5× mass, 5× bend), seam 10 mm (2× mass, 3× bend)."
         ));
-        assert!(ext_html.contains("Start self-repulsion: 4.0 mm (stiffness 0.5, period 5)."));
+        assert!(ext_html.contains(
+            "Start self-repulsion: 4.0 mm (stiffness 0.5, period 5, max checks 500000)."
+        ));
         assert!(ext_html.contains("Authored creases: 14 hinge(s)."));
         assert!(ext_html.contains("Extra settling: 4/12 steps (quiet_window)."));
         assert!(
