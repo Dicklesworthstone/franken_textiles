@@ -621,7 +621,15 @@ Production `/27`, parallel `/12` and shared-operator `/3` retain both the actual
 and the complete-order result. The cost report uses
 `search_scope: "shared_operator_bounded_joint_operation_order_search/1"`. Each allocation searches
 dependency-ready local operations and cell dispatches together instead of fixing the serial
-incumbent's order. `optimality_proven` requires complete joint count/order/dispatch exploration,
+incumbent's order. Within one cell, untouched garment copies have the same recipes, prerequisites,
+handling transitions and fixture lifecycles. The search starts one representative of those copies
+at a time in its existing deterministic traversal order, avoiding permutations that only rename
+identical garments. Once a copy has started, all of its ready operations remain independently
+interleavable with other started copies. Actual copy identities and every fixture hold remain in
+the selected schedule and stitch replay. This reduction applies to whole-garment parallel cells;
+specialist routes with independently qualified copy windows keep their own search.
+
+`optimality_proven` requires complete joint count/order/dispatch exploration,
 every relevant complete order to have a proved price, and no unresolved assignments or cell counts.
 The former `retained_order_optimality_proven` field is omitted for this broader scope. Makespan
 proof remains a separate claim based on the selected feasible finish and its independent lower bound.

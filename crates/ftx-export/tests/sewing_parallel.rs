@@ -3060,6 +3060,249 @@ fn shared_operator_joint_order_cap_preserves_a_complete_feasible_seed() {
     assert_eq!(complete, BTreeSet::from([(0, 0), (0, 1), (1, 0), (1, 1)]));
 }
 
+// Enumerate every labeled copy/operation and dispatch, without symmetry pruning or production
+// helpers. Zero capacity means independent operations without fixtures; positive capacity means
+// each join acquires one fixture until that same copy's reinforcement has finished.
+fn labeled_operator_oracle(copies: usize, capacity: usize, transfer: u64, travel: u64) -> u64 {
+    #[derive(Clone)]
+    struct State {
+        done: [Vec<u8>; 2],
+        last: [Option<(usize, usize)>; 2],
+        ready: [u64; 2],
+        free: u64,
+        worker: Option<usize>,
+        unloaded: [bool; 2],
+    }
+    fn visit(state: &State, capacity: usize, transfer: u64, travel: u64) -> u64 {
+        if state.unloaded.into_iter().all(|done| done) {
+            return state.ready.into_iter().max().unwrap();
+        }
+        let mut best = u64::MAX;
+        for cell in 0..2 {
+            if state.unloaded[cell] {
+                continue;
+            }
+            let mut choices = Vec::new();
+            if state.done[cell].iter().all(|&done| done == 3) {
+                choices.push(None);
+            } else {
+                for (copy, &done) in state.done[cell].iter().enumerate() {
+                    for operation in 0..2 {
+                        if done & (1 << operation) != 0
+                            || capacity > 0
+                                && (operation == 1 && done & 1 == 0
+                                    || operation == 0
+                                        && state.done[cell].iter().filter(|&&s| s == 1).count()
+                                            == capacity)
+                        {
+                            continue;
+                        }
+                        choices.push(Some((copy, operation)));
+                    }
+                }
+            }
+            for choice in choices {
+                let (attended, feed) = choice.map_or((200, 0), |(copy, operation)| {
+                    let setup = match (state.last[cell].map(|(_, op)| op), operation) {
+                        (None, 0) => 1000,
+                        (None, 1) => 3000,
+                        (Some(0), 1) => 500,
+                        (Some(1), 0) => 2000,
+                        _ => 0,
+                    };
+                    let handling = match state.last[cell] {
+                        None => 100,
+                        Some((last, _)) if last == copy => 100,
+                        Some(_) => transfer,
+                    };
+                    (setup + handling, 4000)
+                });
+                let arrival = state.free
+                    + if state.worker.is_some_and(|from| from != cell) {
+                        travel
+                    } else {
+                        0
+                    };
+                let mut next = state.clone();
+                next.free = arrival.max(state.ready[cell]) + attended;
+                next.ready[cell] = next.free + feed;
+                next.worker = Some(cell);
+                if let Some((copy, operation)) = choice {
+                    next.done[cell][copy] |= 1 << operation;
+                    next.last[cell] = Some((copy, operation));
+                } else {
+                    next.unloaded[cell] = true;
+                }
+                best = best.min(visit(&next, capacity, transfer, travel));
+            }
+        }
+        best
+    }
+    (0..=copies)
+        .map(|a| {
+            visit(
+                &State {
+                    done: [vec![0; a], vec![0; copies - a]],
+                    last: [None; 2],
+                    ready: [0; 2],
+                    free: 0,
+                    worker: None,
+                    unloaded: [a == 0, a == copies],
+                },
+                capacity,
+                transfer,
+                travel,
+            )
+        })
+        .min()
+        .unwrap()
+}
+
+#[test]
+fn shared_operator_copy_symmetry_preserves_labeled_optima_and_started_fixture_holds() {
+    let mut saw_overlapping_copies = false;
+    for copies in 1..=3 {
+        for (capacity, transfer, travel) in [
+            (0, 0, 0),
+            (0, 5000, 350),
+            (1, 0, 350),
+            (2, 0, 350),
+            (2, 5000, 0),
+        ] {
+            let (pattern, mut options) = fixture(copies);
+            if capacity == 0 {
+                options["passes"][1]["after"] = json!([]);
+                options["production"]["workholding"] = Value::Null;
+            }
+            for cell in options["production"]["parallel"]["cells"]
+                .as_array_mut()
+                .unwrap()
+            {
+                if capacity == 0 {
+                    cell["workholding"] = Value::Null;
+                } else {
+                    cell["workholding"]["resources"][0]["capacity"] = json!(capacity);
+                }
+                for row in cell["handling"]["transitions"].as_array_mut().unwrap() {
+                    if row["relation"] == "different_copy" {
+                        row["milliseconds"] = json!(transfer);
+                    }
+                }
+            }
+            shared_operator(&mut options, 40000);
+            for row in options["production"]["parallel"]["shared_operator"]["transfers"]
+                .as_array_mut()
+                .unwrap()
+            {
+                row["milliseconds"] = json!(travel);
+            }
+            let expected = labeled_operator_oracle(copies, capacity, transfer, travel);
+            let typed: SewOptions = serde_json::from_value(options).unwrap();
+            let program = SewProgram::build(&pattern, &typed).unwrap();
+            let report = program
+                .plan
+                .production
+                .as_ref()
+                .unwrap()
+                .parallel
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                report.selected.makespan_milliseconds, expected,
+                "copies={copies}, capacity={capacity}, transfer={transfer}, travel={travel}"
+            );
+            let labor = report.shared_operator.as_ref().unwrap();
+            assert!(labor.search_complete && !labor.budget_exhausted);
+            for cell in &report.selected.cells {
+                if let Some(schedule) = &cell.schedule {
+                    assert_eq!(
+                        schedule.ordering.selected_order.len(),
+                        2 * cell.copies.len()
+                    );
+                    if let Some(holding) = &schedule.workholding {
+                        saw_overlapping_copies |=
+                            holding.selected.peak_occupancy["holding-jig"] == 2;
+                    }
+                }
+            }
+            let actual: BTreeSet<_> = program
+                .stitches
+                .iter()
+                .map(|step| (step.copy.unwrap(), step.operation))
+                .collect();
+            let expected: BTreeSet<_> = (0..copies)
+                .flat_map(|copy| [(copy, 0), (copy, 1)])
+                .collect();
+            assert_eq!(actual, expected);
+            assert_eq!(program.stitches.len(), copies * 80);
+        }
+    }
+    // A representative rule must never force a started garment to finish before another starts.
+    assert!(saw_overlapping_copies);
+}
+
+#[test]
+fn shared_operator_copy_symmetry_completes_a_twelve_garment_search_inside_its_cap() {
+    let (pattern, mut options) = one_operation(12);
+    let setup = json!({"needle":options["passes"][0]["needle"],
+        "thread":options["passes"][0]["thread"]});
+    options["production"]["ordering"]["initial_setup"] = setup.clone();
+    options["production"]["ordering"]["max_search_nodes"] = json!(1);
+    options["production"]["handling"]["initial_milliseconds"]["join"] = json!(5000);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["ordering"]["initial_setup"] = setup.clone();
+        cell["ordering"]["max_search_nodes"] = json!(1);
+        cell["handling"]["initial_milliseconds"]["join"] = json!(5000);
+    }
+    shared_operator(&mut options, 40000);
+    options["production"]["parallel"]["max_search_nodes"] = json!(100000);
+    for row in options["production"]["parallel"]["shared_operator"]["transfers"]
+        .as_array_mut()
+        .unwrap()
+    {
+        row["milliseconds"] = json!(350);
+    }
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    let labor = report.shared_operator.as_ref().unwrap();
+    // Twelve 5000 ms attended phases alternate across the two cells, with eleven 350 ms
+    // approaches. The last 4000 ms feed then completes before its 200 ms final unloading.
+    assert_eq!(report.selected.makespan_milliseconds, 68050);
+    assert!(labor.search_complete && !labor.budget_exhausted);
+    assert!(labor.search_nodes < 40000);
+    assert_eq!(
+        report
+            .selected
+            .cells
+            .iter()
+            .map(|cell| cell.copies.len())
+            .collect::<Vec<_>>(),
+        [6, 6]
+    );
+    assert_eq!(program.stitches.len(), 12 * 40);
+    let actual: BTreeSet<_> = program
+        .stitches
+        .iter()
+        .map(|step| step.copy.unwrap())
+        .collect();
+    assert_eq!(actual, (0..12).collect());
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
+    );
+}
+
 #[test]
 fn shared_operator_calendars_allow_autonomous_feed_during_breaks_and_replay_stitches() {
     for (first_end, finish, delay) in [(1100, 11300, 4900), (1099, 12400, 6000)] {

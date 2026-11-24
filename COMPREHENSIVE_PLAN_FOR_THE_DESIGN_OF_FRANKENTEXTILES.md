@@ -6261,6 +6261,32 @@ order cases cover recovered calendar feasibility, improved two-cell overlap and 
 This advances `ftx-pb2.2`; measured factory timing, physical seam quality and hardware authorization
 remain separate empirical requirements.
 
+### 25.227 Resist cloth rotation and flapping with distributed aerodynamic drag
+
+Enabled air drag now integrates the linear triangle velocity field at three positive interior
+quadrature points. A stationary centroid no longer hides local motion or its aerodynamic torque.
+The potential, exact derivatives and generalized-alpha initial acceleration share barycentric
+force distribution, lagged geometry and the existing triangle sparsity. Uniform ambient wind
+retains its independent boundary, and disabled drag preserves the ordinary vacuum path.
+
+The degree-two rule reproduces the consistent area tangent in the linear low-speed limit;
+nonlinear drag remains a spatial approximation requiring mesh refinement. Independent rotation,
+flapping, derivative and integrator checks accompany this correction to `FTX-27b`. It supplies no
+spatial airflow, shielding, qualified fabric coefficients or empirical garment-fit claim.
+
+### 25.228 Spend shared-operator search work on distinct production schedules
+
+Whole-garment joint allocation/order/dispatch search now removes first-start permutations of
+untouched equivalent copies within a cell. Recipes, prerequisites, setup/handling and fixture
+lifecycles are identical under those relabelings. Started copies remain independently schedulable,
+and the selected production and stitch reports retain every actual garment identity. The existing
+work budget can therefore reach physically different orders instead of repeatedly renaming copies.
+
+This extends `ftx-pb2` without changing its objective, resource authority or bounded proof scope.
+Independent small-case enumeration and capped batch cases check the reduction. Specialist routes
+with copy-specific qualifications are outside this reduction; measured production throughput and
+physical process qualification remain separate requirements.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

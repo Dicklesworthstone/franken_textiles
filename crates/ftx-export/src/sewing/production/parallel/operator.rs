@@ -522,10 +522,28 @@ impl LocalOrder {
         }
         let occupied = self.resources.as_ref().map(|limits| limits.occupied(done));
         let previous = last.unwrap_or(self.copies.len());
+        let mut started = ordering::OperationSet::default();
+        for (index, &copy) in self.copies.iter().enumerate() {
+            if done.contains(index) {
+                started.insert(copy);
+            }
+        }
+        // Untouched copies have identical recipes, local prerequisites and fixture lifecycles;
+        // handling distinguishes only same versus different copy. They have no individual
+        // calendars or arrivals. Swapping two untouched identities therefore preserves every
+        // phase and resource clock. Keep their first representative in the existing ID order,
+        // including lexicographic multi-digit IDs, so equal incumbents retain traversal order.
+        // Started copies remain distinct: their outstanding operations/holds may differ.
+        let first_untouched = self
+            .copies
+            .iter()
+            .copied()
+            .find(|&copy| copy < count && !started.contains(copy));
         let mut next: Vec<_> = remaining
             .into_iter()
             .filter(|&next| {
-                done.contains_all(self.predecessors[next])
+                (started.contains(self.copies[next]) || Some(self.copies[next]) == first_untouched)
+                    && done.contains_all(self.predecessors[next])
                     && self.resources.as_ref().is_none_or(|limits| {
                         limits.admits(occupied.as_ref().expect("local fixture occupancy"), next)
                     })
