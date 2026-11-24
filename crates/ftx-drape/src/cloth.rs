@@ -1677,7 +1677,29 @@ impl Solver {
             if project_elements && !psd {
                 project_psd_translation_free(hess, dofs.len());
             }
-            let mut next = 0;
+            // The same loop twice, so the search-free path costs no branch per entry.
+            if let Some(slots) = slots {
+                let mut next = 0;
+                for a in 0..n {
+                    let Some(fa) = self.free[3 * dofs[a / 3] + a % 3] else {
+                        continue;
+                    };
+                    g[fa] += grad[a];
+                    for b in 0..n {
+                        if let Some(fb) = self.free[3 * dofs[b / 3] + b % 3] {
+                            let val = hess[a * n + b];
+                            sink.push_at(
+                                slots[next],
+                                fa,
+                                fb,
+                                if scale != 1.0 { val * scale } else { val },
+                            );
+                            next += 1;
+                        }
+                    }
+                }
+                return;
+            }
             for a in 0..n {
                 let Some(fa) = self.free[3 * dofs[a / 3] + a % 3] else {
                     continue;
@@ -1686,14 +1708,7 @@ impl Solver {
                 for b in 0..n {
                     if let Some(fb) = self.free[3 * dofs[b / 3] + b % 3] {
                         let val = hess[a * n + b];
-                        let val = if scale != 1.0 { val * scale } else { val };
-                        match slots {
-                            Some(slots) => {
-                                sink.push_at(slots[next], fa, fb, val);
-                                next += 1;
-                            }
-                            None => sink.push(fa, fb, val),
-                        }
+                        sink.push(fa, fb, if scale != 1.0 { val * scale } else { val });
                     }
                 }
             }
@@ -3249,11 +3264,8 @@ impl Solver {
             ..SettleReport::default()
         };
         let mut calm = 0;
-        for _ in 0..max_steps {
+        for step_idx in 0..max_steps {
             let r = self.step(rep.h)?;
-            if let Some(c) = self.contact.as_mut() {
-                c.adapt_barrier_stiffness(&self.x);
-            }
             rep.steps += 1;
             rep.time += rep.h;
             rep.newton_iterations += r.iterations;
@@ -3268,6 +3280,13 @@ impl Solver {
             if calm >= quiet {
                 rep.settled = true;
                 break;
+            }
+            // Adapt barrier stiffness only between accepted steps so the returned settled or
+            // budget-final state keeps the exact kappa that equilibrated its last step.
+            if step_idx + 1 < max_steps
+                && let Some(c) = self.contact.as_mut()
+            {
+                c.adapt_barrier_stiffness(&self.x);
             }
             if r.converged && r.iterations <= 8 {
                 rep.h = (rep.h * 2.0).min(h_max);
@@ -4004,6 +4023,16 @@ mod self_contact_tests {
             .unwrap();
         let legacy_k0 = legacy.contact.as_ref().unwrap().params.kappa;
         let adaptive_k0 = adaptive.contact.as_ref().unwrap().params.kappa;
+        // A 1-step compressed settle must not mutate kappa after its final accepted step.
+        let mut one_step = adaptive.clone();
+        let one_rep = one_step.settle(0.005, 0.01, 1e6, 1, 1).unwrap();
+        assert!(one_rep.settled);
+        assert_eq!(one_rep.steps, 1);
+        assert_eq!(
+            one_step.contact.as_ref().unwrap().params.kappa,
+            adaptive_k0,
+            "Solver::settle must not adapt kappa after its final settled step"
+        );
         legacy.settle(0.005, 0.01, 1e-6, 1, 3).unwrap();
         adaptive.settle(0.005, 0.01, 1e-6, 1, 3).unwrap();
         assert_eq!(legacy.contact.as_ref().unwrap().params.kappa, legacy_k0);
