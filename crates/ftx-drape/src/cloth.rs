@@ -4601,6 +4601,62 @@ mod strategy_and_integrator_tests {
         s
     }
 
+    /// With the `parallel` feature and a slot plan, the membrane and hinge entries are gathered slot
+    /// by slot on rayon's pool. The gradient and every matrix entry are the triplet assembly's bits,
+    /// on a compressed, curved sheet (projected membranes) under implicit Euler.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn gathered_assembly_equals_the_triplet_assembly_bit_for_bit() {
+        let (rest, tris) = grid(0.4, 0.3, 40, 30, Vec2::ZERO);
+        let fixed: Vec<[bool; 3]> = rest.iter().map(|p| [p.x == 0.0; 3]).collect();
+        let x: Vec<Vec3> = rest
+            .iter()
+            .map(|p| Vec3::new(0.93 * p.x, p.y, 0.02 * ftx_core::det::sin(17.0 * p.x) * p.y))
+            .collect();
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(120.0, 90.0, 0.2, 30.0, 0.15),
+            2e-4,
+            0.22,
+        )
+        .unwrap();
+        let mut s = Solver::new(model, x.clone(), &fixed, Vec3::new(0.0, 0.0, -9.81));
+        let xt: Vec<Vec3> = x.iter().map(|p| *p + Vec3::new(0.0, 0.0, -0.001)).collect();
+        let bits = |(g, a): &(Vec<f64>, Csr)| {
+            let entries: Vec<(usize, u64)> = (0..a.nrows())
+                .flat_map(|r| {
+                    let (cols, vals) = a.row(r);
+                    cols.iter()
+                        .zip(vals)
+                        .map(|(&c, v)| (c, v.to_bits()))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            (g.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), entries)
+        };
+        let first = s.assemble(&x, Some((&xt, 0.01)), true);
+        s.symbolic(&first.1).unwrap();
+        assert!(
+            s.fill_slots.is_some(),
+            "a contact-free sheet fills its pattern"
+        );
+        let mut triplets = s.clone();
+        triplets.pattern = None;
+        triplets.fill_slots = None;
+        let y: Vec<Vec3> = x
+            .iter()
+            .enumerate()
+            .map(|(i, p)| *p + Vec3::new(0.0, 0.0, 1e-3 * ftx_core::det::cos(i as f64)))
+            .collect();
+        let gathered = s.assemble(&y, Some((&xt, 0.01)), true);
+        assert!(gathered.1.nnz() > 4 * 2048, "several gather chunks");
+        assert_eq!(
+            bits(&gathered),
+            bits(&triplets.assemble(&y, Some((&xt, 0.01)), true))
+        );
+    }
+
     #[test]
     fn adaptive_ilu_and_trust_region_steihaug_match_projected_newton_on_cloth() {
         let mut ref_solver = hanging_sheet();
