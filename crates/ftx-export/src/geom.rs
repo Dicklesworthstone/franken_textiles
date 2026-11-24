@@ -752,6 +752,42 @@ pub fn build_geom(
                 }
             }
         };
+        let crease_deg = match item.get("crease_angle_deg").filter(|v| !v.is_null()) {
+            None => None,
+            Some(v) => {
+                let deg = v.as_f64().ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!(
+                            "{}: internal crease_angle_deg must be a finite number",
+                            g.iid
+                        ),
+                    )
+                })?;
+                if !(deg.is_finite() && deg.abs() < 180.0) {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "{}: internal crease_angle_deg {deg} must be finite and strictly within (-180, 180)",
+                            g.iid
+                        ),
+                    ));
+                }
+                if deg == 0.0 {
+                    None
+                } else if item["kind"] == "cut" {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!(
+                            "{}: internal cut mark cannot carry crease_angle_deg; use kind \"draw\" for pressed creases/pleats",
+                            g.iid
+                        ),
+                    ));
+                } else {
+                    Some(deg)
+                }
+            }
+        };
         for m in &maps {
             let q: Vec<Vec2> = pts.iter().map(|&p| m.apply(p)).collect();
             if item["kind"] == "cut" {
@@ -764,10 +800,7 @@ pub fn build_geom(
                 .filter(|l| truthy(l))
                 .map(py_str)
                 .or_else(|| {
-                    let deg = item
-                        .get("crease_angle_deg")
-                        .and_then(Value::as_f64)
-                        .filter(|d| d.is_finite() && *d != 0.0 && d.abs() < 180.0)?;
+                    let deg = crease_deg?;
                     let (sign, dir) = if deg > 0.0 {
                         ("+", "valley")
                     } else {
@@ -1567,5 +1600,49 @@ mod tests {
                 "PLEAT A",
             ]
         );
+
+        // An internal cut mark carrying a non-zero crease_angle_deg and an out-of-range or
+        // non-numeric crease_angle_deg on a draw mark must refuse fail-closed rather than
+        // mislabeling a slit or silently dropping an invalid crease angle.
+        for (mark, expected_code) in [
+            (
+                json!({"kind": "cut", "pts": [[25, 10], [25, 70]], "crease_angle_deg": 45.0}),
+                RefusalCode::InvalidDocument,
+            ),
+            (
+                json!({"kind": "draw", "pts": [[25, 10], [25, 70]], "crease_angle_deg": 180.0}),
+                RefusalCode::OutOfRange,
+            ),
+            (
+                json!({"kind": "draw", "pts": [[25, 10], [25, 70]], "crease_angle_deg": "90"}),
+                RefusalCode::InvalidDocument,
+            ),
+        ] {
+            let bad_pat = Pattern::new(json!({
+                "schema": "fabric-pattern/1",
+                "style": "BAD_CREASE",
+                "units": "mm",
+                "pieces": [{
+                    "id": "p1",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "internal": [mark],
+                    "cut": {"qty": 1}
+                }]
+            }));
+            assert_eq!(
+                Ctx::new(&bad_pat, ExportOptions::default())
+                    .unwrap()
+                    .geom(Source::Piece(0), 6.0)
+                    .unwrap_err()
+                    .code,
+                expected_code
+            );
+        }
     }
 }

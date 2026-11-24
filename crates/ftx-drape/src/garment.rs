@@ -1603,6 +1603,14 @@ fn extract_piece_creases(
         else {
             continue;
         };
+        if mark.get("kind").and_then(Value::as_str) == Some("cut") {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "{context}: internal cut mark cannot carry crease_angle_deg; use kind \"draw\" for pressed creases/pleats"
+                ),
+            ));
+        }
         let raw_pts = mark
             .get("pts")
             .and_then(Value::as_array)
@@ -3229,5 +3237,23 @@ mod tests {
                 closed_mesh.verts2d[c.verts[1]],
             ) <= 1e-3
         }));
+
+        // An internal cut/slit mark cannot carry a non-zero crease angle; refuse fail-closed.
+        let mut cut_piece = rect("panel", 100.0, 100.0);
+        cut_piece["internal"] = json!([{
+            "kind": "cut",
+            "pts": [[25.0, 25.0], [75.0, 25.0]],
+            "crease_angle_deg": 45.0
+        }]);
+        let cut_pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [cut_piece],
+            "seams": []
+        }));
+        assert_eq!(
+            build_garment(&cut_pat, 25.0).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
     }
 }
