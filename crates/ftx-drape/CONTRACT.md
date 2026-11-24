@@ -758,6 +758,14 @@ the software `fma`, 68 % of a bolero's time (plus 7 % in its `scalbn`). With the
 multiply then an add, `ftx drape` takes 14.7 CPU-seconds for the bolero (was 62) and 53 for the trousers
 (was 454; §11.7's browser budget is five minutes), the same Newton iterations; native 9.8 and 37 s, unchanged.
 
+**Threads.** The optional `parallel` feature (rayon; off by default, so no pool unless asked) evaluates
+independent work in parallel through `par.rs`: element locals and their PSD projections, per-element
+energies, per-pair barrier terms, the reused candidate list's box test and the thickness ramp's gaps.
+Every result lands in an index-ordered vector and every reduction (the Hessian scatter, energy sums, the
+first penetrating pair, the first smallest gap) runs serially in the old order, so the output is bit for
+bit the serial build's at any thread count. The serial parts bound the gain: in the posing room's browser
+sew (ftx-wasm `threads`) 17.1 s became 13.4 s on 4 threads.
+
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
 

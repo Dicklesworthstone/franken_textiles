@@ -20,6 +20,7 @@ use crate::elements::{
     BendingModel, CompressionModel, ElasticSegment, Hinge, Local, Membrane, MembraneElement,
 };
 use crate::integrator::{GeneralizedAlphaParams, TimeIntegrator};
+use crate::par;
 use crate::sparse::advanced::{
     Precond, SteihaugConfig, eisenstat_walker, ilu0_spd_shifted, steihaug_cg,
 };
@@ -478,27 +479,27 @@ impl ClothModel {
         panels: Option<f64>,
         membranes: Option<f64>,
     ) -> f64 {
+        // Per-element energies are independent (parallel with the `parallel` feature); the sums run
+        // in element order, the same bits either way.
         let m: f64 = membranes.unwrap_or_else(|| {
-            self.membranes
-                .iter()
-                .enumerate()
-                .map(|(i, e)| {
-                    self.membrane_response(i).map_or_else(
-                        || self.membrane_energy(i, x),
-                        |law| {
-                            e.response_energy_with_model(
-                                x,
-                                law,
-                                &self.material(i),
-                                self.compression_model,
-                            )
-                        },
-                    )
-                })
-                .sum()
+            par::map(self.membranes.len(), |i| {
+                self.membrane_response(i).map_or_else(
+                    || self.membrane_energy(i, x),
+                    |law| {
+                        self.membranes[i].response_energy_with_model(
+                            x,
+                            law,
+                            &self.material(i),
+                            self.compression_model,
+                        )
+                    },
+                )
+            })
+            .into_iter()
+            .sum()
         });
-        let mut b: f64 = (0..self.hinges.len())
-            .map(|i| self.hinge_energy(i, x))
+        let mut b: f64 = par::map(self.hinges.len(), |i| self.hinge_energy(i, x))
+            .into_iter()
             .sum();
         if let Some(field) = &self.panel_bending {
             b += panels.unwrap_or_else(|| field.patches.iter().map(|p| p.energy(x)).sum::<f64>());
@@ -1727,7 +1728,11 @@ impl Solver {
                 }
             }
         };
-        for (i, e) in self.model.membranes.iter().enumerate() {
+        // Each membrane's and hinge's local terms, projected as `scatter` would project them, are a
+        // function of `x` alone: they are evaluated independently (in parallel with the `parallel`
+        // feature) and scattered below in element order, so the sums are the same bits either way.
+        let membranes = par::map(n_membranes, |i| {
+            let e = &self.model.membranes[i];
             let mut l = self
                 .membrane_plasticity
                 .as_ref()
@@ -1759,6 +1764,13 @@ impl Solver {
                 }
                 l.psd &= extra.psd;
             }
+            if project_elements && !l.psd {
+                project_psd_translation_free(&mut l.hess, e.v.len());
+                l.psd = true;
+            }
+            l
+        });
+        for (i, (e, mut l)) in self.model.membranes.iter().zip(membranes).enumerate() {
             scatter(
                 &e.v,
                 plan.map(|s| s.element(i)),
@@ -1770,8 +1782,15 @@ impl Solver {
                 &mut g,
             );
         }
-        for (i, h) in self.model.hinges.iter().enumerate() {
+        let hinges = par::map(n_hinges, |i| {
             let mut l = self.model.hinge_local(i, x_el);
+            if project_elements && !l.psd {
+                project_psd_translation_free(&mut l.hess, self.model.hinges[i].v.len());
+                l.psd = true;
+            }
+            l
+        });
+        for (i, (h, mut l)) in self.model.hinges.iter().zip(hinges).enumerate() {
             scatter(
                 &h.v,
                 plan.map(|s| s.element(n_membranes + i)),

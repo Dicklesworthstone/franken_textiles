@@ -21,6 +21,7 @@ use crate::distance::{
     Closest, edge_cross_squared, edge_edge_closest, point_triangle_closest, squared_distance,
     squared_distance_f64, squared_distance_grad,
 };
+use crate::par;
 use crate::winding::{DEFAULT_BETA, WindingOctree, winding_exact};
 
 mod materials;
@@ -1034,6 +1035,15 @@ enum PairEnergy {
     Penetrating,
     Active(Box<Jet<12>>),
     Value(f64),
+}
+
+/// One candidate pair's contribution to [`Contact::terms`]: nothing, an infinite energy, an energy
+/// alone (no derivatives requested), or an energy with its derivative block.
+enum PairTerm {
+    Inactive,
+    Penetrating,
+    Energy(f64),
+    Block(f64, Block),
 }
 
 /// The pair's gap (distance − ξ) in plain f64.
@@ -2054,10 +2064,24 @@ impl Contact {
     }
 
     /// The pairs of `pairs`, in order, that pass the exact box test [`Contact::body_candidates`]
-    /// applies at `x` (swept by `p`). A list in that canonical order holds each cloth primitive's
-    /// pairs together, so its padded box is computed once per run of pairs (the same function of
-    /// the same points each time).
+    /// applies at `x` (swept by `p`). Each pair's test depends on that pair alone, so the list is
+    /// filtered in ranges (in parallel with the `parallel` feature) and joined in order.
     fn body_pairs_within(
+        &self,
+        pairs: &[Pair],
+        x: &[Vec3],
+        p: Option<&[Vec3]>,
+        pad: f64,
+    ) -> Vec<Pair> {
+        par::filter_ranges(pairs.len(), 4096, |r| {
+            self.body_pairs_within_run(&pairs[r], x, p, pad)
+        })
+    }
+
+    /// [`Contact::body_pairs_within`] on one stretch of the list. A list in canonical order holds each
+    /// cloth primitive's pairs together, so its padded box is computed once per run of pairs (the same
+    /// function of the same points each time, so a run split between stretches tests the same box).
+    fn body_pairs_within_run(
         &self,
         pairs: &[Pair],
         x: &[Vec3],
@@ -2166,20 +2190,23 @@ impl Contact {
     /// (the cloth vertex, or the first cloth vertex of the cloth triangle or edge).
     #[must_use]
     pub fn closest_pair(&self, x: &[Vec3], range: f64) -> Option<(f64, Pair, Vec3)> {
-        self.near_body_candidates(x, None, range + self.params.thickness)
-            .into_iter()
-            .map(|pair| {
-                let st = stencil(pair, x, &self.body, &self.cloth);
-                let (kind, _) = classify(pair, &st.pts);
-                let at = st
-                    .cloth
-                    .iter()
-                    .flatten()
-                    .next()
-                    .map_or(Vec3::ZERO, |&v| x[v]);
-                (pair_gap(&st, kind, &self.pair_params(pair)), pair, at)
-            })
-            .reduce(|a, b| if b.0 < a.0 { b } else { a })
+        // Gaps are independent (parallel with the `parallel` feature); the first smallest wins, in
+        // candidate order, as in one serial pass.
+        let pairs = self.near_body_candidates(x, None, range + self.params.thickness);
+        par::map(pairs.len(), |i| {
+            let pair = pairs[i];
+            let st = stencil(pair, x, &self.body, &self.cloth);
+            let (kind, _) = classify(pair, &st.pts);
+            let at = st
+                .cloth
+                .iter()
+                .flatten()
+                .next()
+                .map_or(Vec3::ZERO, |&v| x[v]);
+            (pair_gap(&st, kind, &self.pair_params(pair)), pair, at)
+        })
+        .into_iter()
+        .reduce(|a, b| if b.0 < a.0 { b } else { a })
     }
 
     /// Up to `limit` crossings of the cloth at `x` with the body (exact predicates), in a fixed order: each
@@ -2260,55 +2287,25 @@ impl Contact {
             energy: 0.0,
             blocks: Vec::new(),
         };
-        for pair in self.candidates(x, None, self.activation_range()) {
-            let p = &self.pair_params(pair);
-            let st = stencil(pair, x, &self.body, &self.cloth);
-            let (kind, _) = classify(pair, &st.pts);
-            if !with_derivatives {
-                match pair_energy_value(&st, kind, p) {
-                    PairEnergy::Inactive => {}
-                    PairEnergy::Penetrating => {
-                        terms.energy = f64::INFINITY;
-                        return terms;
-                    }
-                    PairEnergy::Value(e) => terms.energy += e,
-                    PairEnergy::Active(e) => terms.energy += e.v,
+        // Each pair's term is a function of `x` alone (evaluated in parallel with the `parallel`
+        // feature); they are added in candidate order and the first penetrating pair ends the sum,
+        // exactly as one serial pass would.
+        let pairs = self.candidates(x, None, self.activation_range());
+        for term in par::map(pairs.len(), |i| {
+            self.pair_term(pairs[i], x, with_derivatives)
+        }) {
+            match term {
+                PairTerm::Inactive => {}
+                PairTerm::Penetrating => {
+                    terms.energy = f64::INFINITY;
+                    return terms;
                 }
-                continue;
-            }
-            let gap = pair_gap(&st, kind, p);
-            if gap >= p.dhat {
-                continue;
-            }
-            if gap <= 0.0 {
-                terms.energy = f64::INFINITY;
-                return terms;
-            }
-            let mollified = st.mollifier_eps.is_some_and(|eps| {
-                let (a, b) = (st.pts[1] - st.pts[0], st.pts[3] - st.pts[2]);
-                a.cross(b).norm2() < eps
-            });
-            if mollified {
-                // Near-parallel edges: the full Hessian of mollifier × barrier, projected later.
-                if let PairEnergy::Active(e) = pair_energy(&st, kind, p) {
-                    terms.energy += e.v;
-                    terms
-                        .blocks
-                        .push(compact(st.cloth, &e.g, |a, b| e.h[a][b], false));
+                PairTerm::Energy(e) => terms.energy += e,
+                PairTerm::Block(e, block) => {
+                    terms.energy += e;
+                    terms.blocks.push(block);
                 }
-                continue;
             }
-            // Gauss–Newton: keep b''·∇g∇gᵀ, drop the indefinite b'·∇²g (exact gradient, PSD Hessian;
-            // exact for a point against a plane).
-            let d2 = squared_distance_grad(st.pts, st.fixed, kind);
-            let d = d2.v.sqrt();
-            let dg: [f64; 12] = std::array::from_fn(|i| d2.g[i] / (2.0 * d));
-            let (b, b1, b2) = barrier_f64(d - p.thickness, p);
-            terms.energy += b;
-            let grad: [f64; 12] = std::array::from_fn(|i| b1 * dg[i]);
-            terms
-                .blocks
-                .push(compact(st.cloth, &grad, |i, j| b2 * dg[i] * dg[j], true));
         }
         if friction && self.has_friction() {
             for f in &self.lag {
@@ -2323,6 +2320,49 @@ impl Contact {
             }
         }
         terms
+    }
+
+    /// One candidate pair's barrier term at `x` for [`Contact::terms`].
+    fn pair_term(&self, pair: Pair, x: &[Vec3], with_derivatives: bool) -> PairTerm {
+        let p = &self.pair_params(pair);
+        let st = stencil(pair, x, &self.body, &self.cloth);
+        let (kind, _) = classify(pair, &st.pts);
+        if !with_derivatives {
+            return match pair_energy_value(&st, kind, p) {
+                PairEnergy::Inactive => PairTerm::Inactive,
+                PairEnergy::Penetrating => PairTerm::Penetrating,
+                PairEnergy::Value(e) => PairTerm::Energy(e),
+                PairEnergy::Active(e) => PairTerm::Energy(e.v),
+            };
+        }
+        let gap = pair_gap(&st, kind, p);
+        if gap >= p.dhat {
+            return PairTerm::Inactive;
+        }
+        if gap <= 0.0 {
+            return PairTerm::Penetrating;
+        }
+        let mollified = st.mollifier_eps.is_some_and(|eps| {
+            let (a, b) = (st.pts[1] - st.pts[0], st.pts[3] - st.pts[2]);
+            a.cross(b).norm2() < eps
+        });
+        if mollified {
+            // Near-parallel edges: the full Hessian of mollifier × barrier, projected later.
+            return match pair_energy(&st, kind, p) {
+                PairEnergy::Active(e) => {
+                    PairTerm::Block(e.v, compact(st.cloth, &e.g, |a, b| e.h[a][b], false))
+                }
+                _ => PairTerm::Inactive,
+            };
+        }
+        // Gauss–Newton: keep b''·∇g∇gᵀ, drop the indefinite b'·∇²g (exact gradient, PSD Hessian;
+        // exact for a point against a plane).
+        let d2 = squared_distance_grad(st.pts, st.fixed, kind);
+        let d = d2.v.sqrt();
+        let dg: [f64; 12] = std::array::from_fn(|i| d2.g[i] / (2.0 * d));
+        let (b, b1, b2) = barrier_f64(d - p.thickness, p);
+        let grad: [f64; 12] = std::array::from_fn(|i| b1 * dg[i]);
+        PairTerm::Block(b, compact(st.cloth, &grad, |i, j| b2 * dg[i] * dg[j], true))
     }
 
     /// Freezes the friction pairs (normal forces, tangent bases, contact weights) at `x` for a step of

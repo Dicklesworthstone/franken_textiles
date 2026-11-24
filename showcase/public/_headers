@@ -32,6 +32,19 @@
   Strict-Transport-Security: max-age=15552000
   Content-Security-Policy: default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'
 
+# The posing room runs the solver on several threads (public/labs/studio-engine-threads.mjs). Threads
+# need shared memory, which a browser grants only to a cross-origin isolated page, and every worker
+# script the page starts must carry the same embedder policy. Everything here is same-origin (see the
+# content policy above), so require-corp blocks nothing. Without isolation the page uses one thread.
+/studies/pose/
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/labs/pose-worker.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/workbench/pkg-threads/*
+  Cross-Origin-Embedder-Policy: require-corp
+  Cache-Control: public, no-cache, no-transform
+
 # Share-card routes have no file extension, so their type is stated here.
 /sections/:section/opengraph-image
   Content-Type: image/png

@@ -16,6 +16,12 @@ miniz_oxide.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spade.workspace = true
+rayon = { workspace = true, optional = true }
+
+[features]
+# Element, energy and contact-pair evaluation on rayon's pool (src/par.rs). Off by default: library
+# users get no thread pool unless they ask. Results are bit-identical with and without it.
+parallel = ["dep:rayon"]
 
 [lints]
 workspace = true

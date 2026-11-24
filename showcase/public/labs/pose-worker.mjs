@@ -14,7 +14,9 @@
 //
 // A page that wants another pose while a sew is running terminates this worker and starts a new one.
 // Positions are xyz in metres in the solver's frame (z up, the wearer facing -y).
-import { getStudioEngine } from "./studio-engine.mjs";
+// The threaded engine where the page is cross-origin isolated (studio-engine-threads.mjs falls back to the
+// single-threaded one by itself).
+import { getStudioEngine, solverThreads } from "./studio-engine-threads.mjs";
 
 self.ftxProgress = line => postMessage({ type: "progress", line });
 
@@ -40,6 +42,8 @@ async function sew({ body, pattern, fit, settings, left, right }) {
   const [wasm, header, data, patternText, fitText] = await Promise.all([
     getStudioEngine(), text(body + ".json"), gunzipped(body + ".bin.gz"), text(pattern), text(fit),
   ]);
+  const threads = solverThreads();
+  postMessage({ type: "progress", line: threads > 1 ? `solver ready on ${threads} threads` : "solver ready" });
   postMessage({ type: "progress", line: `placing the pieces round the arms at ${left}° and ${right}°` });
   const began = performance.now();
   const sewn = wasm.WebDrapeSession.posed(header, data, patternText, fitText, JSON.stringify(settings ?? {}), left, right);

@@ -3,6 +3,10 @@
 //! `WebBody(bytes)` and `fold_up(body, …)` for the fold-up on a fitted body.
 
 use wasm_bindgen::prelude::*;
+/// The threaded build's pool: `await initThreadPool(n)` once, after `init()` and before any drape, starts
+/// `n` workers for the solver's parallel evaluation (`threads` feature).
+#[cfg(feature = "threads")]
+pub use wasm_bindgen_rayon::init_thread_pool;
 
 use crate::{fold, page};
 

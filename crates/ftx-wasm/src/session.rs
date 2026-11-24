@@ -822,8 +822,9 @@ impl Session {
         self.arms
     }
 
-    /// The last accepted move's work (`trials`, `substeps`, `newton_iterations` per substep); null
-    /// before the first.
+    /// The last accepted move's work: `trials` and `substeps`, and per accepted substep its solver
+    /// report's `newton_iterations`, `ccd_limited`, `halvings`, `line_search_failures`, `factorizations`
+    /// and `pcg_iterations`; null before the first.
     #[must_use]
     pub fn last_move(&self) -> &Value {
         &self.last_move
@@ -865,10 +866,22 @@ impl Session {
         }
         .map_err(|refusal| refusal.to_string())?;
         self.arms = [left, right];
+        let per_substep = |field: fn(&ftx_drape::SolveReport) -> usize| {
+            report
+                .samples
+                .iter()
+                .map(|s| field(&s.solve))
+                .collect::<Vec<_>>()
+        };
         self.last_move = json!({
             "trials": report.trials,
             "substeps": report.samples.len(),
-            "newton_iterations": report.samples.iter().map(|s| s.solve.iterations).collect::<Vec<_>>(),
+            "newton_iterations": per_substep(|r| r.iterations),
+            "ccd_limited": per_substep(|r| r.ccd_limited),
+            "halvings": per_substep(|r| r.halvings),
+            "line_search_failures": per_substep(|r| r.line_search_failures),
+            "factorizations": per_substep(|r| r.factorizations),
+            "pcg_iterations": per_substep(|r| r.pcg_iterations),
         });
         let mut samples =
             Vec::with_capacity(report.samples.len() * (1 + 3 * self.scene.weld.len()));

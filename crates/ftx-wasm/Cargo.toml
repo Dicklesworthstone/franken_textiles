@@ -25,6 +25,13 @@ serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen.workspace = true
+wasm-bindgen-rayon = { workspace = true, optional = true }
+
+[features]
+# The threaded engine (the posing room's): the drape solver's parallel evaluation on a pool of Web
+# Workers. Needs a build with atomics (+atomics,+bulk-memory and -Z build-std) and a cross-origin
+# isolated page; the default build stays single-threaded. Results are bit-identical either way.
+threads = ["ftx-drape/parallel", "dep:wasm-bindgen-rayon"]
 
 [lints]
 workspace = true

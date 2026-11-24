@@ -58,6 +58,22 @@ miniz_oxide = { version = "=0.8.9" }
 # wasm-bindgen CLI (0.2.128), which must match it exactly; pulls wasm-bindgen-macro/-shared/-backend and
 # once_cell. Native builds do not compile it.
 wasm-bindgen = { version = "=0.2.128" }
+# Optional data parallelism for the drape solver, ftx-drape's `parallel` feature only (never a mandatory
+# pool; approved by the maintainer 2026-11-24). 1.12.0 with default features; pulls rayon-core 1.13.0,
+# crossbeam-deque, crossbeam-epoch, crossbeam-utils and either, and on wasm32 also wasm_sync (with js-sys,
+# web-sys, futures-util/-core/-task, pin-project-lite, slab). Used: IntoParallelIterator::into_par_iter
+# on index ranges and ParallelIterator::map/collect into Vec, which keeps item order; every reduction
+# stays serial in that order, so parallel and serial runs give the same bits (ftx-drape/src/par.rs).
+# Measured 2026-11-24 (headless Chromium, 8-core EPYC, identical digests): the posing room's sew 17.1 s
+# single-threaded, 13.4 s on 4 threads (1.28x); a 5-degree arm nudge 18.7 s, 15.2 s on 8. The rest is the
+# serial Hessian scatter and sparse LDLT. Native CLI bolero drape: about 4 % (26.2 to 25.1 s, 4 threads).
+rayon = { version = "=1.12.0" }
+# Rayon's pool on Web Workers, ftx-wasm's `threads` feature only and only for wasm32 (the posing room's
+# threaded engine, built with atomics and served cross-origin isolated). 1.3.0 with `no-bundler` (our
+# `wasm-bindgen --target web` output is loaded without a bundler); pulls js-sys 0.3.105 and
+# crossbeam-channel beyond rayon's closure.
+# Used: init_thread_pool, re-exported to JavaScript as initThreadPool.
+wasm-bindgen-rayon = { version = "=1.3.0", features = ["no-bundler"] }
 
 [profile.release-perf]
 inherits = "release"

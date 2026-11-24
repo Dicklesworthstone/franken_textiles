@@ -36,6 +36,7 @@ pub mod metrics;
 pub mod motion;
 pub mod nearest;
 pub mod outfit;
+mod par;
 pub mod point_cache;
 pub mod qualify;
 pub mod render;
