@@ -4344,3 +4344,73 @@ test('body-start editor authors and releases per-frame fixed poses with explicit
   assert.equal(bodyStartField(p0,'bodyStart-pose-0-0').value,'0.35');
   assert.equal(bodyStartField(p0,'bodyStart-pose-0-0').disabled,true);
 });
+
+test('body fit summary, start preview and accepted frame review surface per-frame fixed poses and refuse tampered fixed_pose payloads', async () => {
+  const p=await photoPage();selectBodyFit(p);
+  // Start preview with fixed_pose annotates fixed controls + evidence and rejects mismatched/oversized fixed_pose.
+  await p.e.bodyFitStartRun.onclick();
+  let w=p.current(), msg=w.messages[0];
+  const baseStartReview={
+    schema:'ftx-body-start-frame-review/1',status:'INITIALIZATION_REVIEW',body_fitted:false,
+    start_index:0,start_count:2,frame_index:0,frame_count:2,frame_label:'synthetic @ 0 us',
+    image_size_px:[100,80],rotation_cw_deg:0,projection_kind:'straight_edges',
+    shape_parameters:[{name:'height',lower:0,upper:1,unit:'dimensionless'}],shape_values:[0.5],
+    pose_parameters:[{name:'root_x_m',lower:-3,upper:3,unit:'m'},{name:'joint:arm',lower:-1.5,upper:1.5,unit:'rad'}],
+    pose_values:[0.25,0.1],keypoints:[],triangles:[[0,1,2]],projected_vertices_px:[[10,10],[20,10],[15,20]],
+    unprojectable_vertices:0,mesh_obj:'v 0 0 0\n',diagnostics:[],
+    no_claim:'Initialization preview only.'
+  };
+  await w.emit({type:'result',request:msg.request,report:JSON.stringify({
+    ...baseStartReview,
+    fixed_pose:{values:{root_x_m:0.25},evidence:'Floor tape mark on Frame 1'},
+  })});
+  assert.equal(p.e.bodyFitReviewError.textContent,'');
+  assert.match(p.e.bodyFitReviewParameters.textContent,/root_x_m: 0\.25 m \(-3 < value < 3\) \[FIXED — caller assumption\]/);
+  assert.doesNotMatch(p.e.bodyFitReviewParameters.textContent,/joint:arm:.*\[FIXED/);
+  assert.match(p.e.bodyFitReviewParameters.textContent,/Evidence: Floor tape mark on Frame 1/);
+
+  // Tampered start preview where fixed_pose disagrees with pose_values refuses fail-closed.
+  await p.e.bodyFitStartRun.onclick();
+  w=p.current();msg=w.messages[0];
+  await w.emit({type:'result',request:msg.request,report:JSON.stringify({
+    ...baseStartReview,
+    fixed_pose:{values:{root_x_m:0.5},evidence:'Mismatched start value'},
+  })});
+  assert.match(p.e.bodyFitReviewError.textContent,/invalid fixed pose controls/);
+
+  // Accepted fit summary surfaces per-frame fixed poses + zero-spread-by-constraint notice, and accepted frame review surfaces fixed_pose.
+  await p.e.bodyFitRun.onclick();
+  w=p.current();msg=w.messages[0];
+  const fitDoc=bodyFitReport();
+  fitDoc.input.frames[0].fixed_pose={values:{root_x_m:0.25},evidence:'Floor tape mark on Frame 1'};
+  await w.emit({type:'result',request:msg.request,report:JSON.stringify(fitDoc)});
+  assert.match(p.e.bodyFitSummary.textContent,/Prescribed fixed pose constraints on 1 frame\(s\): Frame 1 \(root_x_m; evidence: Floor tape mark on Frame 1\); zero spread on fixed controls is by constraint, not inferred precision\./);
+
+  await p.e.bodyFitReviewRun.onclick();
+  w=p.current();msg=w.messages[0];
+  const baseFrameReview=bodyFrameReport();
+  await w.emit({type:'result',request:msg.request,report:JSON.stringify({
+    ...baseFrameReview,
+    fixed_pose:{values:{root_x_m:0.25},evidence:'Floor tape mark on Frame 1'},
+  })});
+  assert.equal(p.e.bodyFitReviewError.textContent,'');
+  assert.match(p.e.bodyFitReviewSummary.textContent,/Fixed pose controls on this frame: root_x_m=0\.25 \(evidence: Floor tape mark on Frame 1; caller assumption, not measured precision\)\./);
+
+  // Tampered accepted frame review with oversized fixed_pose evidence refuses fail-closed.
+  await p.e.bodyFitReviewRun.onclick();
+  w=p.current();msg=w.messages[0];
+  await w.emit({type:'result',request:msg.request,report:JSON.stringify({
+    ...baseFrameReview,
+    fixed_pose:{values:{root_x_m:0.25},evidence:'x'.repeat(4097)},
+  })});
+  assert.match(p.e.bodyFitReviewError.textContent,/invalid fixed pose controls/);
+
+  // Tampered fit report with blank fixed_pose evidence refuses fail-closed.
+  await p.e.bodyFitRun.onclick();
+  w=p.current();msg=w.messages[0];
+  const badFitDoc=bodyFitReport();
+  badFitDoc.input.frames[0].fixed_pose={values:{root_x_m:0.25},evidence:'   '};
+  await w.emit({type:'result',request:msg.request,report:JSON.stringify(badFitDoc)});
+  assert.match(p.e.bodyFitError.textContent,/invalid fixed pose controls/);
+  assert.equal(p.e.bodyFitResult.hidden,true);
+});

@@ -858,6 +858,22 @@ function validFixedNumber(raw,parameter) {
   if(!Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper) return null;
   return value;
 }
+function checkedFixedPose(fixed,parameters=null,poseValues=null) {
+  if(!fixed || typeof fixed!=="object" || Array.isArray(fixed) || Object.keys(fixed).some(key=>!["values","evidence"].includes(key)) ||
+      typeof fixed.evidence!=="string" || !fixed.evidence.trim() || new Blob([fixed.evidence]).size>4096 ||
+      !fixed.values || typeof fixed.values!=="object" || Array.isArray(fixed.values) || !Object.keys(fixed.values).length) {
+    return false;
+  }
+  return Object.entries(fixed.values).every(([name,value])=>{
+    if(typeof value!=="number" || !Number.isFinite(value)) return false;
+    if(!parameters) return true;
+    const index=parameters.findIndex(p=>p.name===name);
+    if(index<0) return false;
+    const parameter=parameters[index];
+    if(value<=parameter.lower || value>=parameter.upper) return false;
+    return !poseValues || poseValues[index]===value;
+  });
+}
 function bodyStartsFixedChanged() {
   if(!bodyStartsView || !bodyStartsFixedDraft.length) return false;
   return bodyStartsView.frames.some((frame,index)=>{
@@ -1056,15 +1072,8 @@ function checkedBodyStartsView(text,input,edits) {
         typeof frame.identity.timestamp_us!=="string" || !/^(0|[1-9]\d*)$/.test(frame.identity.timestamp_us)) {
       throw Error("The engine returned invalid original frame identities.");
     }
-    if(Object.hasOwn(frame,"fixed_pose")) {
-      const fixed=frame.fixed_pose;
-      if(!fixed || typeof fixed!=="object" || Array.isArray(fixed) || Object.keys(fixed).some(key=>!["values","evidence"].includes(key)) ||
-          typeof fixed.evidence!=="string" || !fixed.evidence.trim() || new Blob([fixed.evidence]).size>4096 ||
-          !fixed.values || typeof fixed.values!=="object" || Array.isArray(fixed.values) ||
-          !Object.keys(fixed.values).length || Object.entries(fixed.values).some(([name,value])=>{
-            const parameter=view.pose.find(p=>p.name===name);
-            return !parameter || !Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper;
-          })) throw Error("The engine returned invalid fixed pose controls.");
+    if(Object.hasOwn(frame,"fixed_pose") && !checkedFixedPose(frame.fixed_pose,view.pose)) {
+      throw Error("The engine returned invalid fixed pose controls.");
     }
   }
   const validVector=(values,parameters)=>Array.isArray(values) && values.length===parameters.length &&
@@ -1681,7 +1690,15 @@ function publishBodyFit(text,input,iterations,maxEvaluations,modelSnapshot) {
       check.name,check.partition,`${check.residual ?? "Unavailable"} / ${check.limit} ${check.unit}`,check.passed?"Pass":"Fail"]);
     for(const flag of attempt.flags) flags.push(`Start ${i+1}: ${flag}`);
   }
-  $("bodyFitSummary").textContent=`${saved?"Saved report: ":""}${report.status}: ${report.input.frames.length} frames, ${report.attempts.length} starts, ${report.model_evaluations} model evaluations.`;
+  if(report.input.frames.some(frame=>Object.hasOwn(frame || {},"fixed_pose") && frame.fixed_pose!==null && !checkedFixedPose(frame.fixed_pose))) {
+    throw Error("The engine returned invalid fixed pose controls.");
+  }
+  const fixedFrames=report.input.frames.flatMap((frame,i)=>frame?.fixed_pose
+    ? [`Frame ${i+1} (${Object.keys(frame.fixed_pose.values).sort().join(", ")}; evidence: ${frame.fixed_pose.evidence})`] : []);
+  const fixedSummary=fixedFrames.length
+    ? ` Prescribed fixed pose constraints on ${fixedFrames.length} frame(s): ${fixedFrames.join("; ")}; zero spread on fixed controls is by constraint, not inferred precision.`
+    : "";
+  $("bodyFitSummary").textContent=`${saved?"Saved report: ":""}${report.status}: ${report.input.frames.length} frames, ${report.attempts.length} starts, ${report.model_evaluations} model evaluations.${fixedSummary}`;
   $("bodyFitUse").textContent=accepted?
     "Accepted shape available. Continue in Pattern Workbench with this exact report and model, then choose garment and measurement evidence and confirm the wearer before body checks or draping. The downloads also work in either workbench.":
     "No accepted shape was published. Keep the diagnostic report and resolve the reported evidence or numerical failures before trying again.";
@@ -1786,6 +1803,9 @@ function publishBodyReview(text,index,startIndex=null) {
        !Array.isArray(v.diagnostics))) {
     throw Error("The engine did not return the requested body-frame review.");
   }
+  if(Object.hasOwn(v,"fixed_pose") && !checkedFixedPose(v.fixed_pose,initial?v.pose_parameters:null,initial?v.pose_values:null)) {
+    throw Error("The engine returned invalid fixed pose controls.");
+  }
   bodyReviewValue=v; bodyReviewText=text; drawBodyReview();
   $("bodyFitReviewHeading").textContent=initial?"Declared initialization — no fitted body":"Inspect an accepted frame";
   $("bodyFitReviewImageSource").textContent=v.source_image?
@@ -1798,14 +1818,24 @@ function publishBodyReview(text,index,startIndex=null) {
   $("bodyFitReviewStatus").textContent=initial?
     "INITIALIZATION_REVIEW: start "+(startIndex+1)+" of "+v.start_count+", frame "+(index+1)+" of "+v.frame_count+" ("+v.frame_label+"). No optimization or acceptance was performed.":
     v.frame_label+": full-mesh evidence rechecked without another fit.";
+  const fixedReviewText=!initial && v.fixed_pose
+    ? " Fixed pose controls on this frame: "+Object.keys(v.fixed_pose.values).sort().map(k=>`${k}=${v.fixed_pose.values[k]}`).join(", ")+
+      ` (evidence: ${v.fixed_pose.evidence}; caller assumption, not measured precision).`
+    : "";
   $("bodyFitReviewSummary").textContent=v.projected_vertices_px.length+" vertices, "+v.triangles.length+" faces. "+
     v.unprojectable_vertices+" vertices cannot be projected in this camera and are omitted from the drawing. "+
     (v.mesh_obj===null?"No usable mesh was produced; review every diagnostic below. ":"The OBJ retains the full mesh. ")+
-    (v.projection_kind==="distorted_vertices"?"Distorted camera: only projected vertices are drawn, because straight image edges would be misleading. ":"")+v.no_claim;
+    (v.projection_kind==="distorted_vertices"?"Distorted camera: only projected vertices are drawn, because straight image edges would be misleading. ":"")+v.no_claim+fixedReviewText;
   if(initial) {
     $("bodyFitStartDetails").hidden=false;
-    const values=(parameters,selected)=>parameters.map((p,i)=>p.name+": "+selected[i]+(p.unit?" "+p.unit:"")+" ("+p.lower+" < value < "+p.upper+")").join("\n");
-    $("bodyFitReviewParameters").textContent="Shared shape\n"+values(v.shape_parameters,v.shape_values)+"\n\nFrame pose\n"+values(v.pose_parameters,v.pose_values);
+    const fixedValues=v.fixed_pose?.values ?? {};
+    const values=(parameters,selected,isPose=false)=>parameters.map((p,i)=>p.name+": "+selected[i]+(p.unit?" "+p.unit:"")+
+      " ("+p.lower+" < value < "+p.upper+")"+(isPose && Object.hasOwn(fixedValues,p.name)?" [FIXED — caller assumption]":"")).join("\n");
+    const fixedBlock=v.fixed_pose
+      ? "\n\nFixed pose constraints (caller assumption; not measured anatomy or physical fit)\nEvidence: "+v.fixed_pose.evidence
+      : "";
+    $("bodyFitReviewParameters").textContent="Shared shape\n"+values(v.shape_parameters,v.shape_values)+
+      "\n\nFrame pose\n"+values(v.pose_parameters,v.pose_values,true)+fixedBlock;
     const row=values=>{
       const tr=document.createElement("tr");
       for(const value of values) {const td=document.createElement("td");td.textContent=String(value);tr.append(td);}
