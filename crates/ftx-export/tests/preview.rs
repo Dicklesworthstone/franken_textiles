@@ -159,6 +159,8 @@ fn diagnostic_svg_renders_internal_and_seam_creases_on_physical_instances() {
                 "internal": [
                     {"kind": "draw", "pts": [[30, 10], [30, 70]], "label": "PLEAT <A>", "crease_angle_deg": 45.0},
                     {"kind": "draw", "pts": [[60, 20], [80, 20], [70, 60]], "closed": true, "crease_angle_deg": -60.5},
+                    {"kind": "draw", "pts": [[45, 10], [45, 70]], "crease_angle_deg": 0.04},
+                    {"kind": "draw", "pts": [[20, 20], [20, 20]], "crease_angle_deg": 20.0},
                     {"kind": "draw", "pts": [[10, 10], [10, 70]], "crease_angle_deg": 0.0},
                     {"kind": "cut", "pts": [[50, 10], [50, 70]], "crease_angle_deg": 30.0}
                 ]
@@ -176,6 +178,7 @@ fn diagnostic_svg_renders_internal_and_seam_creases_on_physical_instances() {
                 ],
                 "grain": [[20, 10], [20, 70]],
                 "internal": [
+                    {"kind": "draw", "pts": [[0, 10], [0, 70]], "crease_angle_deg": 15.0},
                     {"kind": "draw", "pts": [[40, 10], [40, 70]], "crease_angle_deg": -35.0}
                 ]
             }
@@ -189,21 +192,29 @@ fn diagnostic_svg_renders_internal_and_seam_creases_on_physical_instances() {
     let report = validate(&pattern, &json!({"points": []}), &Measurements(json!({})));
     for dark in [false, true] {
         let svg = diagnostic_svg(&pattern, &report, dark).unwrap();
-        // front.R and front.L each get 2 valid internal creases (valley + closed mountain);
-        // back is unfolded on_fold so its off-fold crease appears on both halves (2 paths).
-        assert_eq!(svg.matches("data-crease-instance=\"front.R\"").count(), 2);
-        assert_eq!(svg.matches("data-crease-instance=\"front.L\"").count(), 2);
-        assert_eq!(svg.matches("data-crease-instance=\"back\"").count(), 2);
+        // front.R and front.L each get 3 valid internal creases (valley + closed mountain + tiny
+        // non-zero valley); zero-length open, zero-degree, and cut-mark creases are omitted.
+        // back is unfolded on_fold so its on-fold crease appears once and its off-fold crease
+        // appears on both halves (1 + 2 = 3 paths).
+        assert_eq!(svg.matches("data-crease-instance=\"front.R\"").count(), 3);
+        assert_eq!(svg.matches("data-crease-instance=\"front.L\"").count(), 3);
+        assert_eq!(svg.matches("data-crease-instance=\"back\"").count(), 3);
         assert!(svg.contains("data-crease-angle-deg=\"+45\" data-crease-fold=\"valley\""));
         assert!(svg.contains("data-crease-angle-deg=\"-60.5\" data-crease-fold=\"mountain\""));
+        assert!(svg.contains("data-crease-angle-deg=\"+0.04\" data-crease-fold=\"valley\""));
+        assert!(svg.contains("CREASE +0.04 deg (valley)"));
+        assert!(svg.contains("data-crease-angle-deg=\"+15\" data-crease-fold=\"valley\""));
         assert!(svg.contains("data-crease-angle-deg=\"-35\" data-crease-fold=\"mountain\""));
         assert!(svg.contains("PLEAT &lt;A&gt;: CREASE +45 deg (valley)"));
         assert!(!svg.contains("PLEAT <A>"));
-        // Cut mark crease and 0-degree crease are not emitted as crease paths.
+        // Zero-length open crease, cut mark crease, and 0-degree crease are not emitted.
+        assert!(!svg.contains("data-crease-angle-deg=\"+20\""));
         assert!(!svg.contains("data-crease-angle-deg=\"+30\""));
         assert!(!svg.contains("data-crease-angle-deg=\"+0\""));
-        // Creased seam carries angle attribute and title; 0-degree seam does not.
-        assert!(svg.contains("data-seam=\"side_R\" data-side=\"a\" data-failing=\"false\" data-crease-angle-deg=\"+45\""));
+        // Creased seam carries angle + fold attributes and title; 0-degree seam does not.
+        assert!(svg.contains(
+            "data-seam=\"side_R\" data-side=\"a\" data-failing=\"false\" data-crease-angle-deg=\"+45\" data-crease-fold=\"valley\""
+        ));
         assert!(svg.contains("front.R/side (crease +45 deg (valley))"));
         assert!(!svg.contains(
             "data-seam=\"side_L\" data-side=\"a\" data-failing=\"false\" data-crease-angle-deg="

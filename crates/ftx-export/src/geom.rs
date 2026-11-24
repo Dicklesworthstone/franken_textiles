@@ -499,13 +499,22 @@ fn parse_crease_angle_deg(raw: Option<&Value>, context: &str) -> Result<Option<f
     Ok((deg != 0.0).then_some(deg))
 }
 
+pub(crate) fn signed_crease_deg(deg: f64) -> String {
+    let sign = if deg > 0.0 { "+" } else { "-" };
+    let abs = deg.abs();
+    let mut mag = fnum(abs, 1);
+    if mag == "0" {
+        mag = fnum(abs, 3);
+    }
+    if mag == "0" {
+        mag = py::repr_f64(abs);
+    }
+    format!("{sign}{mag}")
+}
+
 pub(crate) fn format_crease_angle(prefix: &str, deg: f64) -> String {
-    let (sign, dir) = if deg > 0.0 {
-        ("+", "valley")
-    } else {
-        ("-", "mountain")
-    };
-    format!("{prefix} {sign}{} deg ({dir})", fnum(deg.abs(), 1))
+    let dir = if deg > 0.0 { "valley" } else { "mountain" };
+    format!("{prefix} {} deg ({dir})", signed_crease_deg(deg))
 }
 
 fn stem(eid: &str) -> &str {
@@ -817,6 +826,14 @@ pub fn build_geom(
                         ),
                     ));
                 }
+            } else if !pts
+                .windows(2)
+                .any(|w| ftx_core::det::hypot(w[1].x - w[0].x, w[1].y - w[0].y) > 1e-6)
+            {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    format!("{}: internal crease polyline has zero length", g.iid),
+                ));
             }
         }
         if pts.is_empty() {
@@ -832,18 +849,37 @@ pub fn build_geom(
                 }
             }
         };
+        let mut first_q: Option<Vec<Vec2>> = None;
         for m in &maps {
             let q: Vec<Vec2> = pts.iter().map(|&p| m.apply(p)).collect();
+            if crease_deg.is_some()
+                && first_q.as_ref().is_some_and(|prev| {
+                    prev.len() == q.len()
+                        && prev
+                            .iter()
+                            .zip(&q)
+                            .all(|(&a, &b)| ftx_core::det::hypot(a.x - b.x, a.y - b.y) <= 1e-3)
+                })
+            {
+                continue;
+            }
+            if first_q.is_none() {
+                first_q = Some(q.clone());
+            }
             if item["kind"] == "cut" {
                 g.internal_cut.push((q.clone(), closed));
             } else {
                 g.internal_draw.push((q.clone(), closed));
             }
-            let lab = item
-                .get("label")
-                .filter(|l| truthy(l))
-                .map(py_str)
-                .or_else(|| crease_deg.map(|deg| format_crease_angle("CREASE", deg)));
+            let custom_lab = item.get("label").filter(|l| truthy(l)).map(py_str);
+            let lab = match (custom_lab, crease_deg) {
+                (Some(label), Some(deg)) => {
+                    Some(format!("{label}: {}", format_crease_angle("CREASE", deg)))
+                }
+                (Some(label), None) => Some(label),
+                (None, Some(deg)) => Some(format_crease_angle("CREASE", deg)),
+                (None, None) => None,
+            };
             if let Some(lab) = lab {
                 let at = if closed {
                     let s = q.iter().fold(Vec2::ZERO, |acc, &p| acc + p);
@@ -1659,29 +1695,49 @@ mod tests {
             6.0
         ));
 
-        // Internal crease marks without an explicit label synthesize an ASCII direction/angle
-        // annotation, while explicit labels and uncreased/zero-angle internal lines are preserved.
+        // Internal crease marks synthesize an ASCII direction/angle annotation (preserving any
+        // explicit label alongside it), never round tiny non-zero angles to +0/-0, deduplicate
+        // on-fold creases when unfolded, and preserve uncreased/zero-angle internal lines.
         let creased_pat = Pattern::new(json!({
             "schema": "fabric-pattern/1",
             "style": "CREASE",
             "units": "mm",
-            "pieces": [{
-                "id": "p1",
-                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
-                "edges": [
-                    {"id": "e0", "from": "a", "to": "b"},
-                    {"id": "e1", "from": "b", "to": "c"},
-                    {"id": "e2", "from": "c", "to": "d"},
-                    {"id": "e3", "from": "d", "to": "a"}
-                ],
-                "internal": [
-                    {"kind": "draw", "pts": [[25, 0], [25, 80]], "crease_angle_deg": 90.0},
-                    {"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": -45.5},
-                    {"kind": "draw", "pts": [[75, 0], [75, 80]], "label": "PLEAT A", "crease_angle_deg": -60.0},
-                    {"kind": "draw", "pts": [[10, 10], [10, 70]], "crease_angle_deg": 0.0}
-                ],
-                "cut": {"qty": 1}
-            }]
+            "pieces": [
+                {
+                    "id": "p1",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "internal": [
+                        {"kind": "draw", "pts": [[25, 0], [25, 80]], "crease_angle_deg": 90.0},
+                        {"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": -45.5},
+                        {"kind": "draw", "pts": [[75, 0], [75, 80]], "label": "PLEAT A", "crease_angle_deg": -60.0},
+                        {"kind": "draw", "pts": [[60, 10], [60, 70]], "crease_angle_deg": 0.04},
+                        {"kind": "draw", "pts": [[65, 10], [65, 70]], "crease_angle_deg": -0.0002},
+                        {"kind": "draw", "pts": [[10, 10], [10, 70]], "crease_angle_deg": 0.0}
+                    ],
+                    "cut": {"qty": 1}
+                },
+                {
+                    "id": "p_fold",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "cb", "from": "d", "to": "a"}
+                    ],
+                    "internal": [
+                        {"kind": "draw", "pts": [[0, 10], [0, 70]], "crease_angle_deg": 30.0},
+                        {"kind": "draw", "pts": [[40, 10], [40, 70]], "crease_angle_deg": -25.0}
+                    ],
+                    "cut": {"qty": 1, "on_fold": "cb"}
+                }
+            ]
         }));
         let creased_geom = Ctx::new(&creased_pat, ExportOptions::default())
             .unwrap()
@@ -1698,13 +1754,37 @@ mod tests {
             vec![
                 "CREASE +90 deg (valley)",
                 "CREASE -45.5 deg (mountain)",
-                "PLEAT A",
+                "PLEAT A: CREASE -60 deg (mountain)",
+                "CREASE +0.04 deg (valley)",
+                "CREASE -0.0002 deg (mountain)",
+            ]
+        );
+        // Unfolding an on_fold piece mirrors the off-fold crease onto both halves (2 paths/labels)
+        // while keeping a crease along the fold axis itself single (1 path/label).
+        let fold_inst = creased_pat.instance("p_fold").unwrap();
+        let unfolded = Ctx::new(&creased_pat, ExportOptions::default())
+            .unwrap()
+            .geom(Source::Instance(fold_inst), 6.0)
+            .unwrap();
+        assert_eq!(unfolded.internal_draw.len(), 3);
+        let fold_labels: Vec<&str> = unfolded
+            .labels
+            .iter()
+            .filter(|lb| lb.kind == "internal")
+            .map(|lb| lb.lines[0].0.as_str())
+            .collect();
+        assert_eq!(
+            fold_labels,
+            vec![
+                "CREASE +30 deg (valley)",
+                "CREASE -25 deg (mountain)",
+                "CREASE -25 deg (mountain)",
             ]
         );
 
         // An internal cut mark carrying a non-zero crease_angle_deg, a crease with fewer than 2
-        // points, and an out-of-range or non-numeric crease_angle_deg on a draw mark must refuse
-        // fail-closed rather than mislabeling a slit or silently dropping an invalid crease angle.
+        // points, a zero-length open crease, and an out-of-range or non-numeric crease_angle_deg
+        // on a draw mark must refuse fail-closed.
         for (mark, expected_code) in [
             (
                 json!({"kind": "cut", "pts": [[25, 10], [25, 70]], "crease_angle_deg": 45.0}),
@@ -1717,6 +1797,14 @@ mod tests {
             (
                 json!({"kind": "draw", "pts": [[25, 10]], "crease_angle_deg": 45.0}),
                 RefusalCode::InvalidDocument,
+            ),
+            (
+                json!({"kind": "draw", "pts": [[25, 10], [25, 10]], "crease_angle_deg": 45.0}),
+                RefusalCode::DegenerateGeometry,
+            ),
+            (
+                json!({"kind": "draw", "pts": [[25, 10], [25, 10], [25, 10]], "crease_angle_deg": 45.0}),
+                RefusalCode::DegenerateGeometry,
             ),
             (
                 json!({"kind": "draw", "pts": [[25, 10], [25, 70]], "closed": true, "crease_angle_deg": 45.0}),

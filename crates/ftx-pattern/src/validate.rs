@@ -909,6 +909,13 @@ pub fn validate(pat: &Pattern, spec: &Value, body: &dyn BodyMeasure) -> Report {
                                                     "{pid}: internal[{idx}] closed crease requires at least 3 distinct finite [x, y] points"
                                                 ));
                                             }
+                                        } else if !pts.windows(2).any(|w| {
+                                            ftx_core::det::hypot(w[1][0] - w[0][0], w[1][1] - w[0][1])
+                                                > 1e-6
+                                        }) {
+                                            completeness.push(format!(
+                                                "{pid}: internal[{idx}] crease polyline has zero length"
+                                            ));
                                         }
                                     }
                                     _ => {
@@ -1354,11 +1361,13 @@ mod raw_point_tests {
             assert_eq!(seams[0].status, "ERROR");
         }
 
-        // Invalid internal crease_angle_deg (cut mark, <2 pts, degenerate closed loop,
-        // out-of-range, non-numeric) records a completeness error -> NOT_CONVERGED.
+        // Invalid internal crease_angle_deg (cut mark, <2 pts, zero-length open polyline,
+        // degenerate closed loop, out-of-range, non-numeric) records a completeness error -> NOT_CONVERGED.
         for bad_mark in [
             json!({"kind": "cut", "pts": [[50, 0], [50, 80]], "crease_angle_deg": 45.0}),
             json!({"kind": "draw", "pts": [[50, 0]], "crease_angle_deg": 45.0}),
+            json!({"kind": "draw", "pts": [[50, 10], [50, 10]], "crease_angle_deg": 45.0}),
+            json!({"kind": "draw", "pts": [[50, 10], [50, 10], [50, 10]], "crease_angle_deg": 45.0}),
             json!({"kind": "draw", "pts": [[50, 0], [50, 80]], "closed": true, "crease_angle_deg": 45.0}),
             json!({"kind": "draw", "pts": [[50, 0], [50, 80], [50, 0]], "closed": true, "crease_angle_deg": 45.0}),
             json!({"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": 180.0}),

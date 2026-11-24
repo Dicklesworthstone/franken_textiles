@@ -10,7 +10,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, det, py};
 use ftx_pattern::{Instance, Pattern, Report, doc::truthy};
 use serde_json::Value;
 
-use crate::geom::format_crease_angle;
+use crate::geom::{format_crease_angle, signed_crease_deg};
 use crate::text::{fnum, xml_escape};
 
 const GAP: f64 = 25.0;
@@ -42,11 +42,6 @@ fn family(id: &str) -> &str {
 fn nonzero_crease_deg(raw: Option<&Value>) -> Option<f64> {
     let deg = raw.and_then(Value::as_f64)?;
     (deg.is_finite() && deg != 0.0 && deg.abs() < 180.0).then_some(deg)
-}
-
-fn signed_crease_deg(deg: f64) -> String {
-    let sign = if deg > 0.0 { "+" } else { "-" };
-    format!("{sign}{}", fnum(deg.abs(), 1))
 }
 
 fn fold_axis_for_piece(piece: &Value) -> Option<(Vec2, Vec2)> {
@@ -146,6 +141,11 @@ fn instance_creases(pattern: &Pattern, instance: &Instance) -> Vec<InstanceCreas
             }
             ring.push(ring[0]);
             drafted = ring;
+        } else if !drafted
+            .windows(2)
+            .any(|w| det::hypot(w[1].x - w[0].x, w[1].y - w[0].y) > 1e-6)
+        {
+            continue;
         }
         let label = item
             .get("label")
@@ -435,7 +435,11 @@ pub fn diagnostic_svg(pattern: &Pattern, report: &Report, dark: bool) -> Result<
                     checked_points(&points, &mut total)?;
                     let crease_deg = nonzero_crease_deg(seam.0.get("crease_angle_deg"));
                     let crease_attr = crease_deg.map_or_else(String::new, |deg| {
-                        format!(" data-crease-angle-deg=\"{}\"", signed_crease_deg(deg))
+                        let fold = if deg > 0.0 { "valley" } else { "mountain" };
+                        format!(
+                            " data-crease-angle-deg=\"{}\" data-crease-fold=\"{fold}\"",
+                            signed_crease_deg(deg)
+                        )
                     });
                     let title = match crease_deg {
                         Some(deg) => {
