@@ -409,6 +409,7 @@ struct Dispatch {
 pub(super) struct Candidate {
     pub counts: Vec<usize>,
     pub makespan: u64,
+    order_cost: Option<f64>,
     feed: u64,
     steps: Vec<Dispatch>,
     finishes: Vec<Option<u64>>,
@@ -424,6 +425,7 @@ pub(super) struct Outcome {
     pub complete: bool,
     pub exhausted: bool,
     pub feed_time_search: Option<super::FeedTimeReport>,
+    pub thread_order_search: Option<super::ThreadOrderReport>,
 }
 
 // A separate complete DP relaxes all operator travel, waiting and autonomous-feed timing. Each
@@ -473,6 +475,7 @@ struct Search<'a> {
     lower: u64,
     feed_lower: Option<u64>,
     deadline: Option<u64>,
+    cost: Option<super::CostSearch<'a>>,
     shared_workholding: Option<&'a shared_workholding::Policy>,
 }
 
@@ -488,11 +491,30 @@ impl Search<'_> {
     }
 
     fn proved(&self) -> bool {
+        // A makespan bound cannot prove a purchasing minimum. Cost mode must inspect every
+        // retained count/order candidate, or explicitly retain an incomplete incumbent.
+        if self.cost.is_some() {
+            return false;
+        }
         // A feed-bound match proves the primary objective but must not stop improvements to
         // completion at the same feed. Early stopping requires both independently valid bounds.
         self.best.as_ref().is_some_and(|best| {
             best.makespan == self.lower && self.feed_lower.is_none_or(|lower| best.feed == lower)
         })
+    }
+
+    fn stopped(&self) -> bool {
+        self.exhausted
+            || self
+                .cost
+                .as_ref()
+                .is_some_and(|cost| cost.assignment_exhausted || cost.order_exhausted)
+    }
+
+    fn allocation_tick(&mut self) -> bool {
+        // Count prefixes use the separately reserved purchasing-search allowance. Operator
+        // dispatches keep their own cap; neither reservation can silently spend the other.
+        self.cost.as_mut().is_none_or(super::CostSearch::tick) && self.tick()
     }
 
     fn feed(&self, counts: &[usize]) -> Option<u64> {
@@ -697,6 +719,7 @@ impl Search<'_> {
         Ok(Candidate {
             counts: counts.to_vec(),
             makespan,
+            order_cost: None,
             feed: self
                 .feed(counts)
                 .ok_or_else(|| budget("shared-operator feed sum exceeds the exact clock"))?,
@@ -705,9 +728,19 @@ impl Search<'_> {
         })
     }
 
-    fn retain(&mut self, candidate: Candidate) {
+    fn retain(&mut self, mut candidate: Candidate) {
+        if let Some(cost) = &mut self.cost {
+            candidate.order_cost = cost.price(&candidate.counts);
+        }
         if self.best.as_ref().is_none_or(|best| {
-            if self.feed_lower.is_some() {
+            if self.cost.is_some() {
+                match (candidate.order_cost, best.order_cost) {
+                    (Some(a), Some(b)) => a < b || a == b && candidate.makespan < best.makespan,
+                    (Some(_), None) => true,
+                    (None, Some(_)) => false,
+                    (None, None) => candidate.makespan < best.makespan,
+                }
+            } else if self.feed_lower.is_some() {
                 (candidate.feed, candidate.makespan) < (best.feed, best.makespan)
             } else {
                 candidate.makespan < best.makespan
@@ -718,7 +751,10 @@ impl Search<'_> {
     }
 
     fn seed(&mut self, counts: &[usize]) -> Result<Option<Candidate>, Refusal> {
-        if self.feed(counts).is_none() {
+        if self.feed(counts).is_none()
+            || self.stopped()
+            || self.cost.as_mut().is_some_and(|cost| !cost.tick())
+        {
             return Ok(None);
         }
         let mut state = self.initial();
@@ -781,7 +817,7 @@ impl Search<'_> {
     }
 
     fn interleave(&mut self, state: &mut State, counts: &[usize]) -> Result<(), Refusal> {
-        if self.exhausted || self.proved() {
+        if self.stopped() || self.proved() {
             return Ok(());
         }
         let Some(bound) = self.optimistic(state, counts)? else {
@@ -791,7 +827,16 @@ impl Search<'_> {
             return Ok(());
         };
         if self.best.as_ref().is_some_and(|best| {
-            if self.feed_lower.is_some() {
+            if let Some(cost) = &self.cost {
+                // A complete count vector has one source-bound thread order regardless of
+                // interleaving. Only an already evaluated complete price can prune on cost.
+                match (cost.prices.get(counts), best.order_cost) {
+                    (Some(Some(price)), Some(best_price)) => {
+                        *price > best_price || *price == best_price && bound >= best.makespan
+                    }
+                    _ => false,
+                }
+            } else if self.feed_lower.is_some() {
                 feed > best.feed || feed == best.feed && bound >= best.makespan
             } else {
                 bound >= best.makespan
@@ -823,7 +868,7 @@ impl Search<'_> {
             state.free = old_free;
             state.previous = old_previous;
             state.shared_workholding = old_workholding;
-            if self.exhausted || self.proved() {
+            if self.stopped() || self.proved() {
                 break;
             }
         }
@@ -837,7 +882,7 @@ impl Search<'_> {
         remaining: usize,
         partial_feed: u64,
     ) -> Result<(), Refusal> {
-        if self.exhausted || self.proved() {
+        if self.stopped() || self.proved() {
             return Ok(());
         }
         if cell == counts.len() {
@@ -852,7 +897,7 @@ impl Search<'_> {
             0
         };
         for count in first..=remaining {
-            if !self.tick() {
+            if !self.allocation_tick() {
                 break;
             }
             let Some(feed) = partial_feed
@@ -878,7 +923,8 @@ impl Search<'_> {
                     .available_until_milliseconds
                     .is_some_and(|end| finish > end)
                     || self.deadline.is_some_and(|end| finish > end)
-                    || self.feed_lower.is_none()
+                    || self.cost.is_none()
+                        && self.feed_lower.is_none()
                         && self
                             .best
                             .as_ref()
@@ -889,7 +935,7 @@ impl Search<'_> {
             }
             counts[cell] = count;
             self.allocate(counts, cell + 1, remaining - count, feed)?;
-            if self.exhausted || self.proved() {
+            if self.stopped() || self.proved() {
                 break;
             }
         }
@@ -918,6 +964,8 @@ impl State {
 }
 
 pub(super) fn evaluate(
+    plan: &SewPlan,
+    cell_plans: &[super::CellPlan],
     parallel: &super::Policy,
     cells: &[&Cell],
     trials: &[Vec<Trial>],
@@ -955,13 +1003,10 @@ pub(super) fn evaluate(
             "qualified shared-operator shift cannot accommodate the required work: a complete allocation over independent cell-finish and attended-work lower bounds exceeds its end",
         ));
     }
-    let deadline = parallel
-        .feed_time_search
-        .as_ref()
-        .and_then(|feed| feed.completion_deadline_milliseconds);
+    let deadline = parallel.completion_deadline();
     if deadline.is_some_and(|end| lower > end) {
         return Err(bad(
-            "shared-operator completion lower bound exceeds the feed search deadline",
+            "shared-operator completion lower bound exceeds the requested complete-job deadline",
         ));
     }
     let (feed_lower, feed_counts) = if let Some(feed) = &parallel.feed_time_search {
@@ -1001,6 +1046,9 @@ pub(super) fn evaluate(
         lower,
         feed_lower,
         deadline,
+        cost: parallel.thread_order_search.as_ref().map(|policy| {
+            super::CostSearch::new(plan, cell_plans, cells, trials, policy, (0, &[]))
+        }),
         shared_workholding: parallel.shared_workholding.as_ref(),
     };
     let mut baseline_counts = vec![0; cells.len()];
@@ -1022,7 +1070,7 @@ pub(super) fn evaluate(
     let proved = search.proved();
     let selected = search.best.ok_or_else(|| Refusal::new(RefusalCode::NotConverged,
         if deadline.is_some() {
-            "no complete shared-operator assignment was found inside the qualified windows and feed search deadline; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved"
+            "no complete shared-operator assignment was found inside the qualified windows and complete-job deadline; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved"
         } else {
             "no complete shared-operator assignment was found inside the qualified cell/operator windows; retained serial incumbents do not exclude other feasible operation orders, so infeasibility is not proved"
         })
@@ -1042,6 +1090,33 @@ pub(super) fn evaluate(
             baseline_replaced,
         }
     });
+    let thread_order_search = search.cost.as_ref().map(|cost| {
+        let complete = !search.exhausted && !cost.assignment_exhausted && !cost.order_exhausted;
+        super::ThreadOrderReport {
+            currency: cost.currency.clone(),
+            search_scope: "shared_operator_retained_serial_incumbents/1",
+            completion_deadline_milliseconds: deadline,
+            selected_order_cost: selected.order_cost,
+            search_nodes: cost.nodes,
+            search_complete: complete,
+            order_evaluations: cost.prices.len(),
+            unresolved_assignments: cost.unresolved,
+            unresolved_cell_counts: super::unresolved_cell_counts(cells, trials, deadline),
+            baseline_replaced,
+            assignment_budget_exhausted: cost.assignment_exhausted,
+            order_budget_exhausted: cost.order_exhausted,
+            // Feasibility of another local serial order was not searched. Even a complete
+            // retained-order cost search cannot certify the unrestricted coupled problem.
+            optimality_proven: false,
+            retained_order_optimality_proven: Some(
+                complete && selected.order_cost.is_some() && cost.unresolved == 0,
+            ),
+        }
+    });
+    let cost_stopped = search
+        .cost
+        .as_ref()
+        .is_some_and(|cost| cost.assignment_exhausted || cost.order_exhausted);
     Ok(Outcome {
         baseline: baseline.unwrap_or_else(|| selected.clone()),
         selected,
@@ -1049,9 +1124,10 @@ pub(super) fn evaluate(
         lower,
         nodes: search.nodes,
         bound_work,
-        complete: !search.exhausted || proved,
+        complete: !cost_stopped && (!search.exhausted || proved),
         exhausted: search.exhausted && !proved,
         feed_time_search,
+        thread_order_search,
     })
 }
 
