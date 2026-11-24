@@ -1090,6 +1090,9 @@ fn scheduled_wind_must_match_every_original_interval_before_comparison() {
         "schedule_missing",
         "schedule_null",
         "schedule_changed",
+        "basis_missing",
+        "basis_null",
+        "basis_blank",
         "initial_missing",
         "initial_changed",
         "sample_missing",
@@ -1115,6 +1118,11 @@ fn scheduled_wind_must_match_every_original_interval_before_comparison() {
                         "schedule_changed" => {
                             motion["air_velocity_schedule_m_s"][1][0] = json!(0.5);
                         }
+                        "basis_missing" => {
+                            motion.as_object_mut().unwrap().remove("air_velocity_basis");
+                        }
+                        "basis_null" => motion["air_velocity_basis"] = Value::Null,
+                        "basis_blank" => motion["air_velocity_basis"] = json!("   "),
                         "initial_missing" => {
                             motion["initial_sample"]
                                 .as_object_mut()
@@ -1184,18 +1192,40 @@ fn scheduled_wind_must_match_every_original_interval_before_comparison() {
 fn scheduled_wind_admits_stationary_initial_air_and_requires_declared_drag() {
     let request = motion_request();
     let pattern = Pattern::from_json(PATTERN).unwrap();
-    for mode in ["omitted", "explicit_zero", "missing_drag"] {
+    for mode in ["omitted", "explicit_zero", "integer_json", "missing_drag"] {
         let mut descriptor = wind_descriptor();
         let drag = &mut descriptor["scenario"]["options"]["damping"]["air_drag"];
         drag.as_object_mut().unwrap().remove("air_velocity_m_s");
         if mode == "explicit_zero" {
             drag["air_velocity_m_s"] = json!([0.0, 0.0, 0.0]);
+        } else if mode == "integer_json" {
+            drag["air_velocity_m_s"] = json!([0, 0, 0]);
+            descriptor["scenario"]["motion"]["air_velocity_schedule_m_s"] =
+                json!([[1, 0, 0], [0, -1, 0]]);
         } else if mode == "missing_drag" {
             *drag = Value::Null;
         }
         let report = request
             .evaluate_with(&pattern, &descriptor, |_, pattern| {
-                Ok(synthetic_wind_motion(pattern, &descriptor))
+                let mut result = synthetic_wind_motion(pattern, &descriptor);
+                if mode == "integer_json" {
+                    // Simulate Rust f64 serialization of the same numerical velocities.
+                    let motion = &mut result["motion"]["result"];
+                    motion["initial_sample"]["air_velocity_m_s"] = json!([0.0, 0.0, 0.0]);
+                    motion["air_velocity_schedule_m_s"] =
+                        json!([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]);
+                    for (interval, index) in [2, 5].into_iter().enumerate() {
+                        motion["keyframes"][interval]["air_velocity_m_s"] =
+                            motion["air_velocity_schedule_m_s"][interval].clone();
+                        let start = if interval == 0 { 0 } else { 3 };
+                        for sample in &mut motion["samples"].as_array_mut().unwrap()[start..=index]
+                        {
+                            sample["air_velocity_m_s"] =
+                                motion["air_velocity_schedule_m_s"][interval].clone();
+                        }
+                    }
+                }
+                Ok(result)
             })
             .unwrap();
         assert_eq!(

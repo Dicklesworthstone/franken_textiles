@@ -4609,37 +4609,52 @@ fn admit_air_velocity(
             Err(fail())
         };
     };
-    let velocity = |value: &Value| {
-        value
-            .as_array()
-            .is_some_and(|v| v.len() == 3 && v.iter().all(|x| finite(x).is_some()))
+    let velocity = |value: &Value| -> Option<[f64; 3]> {
+        let values = value.as_array().filter(|v| v.len() == 3)?;
+        Some([
+            finite(&values[0])?,
+            finite(&values[1])?,
+            finite(&values[2])?,
+        ])
     };
-    let schedule = declared
+    let schedule: Vec<[f64; 3]> = declared
         .as_array()
-        .filter(|values| values.len() == frames.len() && values.iter().all(velocity))
+        .filter(|values| values.len() == frames.len())
+        .and_then(|values| values.iter().map(velocity).collect())
+        .ok_or_else(fail)?;
+    let retained_schedule: Vec<[f64; 3]> = motion["air_velocity_schedule_m_s"]
+        .as_array()
+        .filter(|values| values.len() == schedule.len())
+        .and_then(|values| values.iter().map(velocity).collect())
         .ok_or_else(fail)?;
     let drag = &descriptor["scenario"]["options"]["damping"]["air_drag"];
-    let stationary = json!([0.0, 0.0, 0.0]);
-    let initial = drag.get("air_velocity_m_s").unwrap_or(&stationary);
-    if motion["air_velocity_schedule_m_s"] != *declared
-        || !drag.is_object()
-        || !velocity(initial)
-        || motion["initial_sample"]["air_velocity_m_s"] != *initial
+    if !drag.is_object() {
+        return Err(fail());
+    }
+    let initial = match drag.get("air_velocity_m_s") {
+        Some(value) => velocity(value).ok_or_else(fail)?,
+        None => [0.0, 0.0, 0.0],
+    };
+    if retained_schedule != schedule
+        || !motion["air_velocity_basis"]
+            .as_str()
+            .is_some_and(|basis| !basis.trim().is_empty())
+        || velocity(&motion["initial_sample"]["air_velocity_m_s"]) != Some(initial)
     {
         return Err(fail());
     }
     // Endpoint indices were admitted above. Their inclusive ranges own every original
     // interval, including source-pose samples and accepted mechanical subdivisions.
     let mut start = 0;
-    for (interval, (wind, endpoint)) in schedule.iter().zip(endpoints).enumerate() {
+    for (interval, (&wind, endpoint)) in schedule.iter().zip(endpoints).enumerate() {
         let end = endpoint["sample_index"]
             .as_u64()
             .and_then(|value| usize::try_from(value).ok())
             .filter(|&value| value >= start && value < samples.len())
             .ok_or_else(fail)?;
-        if endpoint["air_velocity_m_s"] != *wind
+        if velocity(&endpoint["air_velocity_m_s"]) != Some(wind)
             || samples[start..=end].iter().any(|sample| {
-                sample["air_velocity_m_s"] != *wind
+                velocity(&sample["air_velocity_m_s"]) != Some(wind)
                     || sample["authored_interval_index"].as_u64() != Some(interval as u64)
             })
         {
@@ -4680,8 +4695,8 @@ fn admit_pose_sampling(
         .filter(|n| (1..=512).contains(n))
         .ok_or_else(fail)?;
     if !policy.as_object().is_some_and(|o| o.len() == 2)
-        || receipt["max_step_s"] != policy["max_step_s"]
-        || receipt["max_segments"] != policy["max_segments"]
+        || finite(&receipt["max_step_s"]) != Some(step)
+        || receipt["max_segments"].as_u64() != Some(limit)
     {
         return Err(fail());
     }
