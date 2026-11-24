@@ -14,7 +14,7 @@ import type {SewingPhases} from "../construction/replay";
 const Scene=dynamic(()=>import("./Scene"),{ssr:false});
 type Run={id:string;label:string;surface?:string;posture:string;fraction:number;stiffness:number;seatGap?:number;meshKey?:string;clothVertices?:number;spacingMm?:number;frames?:number[];phases?:SewingPhases;
   waistbandShift?:number;strain?:{p95:number};flags?:string[];refusal?:{code:string;message:string;repairs:string[]}};
-type Study=Layout&{cases:Run[];solverArguments?:string[]};
+type Study=Layout&{cases:Run[]};
 const stations=["Posture","Elastic","Cross-section"] as const;
 type Station=typeof stations[number];
 
@@ -35,9 +35,6 @@ function Drawing({body,cloth,height}:{body:Cut|null;cloth:Cut|null;height:number
 }
 
 export default function TrouserStudy({study}:{study:Study}){
-  const solverArguments=study.solverArguments??[];
-  const compressionAt=solverArguments.indexOf("--compression");
-  const compressionPercent=compressionAt>=0?Number((Number(solverArguments[compressionAt+1])*100).toPrecision(3)):null;
   const [station,setStation]=useState<Station>("Posture"),[id,setId]=useState("standing");
   const [model,setModel]=useState<Model>(),[error,setError]=useState(""),[gpu,setGpu]=useState(true);
   const [view,setView]=useState(0),[strain,setStrain]=useState(false),[clip,setClip]=useState(false);
@@ -128,7 +125,7 @@ export default function TrouserStudy({study}:{study:Study}){
       <section className="ts-films"><header><p className="ts-kicker">On film</p><h2>Three views of the <em>cut.</em></h2></header>
         {[["trouser-posture","Bending the knee"],["trouser-elastic","Holding the waist"],["trouser-section","Inside the folds"]].map(([film,title])=><figure key={film}><div><InlineFilm id={film} title={title}/></div><figcaption>{title}<a href={filmFile(film)} download aria-label={"Download "+title}>MP4 ↓</a></figcaption></figure>)}
       </section>
-      <details className="ts-method"><summary>Pattern, poses and solver readings</summary><p>The seven panels and seventeen seams come from the downloadable pattern. The drapes use 2 mm self-contact thickness and synthetic fabric parameters.{compressionPercent!==null&&<> The cloth resists shortening at {compressionPercent} % of its tensile stiffness, measured on the principal strains, so loose cloth folds instead of standing out as a shell.</>}{solverArguments.includes("--construction-standard")&&<> Hems and seam allowances carry the solver’s uncalibrated construction weighting.</>}{solverArguments.length>0&&<> These are model choices, not a measured fabric.</>} The quarter squat uses 20 mm meshing and the other cases use 12 mm. Each starts at its prescribed posture. Chair and floor contact are outside the calculation.</p>
+      <details className="ts-method"><summary>Pattern, poses and solver readings</summary><p>The seven panels and seventeen seams come from the downloadable pattern. The drapes use 2 mm self-contact thickness and synthetic fabric parameters. The quarter squat uses 20 mm meshing and the other cases use 12 mm. Each starts at its prescribed posture. Chair and floor contact are outside the calculation.</p>
         <p>The full squat and full seat were refused because the posed body crosses itself. The zero-elastic run had a cloth crossing at placement. Diagnostics are retained in the downloadable results.</p>
         <p>The gap is the solver’s mean seat-ring clearance. Negative waistband shift means the band dropped. The slice uses display geometry rounded to 0.1 mm. Its left-to-right span is a geometric dimension across the section. Physical fit requires a sewn sample.</p>
         <a href="/exhibits/trouser-study/study.json" download>Download the run summaries and synthetic inputs ↓</a></details>

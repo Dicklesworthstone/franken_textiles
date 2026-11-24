@@ -16,10 +16,10 @@ PATTERN = PUBLIC / "patterns/trousers.json"
 FIT = PUBLIC / "exhibits/poses/trouser-fit.json"
 shared = run_path(str(Path(__file__).with_name("prepare-drape-room.py")))
 read_obj, quantize = shared["read_obj"], shared["quantize"]
-# The skirt and sundress studies' cloth model: the cloth resists shortening at 5 % of its tensile stiffness on
-# the principal strains, so loose cloth folds instead of standing out as a shell, and hems and allowances carry
-# the solver's uncalibrated construction weighting. Model choices, not a measured fabric.
-CLOTH_MODEL = ["--compression", "0.05", "--compression-model", "principal", "--construction-standard"]
+# The published study keeps the solver's default cloth. The skirt and sundress studies' softer model
+# (--compression 0.05 --compression-model principal --construction-standard) was tried on all ten cases on
+# 2026-11-24: no visible change in the legs, the waistband dropped about twice as far, and the 5 N elastic case
+# was refused because its cuff came down onto a foot, which the clothing collider leaves out of contact.
 CASES = [
     ("standing", "Standing", "standing", 1, 15),
     ("sit-12", "Shallow seat", "seated", .125, 15),
@@ -46,8 +46,7 @@ def run_cases(scratch):
     for key, _, posture, fraction, stiffness in CASES:
         command = [ftx, "drape", PATTERN, "--fit", FIT, "--measurements", tapes, "--spacing-mm", "20" if key=="squat-25" else "12",
                    "--self-contact-mm", "2", "--self-mu", "0.4", "--arm-deg", "35", "--elastic-ea",
-                   str(stiffness), "--legs", posture, "--leg-fraction", str(fraction), "--out", scratch/key, "--json",
-                   *CLOTH_MODEL]
+                   str(stiffness), "--legs", posture, "--leg-fraction", str(fraction), "--out", scratch/key, "--json"]
         run = subprocess.run(command, capture_output=True)
         if not run.stdout or (run.returncode and "refusal" not in json.loads(run.stdout)):
             raise RuntimeError(run.stderr.decode())
@@ -126,7 +125,7 @@ def package(scratch, output):
         row["surface"] = key+".gz"
     (output/"study.json").write_text(json.dumps(dict(cases=rows, bodyVertices=len(indices), bodyIndices=faces.size,
         patternSha256=pattern_hash, clothVertices=count, model="anny 0.6.1", spacingMm=12, selfContactMm=2,
-        solverArguments=CLOTH_MODEL, tapes=shared["synthetic_tapes"](520)), separators=(",", ":"))+"\n")
+        tapes=shared["synthetic_tapes"](520)), separators=(",", ":"))+"\n")
 
 
 if __name__ == "__main__":
