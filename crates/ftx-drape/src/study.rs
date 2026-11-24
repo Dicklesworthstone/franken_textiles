@@ -800,11 +800,7 @@ mod tests {
         // be refused here, without constructing a body, meshing or starting a solver.
         scenario.options.validate().unwrap();
         assert!(scenario.validate().is_err());
-        scenario
-            .motion
-            .as_mut()
-            .unwrap()
-            .air_velocity_schedule_m_s = None;
+        scenario.motion.as_mut().unwrap().air_velocity_schedule_m_s = None;
         scenario.validate().unwrap();
     }
 }

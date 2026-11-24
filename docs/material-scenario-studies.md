@@ -294,6 +294,15 @@ is an explicit hold. Endpoint skins are generated once from the exact selected s
 source-model digest. No tape fit or accepted-shape adjustment occurs between endpoints or materials.
 Collision topology and vertex order must remain unchanged.
 
+To change ambient wind during the same continuing garment simulation, supply optional
+`motion.air_velocity_schedule_m_s`: one explicit world-space `[x,y,z]` velocity in m/s per
+original authored interval. The scenario must enable `options.damping.air_drag`; its density and
+coefficients stay fixed. Source-pose sampling and mechanical subdivisions hold the original
+interval's vector. The initial drape uses its separate ordinary ambient velocity. The guided
+workbench saves these vectors with Add or Replace and retains them in frozen named cases.
+See [changing wind during motion](motion-wind.md) for complete JSON, boundary receipts and
+rollback semantics. Thermal convection remains independently qualified.
+
 For independent arm movement, supply the complete optional `arm_pose` pair at an endpoint:
 
 ```json

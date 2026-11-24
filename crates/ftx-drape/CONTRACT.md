@@ -253,6 +253,19 @@ occupancy stay fixed while the initial garment placement uses the requested post
 surface and collision gates still decide whether that setup can run. No implicit standing substitute,
 anatomical correction or empirical rise/seat-fit claim is introduced.
 
+**Changing prescribed wind.** A motion request may supply `air_velocity_schedule_m_s`, exactly
+one finite world-space velocity vector per original authored keyframe interval. Scenario admission
+requires existing aerodynamic drag and validates every vector against its actual coefficients
+before model work. Initial draping retains its ordinary wind; each motion interval holds its
+prescribed vector through source-pose and mechanical subdivisions. A changed vector refreshes
+cached generalized-alpha acceleration while preserving positions, velocities and material/contact
+history. Unchanged vectors keep that acceleration history. The whole-solver motion transaction
+restores forcing as well as cloth state after failure; after success, the final wind remains active.
+Optional initial, accepted-sample and endpoint receipts identify the applied velocities, while the
+complete request continues to bind the motion path identity. Omission preserves constant wind.
+No turbulence, shielding, thermal convection or measured drag calibration is inferred. See
+`docs/motion-wind.md` for the original JSON and guided authoring workflow.
+
 **Articulated garment continuation.** A material-study motion keyframe may add
 `leg_pose: {posture: "seated" | "squat", fraction: 0..1}`. It scales the existing body model's
 leg-joint rotations independently of the stated arm angle, on the same selected occupied shape.
