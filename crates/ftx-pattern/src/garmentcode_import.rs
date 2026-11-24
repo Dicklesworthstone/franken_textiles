@@ -766,6 +766,9 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
                     for key in ["depth", "width"] {
                         if let Some(x) = n.get(key) {
                             nonnegative(x, key)?;
+                            if number(x, key)? == 0.0 {
+                                return Err(invalid(format!("notch {key} must be positive")));
+                            }
                         }
                     }
                     let mut n = n.clone();
@@ -790,7 +793,7 @@ fn annotate_panel(p: &mut Panel, a: &Value) -> Result<(), Refusal> {
 fn annotate_stitch(seam: &mut Value, a: &Value) -> Result<(), Refusal> {
     keys(
         a,
-        &["ratio", "ratio_band", "tol_mm", "kind"],
+        &["ratio", "ratio_band", "tol_mm", "kind", "crease_angle_deg"],
         "stitch annotation",
     )?;
     if let Some(v) = a.get("ratio")
@@ -815,6 +818,14 @@ fn annotate_stitch(seam: &mut Value, a: &Value) -> Result<(), Refusal> {
     }
     if let Some(v) = a.get("tol_mm") {
         nonnegative(v, "seam tolerance")?;
+    }
+    if let Some(v) = a.get("crease_angle_deg") {
+        let deg = number(v, "seam crease_angle_deg")?;
+        if deg.abs() >= 180.0 {
+            return Err(invalid(
+                "seam crease_angle_deg must be finite and strictly within (-180, 180)",
+            ));
+        }
     }
     if a.get("kind")
         .is_some_and(|v| !matches!(v.as_str(), Some("plain" | "ease" | "gather" | "dart")))
@@ -1992,5 +2003,47 @@ mod tests {
             "caller_supplied_unverified"
         );
         assert_eq!(out.pattern["meta"]["import"]["status"], "REVIEW_REQUIRED");
+    }
+
+    #[test]
+    fn notch_dimensions_must_be_positive_and_stitch_creases_are_validated() {
+        for bad_notch in [
+            json!({"edge": 0, "s": 0.5, "depth": 0.0}),
+            json!({"edge": 0, "s": 0.5, "width": 0.0}),
+            json!({"edge": 0, "s": 0.5, "depth": -1.0}),
+            json!({"edge": 0, "s": 0.5, "width": -2.0}),
+        ] {
+            let a = json!({
+                "schema": "fabric-garmentcode-annotations/1",
+                "panels": {"front.R": {"notches": [bad_notch]}}
+            });
+            let err = import_garmentcode(&source(), Some(&a)).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument, "{err}");
+        }
+
+        let valid = json!({
+            "schema": "fabric-garmentcode-annotations/1",
+            "panels": {"front.R": {"notches": [{"edge": 0, "s": 0.5, "depth": 4.0, "width": 3.0}]}},
+            "stitches": {"0": {"crease_angle_deg": -45.5}}
+        });
+        let imported = import_garmentcode(&source(), Some(&valid)).unwrap();
+        assert_eq!(imported.pattern["pieces"][0]["notches"][0]["depth"], 4.0);
+        assert_eq!(imported.pattern["pieces"][0]["notches"][0]["width"], 3.0);
+        assert_eq!(imported.pattern["seams"][0]["crease_angle_deg"], -45.5);
+
+        for bad_deg in [
+            json!(180.0),
+            json!(-180.0),
+            json!(200.0),
+            json!("45"),
+            json!(null),
+        ] {
+            let a = json!({
+                "schema": "fabric-garmentcode-annotations/1",
+                "stitches": {"0": {"crease_angle_deg": bad_deg}}
+            });
+            let err = import_garmentcode(&source(), Some(&a)).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument, "{err}");
+        }
     }
 }
