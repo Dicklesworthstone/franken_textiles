@@ -656,6 +656,14 @@ copy a start when preparing another initialization, then change it enough to mak
 distinct. The optional midpoint action is an explicit initial guess inside the declared bounds,
 not a pose estimated from the photographs. Up to four starts can be retained.
 
+In the generated offline review, **Fixed pose by photograph** lists the declared pose controls
+for each source frame. To prescribe a control, check it, enter an interior value and record
+the independent evidence for that frame. Uncheck a control to release it. **Apply constraints
+and reconcile all starts** copies the prescribed coordinates into every initialization and
+keeps each free coordinate's current value. If two starts would become duplicates, cancel the
+edit and choose distinct values for a free coordinate before reapplying. You can save fixed
+constraints as a draft before entering any starts. The fit treats them as caller assumptions.
+
 An input with `fit.starts: []` or one valid start can be opened for authoring. The empty case does
 not generate a placeholder body. Downloading and applying a completed initialization set requires
 the ordinary fitter's two to four distinct, strictly interior starts. Incomplete fields, bounds
@@ -663,8 +671,8 @@ violations and duplicate starts withdraw the downloads; cancel and reset discard
 
 After applying two to four complete distinct starts, **Download prepared input for browser fitting**
 saves `prepared-input-edited.json`. Select it with the same converted model in the local photo
-page to run the ordinary body fitter directly. The download replaces only the starts in this
-review's native `prepared-input.json` snapshot. Cameras, observations, imported mask samples,
+page to run the ordinary body fitter directly. The download applies the edited starts and any
+explicit per-frame fixed constraints to the native `prepared-input.json` snapshot. Cameras, observations, imported mask samples,
 model settings, metric evidence, uncertainty and FIT/CHECK roles stay fixed. Native frame ordinals
 map each pose back to its exact original frame identity, including full-width timestamps.
 The original snapshot and displayed previews remain unchanged. If the browser cannot preserve

@@ -1475,6 +1475,78 @@ function editNativeStart(p,id,value) {
   const input=nativeStartField(p,id);input.value=value;input.handlers.input();
 }
 
+function nativeFixedControls(p,frame,index=0) {
+  const group=p.e.startFixedFields.children[frame];
+  return {prescribe:group.children[1+2*index].children[0],value:group.children[2+2*index].children[1],
+    evidence:group.children.at(-1).children[1]};
+}
+
+test('native review authors frame constraints, reconciles all starts and reopens both source-bound handoffs',async()=>{
+  const data=nativeStartsData();
+  delete data.frames[0].fixed_pose;
+  for(const [i,start] of data.annotations.starts.entries()) start.poses[0].values[0]=0.1+i/10;
+  const p=nativeStartsEditor(data);
+  const first=nativeFixedControls(p,0),second=nativeFixedControls(p,1);
+  first.prescribe.checked=true;first.prescribe.handlers.change();
+  first.value.value='0.83';first.value.handlers.input();
+  first.evidence.value='Independent fixture position λ';first.evidence.handlers.input();
+  second.prescribe.checked=false;second.prescribe.handlers.change();
+  assert.equal(p.e.applyStart.disabled,true);assert.equal(p.e.startDraftDownload.hidden,true);
+  p.e.applyFixedStarts.handlers.click();
+  assert.equal(p.e.startDownload.hidden,false,p.e.startStatus.textContent);
+  assert.equal(nativeStartField(p,'start-pose-0-0').disabled,true);
+  assert.equal(nativeStartField(p,'start-pose-1-0').disabled,false);
+  const annotations=JSON.parse(await p.urls.get(p.e.startDownload.href).text());
+  const fixed={values:{root_x_m:0.83},evidence:'Independent fixture position λ'};
+  assert.deepEqual(annotations.fixed_poses,[{frame_index:0,fixed_pose:fixed},{frame_index:1,fixed_pose:null}]);
+  assert.deepEqual(annotations.starts.map(s=>s.poses.map(p=>p.values)),[[[0.83],[-0.4]],[[0.83],[-0.4]]]);
+  const exported=JSON.parse(await p.urls.get(p.e.startPreparedDownload.href).text(),
+    (key,value,context)=>key==='timestamp_us'?context.source:value);
+  assert.deepEqual(exported.fit.frames[0].fixed_pose,fixed);
+  assert.equal(Object.hasOwn(exported.fit.frames[1],'fixed_pose'),false);
+  for(const [i,frame] of exported.fit.frames.entries()){
+    assert.deepEqual(frame.frame,data.frames[i].identity);
+    assert.deepEqual(frame.keypoints,[{name:'anchor',pixel_px:[10,20],sigma_px:1,partition:'held_out'}]);
+  }
+  for(const start of exported.fit.starts)assert.deepEqual(start.poses.map(p=>p.frame),data.frames.map(f=>f.identity));
+  p.e.resetStarts.handlers.click();
+  annotations.fixed_poses.reverse();
+  p.e.startDraftFile.files=[file(JSON.stringify(annotations))];await p.e.startDraftFile.handlers.change();
+  assert.equal(nativeFixedControls(p,0).evidence.value,fixed.evidence);
+  assert.equal(nativeFixedControls(p,1).prescribe.checked,false);
+  assert.equal(p.e.startDownload.hidden,true);
+  p.e.applyStart.handlers.click();assert.equal(p.e.startDownload.hidden,false);
+  const stale=structuredClone(annotations);stale.source_input_sha256='0'.repeat(64);
+  p.e.startDraftFile.files=[file(JSON.stringify(stale))];await p.e.startDraftFile.handlers.change();
+  assert.match(p.e.startStatus.textContent,/different source/);
+  assert.equal(p.e.startPreparedDownload.hidden,true);
+  p.e.cancelStart.handlers.click();assert.equal(p.e.startPreparedDownload.hidden,false);
+});
+
+test('native review refuses invalid prescriptions and duplicate starts atomically and saves constraints before initializing',async()=>{
+  const data=nativeStartsData();
+  delete data.frames[0].fixed_pose;
+  data.annotations.starts[1].shape=[0.4];
+  data.annotations.starts[1].poses[0].values=[0.9];
+  const p=nativeStartsEditor(data),control=nativeFixedControls(p,0);
+  control.prescribe.checked=true;control.prescribe.handlers.change();control.value.value='0.51';
+  for(const [evidence,value,expected] of [[' ','0.51',/evidence/],['λ'.repeat(2049),'0.51',/4096/],
+    ['fixture','2',/inside the bounds/],['fixture','0.51',/duplicates/]]){
+    control.evidence.value=evidence;control.value.value=value;p.e.applyFixedStarts.handlers.click();
+    assert.match(p.e.startStatus.textContent,expected);assert.equal(p.e.startDownload.hidden,true);
+  }
+  p.e.cancelStart.handlers.click();
+  assert.equal(nativeFixedControls(p,0).prescribe.checked,false);
+  assert.equal(nativeStartField(p,'start-pose-0-0').value,'0.7');
+  const empty=nativeStartsEditor(nativeStartsData({starts:0})),early=nativeFixedControls(empty,0);
+  early.value.value='0.88';early.value.handlers.input();empty.e.applyFixedStarts.handlers.click();
+  assert.equal(empty.e.startDownload.hidden,true);assert.equal(empty.e.startPreparedDownload.hidden,true);
+  const draft=await empty.urls.get(empty.e.startDraftDownload.href).text();
+  empty.e.resetStarts.handlers.click();
+  empty.e.startDraftFile.files=[file(draft)];await empty.e.startDraftFile.handlers.change();
+  empty.e.newStart.handlers.click();assert.equal(nativeStartField(empty,'start-pose-0-0').value,'0.88');
+});
+
 test('native body-start editor preserves fixed declarations through blanks midpoints copies and exact prepared exports',async()=>{
   const p=nativeStartsEditor(nativeStartsData({starts:0}));
   p.e.newStart.handlers.click();assert.equal(nativeStartField(p,'start-shape-0').value,'');

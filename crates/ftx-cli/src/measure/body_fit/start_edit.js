@@ -3,8 +3,10 @@
   'use strict';
   const data = JSON.parse(document.getElementById('startData').textContent);
   const byId = id => document.getElementById(id);
-  const copy = value => JSON.parse(JSON.stringify(value));
+  const copy = value => structuredClone(value);
   const original = copy(data.annotations.starts);
+  const originalFixed = data.frames.map(frame => frame.fixed_pose ?? null);
+  let fixed = copy(originalFixed), fixedPending = false, fixedInputs = [];
   let starts = copy(original), selected = starts.length ? 0 : null;
   let draft = selected === null ? null : copy(starts[selected]);
   let adding = false, pending = false, downloadUrl = null, revision = 0, needsReview = false;
@@ -16,7 +18,13 @@
   const preparedDownload = byId('startPreparedDownload'), preparedNotice = byId('startPreparedNotice');
   let preparedSource = null, preparedDownloadUrl = null;
   const preparedBoundary = 'Prepared input keeps the reviewed cameras, observations, masks and model settings. Source files are not reread; use native review if they changed.';
-  const changed = () => JSON.stringify(starts) !== JSON.stringify(original);
+  function sameFixed(left, right) {
+    if (!left || !right) return left === right;
+    return left.evidence === right.evidence && data.pose.every(({name}) =>
+      left.values[name] === right.values[name]);
+  }
+  const fixedChanged = () => fixed.some((entry, i) => !sameFixed(entry, originalFixed[i]));
+  const changed = () => fixedChanged() || JSON.stringify(starts) !== JSON.stringify(original);
 
   function parsePrepared(text) {
     const value = JSON.parse(text, (_key, item, context) => {
@@ -86,9 +94,15 @@
     if (annotations.starts.length < 2 || annotations.starts.length > 4) {
       throw new Error('Prepared input needs 2–4 distinct complete starts.');
     }
-    const complete = checkedAnnotations(annotations), value = structuredClone(preparedSource);
+    const complete = checkedAnnotations(annotations), value = copy(preparedSource);
+    if (annotations.fixed_poses) {
+      complete.fixed.forEach((pose, i) => {
+        if (pose) value.fit.frames[i].fixed_pose = pose;
+        else delete value.fit.frames[i].fixed_pose;
+      });
+    }
     // Frame ordinals identify original_fit, never the separately sorted preview/report frames.
-    value.fit.starts = complete.map(start => ({
+    value.fit.starts = complete.starts.map(start => ({
       shape: copy(start.shape),
       poses: data.frames.map(frame => ({
         frame: value.fit.frames[frame.frame_index].frame,
@@ -119,8 +133,11 @@
 
   function updateDownload() {
     withdraw();
-    if (pending || importPending || !starts.length) return;
+    if (pending || fixedPending || importPending || (!starts.length && !fixedChanged())) return;
     const annotations = { ...copy(data.annotations), starts: copy(starts) };
+    if (fixedChanged()) {
+      annotations.fixed_poses = fixed.map((fixed_pose, frame_index) => ({frame_index, fixed_pose}));
+    }
     downloadUrl = URL.createObjectURL(new Blob([JSON.stringify(annotations, null, 2) + '\n'],
       { type: 'application/json' }));
     draftDownload.href = downloadUrl;
@@ -145,14 +162,18 @@
   }
 
   function updateButtons() {
-    list.disabled = pending || !starts.length;
-    byId('newStart').disabled = pending || starts.length >= 4;
-    byId('duplicateStart').disabled = pending || selected === null || starts.length >= 4;
-    byId('removeStart').disabled = pending || selected === null;
-    byId('midpointStart').disabled = draft === null;
-    byId('applyStart').disabled = draft === null;
-    byId('cancelStart').disabled = !pending && !importPending;
-    byId('startPreviewNotice').textContent = (pending || changed()
+    const editing = pending || fixedPending;
+    list.disabled = editing || !starts.length;
+    byId('newStart').disabled = editing || starts.length >= 4;
+    byId('duplicateStart').disabled = editing || selected === null || starts.length >= 4;
+    byId('removeStart').disabled = editing || selected === null;
+    byId('midpointStart').disabled = fixedPending || draft === null;
+    byId('applyStart').disabled = fixedPending || draft === null;
+    byId('cancelStart').disabled = !editing && !importPending;
+    byId('startFixedEditor').disabled = pending;
+    byId('applyFixedStarts').disabled = !fixedPending;
+    for (const fieldset of byId('startParameters').children) fieldset.disabled = fixedPending;
+    byId('startPreviewNotice').textContent = (editing || changed()
       ? 'Edited values have no updated preview. '
       : '') + 'All photographs, projections and meshes below show the original input. '
       + 'Materialize the download and regenerate a native review to inspect edited starts.';
@@ -169,6 +190,52 @@
     const node = document.createElement(tag);
     if (text !== undefined) node.textContent = text;
     return node;
+  }
+
+  function editConstraints() {
+    ++revision;
+    fixedPending = true;
+    withdraw();
+    updateButtons();
+    status.textContent = 'Review fixed pose values and evidence. Applying constraints copies prescribed values into every start. Releasing a control keeps its current starting values.';
+  }
+
+  function renderConstraints() {
+    const container = byId('startFixedFields');
+    container.replaceChildren();
+    byId('startFixedEditor').hidden = !data.pose.length;
+    fixedInputs = data.frames.map((frame, i) => {
+      const group = element('fieldset');
+      group.append(element('legend', frame.label));
+      const inputs = data.pose.map(parameter => {
+        const label = element('label'), prescribe = element('input'), value = element('input');
+        prescribe.type = 'checkbox';
+        prescribe.checked = Object.hasOwn(fixed[i]?.values ?? {}, parameter.name);
+        label.append(prescribe, element('span', ' Fix ' + parameter.name));
+        const valueLabel = element('label');
+        value.type = 'number';
+        value.step = 'any';
+        value.min = String(parameter.lower);
+        value.max = String(parameter.upper);
+        value.value = prescribe.checked ? String(fixed[i].values[parameter.name]) : '';
+        value.disabled = !prescribe.checked;
+        valueLabel.append(element('span', `${parameter.name} (${parameter.unit}), ${parameter.lower} < value < ${parameter.upper} `), value);
+        prescribe.addEventListener('change', () => {
+          value.disabled = !prescribe.checked;
+          editConstraints();
+        });
+        value.addEventListener('input', editConstraints);
+        group.append(label, valueLabel);
+        return {parameter, prescribe, value};
+      });
+      const evidence = element('textarea'), label = element('label');
+      evidence.value = fixed[i]?.evidence ?? '';
+      label.append(element('span', 'Independent evidence for these fixed controls '), evidence);
+      evidence.addEventListener('input', editConstraints);
+      group.append(label);
+      container.append(group);
+      return {inputs, evidence};
+    });
   }
 
   function parameterInput(parameter, value, group, index, frameIndex, fixedPose) {
@@ -195,6 +262,7 @@
   }
 
   function render() {
+    renderConstraints();
     list.replaceChildren();
     starts.forEach((_, index) => {
       const option = element('option', `Start ${index + 1}`);
@@ -225,7 +293,7 @@
         fieldset.append(element('legend', frame.label));
         const values = draft.poses.find(pose => pose.frame_index === frame.frame_index).values;
         const controls = data.pose.map((parameter, index) => {
-          const control = parameterInput(parameter, values[index], 'pose', index, frame.frame_index, frame.fixed_pose);
+          const control = parameterInput(parameter, values[index], 'pose', index, frame.frame_index, fixed[frame.frame_index]);
           fieldset.append(control.label);
           return control;
         });
@@ -296,8 +364,42 @@
     }
   }
 
+  function checkedConstraints(entries) {
+    if (!Array.isArray(entries) || entries.length !== data.frames.length) {
+      throw new Error('Supply constraints or an explicit release for every source frame.');
+    }
+    const result = new Array(entries.length);
+    let free = data.shape.length;
+    for (const entry of entries) {
+      fields(entry, ['frame_index', 'fixed_pose']);
+      const {frame_index: i, fixed_pose: pose} = entry;
+      if (!Number.isInteger(i) || i < 0 || i >= entries.length || Object.hasOwn(result, i)) {
+        throw new Error('Unknown or duplicate fixed pose frame ordinal.');
+      }
+      result[i] = pose;
+      free += data.pose.length;
+      if (pose === null) continue;
+      fields(pose, ['values', 'evidence']);
+      if (typeof pose.evidence !== 'string' || !pose.evidence.trim() || new TextEncoder().encode(pose.evidence).length > 4096) {
+        throw new Error(`Frame ${i + 1} requires explicit fixed pose evidence of at most 4096 UTF-8 bytes.`);
+      }
+      if (!pose.values || typeof pose.values !== 'object' || Array.isArray(pose.values) || !Object.keys(pose.values).length) {
+        throw new Error(`Frame ${i + 1} requires a nonempty set of named fixed controls.`);
+      }
+      for (const [name, value] of Object.entries(pose.values)) {
+        const p = data.pose.find(parameter => parameter.name === name);
+        if (!p) throw new Error('Unknown fixed pose control: ' + name);
+        checkedValue(value, p, 'Fixed pose for Frame ' + (i + 1), value);
+        free--;
+      }
+    }
+    if (free > 128) throw new Error('Releasing these constraints exceeds the native 128 free-parameter limit.');
+    return result;
+  }
+
   function checkedAnnotations(annotations) {
-    fields(annotations, Object.keys(data.annotations));
+    const edited = annotations != null && Object.hasOwn(annotations, 'fixed_poses');
+    fields(annotations, edited ? [...Object.keys(data.annotations), 'fixed_poses'] : Object.keys(data.annotations));
     for (const key of ['schema', 'source_input', 'source_input_sha256', 'model_sha256', 'capture_sources_sha256']) {
       if (annotations[key] !== data.annotations[key]) throw new Error('The draft belongs to a different source, model or capture.');
     }
@@ -310,8 +412,14 @@
         throw new Error('The draft has different silhouette bindings.');
       }
     }
-    if (!Array.isArray(annotations.starts) || annotations.starts.length > 4) throw new Error('A draft supports at most four applied starts.');
-    for (const start of annotations.starts) {
+    const constraints = edited ? checkedConstraints(annotations.fixed_poses) : copy(originalFixed);
+    checkStarts(annotations.starts, constraints);
+    return {starts: annotations.starts, fixed: constraints};
+  }
+
+  function checkStarts(proposed, constraints) {
+    if (!Array.isArray(proposed) || proposed.length > 4) throw new Error('A draft supports at most four applied starts.');
+    for (const start of proposed) {
       fields(start, ['shape', 'poses']);
       if (!Array.isArray(start.shape) || start.shape.length !== data.shape.length) throw new Error('Every shared shape value is required.');
       start.shape.forEach((value, index) => checkedValue(value, data.shape[index], 'Shared shape'));
@@ -322,16 +430,46 @@
         if (!data.frames.some(frame => frame.frame_index === pose.frame_index) || seen.has(pose.frame_index)) throw new Error('Unknown or duplicate frame ordinal.');
         seen.add(pose.frame_index);
         if (!Array.isArray(pose.values) || pose.values.length !== data.pose.length) throw new Error('Every named pose value is required.');
-        const fixed = data.frames.find(frame => frame.frame_index === pose.frame_index).fixed_pose?.values ?? {};
+        const fixed = constraints[pose.frame_index]?.values ?? {};
         pose.values.forEach((value, index) => {
           checkedValue(value, data.pose[index], 'Frame pose',
             Object.hasOwn(fixed, data.pose[index].name) ? fixed[data.pose[index].name] : undefined);
         });
       }
     }
-    validateDistinct(annotations.starts);
-    return annotations.starts;
+    validateDistinct(proposed);
   }
+
+  byId('applyFixedStarts').addEventListener('click', () => {
+    if (!fixedPending || pending) return;
+    try {
+      const next = checkedConstraints(fixedInputs.map(({inputs, evidence}, frame_index) => {
+        const values = Object.fromEntries(inputs.filter(({prescribe}) => prescribe.checked).map(({parameter, value}) =>
+          [parameter.name, value.value.trim() === '' ? NaN : Number(value.value)]));
+        return {frame_index, fixed_pose: Object.keys(values).length ? {values, evidence: evidence.value} : null};
+      }));
+      const proposed = copy(starts);
+      for (const start of proposed) {
+        for (const pose of start.poses) {
+          const values = next[pose.frame_index]?.values ?? {};
+          data.pose.forEach(({name}, i) => {
+            if (Object.hasOwn(values, name)) pose.values[i] = values[name];
+          });
+        }
+      }
+      checkStarts(proposed, next);
+      fixed = next;
+      starts = proposed;
+      draft = selected === null ? null : copy(starts[selected]);
+      fixedPending = false;
+      importPending = false;
+      needsReview = false;
+      render();
+      status.textContent = `Applied frame constraints and reconciled ${starts.length} starts. Inspect updated poses in a new native review.`;
+    } catch (error) {
+      status.textContent = 'Constraints not applied: ' + error.message;
+    }
+  });
 
   const savedFile = byId('startDraftFile');
   for (const event of ['focus', 'click', 'cancel']) savedFile.addEventListener(event, () => {
@@ -355,10 +493,11 @@
       const bytes = await file.arrayBuffer();
       if (ticket !== revision) return;
       const proposed = checkedAnnotations(JSON.parse(new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes)));
-      starts = proposed;
+      starts = proposed.starts;
+      fixed = proposed.fixed;
       selected = starts.length ? 0 : null;
       draft = selected === null ? null : copy(starts[selected]);
-      adding = false; pending = false; needsReview = true; importPending = false;
+      adding = false; pending = false; fixedPending = false; needsReview = true; importPending = false;
       render();
       status.textContent = `${starts.length} applied starts restored. Review every start, then Apply this start to prepare completed annotations. Original previews remain unchanged.`;
     } catch (error) {
@@ -388,8 +527,8 @@
   byId('newStart').addEventListener('click', () => begin({
     shape: data.shape.map(() => ''),
     poses: data.frames.map(frame => ({ frame_index: frame.frame_index,
-      values: data.pose.map(parameter => Object.hasOwn(frame.fixed_pose?.values ?? {}, parameter.name)
-        ? frame.fixed_pose.values[parameter.name] : '') }))
+      values: data.pose.map(parameter => Object.hasOwn(fixed[frame.frame_index]?.values ?? {}, parameter.name)
+        ? fixed[frame.frame_index].values[parameter.name] : '') }))
   }));
   byId('duplicateStart').addEventListener('click', () => {
     if (selected !== null) begin(copy(starts[selected]));
@@ -455,6 +594,7 @@
   byId('cancelStart').addEventListener('click', () => {
     adding = false;
     pending = false;
+    fixedPending = false;
     importPending = false;
     draft = selected === null ? null : copy(starts[selected]);
     render();
@@ -462,6 +602,8 @@
   });
   byId('resetStarts').addEventListener('click', () => {
     starts = copy(original);
+    fixed = copy(originalFixed);
+    fixedPending = false;
     selected = starts.length ? 0 : null;
     draft = selected === null ? null : copy(starts[selected]);
     adding = false;
