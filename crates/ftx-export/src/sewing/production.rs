@@ -361,7 +361,14 @@ fn evaluate_in_calendar(
             .as_ref()
             .is_some_and(|parallel| parallel.thread_order_search.is_some())
         {
-            "ftx-sewing-production/20"
+            if parallel
+                .as_ref()
+                .is_some_and(|parallel| parallel.shared_operator.is_some())
+            {
+                "ftx-sewing-production/26"
+            } else {
+                "ftx-sewing-production/20"
+            }
         } else if parallel
             .as_ref()
             .is_some_and(|parallel| !parallel.cell_plans.is_empty())

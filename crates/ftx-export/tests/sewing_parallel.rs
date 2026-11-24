@@ -703,7 +703,7 @@ fn parallel_thread_cost_validates_domains_and_reserves_all_candidate_purchasing(
     );
     for case in [
         "unconfigured",
-        "operator",
+        "operator_rounding",
         "missing_search",
         "wrong_objective",
         "missing_purchasing",
@@ -715,7 +715,11 @@ fn parallel_thread_cost_validates_domains_and_reserves_all_candidate_purchasing(
                 invalid["production"]["parallel"]["model"] =
                     json!("independent_whole_garment_cells/1")
             }
-            "operator" => shared_operator(&mut invalid, 40000),
+            "operator_rounding" => {
+                shared_operator(&mut invalid, 40000);
+                invalid["production"]["parallel"]["time_basis"] =
+                    json!("ceil_cell_feed_milliseconds/1");
+            }
             "missing_search" => {
                 invalid["production"]["parallel"]["thread_order_search"] = Value::Null
             }
@@ -4356,12 +4360,12 @@ fn parallel_shared_feed_fixture(copies: usize) -> (Pattern, Value) {
 // Independent exhaustive words over exact one-operation chains. Rows are authored first handling
 // plus setup, repeated handling, per-operation feed ceiling, and final unloading milliseconds.
 // No production receipts, search bounds, phases, pruning or source admission are reused here.
-fn feed_operator_oracle(
+fn operator_count_oracle(
     copies: usize,
     case: OperatorCase,
     durations: [[u64; 4]; 2],
     deadline: Option<u64>,
-) -> Option<(u64, u64)> {
+) -> Vec<(usize, u64, u64)> {
     fn enumerate(
         case: OperatorCase,
         phases: &[Vec<(u64, u64)>; 2],
@@ -4436,9 +4440,291 @@ fn feed_operator_oracle(
             let feed = (0..2)
                 .map(|cell| counts[cell] as u64 * durations[cell][2])
                 .sum();
-            Some((feed, finish))
+            Some((a, feed, finish))
         })
-        .min()
+        .collect()
+}
+
+fn shared_thread_cost_fixture(copies: usize) -> (Pattern, Value) {
+    let (pattern, mut options) = parallel_shared_feed_fixture(copies);
+    thread_inventory(&mut options);
+    let parallel = &mut options["production"]["parallel"];
+    parallel["objective"] = json!("minimize_thread_observed_order_cost");
+    parallel["feed_time_search"] = Value::Null;
+    parallel["thread_order_search"] = json!({"max_search_nodes":1000,"max_order_evaluations":16});
+    for (index, cell) in parallel["cells"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        for qualification in cell["configuration"]["qualifications"]
+            .as_array_mut()
+            .unwrap()
+        {
+            let channel = &mut qualification["thread_consumption"]["channels"][0];
+            channel["metres_per_traversal"] = json!(if index == 0 { 0.0125 } else { 0.04 });
+            channel["start_allowance_m"] = json!(0.0);
+            channel["end_allowance_m"] = json!(0.0);
+        }
+        refresh_cell_locks(cell);
+        for path in [
+            ["configuration", "qualification_refs"],
+            ["handling", "qualifications"],
+        ] {
+            cell[path[0]][path[1]]
+                .as_object_mut()
+                .unwrap()
+                .remove("reinforce");
+        }
+    }
+    refresh_operator_locks(&mut options);
+    (pattern, options)
+}
+
+#[test]
+fn parallel_thread_cost_shared_operator_matches_independent_complete_order_enumeration() {
+    let base = OperatorCase {
+        starts: [0, 0],
+        ends: [None, None],
+        available: 0,
+        until: None,
+        arrivals: [0, 0],
+        transfers: [[0, 0], [0, 0]],
+    };
+    let durations = [[1100, 5000, 4000, 200], [600, 1000, 1334, 200]];
+    for case in [
+        base,
+        OperatorCase {
+            arrivals: [700, 100],
+            transfers: [[0, 900], [200, 0]],
+            ..base
+        },
+        OperatorCase {
+            starts: [3000, 0],
+            available: 500,
+            ends: [Some(17000), Some(30000)],
+            until: Some(29000),
+            transfers: [[0, 250], [600, 0]],
+            ..base
+        },
+    ] {
+        for deadline in [
+            None,
+            Some(23300),
+            Some(14300),
+            Some(14299),
+            Some(6802),
+            Some(5900),
+            Some(500),
+        ] {
+            let (pattern, mut options) = shared_thread_cost_fixture(3);
+            for cell in 0..2 {
+                options["production"]["parallel"]["cells"][cell]["available_at_milliseconds"] =
+                    json!(case.starts[cell]);
+                options["production"]["parallel"]["cells"][cell]["available_until_milliseconds"] =
+                    json!(case.ends[cell]);
+            }
+            refresh_operator_locks(&mut options);
+            let parallel = &mut options["production"]["parallel"];
+            parallel["thread_order_search"]["completion_deadline_milliseconds"] = json!(deadline);
+            let operator = &mut parallel["shared_operator"];
+            operator["available_at_milliseconds"] = json!(case.available);
+            operator["available_until_milliseconds"] = json!(case.until);
+            operator["initial_arrival_milliseconds"] =
+                json!({"cell-a":case.arrivals[0],"cell-b":case.arrivals[1]});
+            operator["transfers"][0]["milliseconds"] = json!(case.transfers[0][1]);
+            operator["transfers"][1]["milliseconds"] = json!(case.transfers[1][0]);
+            // Complete demand is 0.5 m per slow-cell garment and 0.8 m per fast-cell garment.
+            // One common order rounds to 2 m at USD10, or 4 m at the USD7-per-2m tier.
+            let expected: Vec<_> = operator_count_oracle(3, case, durations, deadline)
+                .into_iter()
+                .map(|(a, _, finish)| {
+                    let quantity = ((0.5 * a as f64 + 0.8 * (3 - a) as f64) / 2.0).ceil() as u64;
+                    let cost = quantity * if quantity >= 2 { 7 } else { 10 };
+                    (cost, finish, a)
+                })
+                .collect();
+            let actual = SewProgram::build(&pattern, &serde_json::from_value(options).unwrap());
+            let Some(&(price, finish, _)) = expected.iter().min() else {
+                assert!(actual.is_err());
+                continue;
+            };
+            let program = actual.unwrap();
+            let plan = &program.plan;
+            let parallel = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+            let search = parallel.thread_order_search.as_ref().unwrap();
+            assert_eq!(search.selected_order_cost, Some(price as f64));
+            assert_eq!(parallel.selected.makespan_milliseconds, finish);
+            assert_eq!(
+                search.search_scope,
+                "shared_operator_retained_serial_incumbents/1"
+            );
+            assert!(search.search_complete);
+            assert_eq!(search.retained_order_optimality_proven, Some(true));
+            assert!(!search.optimality_proven);
+            assert_eq!(search.order_evaluations, expected.len());
+            assert_eq!(search.unresolved_assignments, 0);
+            assert_eq!(parallel.schema, "ftx-sewing-parallel/11");
+            assert_eq!(plan.schema, "ftx-sewing-plan/38");
+            assert_eq!(
+                plan.production.as_ref().unwrap().schema,
+                "ftx-sewing-production/26"
+            );
+            let a = parallel.selected.cells[0].copies.len();
+            assert!(expected.contains(&(price, finish, a)));
+            assert_eq!(program.stitches.len(), 40 * a + 20 * (3 - a));
+            assert_eq!(
+                program
+                    .stitches
+                    .iter()
+                    .map(|step| step.copy.unwrap())
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([0, 1, 2])
+            );
+            assert!(
+                parallel.search_nodes
+                    <= plan
+                        .options
+                        .production
+                        .as_ref()
+                        .unwrap()
+                        .parallel
+                        .as_ref()
+                        .unwrap()
+                        .max_search_nodes
+            );
+            assert_eq!(
+                serde_json::to_value(&program).unwrap(),
+                serde_json::to_value(SewProgram::build(&pattern, &plan.options).unwrap()).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn parallel_thread_cost_shared_operator_retains_complete_incumbents_at_each_cap() {
+    let (pattern, options) = shared_thread_cost_fixture(3);
+    for cap in ["operator", "count", "prices"] {
+        let mut limited = options.clone();
+        let parallel = &mut limited["production"]["parallel"];
+        match cap {
+            "operator" => parallel["shared_operator"]["max_search_nodes"] = json!(4),
+            "count" => parallel["thread_order_search"]["max_search_nodes"] = json!(1),
+            "prices" => parallel["thread_order_search"]["max_order_evaluations"] = json!(1),
+            _ => unreachable!(),
+        }
+        let plan = build(&pattern, limited).unwrap();
+        let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+        let search = report.thread_order_search.as_ref().unwrap();
+        assert_eq!(search.selected_order_cost, Some(10.0));
+        assert_eq!(report.selected.makespan_milliseconds, 23300);
+        assert!(!search.search_complete && !search.optimality_proven);
+        assert_eq!(search.retained_order_optimality_proven, Some(false));
+        assert_eq!(search.assignment_budget_exhausted, cap == "count");
+        assert_eq!(search.order_budget_exhausted, cap == "prices");
+        assert_eq!(
+            report.shared_operator.as_ref().unwrap().budget_exhausted,
+            cap == "operator"
+        );
+        assert!(report.budget_exhausted);
+        assert_eq!(search.order_evaluations, 1);
+        assert!(
+            report.search_nodes
+                <= plan
+                    .options
+                    .production
+                    .as_ref()
+                    .unwrap()
+                    .parallel
+                    .as_ref()
+                    .unwrap()
+                    .max_search_nodes
+        );
+        assert_eq!(
+            serde_json::to_value(&plan).unwrap(),
+            serde_json::to_value(
+                build(&pattern, serde_json::to_value(&plan.options).unwrap()).unwrap()
+            )
+            .unwrap()
+        );
+    }
+    let mut missing = options;
+    missing["consumables"]["purchasing"]["quote_book"]["quotes"][0]["available"] = json!(false);
+    let plan = build(&pattern, missing).unwrap();
+    let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+    let search = report.thread_order_search.as_ref().unwrap();
+    assert_eq!(search.selected_order_cost, None);
+    assert!(search.search_complete && report.shared_operator.as_ref().unwrap().search_complete);
+    assert_eq!(search.retained_order_optimality_proven, Some(false));
+    assert_eq!(search.unresolved_assignments, 4);
+    assert_eq!(search.order_evaluations, 4);
+    // A loads first; B's two feeds finish at 3034/5368 ms. A unloads at 5100..5300,
+    // followed by B's 5368..5568 unloading. Missing prices preserve this fastest complete job.
+    assert_eq!(report.selected.makespan_milliseconds, 5568);
+}
+
+#[test]
+fn parallel_thread_cost_shared_operator_deadlines_include_pools_calendars_and_final_unload() {
+    for (calendar, finish) in [(false, 10400), (true, 11300)] {
+        for deadline in [finish, finish - 1] {
+            let (pattern, mut options) = shared_thread_cost_fixture(2);
+            let mut second = options["production"]["parallel"]["cells"][0].clone();
+            second["id"] = json!("cell-b");
+            options["production"]["parallel"]["cells"][1] = second;
+            shared_fixtures(&mut options, 1);
+            if calendar {
+                operator_calendars(
+                    &mut options,
+                    json!({"synthetic-person":windows(&[[0,1100],[6000,30000]])}),
+                );
+            }
+            options["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"] =
+                json!(deadline);
+            let actual = build(&pattern, options);
+            if deadline < finish {
+                let refusal = actual.unwrap_err();
+                assert_eq!(refusal.code, RefusalCode::NotConverged);
+                assert!(refusal.message.contains("infeasibility is not proved"));
+                continue;
+            }
+            let plan = actual.unwrap();
+            let report = plan.production.as_ref().unwrap().parallel.as_ref().unwrap();
+            let search = report.thread_order_search.as_ref().unwrap();
+            assert_eq!(search.selected_order_cost, Some(10.0));
+            assert_eq!(search.retained_order_optimality_proven, Some(true));
+            assert!(!search.optimality_proven);
+            assert_eq!(report.selected.makespan_milliseconds, finish);
+            let pools = report.shared_workholding.as_ref().unwrap();
+            assert_eq!(pools.selected.peak_occupancy["common-jigs"], 1);
+            assert_eq!(pools.selected.final_occupancy["common-jigs"], 0);
+            let labor = report.shared_operator.as_ref().unwrap();
+            assert!(labor.selected.steps.last().unwrap().operation.is_none());
+            assert_eq!(
+                labor
+                    .selected
+                    .steps
+                    .iter()
+                    .map(|step| step.feed_finish_milliseconds)
+                    .max(),
+                Some(finish)
+            );
+            assert!(
+                labor
+                    .selected
+                    .steps
+                    .iter()
+                    .all(|step| step.feed_finish_milliseconds <= deadline)
+            );
+            assert_eq!(
+                serde_json::to_value(&plan).unwrap(),
+                serde_json::to_value(
+                    build(&pattern, serde_json::to_value(&plan.options).unwrap()).unwrap()
+                )
+                .unwrap()
+            );
+        }
+    }
 }
 
 #[test]
@@ -4497,7 +4783,10 @@ fn parallel_feed_shared_operator_matches_independent_allocation_and_dispatch_enu
                 json!({"cell-a":case.arrivals[0],"cell-b":case.arrivals[1]});
             operator["transfers"][0]["milliseconds"] = json!(case.transfers[0][1]);
             operator["transfers"][1]["milliseconds"] = json!(case.transfers[1][0]);
-            let expected = feed_operator_oracle(3, case, durations, deadline);
+            let expected = operator_count_oracle(3, case, durations, deadline)
+                .into_iter()
+                .map(|(_, feed, finish)| (feed, finish))
+                .min();
             let actual = SewProgram::build(&pattern, &serde_json::from_value(options).unwrap());
             let Some(expected) = expected else {
                 let refusal = actual.unwrap_err();
