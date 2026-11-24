@@ -125,6 +125,14 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   `BudgetExceeded`, non-finite separation geometry refuses, and no partial start is returned.
   Body, seam and final exact contact admission remain authoritative; this is a bounded start
   heuristic, not a general untangling guarantee or empirical layer-order qualification.
+  The same opt-in pass now queries cloth edges against body faces and body edges against cloth
+  faces. Exact segment/face witnesses catch an interior piercing even when all vertices and
+  endpoint/edge proximity checks miss it. Body-feature corrections use the requested body clearance
+  and outward normals, move welded members together, and share the existing candidate allowance.
+  Immutable body query trees are reused within each relaxation call. A complete sweep validates
+  every finite corrected position before publishing; zero body clearance is a no-op. The ordinary
+  exact contact audit can still refuse symmetric, infeasible or unresolved starts. The existing
+  native `--start-self-repulsion` and portable option reach this path without a new schema.
 - **Offline stills & 3D viewer shading (`FTX-27h`)**: deterministic 2×2 MSAA, grazing sheen, and
   16-sample AO in `render`, plus physical fabric sheen, 3-point shadow rig, legible toggle, wireframe
   overlay, and named camera views in `assets/fold_viewer_template.html`.
@@ -747,8 +755,9 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   2 mm self-contact and retains a 50 mm offset refusal control. This is start admission, not settling,
   independent anatomy, measured fabric or physical-fit qualification.
   If no replacement passes, the original selected state remains available to the existing refusal
-  observer; the full-display check is not suppressed. Body-only requests preserve their existing
-  initialization path. `tests/outfit.rs` exercises a final-state displayed protrusion with an
+  observer; the full-display check is not suppressed. Successful primary body-only starts preserve
+  their original initialization; a primary body-untangling refusal now reaches the earlier-start
+  recovery described above before solver creation. `tests/outfit.rs` exercises a final-state displayed protrusion with an
   earlier clear checkpoint, unchanged rest geometry/mass, and initial/later refusal snapshots.
 - After all relaxation checkpoints fail, a leg crossing the centre plane can recover its own-side
   placement. Only welds owned exclusively by the same leg move, by at most one mesh spacing.

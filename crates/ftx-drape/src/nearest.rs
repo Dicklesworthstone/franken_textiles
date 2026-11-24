@@ -108,6 +108,11 @@ impl NearestTree {
         Ok(tree)
     }
 
+    /// The same immutable outward-oriented surface used by nearest-point start projections.
+    pub(crate) fn surface(&self) -> (&[Vec3], &[[usize; 3]]) {
+        (&self.vertices, &self.triangles)
+    }
+
     fn build(&mut self, start: usize, end: usize, centroid: &[Vec3]) -> usize {
         let (lo, hi) = bounds(
             self.order[start..end]

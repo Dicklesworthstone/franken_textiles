@@ -6320,6 +6320,30 @@ preserving its previous physical state, inertia and material memory. Independent
 synthetic ramp/hold forces test recovery and replay. This advances the software portion of
 `ftx-tm2.1`; empirical fabric calibration, plastic-law identification and physical fit remain open.
 
+### 25.231 Recover body-clear garment starts before dynamics
+
+The remaining long-sleeve work exposed two concrete software gaps in garment initialization.
+A final relaxed state that failed body untangling returned before the earlier-checkpoint recovery
+could run. Scene construction now tries bounded earlier complete relaxation blocks and then finer
+push-out checkpoints after that specific refusal. It retains the original pre-sewn geometry, welds,
+material domains and gather weights, recomputes each candidate's strain receipt, and preserves the
+original rejection metadata through subsequent repairs. Explicitly selected checkpoints are not
+replaced, and non-contact refusals remain authoritative.
+
+The existing opt-in self-repelling relaxation also reacts to body surfaces before final admission.
+It checks both cloth-edge/body-face and body-edge/cloth-face crossings, including face-interior
+piercings missed by isolated vertex push-out or endpoint proximity. Bounded corrections follow
+body outward normals, preserve welded seam equality, and share the existing candidate-work limit.
+Successful legacy starts without the option retain their relaxation arithmetic.
+
+Seven focused test groups cover the recovery handoff, source/domain refusal propagation, actual
+replay receipts, geometric crossing witnesses, production contact admission, seam consistency and
+transactional work-budget failure. These tests are authored; local execution was unavailable and
+GitHub Rust checks were queued at this implementation checkpoint. The unchanged 385 mm sleeve
+still requires its pinned-Anny full-frame replay and original flat-design checks. Neither these
+software changes nor their synthetic fixtures establish measured garment fit or a runtime speedup.
+The parent `ftx-jnqs` remains open.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -776,7 +776,7 @@ pub struct SceneBuildOptions {
         skip_serializing_if = "ConstructionMechanicsOptions::is_default"
     )]
     pub construction: ConstructionMechanicsOptions,
-    /// Opt-in spatial-hash cloth–cloth self-repulsion during start-state relaxation (FTX-27g).
+    /// Opt-in bounded cloth–cloth and body-feature separation during start-state relaxation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_self_repulsion: Option<SelfRepulsionOptions>,
 }

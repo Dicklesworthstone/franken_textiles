@@ -44,16 +44,16 @@ pub const GATHER_COMPRESSION: f64 = 0.03;
 pub const DEFAULT_SELF_REPULSION_CLEARANCE_M: f64 = 0.004;
 /// Default Jacobi separation stiffness in `(0, 1]` for opt-in self-repelling start relaxation.
 pub const DEFAULT_SELF_REPULSION_STIFFNESS: f64 = 0.5;
-/// Default iteration stride for opt-in cloth–cloth separation impulses (divides [`RELAX_PUSH_OUT_ITERS`]).
+/// Default iteration stride for opt-in separation impulses (divides [`RELAX_PUSH_OUT_ITERS`]).
 pub const DEFAULT_SELF_REPULSION_PERIOD: usize = 5;
-/// Default complete-call work bound for cloth–cloth start separation.
+/// Default complete-call work bound for cloth–cloth and body-feature start separation.
 pub const DEFAULT_SELF_REPULSION_CANDIDATE_CHECKS: usize = 32_000_000;
 
 const MAX_SELF_REPULSION_CLEARANCE_M: f64 = 0.1;
 const MAX_SELF_REPULSION_CANDIDATE_CHECKS: usize = 128_000_000;
 
-/// Opt-in bounded cloth–cloth separation impulses during [`relax_with_repulsion`] and
-/// [`start_state_with_repulsion`].
+/// Opt-in bounded cloth–cloth and body-feature separation impulses during [`relax_with_repulsion`]
+/// and [`start_state_with_repulsion`]. Body features use the caller's body clearance.
 ///
 /// Leaving this `None` preserves the reference's bit-identical relaxation trajectory.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,7 +63,7 @@ pub struct SelfRepulsionOptions {
     pub min_separation_m: f64,
     /// Jacobi PBD separation stiffness in `(0, 1]`.
     pub stiffness: f64,
-    /// Apply cloth–cloth separation impulses every `period` iterations (`1..=RELAX_PUSH_OUT_ITERS`).
+    /// Apply cloth–cloth and body-feature impulses every `period` iterations (`1..=RELAX_PUSH_OUT_ITERS`).
     pub period: usize,
     /// Broad-phase candidates examined over a complete relaxation call (`1..=128000000`).
     /// All blocks of [`start_state_with_repulsion`] share one allowance; standalone checkpoint
@@ -502,14 +502,15 @@ pub fn relax(
     .expect("legacy relaxation has no fallible self-repulsion work")
 }
 
-/// As [`relax`], with optional deterministic cloth–cloth separation impulses
-/// ([`SelfRepulsionOptions`]) applied before body push-out to prevent layered and pleated starts
-/// from self-intersecting.
+/// As [`relax`], with optional deterministic cloth–cloth and two-way body-feature separation
+/// ([`SelfRepulsionOptions`]) before vertex push-out. Interior face crossings participate even when
+/// every cloth vertex is outside. This bounded heuristic still requires exact scene admission.
 ///
 /// When `repulsion` is `None`, the result is bit-identical to [`relax`].
 ///
 /// # Errors
-/// Invalid repulsion settings, non-finite separation geometry, or exhausted candidate work.
+/// Invalid repulsion settings or body geometry, non-finite separation geometry, negative body
+/// clearance, or exhausted candidate work.
 #[allow(clippy::too_many_arguments)]
 pub fn relax_with_repulsion(
     mesh: &GarmentMesh,
@@ -993,6 +994,240 @@ fn apply_self_repulsion(
     Ok(())
 }
 
+/// Immutable body feature queries for the opt-in start heuristic. The final contact audit remains
+/// authoritative; this only lets relaxation react before a ridge has passed through a cloth face.
+struct BodyRepulsion {
+    edges: Vec<[usize; 2]>,
+    triangle_query: QueryBvh,
+    edge_query: QueryBvh,
+}
+
+impl BodyRepulsion {
+    fn new(body: &NearestTree) -> Result<Self, Refusal> {
+        let (vertices, triangles) = body.surface();
+        ftx_core::intersection::validate_mesh(vertices, triangles)?;
+        let edges: Vec<_> = face_edges(triangles)
+            .into_iter()
+            .map(|(a, b)| [a, b])
+            .collect();
+        let triangle_boxes: Vec<_> = triangles
+            .iter()
+            .map(|t| crate::contact::aabb(&t.map(|v| vertices[v])))
+            .collect();
+        let edge_boxes: Vec<_> = edges
+            .iter()
+            .map(|e| crate::contact::aabb(&e.map(|v| vertices[v])))
+            .collect();
+        Ok(Self {
+            edges,
+            triangle_query: QueryBvh::build(&triangle_boxes),
+            edge_query: QueryBvh::build(&edge_boxes),
+        })
+    }
+}
+
+struct EdgeFaceWitness {
+    edge_weights: [f64; 2],
+    triangle_weights: [f64; 3],
+    edge_point: Vec3,
+    triangle_point: Vec3,
+    distance: f64,
+}
+
+/// Endpoints and edge pairs cover separated features, but not a segment piercing a face's interior.
+/// The exact predicate admits that missing case before its floating-point witness is reconstructed.
+fn edge_face_witness(edge: [Vec3; 2], triangle: [Vec3; 3]) -> Result<EdgeFaceWitness, Refusal> {
+    let at = |edge_weights: [f64; 2], triangle_weights: [f64; 3]| {
+        let edge_point = edge[0] * edge_weights[0] + edge[1] * edge_weights[1];
+        let triangle_point = triangle[0] * triangle_weights[0]
+            + triangle[1] * triangle_weights[1]
+            + triangle[2] * triangle_weights[2];
+        EdgeFaceWitness {
+            edge_weights,
+            triangle_weights,
+            edge_point,
+            triangle_point,
+            distance: norm3(edge_point - triangle_point),
+        }
+    };
+    let normal = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]);
+    let a = (edge[0] - triangle[0]).dot(normal);
+    let b = (edge[1] - triangle[0]).dot(normal);
+    if !normal.is_finite() || !a.is_finite() || !b.is_finite() || !(a - b).is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "non-finite start body-feature witness",
+        ));
+    }
+    if a != b && ftx_core::intersection::segment_triangle(edge[0], edge[1], triangle).is_some() {
+        // Exact intersection establishes that the mathematical parameter lies in [0, 1].
+        // Only the rounded geometric witness is bounded here, never a supplied physical value.
+        let s = (a / (a - b)).clamp(0.0, 1.0);
+        let point = edge[0] * (1.0 - s) + edge[1] * s;
+        let (weights, _) = point_triangle_closest(point, triangle[0], triangle[1], triangle[2]);
+        let hit = at([1.0 - s, s], weights);
+        if hit.distance.is_finite() {
+            return Ok(hit);
+        }
+    }
+    let (weights, _) = point_triangle_closest(edge[0], triangle[0], triangle[1], triangle[2]);
+    let mut best = at([1.0, 0.0], weights);
+    let (weights, _) = point_triangle_closest(edge[1], triangle[0], triangle[1], triangle[2]);
+    let candidate = at([0.0, 1.0], weights);
+    if candidate.distance < best.distance {
+        best = candidate;
+    }
+    for i in 0..3 {
+        let j = (i + 1) % 3;
+        let ((s, t), _) = edge_edge_closest(edge[0], edge[1], triangle[i], triangle[j]);
+        let mut weights = [0.0; 3];
+        weights[i] = 1.0 - t;
+        weights[j] = t;
+        let candidate = at([1.0 - s, s], weights);
+        if candidate.distance < best.distance {
+            best = candidate;
+        }
+    }
+    if !best.distance.is_finite() {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "non-finite start body-feature distance",
+        ));
+    }
+    Ok(best)
+}
+
+/// One bounded Jacobi sweep over body/cloth features in both directions. Correction directions come
+/// from body outward normals, never an arbitrary cloth normal. Symmetric or infeasible starts may
+/// remain unresolved and must still pass ordinary exact scene admission.
+fn apply_body_repulsion(
+    q: &mut [Vec3],
+    topo: &RepulsionTopology,
+    body: &NearestTree,
+    body_topo: &BodyRepulsion,
+    clearance: f64,
+    opts: SelfRepulsionOptions,
+    work: &mut RepulsionWork,
+) -> Result<(), Refusal> {
+    let (vertices, triangles) = body.surface();
+    let p: Vec<_> = topo.members.iter().map(|members| q[members[0]]).collect();
+    if p.iter().any(|v| !v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "non-finite body-repulsion positions",
+        ));
+    }
+    Refusal::finite("start body clearance", clearance)?;
+    if clearance < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "start body clearance must be nonnegative",
+        ));
+    }
+    if clearance == 0.0 {
+        return Ok(());
+    }
+    let pad = Vec3::new(clearance, clearance, clearance);
+    let mut acc = vec![Vec3::ZERO; topo.n_weld];
+    let mut weight = vec![0.0_f64; topo.n_weld];
+    let mut candidates = Vec::new();
+    let mut add = |ids: &[usize], weights: &[f64], delta: Vec3, normal: Vec3, distance: f64| {
+        if distance >= clearance {
+            return;
+        }
+        let gap = delta.dot(normal);
+        let denominator: f64 = weights.iter().map(|w| w * w).sum();
+        let correction = normal * (opts.stiffness * (clearance - gap) / denominator);
+        for (&id, &w) in ids.iter().zip(weights) {
+            acc[id] += correction * w;
+            weight[id] += w;
+        }
+    };
+    for edge in &topo.edges {
+        let segment = edge.map(|v| p[v]);
+        let (lo, hi) = crate::contact::aabb(&segment);
+        let bounds = (lo - pad, hi + pad);
+        body_topo.triangle_query.query(bounds, &mut candidates);
+        work.spend(candidates.len())?;
+        for &index in &candidates {
+            let triangle = triangles[index].map(|v| vertices[v]);
+            if !crate::bvh::overlaps(bounds, crate::contact::aabb(&triangle)) {
+                continue;
+            }
+            let hit = edge_face_witness(segment, triangle)?;
+            let normal = (triangle[1] - triangle[0])
+                .cross(triangle[2] - triangle[0])
+                .normalized();
+            add(
+                edge,
+                &hit.edge_weights,
+                hit.edge_point - hit.triangle_point,
+                normal,
+                hit.distance,
+            );
+        }
+    }
+    for triangle in &topo.tris {
+        let face = triangle.map(|v| p[v]);
+        let (lo, hi) = crate::contact::aabb(&face);
+        let bounds = (lo - pad, hi + pad);
+        body_topo.edge_query.query(bounds, &mut candidates);
+        work.spend(candidates.len())?;
+        for &index in &candidates {
+            let segment = body_topo.edges[index].map(|v| vertices[v]);
+            if !crate::bvh::overlaps(bounds, crate::contact::aabb(&segment)) {
+                continue;
+            }
+            let hit = edge_face_witness(segment, face)?;
+            if hit.distance >= clearance {
+                continue;
+            }
+            let normal = body.nearest(hit.edge_point).normal;
+            add(
+                triangle,
+                &hit.triangle_weights,
+                hit.triangle_point - hit.edge_point,
+                normal,
+                hit.distance,
+            );
+        }
+    }
+    // Nothing is published before both complete candidate streams fit the shared allowance.
+    let max_step = 0.5 * clearance;
+    let mut updated = p.clone();
+    for w in 0..topo.n_weld {
+        if weight[w] == 0.0 {
+            continue;
+        }
+        let mut delta = acc[w] / weight[w].max(1.0);
+        let length = norm3(delta);
+        if !length.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite body-repelling start correction",
+            ));
+        }
+        if length > max_step {
+            delta = delta * (max_step / length);
+        }
+        updated[w] = p[w] + delta;
+        if !updated[w].is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite body-repelling start position",
+            ));
+        }
+    }
+    for (w, members) in topo.members.iter().enumerate() {
+        if weight[w] > 0.0 {
+            for &member in members {
+                q[member] = updated[w];
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn relax_inner(
     mesh: &GarmentMesh,
@@ -1023,6 +1258,7 @@ fn relax_inner(
     let n = start.len();
     let deg: Vec<f64> = degrees(n, &edges).into_iter().map(|d| d.max(1.0)).collect();
     let topo = repulsion.map(|_| RepulsionTopology::build(mesh, groups));
+    let body_topo = repulsion.map(|_| BodyRepulsion::new(body)).transpose()?;
     let mut q = start.to_vec();
     for it in 0..iters {
         let corr: Vec<Vec3> = edges
@@ -1065,6 +1301,16 @@ fn relax_inner(
                 work.as_deref_mut()
                     .expect("repulsion has a complete-call budget"),
             )?;
+            apply_body_repulsion(
+                &mut q,
+                topo,
+                body,
+                body_topo.as_ref().expect("repulsion has body features"),
+                clearance,
+                opts,
+                work.as_deref_mut()
+                    .expect("repulsion has a complete-call budget"),
+            )?;
         }
         if it % RELAX_PUSH_OUT_ITERS == RELAX_PUSH_OUT_ITERS - 1 || it + 1 == iters {
             body.push_out(&mut q, clearance);
@@ -1100,8 +1346,8 @@ pub fn start_state(mesh: &GarmentMesh, wrapped: Vec<Vec3>, body: &NearestTree) -
         .expect("legacy start has no fallible self-repulsion work")
 }
 
-/// As [`start_state`], with optional bounded cloth–cloth separation impulses during relaxation
-/// ([`SelfRepulsionOptions`]). When `repulsion` is `None`, the result is bit-identical to
+/// As [`start_state`], with optional bounded cloth–cloth and body-feature separation during
+/// relaxation ([`SelfRepulsionOptions`]). When `repulsion` is `None`, the result is bit-identical to
 /// [`start_state`].
 ///
 /// # Errors
@@ -1256,6 +1502,200 @@ mod tests {
             ],
             "placement": {"part": "torso"}
         })
+    }
+
+    #[test]
+    fn body_feature_witness_sees_face_piercing_and_edge_proximity() {
+        let triangle = [
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        ];
+        // Neither endpoint nor either triangle edge is near this interior crossing.
+        let crossing = edge_face_witness(
+            [Vec3::new(0.0, 0.0, -0.1), Vec3::new(0.0, 0.0, 0.3)],
+            triangle,
+        )
+        .unwrap();
+        assert!(crossing.distance < 1e-14);
+        assert!((crossing.edge_weights[1] - 0.25).abs() < 1e-14);
+        for (actual, expected) in crossing.triangle_weights.into_iter().zip([0.25, 0.25, 0.5]) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        let nearby = edge_face_witness(
+            [Vec3::new(-2.0, 0.0, 0.002), Vec3::new(2.0, 0.0, 0.002)],
+            triangle,
+        )
+        .unwrap();
+        assert!((nearby.distance - 0.002).abs() < 1e-14);
+        assert!(nearby.edge_weights.iter().all(|&w| w > 0.0));
+        assert!(nearby.triangle_weights.contains(&0.0));
+    }
+
+    #[test]
+    fn body_repulsion_clears_a_ridge_through_one_welded_cloth_face() {
+        use crate::contact::{Body, Contact, ContactParams, Intersection};
+
+        let vertices = vec![
+            Vec3::new(-0.02, -0.02, -0.02),
+            Vec3::new(0.02, -0.02, -0.02),
+            Vec3::new(0.0, 0.02, -0.02),
+            Vec3::new(0.0, 0.0, 0.02),
+        ];
+        let faces = vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]];
+        let body = NearestTree::new(vertices.clone(), faces.clone()).unwrap();
+        let body_topo = BodyRepulsion::new(&body).unwrap();
+        // Three independent cloth vertices, plus a seam duplicate of the first.
+        let topo = RepulsionTopology {
+            n_weld: 3,
+            members: vec![vec![0, 3], vec![1], vec![2]],
+            adj: vec![vec![1, 2], vec![0, 2], vec![0, 1]],
+            tris: vec![[0, 1, 2]],
+            tri_owner: vec![0],
+            tri_rest2d: vec![[Vec2::new(0.0, 0.0); 3]],
+            edges: vec![[0, 1], [0, 2], [1, 2]],
+            edge_rest2d: vec![vec![]; 3],
+            vert_owners: vec![vec![0]; 3],
+        };
+        let a = Vec3::new(-0.05, -0.05, 0.0);
+        let initial = vec![
+            a,
+            Vec3::new(0.05, -0.05, 0.0),
+            Vec3::new(0.0, 0.075, 0.0),
+            a,
+        ];
+        assert!(
+            initial
+                .iter()
+                .all(|&p| body.signed_distance(p) > RELAX_CLEARANCE)
+        );
+        let mut vertex_only = initial.clone();
+        body.push_out(&mut vertex_only, RELAX_CLEARANCE);
+        assert_eq!(vertex_only, initial);
+        for &p in &vertices {
+            let (w, _) = point_triangle_closest(p, initial[0], initial[1], initial[2]);
+            let closest = initial[0] * w[0] + initial[1] * w[1] + initial[2] * w[2];
+            assert!((p - closest).norm() > RELAX_CLEARANCE);
+        }
+        let audit = Contact::new(
+            Body::new(vertices, faces, 0.01).unwrap(),
+            ContactParams {
+                dhat: 0.001,
+                thickness: 0.0,
+                kappa: 1.0,
+                mu: 0.0,
+                eps_v: 0.001,
+            },
+            vec![[0, 1, 2]],
+            |_, _| 0.001,
+        );
+        assert!(matches!(
+            audit.first_intersection(&initial),
+            Some(Intersection::BodyEdge { .. })
+        ));
+        let opts = SelfRepulsionOptions::default();
+        let repair = || {
+            let mut q = initial.clone();
+            let mut work = RepulsionWork::new(opts);
+            for _ in 0..200 {
+                apply_body_repulsion(
+                    &mut q,
+                    &topo,
+                    &body,
+                    &body_topo,
+                    RELAX_CLEARANCE,
+                    opts,
+                    &mut work,
+                )
+                .unwrap();
+                body.push_out(&mut q, RELAX_CLEARANCE);
+                assert_eq!(q[0], q[3], "seam members must remain welded");
+                if audit.first_intersection(&q).is_none() {
+                    break;
+                }
+            }
+            assert!(
+                audit.first_intersection(&q).is_none(),
+                "the exact body audit must admit the repaired face"
+            );
+            q
+        };
+        assert_eq!(repair(), repair());
+
+        let mut q = initial.clone();
+        let mut work = RepulsionWork::new(SelfRepulsionOptions {
+            max_candidate_checks: 1,
+            ..opts
+        });
+        let refused = apply_body_repulsion(
+            &mut q,
+            &topo,
+            &body,
+            &body_topo,
+            RELAX_CLEARANCE,
+            opts,
+            &mut work,
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, RefusalCode::BudgetExceeded);
+        assert_eq!(q, initial, "a failed sweep must not publish corrections");
+
+        let mut work = RepulsionWork::new(opts);
+        q[0].x = f64::NAN;
+        assert_eq!(
+            apply_body_repulsion(
+                &mut q,
+                &topo,
+                &body,
+                &body_topo,
+                RELAX_CLEARANCE,
+                opts,
+                &mut work,
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(q[1..], initial[1..]);
+        for clearance in [-1.0, f64::NAN] {
+            let mut q = initial.clone();
+            assert!(
+                apply_body_repulsion(
+                    &mut q,
+                    &topo,
+                    &body,
+                    &body_topo,
+                    clearance,
+                    opts,
+                    &mut work,
+                )
+                .is_err()
+            );
+            assert_eq!(q, initial);
+        }
+        let mut q = initial.clone();
+        apply_body_repulsion(&mut q, &topo, &body, &body_topo, 0.0, opts, &mut work).unwrap();
+        assert_eq!(q, initial);
+    }
+
+    #[test]
+    fn body_repulsion_refuses_degenerate_body_features() {
+        let body = NearestTree::new(
+            vec![
+                Vec3::ZERO,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(2.0, 0.0, 0.0),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        assert!(matches!(
+            BodyRepulsion::new(&body),
+            Err(Refusal {
+                code: RefusalCode::DegenerateGeometry,
+                ..
+            })
+        ));
     }
 
     #[test]
