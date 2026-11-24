@@ -25720,3 +25720,162 @@ test('guided regional objectives author exact regions, freeze named-case snapsho
   assert.match(visibleText(mpTrials), /max_warp_green_strain — region cuff \(minimize\): 0\.14 1/);
   assert.doesNotMatch(visibleText(mpTrials), /0\.88 1/);
 });
+
+test('independent cell bounded calendar order search renders calendar_timing proofs and updated scope across consumers', async () => {
+  const p = await pageModule();
+  await p.load();
+  await p.bind();
+  scenarioInputs(p);
+  p.select('sewOptions');
+  const calendars = {
+    model: 'nonpreemptive_resource_windows/1',
+    resources: {
+      'cell-a': [{ start_milliseconds: 0, end_milliseconds: 1000 }],
+      'cell-b': [{ start_milliseconds: 0, end_milliseconds: 4000 }, { start_milliseconds: 10000, end_milliseconds: 12400 }],
+    },
+    source: { note: '<independently qualified calendar breaks>' },
+  };
+  const selected = {
+    makespan_milliseconds: 12400, feed_seconds: 6.4, scheduled_feed_milliseconds: 6400,
+    setup_milliseconds: 0, handling_milliseconds: 0,
+    cells: [
+      { cell: 'cell-a', copies: [], available_at_milliseconds: 0, scheduled_feed_milliseconds: 0, feed_padding_seconds: 0 },
+      {
+        cell: 'cell-b', copies: [0], available_at_milliseconds: 0, finish_milliseconds: 12400,
+        scheduled_feed_milliseconds: 6400, feed_padding_seconds: 0,
+        schedule: {
+          feed_seconds: 6.4,
+          ordering: {
+            selected_order: ['0/long', '0/short'],
+            optimality_proven: false,
+            calendar_timing: {
+              search_scope: 'all_dependency_and_resource_feasible_orders/1',
+              serial_incumbent_finish_milliseconds: null,
+              selected_finish_milliseconds: 12400,
+              lower_bound_finish_milliseconds: 12400,
+              search_nodes: 4,
+              search_complete: true,
+              optimality_proven: true,
+              infeasibility_proven: false,
+              budget_exhausted: false,
+            },
+          },
+          operations: [
+            { id: '0/short', copy: 0, operation_id: 'short', seam_index: 0, after: [] },
+            { id: '0/long', copy: 0, operation_id: 'long', seam_index: 1, after: [] },
+          ],
+        },
+        calendar_timeline: {
+          calendar_delay_milliseconds: 6000,
+          steps: [
+            { operation: '0/long', copy: 0, handling_start_milliseconds: 0, setup_start_milliseconds: 0, feed_start_milliseconds: 0, finish_milliseconds: 4000 },
+            { operation: '0/short', copy: 0, handling_start_milliseconds: 10000, setup_start_milliseconds: 10000, feed_start_milliseconds: 10000, finish_milliseconds: 12400 },
+            { operation: null, copy: null, handling_start_milliseconds: 12400, setup_start_milliseconds: 12400, feed_start_milliseconds: 12400, finish_milliseconds: 12400 },
+          ],
+        },
+      },
+    ],
+  };
+  const parallel = {
+    schema: 'ftx-sewing-parallel/10', time_basis: 'ceil_operation_feed_milliseconds/1',
+    selected, baseline: selected, availability_calendars: calendars,
+    calendar_order_scope: 'bounded_calendar_order_search/1',
+    lower_bound_makespan_milliseconds: 12400, search_nodes: 8, optimality_proven: true, budget_exhausted: false,
+    availability: {
+      baseline_replaced: true,
+      cells: [
+        { cell: 'cell-a', counts: [{ copies: 1, incumbent_finish_milliseconds: null, lower_bound_finish_milliseconds: 6400, feasible: false, infeasibility_proven: true }] },
+        { cell: 'cell-b', counts: [{ copies: 1, incumbent_finish_milliseconds: 12400, lower_bound_finish_milliseconds: 12400, feasible: true, infeasibility_proven: false }] },
+      ],
+    },
+  };
+  const plan = {
+    schema: 'ftx-sewing-plan/37', hardware_execution_authorized: false,
+    options: { production: { parallel: { availability_calendars: calendars, cells: [{ id: 'cell-a' }, { id: 'cell-b' }] } } },
+    seams: [
+      { pass: { id: 'short', needle: 'N', thread: 'T' } },
+      { pass: { id: 'long', needle: 'N', thread: 'T' } },
+    ],
+    production: { schema: 'ftx-sewing-production/25', parallel },
+  };
+  for (const op of ['sew', 'study', 'scenario']) {
+    const row = studyRow('calendar-searched');
+    row.sewing = outcome(plan);
+    const study = studyReport([row]);
+    const report = op === 'sew' ? { stitches: [], plan } : op === 'study' ? study : { ...scenarioReport(), manufacturing: study };
+    const raw = JSON.stringify(report);
+    await p.e[op].onclick();
+    p.emit(report, [{ name: 'cell-calendar-search.json', text: raw, mime: 'application/json' }]);
+    const s = section(p, op === 'sew' ? 'sew' : op === 'study' ? 'Fixed-pattern manufacturing alternatives' : 'Fresh drape and heat alternatives');
+    const table = ending => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent.endsWith(ending));
+    const searchTable = table('independent cell calendar order search');
+    assert.ok(searchTable, `${op} must render independent cell calendar order search table`);
+    assert.deepEqual(plain(searchTable.children.slice(2).map(tr => tr.children.map(n => n.textContent))), [
+      ['cell-a', 'Idle', 'Idle', 'Idle', 'Idle', 'Idle', 'No work', 'No work', 'Idle', 'No work'],
+      ['cell-b', 'Does not fit', '12.4', '12.4', '4', 'true', 'true', 'false', 'false', 'false'],
+    ]);
+    const admissions = table('qualified cell availability').children.slice(2);
+    assert.equal(admissions[0].children.at(-1).textContent, 'Cannot fit: proved');
+    assert.equal(admissions[1].children.at(-1).textContent, 'Complete calendar-searched order fits every opening');
+    assert.match(visibleText(s), /search dependency- and fixture-feasible operation orders against real openings/);
+    assert.match(visibleText(s), /Calendar completion proof is separate from productive setup\/handling optimality/);
+    assert.doesNotMatch(visibleText(s), /replays retained serial operation orders/);
+    if (op === 'sew') {
+      const summary = JSON.parse(s.children[1].textContent);
+      assert.equal(summary.parallel_calendar_resources, 2);
+      assert.equal(summary.parallel_calendar_order_scope, 'bounded_calendar_order_search/1');
+    }
+    assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  }
+});
+
+test('scenario matrix cross-case comparison keeps union and named-region readings distinct with exact labels', async () => {
+  const p = await pageModule();
+  await p.load();
+  scenarioInputs(p);
+  const policy = {
+    basis: 'reported_bounds',
+    objectives: [
+      { metric: 'max_warp_green_strain', region: 'cuff', direction: 'minimize' },
+      { metric: 'max_warp_green_strain', region: 'neck', direction: 'minimize' },
+      { metric: 'areal_mass_kg_m2', direction: 'minimize' },
+    ],
+    constraints: [
+      { metric: 'max_warp_green_strain', basis: 'nominal', maximum: 0.35 },
+    ],
+  };
+  const candidate = {
+    key: 'linen', eligible: true, dominated_by: [], exclusions: [],
+    readings: {
+      max_warp_green_strain: { value: 0.31, unit: '1' },
+      areal_mass_kg_m2: { value: 0.24, unit: 'kg/m2', reported_bounds: [0.22, 0.26] },
+    },
+    regional_readings: {
+      cuff: { max_warp_green_strain: { value: 0.08, unit: '1' } },
+      neck: { max_warp_green_strain: { value: 0.19, unit: '1' } },
+    },
+  };
+  const report = scenarioMatrixReport();
+  report.cases = [{ ...report.cases[0], key: 'standing', comparison: { policy, alternatives: [candidate], frontier: ['linen'], incomparable: [] } }];
+  report.comparison = {
+    frontier: ['linen'],
+    case_order: ['standing'],
+    incomparable: [],
+    policies: { standing: policy },
+    alternatives: [{ key: 'linen', eligible: true, dominated_by: [], cases: { standing: candidate } }],
+  };
+  await p.e.scenario.onclick();
+  p.emit(report);
+  const s = section(p, 'Fresh drape and heat alternatives');
+  const matrixTable = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Named scenario decisions — authoritative Rust comparison');
+  assert.ok(matrixTable);
+  const readingsCell = matrixTable.children[2].children.at(-1).textContent;
+  assert.match(readingsCell, /max_warp_green_strain — region cuff: 0\.08 1/);
+  assert.match(readingsCell, /max_warp_green_strain — region neck: 0\.19 1/);
+  assert.match(readingsCell, /max_warp_green_strain: 0\.31 1/);
+  assert.match(readingsCell, /areal_mass_kg_m2: 0\.24 kg\/m2; reported range \[0\.22, 0\.26\] kg\/m2/);
+  assert.doesNotMatch(readingsCell, /region cuff:[^|]*reported range unknown/);
+  assert.doesNotMatch(readingsCell, /region neck:[^|]*reported range unknown/);
+  assert.doesNotMatch(readingsCell, /max_warp_green_strain: 0\.31 1; reported range unknown/);
+  assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+});

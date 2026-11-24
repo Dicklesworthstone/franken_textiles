@@ -2229,13 +2229,14 @@ function scenarioMatrixComparison(op, parent, r) {
       for (const key of result.case_order) {
         const candidate = row.cases[key], policy = result.policies[key];
         const quantities = [...(policy?.objectives || []), ...(policy?.constraints || [])]
-          .filter((q, i, all) => all.findIndex(other => other.metric === q.metric) === i);
-        const readings = quantities.map(({ metric: name }) => {
-          const q = candidate?.readings?.[name];
-          if (!q) return `${name}: Unknown`;
+          .filter((q, i, all) => all.findIndex(other => other.metric === q.metric && (other.region ?? null) === (q.region ?? null)) === i);
+        const readings = quantities.map(({ metric: name, region }) => {
+          const label = region != null ? `${name} — region ${region}` : name;
+          const q = region != null ? candidate?.regional_readings?.[region]?.[name] : candidate?.readings?.[name];
+          if (!q) return `${label}: Unknown`;
           const bounds = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
-            metricUsesBounds(policy, name) ? "; reported range unknown" : "";
-          return `${name}: ${metric(q.value)} ${q.unit}${bounds}`;
+            metricUsesBounds(policy, name, region) ? "; reported range unknown" : "";
+          return `${label}: ${metric(q.value)} ${q.unit}${bounds}`;
         });
         cells(t, [row.key, row.eligible ? "Eligible" : "Excluded", row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
           key, candidate ? (candidate.eligible ? "Eligible" : `Excluded: ${candidate.exclusions.map(e => e.message).join("; ")}`) : "Unknown",
@@ -2331,6 +2332,13 @@ function designComparison(op, parent, study, casePolicies = {}) {
       const objectiveLabel = item => item ? `${item.metric}${item.region != null ? ` — region ${item.region}` : ""}` : "Unknown";
       const objectiveReading = (candidate, item) =>
         item?.region != null ? candidate?.regional_readings?.[item.region]?.[item.metric] : candidate?.readings?.[item?.metric];
+      const readingText = (reading, needsBounds = bounded) => {
+        if (!reading) return "Unknown";
+        const range = reading.reported_bounds ?
+          `; reported range [${reading.reported_bounds.map(metric).join(", ")}] ${reading.unit || ""}` :
+          needsBounds ? "; reported range unknown" : "";
+        return `${metric(reading.value)} ${reading.unit || ""}${range}`;
+      };
       const formatComparisonReadings = (comparison, policyKey) => {
         const policy = policyFor(policyKey);
         const parts = Object.entries(comparison?.readings || {}).map(([key, value]) =>
@@ -2342,13 +2350,6 @@ function designComparison(op, parent, study, casePolicies = {}) {
           }
         }
         return parts.join("; ") || "Unavailable";
-      };
-      const readingText = (reading, needsBounds = bounded) => {
-        if (!reading) return "Unknown";
-        const range = reading.reported_bounds ?
-          `; reported range [${reading.reported_bounds.map(metric).join(", ")}] ${reading.unit || ""}` :
-          needsBounds ? "; reported range unknown" : "";
-        return `${metric(reading.value)} ${reading.unit || ""}${range}`;
       };
       if (guidance) {
         const search = table(parent, severalMaterials ? "Multi-material Pareto adaptive alteration search" :
@@ -3957,6 +3958,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
   const feedSearch = report.feed_time_search;
   const calendars = operator?.availability_calendars;
   const cellCalendars = report.availability_calendars;
+  const calendarOrderSearch = report.calendar_order_scope === "bounded_calendar_order_search/1";
   const pools = report.shared_workholding;
   const seconds = value => typeof value === "number" ? value / 1000 : null;
   const totals = table(parent, `${label}: parallel completion and aggregate work`,
@@ -4041,7 +4043,7 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       for (const count of cell.counts || []) cells(windows, [cell.cell, metric(count.copies),
         typeof cell.available_until_milliseconds === "number" ? metric(seconds(cell.available_until_milliseconds)) : "Open ended",
         metric(seconds(count.incumbent_finish_milliseconds)), metric(seconds(count.lower_bound_finish_milliseconds)),
-        count.feasible ? (cellCalendars ? "Complete retained order fits every opening" : calendars ? "Fits before calendar and shared-resource constraints" : pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
+        count.feasible ? (calendarOrderSearch ? "Complete calendar-searched order fits every opening" : cellCalendars ? "Complete retained order fits every opening" : calendars ? "Fits before calendar and shared-resource constraints" : pools ? "Fits without shared-resource contention" : operator ? "Fits without operator contention" : "Fits") : count.infeasibility_proven ? "Cannot fit: proved" : "Unresolved search"]);
     }
   }
   if (cellCalendars) {
@@ -4053,12 +4055,33 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     }
     const delays = table(parent, `${label}: independent cell calendar delays`,
       ["Cell", "Unoccupied calendar delay (s)"]);
+    const calendarTimed = (report.selected?.cells || []).some(cell => cell.schedule?.ordering?.calendar_timing);
+    const calendarSearch = calendarTimed ? table(parent, `${label}: independent cell calendar order search`,
+      ["Cell", "Serial incumbent finish (s)", "Selected calendar finish (s)", "Calendar finish lower bound (s)",
+        "Calendar search nodes", "Calendar search complete", "Calendar finish minimum proved",
+        "Calendar infeasibility proved", "Calendar work limit reached", "Productive work minimum proved"]) : null;
     const timeline = table(parent, `${label}: selected independent cell timeline`,
       ["Cell", "Local operation", "Global copy", "Handling starts (s)", "Setup starts (s)",
         "Feed starts (s)", "Complete (s)"]);
     for (const cell of report.selected?.cells || []) {
       cells(delays, [cell.cell, cell.calendar_timeline
         ? metric(seconds(cell.calendar_timeline.calendar_delay_milliseconds)) : "Idle"]);
+      if (calendarSearch) {
+        const ct = cell.schedule?.ordering?.calendar_timing;
+        if (!cell.schedule) {
+          cells(calendarSearch, [cell.cell, "Idle", "Idle", "Idle", "Idle", "Idle", "No work", "No work", "Idle", "No work"]);
+        } else if (!ct) {
+          cells(calendarSearch, [cell.cell, "Not recorded", "Not recorded", "Not recorded", "Not recorded",
+            "Not recorded", "Not recorded", "Not recorded", "Not recorded", String(cell.schedule.ordering.optimality_proven)]);
+        } else {
+          cells(calendarSearch, [cell.cell,
+            ct.serial_incumbent_finish_milliseconds == null ? "Does not fit" : metric(seconds(ct.serial_incumbent_finish_milliseconds)),
+            ct.selected_finish_milliseconds == null ? "None" : metric(seconds(ct.selected_finish_milliseconds)),
+            metric(seconds(ct.lower_bound_finish_milliseconds)), metric(ct.search_nodes),
+            String(ct.search_complete), String(ct.optimality_proven), String(ct.infeasibility_proven),
+            String(ct.budget_exhausted), String(cell.schedule.ordering.optimality_proven)]);
+        }
+      }
       for (const step of cell.calendar_timeline?.steps || []) cells(timeline, [cell.cell,
         step.operation ?? "Final unloading", typeof step.copy === "number" ? metric(step.copy) : "Batch end",
         metric(seconds(step.handling_start_milliseconds)), metric(seconds(step.setup_start_milliseconds)),
@@ -4119,8 +4142,12 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
       (cellCalendars ? "Feed is rounded upward separately for each positive operation. " : "Feed is rounded upward once per used cell. ")) +
     (cellCalendars ? "Each complete handling, setup and feed block fits one opening; final unloading also fits one opening. " +
       "Garment, fixture and setup state persist across breaks. Calendar delays are separate from productive work. " +
-      "The allocation replays retained serial operation orders; a failed retained order remains unresolved unless its independent lower bound proves exclusion. " +
-      "Completing that retained-order search alone does not prove a global optimum. " : "") +
+      (calendarOrderSearch ?
+        "Each cell/count uses the remaining shared prefix budget to search dependency- and fixture-feasible operation orders against real openings. " +
+        "Calendar completion proof is separate from productive setup/handling optimality; an earlier calendar finish can use more productive work. " +
+        "A missing order stays unresolved unless exhausted calendar search or an independent lower bound proves exclusion. " :
+        "The allocation replays retained serial operation orders; a failed retained order remains unresolved unless its independent lower bound proves exclusion. " +
+        "Completing that retained-order search alone does not prove a global optimum. ") : "") +
     "Each used cell includes its own availability, initial setup and final unloading; raw feed and padding remain separate. " +
     "Elapsed completion is distinct from summed machine work. The retained single-machine reference is not the selected concurrent order. " +
     (heterogeneous ? "Stitch pitch, feed, qualifications and thread consumption come from each selected cell's own admitted plan. " +
@@ -4316,6 +4343,8 @@ function sewingResult(parent, r) {
     parallel_scheduled_feed_milliseconds: parallel?.feed_time_search?.selected_feed_milliseconds,
     parallel_feed_lower_bound_milliseconds: parallel?.feed_time_search?.lower_bound_feed_milliseconds,
     parallel_feed_optimality_proven: parallel?.feed_time_search?.optimality_proven,
+    parallel_calendar_resources: parallel?.availability_calendars ? Object.keys(parallel.availability_calendars.resources).length : undefined,
+    parallel_calendar_order_scope: parallel?.calendar_order_scope,
     routed_makespan_seconds: routing ? routing.selected.makespan_milliseconds / 1000 : undefined,
     routed_lower_bound_seconds: routing ? routing.lower_bound_makespan_milliseconds / 1000 : undefined,
     routed_optimality_proven: routing?.optimality_proven,
