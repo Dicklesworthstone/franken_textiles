@@ -406,6 +406,16 @@ pub struct Body {
     tri_box: Vec<(Vec3, Vec3)>,
     edge_box: Vec<(Vec3, Vec3)>,
     winding_tree: WindingOctree,
+    /// Names this geometry: a new body and every refit take a fresh number, a clone keeps it. A
+    /// contact's candidate list is reused only against the geometry it was built for.
+    generation: u64,
+}
+
+/// The source of [`Body::generation`] numbers (process-wide; only ever compared for equality).
+static BODY_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_body_generation() -> u64 {
+    BODY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether two axis-aligned boxes overlap (touching counts).
@@ -650,6 +660,7 @@ impl Body {
             tri_box: Vec::new(),
             edge_box: Vec::new(),
             winding_tree: WindingOctree::empty(),
+            generation: next_body_generation(),
         }
     }
 
@@ -719,6 +730,7 @@ impl Body {
             tri_box,
             edge_box,
             winding_tree,
+            generation: next_body_generation(),
         })
     }
 
@@ -755,6 +767,7 @@ impl Body {
         self.tri_grid = tri_grid;
         self.edge_grid = edge_grid;
         self.vert_grid = vert_grid;
+        self.generation = next_body_generation();
         if self.closed {
             self.winding_tree.refit(&self.vertices, &self.triangles);
         }
@@ -1059,6 +1072,76 @@ fn pair_energy(st: &Stencil, kind: Closest, p: &ContactParams) -> PairEnergy {
     PairEnergy::Active(Box::new(e))
 }
 
+/// How much further than a query's padding a reusable candidate list reaches (m). Only speed depends
+/// on it: a longer reach lists more pairs and is rebuilt less often.
+const NEAR_SKIN_M: f64 = 0.004;
+/// Room left in the reach test for rounding (m), many orders above it at garment scale.
+const NEAR_MARGIN_M: f64 = 1e-9;
+
+/// The cloth–body candidate pairs whose padded boxes overlapped at some anchor cloth positions, in the
+/// order [`Contact::body_candidates`] lists them. A later query at `x` (swept by `p`) with padding
+/// `pad` can accept a pair only if its boxes come within `pad + d + s` of each other at the anchor,
+/// where `d` is how far any cloth vertex has moved since then and `s` the largest sweep component
+/// (each box of the query lies inside the anchor box grown by `d + s`). When that is within the
+/// list's own padding, the list holds every such pair, and filtering it with the query's exact box
+/// test gives the pairs of a fresh grid query, in the same order.
+#[derive(Debug)]
+struct NearList {
+    body: u64,
+    triangles: Vec<[usize; 3]>,
+    edges: Vec<[usize; 2]>,
+    anchor: Vec<Vec3>,
+    pad: f64,
+    pairs: Vec<Pair>,
+}
+
+/// The latest [`NearList`]. Copies of a contact (a step's trial solver) start from the same list.
+#[derive(Debug, Default)]
+struct NearCache(std::sync::Mutex<Option<std::sync::Arc<NearList>>>);
+
+impl Clone for NearCache {
+    fn clone(&self) -> Self {
+        NearCache(std::sync::Mutex::new(self.current()))
+    }
+}
+
+impl NearCache {
+    fn current(&self) -> Option<std::sync::Arc<NearList>> {
+        self.0.lock().ok().and_then(|list| list.clone())
+    }
+
+    fn store(&self, list: NearList) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some(std::sync::Arc::new(list));
+        }
+    }
+}
+
+/// A primitive's box from its points at `x` and, with a sweep, at `x + p`, grown by `pad`: the box
+/// [`Contact::body_candidates`] tests (the same points folded in the same order as [`aabb`]).
+fn padded_span(ids: &[usize], x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> (Vec3, Vec3) {
+    let fold = |(lo, hi): (Vec3, Vec3), q: Vec3| {
+        (
+            Vec3::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z)),
+            Vec3::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z)),
+        )
+    };
+    let mut span = (
+        Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+        Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for &i in ids {
+        span = fold(span, x[i]);
+    }
+    if let Some(p) = p {
+        for &i in ids {
+            span = fold(span, x[i] + p[i]);
+        }
+    }
+    let (lo, hi) = span;
+    (lo - Vec3::new(pad, pad, pad), hi + Vec3::new(pad, pad, pad))
+}
+
 /// The contact state of a solver: the body, parameters, cloth topology and the friction lag.
 #[derive(Clone, Debug)]
 pub struct Contact {
@@ -1079,6 +1162,7 @@ pub struct Contact {
     lag: Vec<FrictionPair>,
     lag_x: Vec<Vec3>,
     lag_h: f64,
+    near: NearCache,
 }
 
 // A liquid-domain qualification freezes physical interfaces and contact policy, not body motion
@@ -1419,6 +1503,7 @@ impl Contact {
             lag_x: Vec::new(),
             lag_h: 1.0,
             creases: Vec::new(),
+            near: NearCache::default(),
         }
     }
 
@@ -1898,11 +1983,82 @@ impl Contact {
 
     /// Candidate pairs whose primitives' boxes (from `x` to `x + p`, if given) come within `pad` of each other.
     pub(crate) fn candidates(&self, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> Vec<Pair> {
-        let mut out = self.body_candidates(x, p, pad);
+        let mut out = self.near_body_candidates(x, p, pad);
         if self.self_params.is_some() {
             out.extend(self.self_candidates(x, p, pad));
         }
         out
+    }
+
+    /// [`Contact::body_candidates`], from the reusable [`NearList`] when it reaches far enough (the
+    /// same pairs in the same order); otherwise a fresh grid query, which for an unswept query also
+    /// becomes the new list, built `NEAR_SKIN_M` wider.
+    fn near_body_candidates(&self, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> Vec<Pair> {
+        if self.body.triangles.is_empty() {
+            return Vec::new();
+        }
+        let largest = |m: f64, d: Vec3| m.max(d.x.abs()).max(d.y.abs()).max(d.z.abs());
+        let sweep = p.map_or(0.0, |p| p.iter().copied().fold(0.0, largest));
+        if let Some(list) = self.near.current()
+            && list.body == self.body.generation
+            && list.anchor.len() == x.len()
+            && list.triangles == self.cloth.triangles
+            && list.edges == self.cloth.edges
+        {
+            let moved = x
+                .iter()
+                .zip(&list.anchor)
+                .map(|(&a, &b)| a - b)
+                .fold(0.0, largest);
+            // NaN anywhere fails the comparison and takes the fresh query below.
+            if pad + moved + sweep <= list.pad - NEAR_MARGIN_M {
+                return list
+                    .pairs
+                    .iter()
+                    .copied()
+                    .filter(|&pair| self.body_pair_within(pair, x, p, pad))
+                    .collect();
+            }
+        }
+        if p.is_some() || !pad.is_finite() || !x.iter().all(|q| q.is_finite()) {
+            return self.body_candidates(x, p, pad);
+        }
+        let reach = pad + NEAR_SKIN_M;
+        let pairs = self.body_candidates(x, None, reach);
+        let out = pairs
+            .iter()
+            .copied()
+            .filter(|&pair| self.body_pair_within(pair, x, None, pad))
+            .collect();
+        self.near.store(NearList {
+            body: self.body.generation,
+            triangles: self.cloth.triangles.clone(),
+            edges: self.cloth.edges.clone(),
+            anchor: x.to_vec(),
+            pad: reach,
+            pairs,
+        });
+        out
+    }
+
+    /// The exact box test [`Contact::body_candidates`] applies to `pair` at `x` (swept by `p`).
+    fn body_pair_within(&self, pair: Pair, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> bool {
+        let b = &self.body;
+        match pair {
+            Pair::VertexTri { cv, bt } => {
+                let (lo, hi) = padded_span(&[cv], x, p, pad);
+                overlaps(b.tri_box[bt], lo, hi)
+            }
+            Pair::TriVertex { ct, bv } => {
+                let (lo, hi) = padded_span(&self.cloth.triangles[ct], x, p, pad);
+                overlaps((b.vertices[bv], b.vertices[bv]), lo, hi)
+            }
+            Pair::EdgeEdge { ce, be } => {
+                let (lo, hi) = padded_span(&self.cloth.edges[ce], x, p, pad);
+                overlaps(b.edge_box[be], lo, hi)
+            }
+            _ => false,
+        }
     }
 
     fn body_candidates(&self, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> Vec<Pair> {
@@ -1912,14 +2068,7 @@ impl Contact {
             return out;
         }
         let mut buf = Vec::new();
-        let span = |ids: &[usize]| -> (Vec3, Vec3) {
-            let mut pts: Vec<Vec3> = ids.iter().map(|&i| x[i]).collect();
-            if let Some(p) = p {
-                pts.extend(ids.iter().map(|&i| x[i] + p[i]));
-            }
-            let (lo, hi) = aabb(&pts);
-            (lo - Vec3::new(pad, pad, pad), hi + Vec3::new(pad, pad, pad))
-        };
+        let span = |ids: &[usize]| padded_span(ids, x, p, pad);
         // Grid cells give a superset; the exact box test keeps the pairs whose boxes come within `pad`.
         for cv in 0..x.len() {
             let (lo, hi) = span(&[cv]);
@@ -1978,7 +2127,7 @@ impl Contact {
     /// (the cloth vertex, or the first cloth vertex of the cloth triangle or edge).
     #[must_use]
     pub fn closest_pair(&self, x: &[Vec3], range: f64) -> Option<(f64, Pair, Vec3)> {
-        self.body_candidates(x, None, range + self.params.thickness)
+        self.near_body_candidates(x, None, range + self.params.thickness)
             .into_iter()
             .map(|pair| {
                 let st = stencil(pair, x, &self.body, &self.cloth);
@@ -2442,6 +2591,95 @@ mod tests {
             mu: 0.3,
             eps_v: 1e-3,
         }
+    }
+
+    /// The reusable candidate list gives exactly the pairs (and order) of a fresh grid query, for
+    /// moves within and beyond its reach, swept and unswept, and is reused while it reaches.
+    #[test]
+    fn reused_candidate_list_equals_a_fresh_query() {
+        let grid = |n: usize, spacing: f64, z: &dyn Fn(f64, f64) -> f64| {
+            let vertices: Vec<Vec3> = (0..n * n)
+                .map(|k| {
+                    let (u, v) = ((k % n) as f64 * spacing, (k / n) as f64 * spacing);
+                    Vec3::new(u, v, z(u, v))
+                })
+                .collect();
+            let triangles: Vec<[usize; 3]> = (0..(n - 1) * (n - 1))
+                .flat_map(|c| {
+                    let (i, j) = (c % (n - 1), c / (n - 1));
+                    let a = j * n + i;
+                    [[a, a + 1, a + n + 1], [a, a + n + 1, a + n]]
+                })
+                .collect();
+            (vertices, triangles)
+        };
+        let (body_v, body_t) = grid(24, 0.01, &|u, v| {
+            0.004 * (31.0 * u).sin() * (23.0 * v).cos()
+        });
+        let body = Body::new(body_v, body_t, 0.005).unwrap();
+        let (cloth, cloth_t) = grid(9, 0.025, &|_, _| 0.006);
+        let c = Contact::new(body, params(), cloth_t, |_, _| 0.025);
+        // A fixed pseudo-random sequence (no RNG crate): small moves, moves past the reach, sweeps.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut unit = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        let (mut hits, mut found) = (0, 0);
+        let mut x = cloth.clone();
+        for step in 0..80 {
+            // Offsets from the start (not a random walk), so the sheet stays over the body.
+            let amplitude = [2e-4, 1e-3, 3e-3, 9e-3][step % 4];
+            for (q, start) in x.iter_mut().zip(&cloth) {
+                *q = *start + Vec3::new(unit(), unit(), unit()) * amplitude;
+            }
+            let sweep: Vec<Vec3> = (0..x.len())
+                .map(|_| Vec3::new(unit(), unit(), unit()) * [1e-3, 4e-3][step % 2])
+                .collect();
+            for pad in [5e-4, 1.5e-3, 8e-3] {
+                let before = c.near.current();
+                let reused = c.candidates(&x, None, pad);
+                if before
+                    .as_ref()
+                    .zip(c.near.current())
+                    .is_some_and(|(a, b)| std::sync::Arc::ptr_eq(a, &b))
+                {
+                    hits += 1;
+                }
+                assert_eq!(
+                    reused,
+                    c.body_candidates(&x, None, pad),
+                    "step {step}, pad {pad}"
+                );
+                found += usize::from(!reused.is_empty());
+                assert_eq!(
+                    c.candidates(&x, Some(&sweep), pad),
+                    c.body_candidates(&x, Some(&sweep), pad),
+                    "step {step}, pad {pad}, swept"
+                );
+            }
+        }
+        assert!(hits > 20, "the list was reused only {hits} times");
+        assert!(found > 60, "only {found} queries found any pair");
+        // Another body geometry never reads the old list.
+        let mut moved = c.clone();
+        moved
+            .body
+            .refit_vertices(
+                moved
+                    .body
+                    .vertices
+                    .iter()
+                    .map(|p| *p + Vec3::new(0.0, 0.0, 0.002))
+                    .collect(),
+            )
+            .unwrap();
+        assert_eq!(
+            moved.candidates(&x, None, 1.5e-3),
+            moved.body_candidates(&x, None, 1.5e-3)
+        );
     }
 
     #[test]
