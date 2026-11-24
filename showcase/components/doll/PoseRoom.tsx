@@ -22,6 +22,7 @@ function phaseLine(status: PoseStatus, elapsed: number) {
   switch (status.phase) {
     case "loading": return "Loading the form";
     case "sewing": return `Sewing the jacket on in this pose · ${elapsed.toFixed(0)} s`;
+    case "moving": return `Moving the arm under the jacket · ${elapsed.toFixed(0)} s`;
     case "replay": return "Replaying what the solver did";
     case "failed": return "The solver could not start";
     default: return "Ready: drag an arm";
@@ -34,9 +35,12 @@ export default function PoseRoom() {
   const command = useRef<((c: PoseCommand) => void) | null>(null);
   const onStatus = useCallback((next: PoseStatus) => setStatus(next), []);
   useEffect(() => {
-    if (status.phase !== "sewing" || status.sewingSince === undefined) return;
+    if ((status.phase !== "sewing" && status.phase !== "moving") || status.sewingSince === undefined) return;
     const since = status.sewingSince;
-    const timer = setInterval(() => setElapsed((performance.now() - since) / 1000), 250);
+    // Start from this run's own time at once, not the last run's until the first tick.
+    const tick = () => setElapsed((performance.now() - since) / 1000);
+    tick();
+    const timer = setInterval(tick, 250);
     return () => clearInterval(timer);
   }, [status.phase, status.sewingSince]);
   const { angles } = status;
@@ -54,7 +58,8 @@ export default function PoseRoom() {
           <h1>Pose the arms. <em>The jacket is sewn on again.</em></h1>
           <p className="pose-lead">Drag an arm to where you want it. When you let go, the project&rsquo;s own cloth
             solver, running in this tab, lays the five pieces of the bolero round the form in that pose, sews the
-            seams and lets the jacket hang. Nothing is recorded in advance.</p>
+            seams and lets the jacket hang. Nudge an arm by a few degrees instead and the solver carries the sewn
+            jacket along with it. Nothing is recorded in advance.</p>
         </header>
 
         <div className="pose-bench">
@@ -97,7 +102,9 @@ export default function PoseRoom() {
             <dl className="pose-readout">
               <div><dt>Last sewn</dt><dd>{status.sewSeconds === undefined ? "…" :
                 `${status.clothVertices?.toLocaleString("en-GB")} cloth points, sewn and hung in ${status.sewSeconds.toFixed(1)} s in this tab`}</dd></div>
-              <div><dt>Pose of the jacket</dt><dd>{status.sewn ? `left ${status.sewn[0]}° · right ${status.sewn[1]}°` : "…"}</dd></div>
+              {status.moveSeconds !== undefined && <div><dt>Last move</dt><dd>
+                {`${status.moveSubsteps} checked steps, solved in ${status.moveSeconds.toFixed(1)} s in this tab`}</dd></div>}
+              <div><dt>Pose of the jacket</dt><dd>{status.sewn ? `left ${Math.round(status.sewn[0])}° · right ${Math.round(status.sewn[1])}°` : "…"}</dd></div>
               <div><dt>Solver warnings</dt><dd>{status.flags === undefined ? "…" : status.flags.length === 0 ? "None for this drape" :
                 <ul className="pose-flags">{status.flags.map(f => <li key={f}>{f}</li>)}</ul>}</dd></div>
             </dl>
@@ -114,11 +121,14 @@ export default function PoseRoom() {
             <li><b>The jacket is a real drape.</b> For every pose, the solver places the five flat pieces round
               the form, closes the seams and lets the jacket hang under gravity, with contact and friction
               against the form. The replay is its own record of that, frame by frame.</li>
-            <li><b>The form moves; the cloth is sewn again.</b> Dragging only moves the form. Letting go starts a
-              new drape in the nearest of the arm&rsquo;s sampled poses; if you move again before it finishes,
-              that drape is dropped and a new one begins. Carrying the sewn jacket along with a moving arm, in
-              steps the solver can certify, took 7 to 9 minutes for every 10° in our native tests, so the page
-              sews it on again instead.</li>
+            <li><b>A small move carries the jacket; a larger one sews it again.</b> Dragging moves the form. If you
+              let go within 5° of the pose the jacket was sewn in, the solver moves the arm there under the sewn
+              jacket in short steps: each starts with the cloth near the form moved along with it and is
+              accepted only after the solver&rsquo;s collision checks, and the replay shows those steps.
+              Further than that, a new drape starts in the nearest of the arm&rsquo;s sampled poses, which is
+              the quicker of the two for a large change; if you move again before it finishes, that drape is
+              dropped. In our tests (Node, one desktop machine) a 5° move took about 6 s, a fresh sew about
+              20 s and a 10° move about a minute.</li>
             <li><b>It runs on your device.</b> The solver is compiled to WebAssembly and works in a background
               thread of this tab. How long a pose takes depends on your computer.</li>
           </ol>

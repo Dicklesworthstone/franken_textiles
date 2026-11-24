@@ -15,7 +15,7 @@ import { fabrics } from "../atelier3d/weave";
 // the hung jacket. Nothing shown on the cloth is animated by hand.
 
 export type PoseStatus = {
-  phase: "loading" | "sewing" | "replay" | "ready" | "failed";
+  phase: "loading" | "sewing" | "moving" | "replay" | "ready" | "failed";
   lines: string[];
   message?: string;
   /** The angles the form's arms were sampled at; a pose is sewn with each arm at one of them. */
@@ -26,6 +26,9 @@ export type PoseStatus = {
   sewn?: [number, number];
   /** How long the last sew took in this tab (s). */
   sewSeconds?: number;
+  /** How long the last move under the sewn jacket took in this tab (s), and its accepted substeps. */
+  moveSeconds?: number;
+  moveSubsteps?: number;
   /** When the running sew began (performance.now()). */
   sewingSince?: number;
   clothVertices?: number;
@@ -59,7 +62,15 @@ const PATTERN = "/exhibits/poses/bolero-start.json";
 const FIT = "/exhibits/poses/fit-spec.json";
 // The drape room's bolero, at the browser's step budget.
 // Settling stops as soon as the cloth is quiet; raised arms need a few more steps than hanging ones.
-const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_steps: 48, time_subdivision: true, self_contact_mm: 0 };
+// A move under the sewn jacket takes substeps of up to 50 ms, each starting with the cloth within 20 mm
+// of the body carried along with it (ftx_drape::motion::advance_body_carried).
+const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_steps: 48, time_subdivision: true, self_contact_mm: 0,
+  motion_carry_mm: 20, motion_step_s: 0.05 };
+// A small change of pose moves the arm under the sewn jacket with the solver's checked moving-body step;
+// a larger one sews the jacket on again, which is the faster of the two there (measured in Node: a 5° move
+// at 20°/s took about 6 s, a 10° move about a minute, a fresh sew about 20 s).
+const MOVE_LIMIT_DEG = 5;
+const ARM_SPEED_DEG_S = 20;
 const same = (a?: [number, number] | null, b?: [number, number] | null) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
 
 /** Solver frame (z up, the wearer facing -y) to three.js (y up, the wearer facing +z). */
@@ -140,7 +151,7 @@ export default function PoseScene({ onStatus, command }: {
     const canvas = renderer.domElement;
     canvas.style.cssText = "width:100%;height:100%;display:block";
     canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", "A child's form wearing a bolero. Drag an arm up or down to pose it; when you let go the jacket is sewn on again in that pose. Drag elsewhere to turn the view, right-drag to move it, scroll or pinch to zoom.");
+    canvas.setAttribute("aria-label", "A child's form wearing a bolero. Drag an arm up or down to pose it; when you let go, a small move carries the jacket along with the arm and a larger one sews it on again in that pose. Drag elsewhere to turn the view, right-drag to move it, scroll or pinch to zoom.");
     surface.appendChild(canvas);
     prepareRenderer(renderer);
     renderer.setClearColor(0, 0);
@@ -187,6 +198,11 @@ export default function PoseScene({ onStatus, command }: {
     let sewn: Sewn | null = null;
     let replay: { began: number } | null = null;
     let worker: Worker | null = null, sewing: [number, number] | null = null;
+    // A move under the sewn jacket: asked of the worker (`moving`), then played back (`carry`). `clothNow` is
+    // the jacket's present positions (solver frame), where a move starts from.
+    let moving: { from: [number, number]; to: [number, number]; seconds: number } | null = null;
+    let carry: { from: [number, number]; to: [number, number]; seconds: number; samples: Float32Array; start: Float32Array; began: number } | null = null;
+    let clothNow: Float32Array | null = null;
     let raf = 0;
 
     function setBody(left: number, right: number) {
@@ -198,19 +214,22 @@ export default function PoseScene({ onStatus, command }: {
       bodyGeometry.computeBoundingSphere();
       status.shown = [left, right];
       // The jacket on show belongs to one pose; in any other it would cut through the arms.
-      if (garment) garment.mesh.visible = same(status.shown, status.sewn ?? null) || !!replay;
+      // (During a move the jacket is the solver's own state at the form's shown pose, so it stays.)
+      if (garment) garment.mesh.visible = same(status.shown, status.sewn ?? null) || !!replay || !!carry || !!moving;
       paint();
     }
 
     function sew(pose: [number, number]) {
       if (same(pose, sewing)) return;
-      if (same(pose, status.sewn ?? null) && !sewing) {
+      if (same(pose, status.sewn ?? null) && !sewing && !moving) {
         if (garment) garment.mesh.visible = true;
         status.phase = "ready";
         publish();
         return;
       }
       // A sew in progress is for a pose the visitor has left: drop it and start this one.
+      moving = null;
+      carry = null;
       worker?.terminate();
       worker = new Worker("/labs/pose-worker.mjs", { type: "module" });
       worker.onmessage = onWorker;
@@ -220,6 +239,26 @@ export default function PoseScene({ onStatus, command }: {
       Object.assign(status, { phase: "sewing", sewingSince: performance.now(), lines: [], message: undefined });
       publish();
       worker.postMessage({ type: "sew", body: BODY, pattern: PATTERN, fit: FIT, settings: SETTINGS, left: pose[0], right: pose[1] });
+    }
+
+    // A nudge of at most MOVE_LIMIT_DEG from the sewn pose keeps the jacket on and moves the arm under it.
+    const canMove = (pose: [number, number]) => {
+      if (!worker || !sewn || !clothNow || sewing || moving || carry || !status.sewn) return false;
+      const change = Math.max(Math.abs(pose[0] - status.sewn[0]), Math.abs(pose[1] - status.sewn[1]));
+      return change >= 0.5 && change <= MOVE_LIMIT_DEG;
+    };
+
+    function moveTo(pose: [number, number]) {
+      const from: [number, number] = [...status.sewn!];
+      const degrees = Math.max(Math.abs(pose[0] - from[0]), Math.abs(pose[1] - from[1]));
+      const seconds = Math.max(0.1, degrees / ARM_SPEED_DEG_S);
+      moving = { from, to: pose, seconds };
+      // The jacket stays on, in its pose, while the solver works; the playback then moves both together.
+      setBody(from[0], from[1]);
+      if (garment) garment.mesh.visible = true;
+      Object.assign(status, { phase: "moving", sewingSince: performance.now(), message: undefined });
+      publish();
+      worker!.postMessage({ type: "move", left: pose[0], right: pose[1], seconds });
     }
 
     command.current = (c) => {
@@ -244,6 +283,28 @@ export default function PoseScene({ onStatus, command }: {
         if (!same([reply.left, reply.right], sewing)) return;
         sewing = null;
         dress(reply as Sewn);
+      } else if (reply.type === "moved") {
+        if (!moving || !same([reply.left, reply.right], moving.to) || !clothNow) return;
+        carry = { ...moving, samples: reply.samples as Float32Array, start: clothNow, began: -1 };
+        moving = null;
+        const n = clothNow.length;
+        Object.assign(status, {
+          phase: "replay", sewn: [reply.left, reply.right], moveSeconds: reply.seconds,
+          moveSubsteps: carry.samples.length / (1 + n), sewingSince: undefined,
+        });
+        publish();
+      } else if (reply.type === "move-failed") {
+        if (!moving || !same([reply.left, reply.right], moving.to) || !form) return;
+        const to = moving.to;
+        moving = null;
+        // The session is where it was; sew the jacket on in the nearest sampled pose instead.
+        const pose: [number, number] = [nearest(form.angles, to[0]), nearest(form.angles, to[1])];
+        const resewing = !same(pose, status.sewn ?? null);
+        setBody(pose[0], pose[1]);
+        sew(pose);
+        status.message = `The solver could not carry the jacket to that pose (${reply.message}). ` +
+          (resewing ? "It is sewing the jacket on again in the nearest sampled pose." : "The arm is back in the pose the jacket was sewn in.");
+        publish();
       }
     }
 
@@ -260,6 +321,7 @@ export default function PoseScene({ onStatus, command }: {
         scene.add(garment.mesh);
       }
       sewn = next;
+      clothNow = next.cloth;
       garment.mesh.visible = true;
       Object.assign(status, {
         sewn: [next.left, next.right], sewSeconds: next.seconds, clothVertices: n, sewingSince: undefined,
@@ -391,7 +453,8 @@ export default function PoseScene({ onStatus, command }: {
       return THREE.MathUtils.radToDeg(Math.atan2(outward, down));
     };
     const down = (event: PointerEvent) => {
-      if (event.button !== 0 || !event.isPrimary || !form) return;
+      // While the solver carries the jacket (or it is being played back) the arms wait; the view still turns.
+      if (event.button !== 0 || !event.isPrimary || !form || moving || carry) return;
       const arm = armAt(event);
       if (!arm) return;
       dragging = arm;
@@ -426,7 +489,14 @@ export default function PoseScene({ onStatus, command }: {
       orbit.enabled = true;
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
       canvas.style.cursor = "pointer";
-      const pose: [number, number] = [nearest(form.angles, status.shown[0]), nearest(form.angles, status.shown[1])];
+      // A small nudge moves the arm under the jacket to exactly where it was let go; anything larger sews
+      // the jacket on again in the nearest sampled pose.
+      const released: [number, number] = [status.shown[0], status.shown[1]];
+      if (canMove(released)) {
+        moveTo(released);
+        return;
+      }
+      const pose: [number, number] = [nearest(form.angles, released[0]), nearest(form.angles, released[1])];
       setBody(pose[0], pose[1]);
       sew(pose);
     };
@@ -465,6 +535,33 @@ export default function PoseScene({ onStatus, command }: {
         if (seconds >= keys[keys.length - 1][0]) {
           replay = null;
           garment.update(toThree(sewn.cloth));
+          if (status.phase === "replay") { status.phase = "ready"; publish(); }
+        }
+      }
+      // A move under the jacket: the solver's accepted substeps, shown four times slower than the cloth's
+      // own time (at least a second), with the form between its two poses at the same moment.
+      if (garment && carry) {
+        if (carry.began < 0) carry.began = now;
+        const n = carry.start.length, stride = 1 + n, count = carry.samples.length / stride;
+        const t = Math.min(1, (now - carry.began) / 1000 / Math.max(1, carry.seconds * 4)) * carry.seconds;
+        let k = 0;
+        while (k < count - 1 && carry.samples[k * stride] < t) k++;
+        const t1 = carry.samples[k * stride], t0 = k > 0 ? carry.samples[(k - 1) * stride] : 0;
+        const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
+        if (blend.length !== n) blend = new Float32Array(n);
+        for (let j = 0; j < n; j++) {
+          const before = k > 0 ? carry.samples[(k - 1) * stride + 1 + j] : carry.start[j];
+          blend[j] = before * (1 - f) + carry.samples[k * stride + 1 + j] * f;
+        }
+        garment.update(toThree(blend, new Float32Array(n)));
+        const u = t / carry.seconds;
+        setBody(carry.from[0] + (carry.to[0] - carry.from[0]) * u, carry.from[1] + (carry.to[1] - carry.from[1]) * u);
+        dirty = true;
+        if (t >= carry.seconds) {
+          clothNow = carry.samples.slice((count - 1) * stride + 1, count * stride);
+          garment.update(toThree(clothNow));
+          setBody(carry.to[0], carry.to[1]);
+          carry = null;
           if (status.phase === "replay") { status.phase = "ready"; publish(); }
         }
       }
