@@ -9,7 +9,10 @@ use super::{
     Scenario, budget, coverage_at, hash, heat, invalid, omitted, outcome, vapor_coverage_request,
 };
 use crate::{
-    motion::{DissipationCapture, MotionOptions, advance_body_coupled, advance_body_with_work},
+    motion::{
+        DissipationCapture, MotionOptions, advance_body_carried_with_work,
+        advance_body_coupled_with_carry, advance_body_with_work,
+    },
     run::{DrapeBody, DrapeRun},
     start::{edge_strain, face_edges},
 };
@@ -134,6 +137,16 @@ pub struct Request {
     /// Defaults to 500000; endpoint receipts also consume the session's geometry allowance.
     #[serde(default = "default_sample_vertices")]
     pub max_sample_vertices: usize,
+    /// Optional nearest-body carry radius in metres, finite and in (0, 0.1]. This changes
+    /// only the Newton starting guess, never prescribes cloth positions or velocities.
+    /// History-free ImplicitEuler uses the guess; other supported models keep their plain solves.
+    /// Omission retains the existing stationary-cloth start and its serialized policy.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "carry_radius"
+    )]
+    pub carry_radius_m: Option<f64>,
     /// Optional prescribed world-space air velocity in m/s for each original keyframe interval.
     /// Entry i applies after the preceding keyframe through keyframes[i], including all source-pose
     /// subdivisions. Requires aerodynamic drag; never derives a convection coefficient or airflow.
@@ -156,6 +169,13 @@ pub struct Request {
     /// fixed `vapor_coverage` source/body/boundary policy. No moisture or latent heat is evolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vapor_coverage_history: Option<crate::vapor::coverage::history::Policy>,
+}
+
+// A supplied null must not silently discard an authored numerical policy.
+fn carry_radius<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error> {
+    f64::deserialize(deserializer).map(Some)
 }
 
 impl Request {
@@ -219,6 +239,14 @@ impl Request {
         {
             return Err(invalid(
                 "invalid motion schema, keyframe count or work/sample limits",
+            ));
+        }
+        if self
+            .carry_radius_m
+            .is_some_and(|radius| !radius.is_finite() || radius <= 0.0 || radius > 0.1)
+        {
+            return Err(invalid(
+                "motion carry_radius_m must be finite and greater than zero, at most 0.1 m",
             ));
         }
         if let Some(schedule) = &self.air_velocity_schedule_m_s {
@@ -657,12 +685,13 @@ fn evaluate_path(
                 .as_mut()
                 .map_err(|e| e.clone())?;
             let mut index = samples.len();
-            advance_body_coupled(
+            advance_body_coupled_with_carry(
                 &mut run.scene.solver,
                 target,
                 time_s - previous_time,
                 options,
                 capture,
+                request.carry_radius_m,
                 history,
                 |solver, sample, history| {
                     let time = if sample.time_s == time_s - previous_time {
@@ -674,6 +703,15 @@ fn evaluate_path(
                     index += 1;
                     Ok(())
                 },
+            )?
+        } else if let Some(radius) = request.carry_radius_m {
+            advance_body_carried_with_work(
+                &mut run.scene.solver,
+                target,
+                time_s - previous_time,
+                options,
+                capture,
+                radius,
             )?
         } else {
             advance_body_with_work(
@@ -845,6 +883,9 @@ fn evaluate_path(
         "fit_claim":false,"settledness_claim":false,
         "thermal_basis":"Independent steady endpoint snapshots, not transient temperatures or heat during motion.",
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
+    if let Some(radius) = request.carry_radius_m {
+        result["carry_radius_m"] = json!(radius);
+    }
     if let Some(schedule) = &request.air_velocity_schedule_m_s {
         result["air_velocity_schedule_m_s"] = json!(schedule);
         result["air_velocity_basis"] = json!(
@@ -959,6 +1000,44 @@ fn evaluate_path(
 mod tests {
     use super::*;
     use crate::{PartFrame, scene::PartFrames};
+
+    #[test]
+    fn carried_start_policy_preserves_omission_and_refuses_invalid_authored_values() {
+        let encoded = json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [{"time_s": 0.002, "arm_abduction_deg": 35.0}],
+            "max_step_s": 0.001,
+            "max_trials": 16,
+            "max_pairs": 100000,
+            "max_sample_vertices": 500000
+        });
+        let mut request: Request = serde_json::from_value(encoded.clone()).unwrap();
+        request.validate().unwrap();
+        assert_eq!(serde_json::to_value(&request).unwrap(), encoded);
+        let omitted_sha256 = hash(&request).unwrap();
+        for malformed in [Value::Null, json!("0.02"), json!([0.02]), json!({})] {
+            let mut value = encoded.clone();
+            value["carry_radius_m"] = malformed;
+            assert!(serde_json::from_value::<Request>(value).is_err());
+        }
+        for radius in [0.0, -0.01, 0.1000000001, f64::NAN, f64::INFINITY] {
+            request.carry_radius_m = Some(radius);
+            let error = request.validate().unwrap_err();
+            assert!(error.message.contains("carry_radius_m"));
+        }
+        for radius in [0.000001, 0.02, 0.1] {
+            request.carry_radius_m = Some(radius);
+            request.validate().unwrap();
+            let with_carry = serde_json::to_value(&request).unwrap();
+            assert_eq!(with_carry["carry_radius_m"], json!(radius));
+            let roundtrip: Request = serde_json::from_value(with_carry).unwrap();
+            assert_eq!(roundtrip.carry_radius_m, Some(radius));
+            assert_ne!(hash(&request).unwrap(), omitted_sha256);
+        }
+        request.carry_radius_m = None;
+        assert_eq!(hash(&request).unwrap(), omitted_sha256);
+        assert_eq!(serde_json::to_value(request).unwrap(), encoded);
+    }
 
     #[test]
     fn prescribed_wind_schedule_preserves_defaults_and_validates_actual_drag() {
@@ -1482,6 +1561,15 @@ mod tests {
 
     #[test]
     fn prescribed_wind_drives_actual_motion_and_rolls_back_after_late_failure() {
+        prescribed_wind_motion(None);
+    }
+
+    #[test]
+    fn carried_start_follows_the_actual_motion_kernel_and_rolls_back_after_late_failure() {
+        prescribed_wind_motion(Some(0.02));
+    }
+
+    fn prescribed_wind_motion(carry_radius_m: Option<f64>) {
         let pattern = ftx_pattern::Pattern::from_json(include_str!(
             "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
         ))
@@ -1522,7 +1610,7 @@ mod tests {
         let count = vertices.len() + original.x.len();
         let first_wind = [0.5, -0.25, 0.1];
         let second_wind = [-0.25, 0.5, 0.25];
-        let request: Request = serde_json::from_value(json!({
+        let mut request: Request = serde_json::from_value(json!({
             "schema": "ftx-drape-motion/1",
             "keyframes": [
                 {"time_s": 0.002, "arm_abduction_deg": 35.0},
@@ -1535,6 +1623,7 @@ mod tests {
             "air_velocity_schedule_m_s": [first_wind, second_wind]
         }))
         .unwrap();
+        request.carry_radius_m = carry_radius_m;
         let endpoints: Vec<Vec<_>> = [0.0001, 0.0002]
             .into_iter()
             .map(|z| vertices.iter().map(|p| *p + Vec3::new(0., 0., z)).collect())
@@ -1543,6 +1632,13 @@ mod tests {
         let mut changed = request.clone();
         changed.air_velocity_schedule_m_s.as_mut().unwrap()[1][0] += 0.25;
         assert!(path.validate_for(&changed, &body).is_err());
+        let mut changed = request.clone();
+        changed.carry_radius_m = if carry_radius_m.is_some() {
+            None
+        } else {
+            Some(0.02)
+        };
+        assert!(path.validate_for(&changed, &body).is_err());
         let options = MotionOptions {
             max_step_s: 0.001,
             max_trials: 16,
@@ -1550,12 +1646,26 @@ mod tests {
             max_sample_vertices: 2 * count,
         };
         let mut expected = original.clone();
+        let advance = |solver: &mut crate::Solver, endpoint: &[Vec3]| {
+            match carry_radius_m {
+                Some(radius) => advance_body_carried_with_work(
+                    solver,
+                    endpoint,
+                    0.002,
+                    options,
+                    DissipationCapture::default(),
+                    radius,
+                ),
+                None => advance_body(solver, endpoint, 0.002, options),
+            }
+            .unwrap()
+        };
         expected.damping.air_drag.as_mut().unwrap().air_velocity_m_s = first_wind;
         expected.reset_acceleration();
-        advance_body(&mut expected, &endpoints[0], 0.002, options).unwrap();
+        advance(&mut expected, &endpoints[0]);
         expected.damping.air_drag.as_mut().unwrap().air_velocity_m_s = second_wind;
         expected.reset_acceleration();
-        advance_body(&mut expected, &endpoints[1], 0.002, options).unwrap();
+        advance(&mut expected, &endpoints[1]);
         let result = evaluate(
             &request,
             &path,
@@ -1571,6 +1681,12 @@ mod tests {
         assert_eq!(run.scene.solver.x, expected.x);
         assert_eq!(run.scene.solver.v, expected.v);
         assert_eq!(run.scene.solver.damping, expected.damping);
+        assert_eq!(format!("{:?}", run.scene.solver), format!("{expected:?}"));
+        assert_eq!(
+            result.get("carry_radius_m"),
+            carry_radius_m.map(|r| json!(r)).as_ref()
+        );
+        assert!(result["initial_sample"].get("carry_radius_m").is_none());
         assert_eq!(
             result["initial_sample"]["air_velocity_m_s"],
             json!([0.0, 0.0, 0.0])
@@ -1582,12 +1698,22 @@ mod tests {
         assert_eq!(result["samples"].as_array().unwrap().len(), 4);
         for (index, sample) in result["samples"].as_array().unwrap().iter().enumerate() {
             let interval = index / 2;
-            let wind = if interval == 0 { first_wind } else { second_wind };
+            let wind = if interval == 0 {
+                first_wind
+            } else {
+                second_wind
+            };
             assert_eq!(sample["authored_interval_index"], json!(interval));
             assert_eq!(sample["air_velocity_m_s"], json!(wind));
         }
-        assert_eq!(result["keyframes"][0]["air_velocity_m_s"], json!(first_wind));
-        assert_eq!(result["keyframes"][1]["air_velocity_m_s"], json!(second_wind));
+        assert_eq!(
+            result["keyframes"][0]["air_velocity_m_s"],
+            json!(first_wind)
+        );
+        assert_eq!(
+            result["keyframes"][1]["air_velocity_m_s"],
+            json!(second_wind)
+        );
 
         // The second interval installs its new wind before its second sample exceeds the budget.
         run.scene.solver = original.clone();
@@ -1610,6 +1736,7 @@ mod tests {
         assert_eq!(run.scene.solver.x, original.x);
         assert_eq!(run.scene.solver.v, original.v);
         assert_eq!(run.scene.solver.damping, original.damping);
+        assert_eq!(format!("{:?}", run.scene.solver), format!("{original:?}"));
         assert_eq!(
             run.scene.solver.contact.as_ref().unwrap().body.vertices,
             original.contact.as_ref().unwrap().body.vertices

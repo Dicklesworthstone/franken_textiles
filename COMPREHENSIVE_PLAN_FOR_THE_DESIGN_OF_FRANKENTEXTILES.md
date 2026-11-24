@@ -6222,6 +6222,23 @@ components in metres per second. This advances `ftx-aero-wind` using the existin
 option authority. Uniform prescribed wind does not provide a spatial airflow model, qualified
 fabric drag, thermal convection or empirical garment fit.
 
+### 25.225 Connect carried-body starts to ordinary garment studies
+
+Ordinary native and portable motion studies can opt into the existing nearest-body carried
+Newton start with a finite positive `carry_radius_m` of at most 0.1 m. This carries only the
+starting guess through the requested body displacement; the same variational solve, continuous
+contact checks, constitutive laws and convergence requirements determine each accepted state.
+Omission preserves the existing policy and report format. Source-pose sampling, captured
+material work and coupled liquid/momentum transfers use the same kernel and complete rollback.
+The existing kernel uses the guess for history-free Implicit Euler; other supported models
+retain their ordinary physical solve.
+
+The guided editor authors the whole-motion radius and freezes it into named cases. Results
+retain the exact requested radius, and motion comparison reconciles this numerical policy
+without invalidating independently available initial-drape or manufacturing results. This
+advances `ftx-ms2.33` by connecting a working solver capability to normal garment studies,
+without another dynamics path, new empirical fabric data or a physical-fit claim.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -139,6 +139,15 @@ three components with air drag, and material scenarios retain them for replay. D
 remain uncalibrated reference values; this input does not set thermal convection. The optional
 static gravity comparison reports a refusal with nonzero wind while retaining the dynamic result.
 
+**Moving sewn garments.** Ordinary motion studies can opt into the posing room's nearest-body
+starting guess with `motion.carry_radius_m` (for example, `0.02` for 20 mm). This helps Newton start
+near the moving limb while the existing physical solve and collision checks still determine the
+cloth response. It works with source-pose sampling, material-work capture and liquid-coupled
+motion; whole-trajectory rollback and work limits stay in force. The starting guess currently
+applies to history-free Implicit Euler; other supported models retain their ordinary solve.
+The guided motion editor exposes
+the same policy. See [motion scenarios](docs/material-scenario-studies.md#starting-nearby-cloth-with-a-moving-body).
+
 Photo/video body fitting requires prepared, calibrated frames and reviewed correspondences or masks.
 The [decoded-frame selection](docs/video-frame-selection.md), [multi-frame fitting](docs/multi-frame-body-fit.md)
 and [accepted-shape reuse](docs/reuse-body-fit.md) guides document those stages. An arbitrary phone clip

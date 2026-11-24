@@ -22593,6 +22593,84 @@ test('guided root rotation named cases keep independent snapshots after later po
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
 });
 
+test('guided carry starts convert explicit millimetres and display only the retained native policy',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionCarry.checked,false);assert.equal(p.e.guidedMotionCarryRadiusMm.disabled,true);
+  assert.equal(p.e.guidedMotionCarryRadiusMm.value,'');
+  await addGuidedMotion(p,0.002,35);await addGuidedMotion(p,0.004,36);
+  p.e.guidedMotionCarry.checked=true;p.e.guidedMotionCarry.handlers.change();
+  assert.equal(p.e.guidedMotionCarryControls.hidden,false);assert.equal(p.e.guidedMotionCarryRadiusMm.disabled,false);
+  const before=p.current().messages.length;
+  for(const radius of ['', '0', '-20', '100.0001', 'Infinity']) {
+    p.e.guidedMotionCarryRadiusMm.value=radius;p.e.guidedMotionCarryRadiusMm.handlers.input();await p.e.scenario.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/carry/i);
+  }
+  p.e.guidedMotionCarryRadiusMm.value='20';p.e.guidedMotionCarryRadiusMm.handlers.input();
+  p.e.guidedMotionPoseSampling.checked=true;p.e.guidedMotionPoseStep.value='0.001';p.e.guidedMotionPoseSegments.value='8';
+  p.e.guidedMotionPoseSampling.handlers.change();await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);const request=JSON.parse(sent.scenarioRequest);
+  assert.equal(request.motion.carry_radius_m,0.02);assert.equal(request.motion.keyframes.length,2);
+  assert.deepEqual(request.motion.source_pose_sampling,{max_step_s:0.001,max_segments:8});
+  assert.ok(request.motion.keyframes.every(frame=>!Object.hasOwn(frame,'carry_radius_m')));
+  const report=scenarioReport();report.scenario.scenario=request;
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({duration_s:0.004,samples:[],trials:4,
+    carry_radius_m:0.02,keyframes:request.motion.keyframes.map(frame=>({...frame,surface:omitted(),coverage:omitted()}))});
+  const worker=await workerModule({bindings:{default:async()=>{},WebBody:class{free(){}},material_scenario_study:(_model,...args)=>{
+    assert.deepEqual(args,[sent.pattern,sent.studyRequest,sent.scenarioRequest,sent.measurements]);return JSON.stringify(report);
+  }}});
+  const response=await worker.send(sent);assert.equal(response.type,'result',response.message);
+  p.e.guidedMotionCarryRadiusMm.value='99';p.current().emit(response);
+  const result=section(p,'Fresh drape and heat alternatives');
+  assert.match(visibleText(result),/A: carried Newton start within 20 mm/);assert.doesNotMatch(visibleText(result),/within 99 mm/);
+  assert.match(visibleText(result),/unchanged collision and physical checks/);
+  const detail=descendants(result).find(node=>node.tag==='details'&&node.children[0].textContent.startsWith('A: motion identities'));
+  detail.open=true;detail.handlers.toggle();assert.match(visibleText(detail),/"carry_radius_m": 0.02/);
+  const download=descendants(result).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);
+  p.e.guidedMotionCarry.checked=false;p.e.guidedMotionCarry.handlers.change();assert.equal(result.hidden,true);
+  await p.e.scenario.onclick();assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion,'carry_radius_m'),false);
+  p.emit(scenarioReport());await p.load();assert.equal(p.e.guidedMotionCarry.checked,false);
+  assert.equal(p.e.guidedMotionCarryRadiusMm.value,'');assert.equal(p.e.guidedMotionCarryRadiusMm.disabled,true);
+});
+
+test('guided carry starts freeze named cases and preserve original motion tokens despite inactive draft edits',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  await addGuidedMotion(p,0.002,35);p.e.guidedMotionCarryRadiusMm.value='20';
+  p.e.guidedMotionCarry.checked=true;p.e.guidedMotionCarry.handlers.change();await saveGuidedCase(p,'nearby');
+  p.e.guidedMotionCarryRadiusMm.value='100';p.e.guidedMotionCarryRadiusMm.handlers.input();await saveGuidedCase(p,'wider');
+  p.e.guidedMotionCarry.checked=false;p.e.guidedMotionCarry.handlers.change();await saveGuidedCase(p,'ordinary');
+  const original=guidedMotionOriginal.replace('"max_step_s":','"carry_radius_m":2.500e-2,"max_step_s":');
+  p.e.guidedMotionSource.value='file';p.e.guidedMotionSource.handlers.change();
+  p.select('guidedMotionFile',original);p.e.guidedMotionFile.handlers.change();await saveGuidedCase(p,'source');
+  assert.equal(p.e.guidedMotionCarry.disabled,true);assert.equal(p.e.guidedMotionCarryRadiusMm.disabled,true);
+  await p.e.scenario.onclick();const worker=p.current(),sent=worker.messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);const cases=JSON.parse(sent.scenarioRequest).cases;
+  assert.deepEqual(cases.map(item=>item.scenario.motion.carry_radius_m),[0.02,0.1,undefined,0.025]);
+  assert.ok(sent.scenarioRequest.includes(original));assert.match(visibleText(p.e.guidedScenarioCases),/carried Newton start within 100 mm/);
+  p.e.guidedMotionCarry.checked=true;p.e.guidedMotionCarry.handlers.change();
+  p.e.guidedMotionCarryRadiusMm.value='75';p.e.guidedMotionCarryRadiusMm.handlers.input();assert.equal(worker.dead,false);
+  p.emit(scenarioReport());await p.e.scenario.onclick();assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
+test('guided carry changes cancel delayed reads and dispatched trajectories without accepting stale results',async()=>{
+  for(const delayed of [false,true]) {
+    const {p,sources}=await guidedScenarioSetup();guidedMotionControls(p);await addGuidedMotion(p,0.002,35);
+    p.e.guidedMotionCarryRadiusMm.value='20';p.e.guidedMotionCarry.checked=true;p.e.guidedMotionCarry.handlers.change();
+    const delay=deferred();let reading=false;
+    if(delayed)p.e.fit.files[0].arrayBuffer=async()=>{reading=true;return utf8Buffer(await delay.promise);};
+    const worker=p.current(),before=worker.messages.length,running=p.e.scenario.onclick();
+    if(delayed)assert.equal(reading,true);else await running;
+    const stale=worker.messages.at(-1)?.request;
+    p.e.guidedMotionCarryRadiusMm.value='40';p.e.guidedMotionCarryRadiusMm.handlers.input();assert.equal(worker.dead,true);p.ready();
+    if(delayed){delay.resolve(sources.fit);await running;assert.equal(worker.messages.length,before);}
+    else {
+      worker.emit({type:'result',request:stale,result:scenarioReport(),files:[{name:'stale-carry.json',text:'{}'}]});
+      assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);assert.equal(p.live.size,0);
+    }
+    await p.e.scenario.onclick();assert.equal(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.carry_radius_m,0.04);
+  }
+});
+
 test('guided source pose sampling freezes independent policies and invalidates active work',async()=>{
   const {p}=await guidedScenarioSetup();guidedMotionControls(p);
   assert.equal(p.e.guidedMotionPoseSampling.checked,false);

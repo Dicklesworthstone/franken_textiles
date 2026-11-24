@@ -303,6 +303,31 @@ workbench saves these vectors with Add or Replace and retains them in frozen nam
 See [changing wind during motion](motion-wind.md) for complete JSON, boundary receipts and
 rollback semantics. Thermal convection remains independently qualified.
 
+### Starting nearby cloth with a moving body
+
+Optional `motion.carry_radius_m` lets ordinary native and browser studies use the same
+nearest-body starting guess as the posing room. For example, `"carry_radius_m": 0.02`
+starts cloth within 20 mm of a moving body with that body's local displacement. Influence
+is full inside half the radius and fades to zero at the radius. The finite radius must be
+strictly positive and at most 0.1 m; omission retains the existing stationary-cloth start.
+Explicit null, zero, negative, nonfinite and excessive values refuse before simulation.
+
+This changes **where Newton starts**, not the physical equations or the final cloth state.
+The existing solver still determines positions, velocities, contact, friction and material
+history. The joint body/cloth path is checked, and all post-solve contact and convergence
+checks remain required. A useful starting guess can admit larger limb movements within the
+existing trial budget; it does not guarantee convergence or establish a physical-fit claim.
+The starting guess currently applies to Implicit Euler without relaxation or plasticity history.
+Generalized-alpha and materials with those histories retain their ordinary physical solve.
+
+The same policy applies to every authored interval and generated source-pose segment. Material
+work capture and liquid-coupled motion retain their normal accepted-step transactions: a
+later mechanical, thermal or mass-transfer refusal cannot publish a partial trajectory.
+The initial drape is unchanged. The guided editor exposes the radius in millimetres as one
+whole-motion choice, and saved named cases retain it. Successful results record the exact
+`carry_radius_m`; motion-dependent comparisons reject missing, altered or injected policy
+metadata while preserving independently available initial-drape and manufacturing readings.
+
 For independent arm movement, supply the complete optional `arm_pose` pair at an endpoint:
 
 ```json

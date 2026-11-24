@@ -213,6 +213,8 @@ pub fn advance_body_with_work(
 /// instead of the body sweeping into cloth that stands still; that is what lets a limb move more
 /// than the current cloth gap per substep. Positions, velocities and every post-solve check are
 /// the solver's own, exactly as in [`advance_body`]: the carry is only where Newton starts.
+/// Material-history fields and Generalized-alpha keep their ordinary physical solve without the
+/// guess; the carried start does not extend that existing kernel domain.
 ///
 /// # Errors
 /// As [`advance_body`], and a radius that is not finite and positive.
@@ -223,17 +225,39 @@ pub fn advance_body_carried(
     options: MotionOptions,
     carry_radius_m: f64,
 ) -> Result<MotionReport, Refusal> {
-    if !carry_radius_m.is_finite() || carry_radius_m <= 0.0 {
-        return Err(invalid(
-            "the cloth carry radius must be finite and positive",
-        ));
-    }
-    advance_body_inner(
+    advance_body_carried_with_work(
         solver,
         target,
         duration_s,
         options,
         DissipationCapture::default(),
+        carry_radius_m,
+    )
+}
+
+/// [`advance_body_carried`] with explicitly requested accepted material-work channels.
+/// Carry changes only the checked Newton starting guess; reference geometry, physical velocities,
+/// constitutive history and captured work still come from the converged mechanical solve.
+/// As in the existing carried API, material-history fields and Generalized-alpha retain the plain
+/// physical step without the guess; capturing work does not change that integrator/model domain.
+///
+/// # Errors
+/// As [`advance_body_with_work`], plus a non-finite or non-positive carry radius. A refused
+/// request leaves the whole solver unchanged, including work accepted in earlier trial substeps.
+pub fn advance_body_carried_with_work(
+    solver: &mut Solver,
+    target: &[Vec3],
+    duration_s: f64,
+    options: MotionOptions,
+    capture: DissipationCapture,
+    carry_radius_m: f64,
+) -> Result<MotionReport, Refusal> {
+    advance_body_coupled_with_carry(
+        solver,
+        target,
+        duration_s,
+        options,
+        capture,
         Some(carry_radius_m),
         &mut (),
         |_, _, _| Ok(()),
@@ -303,8 +327,33 @@ pub(crate) fn advance_body_coupled<S: Clone>(
     state: &mut S,
     accept: impl FnMut(&mut Solver, &MotionSample, &mut S) -> Result<(), Refusal>,
 ) -> Result<MotionReport, Refusal> {
-    advance_body_inner(
+    advance_body_coupled_with_carry(
         solver, target, duration_s, options, capture, None, state, accept,
+    )
+}
+
+// The existing accepted-step transaction also owns carried starting guesses. In particular, a
+// later thermal/mass-transfer refusal cannot publish the trial cloth, impulse or liquid history.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn advance_body_coupled_with_carry<S: Clone>(
+    solver: &mut Solver,
+    target: &[Vec3],
+    duration_s: f64,
+    options: MotionOptions,
+    capture: DissipationCapture,
+    carry_radius_m: Option<f64>,
+    state: &mut S,
+    accept: impl FnMut(&mut Solver, &MotionSample, &mut S) -> Result<(), Refusal>,
+) -> Result<MotionReport, Refusal> {
+    advance_body_inner(
+        solver,
+        target,
+        duration_s,
+        options,
+        capture,
+        carry_radius_m,
+        state,
+        accept,
     )
 }
 
@@ -319,6 +368,11 @@ fn advance_body_inner<S: Clone>(
     state: &mut S,
     mut accept: impl FnMut(&mut Solver, &MotionSample, &mut S) -> Result<(), Refusal>,
 ) -> Result<MotionReport, Refusal> {
+    if carry_radius_m.is_some_and(|radius| !radius.is_finite() || radius <= 0.0) {
+        return Err(invalid(
+            "the cloth carry radius must be finite and positive",
+        ));
+    }
     solver.model.check_attached_mass()?;
     solver.check_constitutive_models()?;
     if !duration_s.is_finite()

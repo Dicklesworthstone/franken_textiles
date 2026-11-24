@@ -4559,7 +4559,23 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
     }
     admit_pose_sampling(request, motion, frames, samples)?;
     admit_air_velocity(descriptor, motion, frames, samples, endpoints)?;
+    admit_carry_radius(request, motion)?;
     Ok(motion)
+}
+
+fn admit_carry_radius(request: &Value, motion: &Value) -> Result<(), Refusal> {
+    match (request.get("carry_radius_m"), motion.get("carry_radius_m")) {
+        (None, None) => Ok(()),
+        (Some(declared), Some(retained))
+            if declared == retained
+                && finite(declared).is_some_and(|radius| radius > 0. && radius <= 0.1) =>
+        {
+            Ok(())
+        }
+        _ => Err(invalid(
+            "motion comparison requires the exact requested carry_radius_m in (0, 0.1] metres, omitted from both request and result when unused",
+        )),
+    }
 }
 
 fn admit_air_velocity(
@@ -4586,10 +4602,8 @@ fn admit_air_velocity(
                 .iter()
                 .all(|endpoint| endpoint["air_velocity_m_s"].is_null())
             && samples.iter().all(|sample| {
-                sample["air_velocity_m_s"].is_null()
-                    && sample["authored_interval_index"].is_null()
-            })
-        {
+                sample["air_velocity_m_s"].is_null() && sample["authored_interval_index"].is_null()
+            }) {
             Ok(())
         } else {
             Err(fail())

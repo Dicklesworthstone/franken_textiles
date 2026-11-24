@@ -1,6 +1,9 @@
 //! Moving-collider regressions use synthetic surfaces, never production body assets.
 use ftx_core::{RefusalCode, Vec3};
-use ftx_drape::motion::{MotionOptions, advance_body};
+use ftx_drape::motion::{
+    DissipationCapture, MotionOptions, advance_body, advance_body_carried,
+    advance_body_carried_with_work,
+};
 use ftx_drape::{Body, ClothModel, Contact, ContactParams, Membrane, Solver};
 
 fn parameters(mu: f64) -> ContactParams {
@@ -243,6 +246,123 @@ fn raising_collider_lifts_cloth_with_checked_continuous_substeps() {
         x0 = frame.cloth.clone();
     }
     assert!(s.x.iter().all(|p| p.z > 0.0045));
+}
+
+#[test]
+fn carried_start_lifts_cloth_through_a_larger_checked_body_move() {
+    let mut s = sliding_patch(0.0, false);
+    s.gravity = Vec3::new(0.0, 0.0, -9.81);
+    let original = s.clone();
+    let mut x0 = s.x.clone();
+    let mut c0 = s.contact.as_ref().unwrap().clone();
+    let target: Vec<_> = c0
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.0, 0.0, 0.004))
+        .collect();
+    let report = advance_body_carried_with_work(
+        &mut s,
+        &target,
+        0.2,
+        MotionOptions::default(),
+        DissipationCapture::default(),
+        0.02,
+    )
+    .unwrap();
+    for frame in &report.samples {
+        assert!(frame.solve.converged);
+        assert_eq!(
+            c0.motion_bound(&x0, &frame.cloth, &frame.body, 1000)
+                .unwrap()
+                .fraction,
+            1.0
+        );
+        c0.body = Body::new(frame.body.clone(), c0.body.triangles.clone(), 0.1).unwrap();
+        assert!(c0.first_intersection(&frame.cloth).is_none());
+        assert!(c0.min_gap(&frame.cloth, 0.01).unwrap() > 0.0);
+        x0 = frame.cloth.clone();
+    }
+    assert!(s.x.iter().all(|p| p.z > 0.0045));
+    assert_eq!(s.contact.as_ref().unwrap().body.vertices, target);
+    assert_eq!(report.samples.last().unwrap().time_s, 0.2);
+
+    // The pre-existing public carried API keeps precisely its original arithmetic/allocation.
+    let mut legacy = original.clone();
+    let old =
+        advance_body_carried(&mut legacy, &target, 0.2, MotionOptions::default(), 0.02).unwrap();
+    assert_eq!(format!("{old:?}"), format!("{report:?}"));
+    assert_eq!(format!("{legacy:?}"), format!("{s:?}"));
+
+    // A sample budget reached after an accepted substep publishes none of the carried motion.
+    let mut limited = original.clone();
+    assert_eq!(
+        advance_body_carried_with_work(
+            &mut limited,
+            &target,
+            0.2,
+            MotionOptions {
+                max_sample_vertices: 6,
+                ..MotionOptions::default()
+            },
+            DissipationCapture::default(),
+            0.02,
+        )
+        .unwrap_err()
+        .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert_eq!(format!("{limited:?}"), format!("{original:?}"));
+}
+
+#[test]
+fn carried_start_never_prescribes_frictionless_tangential_cloth_motion() {
+    let original = sliding_patch(0.0, true);
+    let target: Vec<_> = original
+        .contact
+        .as_ref()
+        .unwrap()
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.002, 0.0, 0.0))
+        .collect();
+    let mut s = original.clone();
+    let report = advance_body_carried_with_work(
+        &mut s,
+        &target,
+        0.2,
+        MotionOptions::default(),
+        DissipationCapture::default(),
+        0.02,
+    )
+    .unwrap();
+    for frame in &report.samples {
+        assert!(frame.solve.converged);
+        for (position, start) in frame.cloth.iter().zip(&original.x) {
+            assert!((*position - *start).norm() < 1e-12);
+        }
+    }
+    assert!(s.v.iter().all(|velocity| velocity.norm() < 1e-10));
+    assert_eq!(s.contact.as_ref().unwrap().body.vertices, target);
+
+    for radius in [0.0, -0.01, f64::NAN, f64::INFINITY] {
+        let mut refused = original.clone();
+        assert_eq!(
+            advance_body_carried_with_work(
+                &mut refused,
+                &target,
+                0.2,
+                MotionOptions::default(),
+                DissipationCapture::default(),
+                radius,
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(format!("{refused:?}"), format!("{original:?}"));
+    }
 }
 
 #[test]

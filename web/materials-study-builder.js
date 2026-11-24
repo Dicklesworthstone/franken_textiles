@@ -886,6 +886,12 @@ function motionCompressionSource(raw, keyframes) {
   // Original JSON is inserted unchanged, including the source acquisition's numeric tokens.
 }
 
+function motionCarryRadius(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 0.1) {
+    throw Error("Motion carry_radius_m must be finite and greater than zero, at most 0.1 m (100 mm).");
+  }
+}
+
 function motionAirVelocitySchedule(value, keyframes, airDrag = undefined) {
   if (value === null) return;
   if (!Array.isArray(value) || value.length !== keyframes.length) {
@@ -909,7 +915,7 @@ function motionAirVelocitySchedule(value, keyframes, airDrag = undefined) {
 
 /** Author prescribed endpoints around exact liquid policies; Rust owns physical admission and evolution. */
 export function buildMaterialMotionRequest(state, liquid = undefined, compression = undefined, compressionTarget = undefined) {
-  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "air_velocity_schedule_m_s", "source_pose_sampling", "transient_surface", "transient_coverage"],
+  object(state, ["keyframes", "max_step_s", "max_trials", "max_pairs", "max_sample_vertices", "carry_radius_m", "air_velocity_schedule_m_s", "source_pose_sampling", "transient_surface", "transient_coverage"],
     ["keyframes", "max_step_s", "max_trials", "max_pairs"], "Guided motion");
   if (!Array.isArray(state.keyframes) || !state.keyframes.length || state.keyframes.length > 16) {
     throw Error("Motion needs 1–16 explicitly authored endpoints.");
@@ -949,6 +955,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
     previous = frame.time_s;
   }
   if (minimumTrials > state.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  if (own(state, "carry_radius_m")) motionCarryRadius(state.carry_radius_m);
   if (own(state, "air_velocity_schedule_m_s")) motionAirVelocitySchedule(state.air_velocity_schedule_m_s, state.keyframes);
   motionPoseSampling(state.source_pose_sampling, state.keyframes);
   const heatingFields = ["plastic_dissipation_heat", "relaxation_dissipation_heat", "bending_plastic_dissipation_heat"];
@@ -1131,7 +1138,7 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
 function motionPolicy(value) {
   const required = ["schema", "keyframes", "max_step_s", "max_trials", "max_pairs"];
   const advanced = ["transient_surface", "transient_coverage", "vapor_coverage_history"];
-  object(value, [...required, "max_sample_vertices", "air_velocity_schedule_m_s", "source_pose_sampling", ...advanced], required, "Prescribed motion");
+  object(value, [...required, "max_sample_vertices", "carry_radius_m", "air_velocity_schedule_m_s", "source_pose_sampling", ...advanced], required, "Prescribed motion");
   if (value.schema !== "ftx-drape-motion/1" || !Array.isArray(value.keyframes) ||
     !value.keyframes.length || value.keyframes.length > 16) {
     throw Error("Prescribed motion needs ftx-drape-motion/1 with 1–16 keyframes.");
@@ -1165,6 +1172,7 @@ function motionPolicy(value) {
     previous = frame.time_s;
   }
   if (minimumTrials > value.max_trials) throw Error("Motion requires more nominal substeps than max_trials.");
+  if (own(value, "carry_radius_m")) motionCarryRadius(value.carry_radius_m);
   if (own(value, "air_velocity_schedule_m_s")) motionAirVelocitySchedule(value.air_velocity_schedule_m_s, value.keyframes);
   motionPoseSampling(value.source_pose_sampling, value.keyframes);
   for (const key of advanced) {

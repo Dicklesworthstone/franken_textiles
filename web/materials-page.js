@@ -434,6 +434,10 @@ function controls() {
   $("guidedVaporSurfaceFile").disabled ||= guidedVaporSurfaceMode() !== "file";
   $("guidedMotionForm").hidden = motionMode !== "form";
   $("guidedMotionFileField").hidden = motionMode !== "file";
+  const carry = motionMode === "form" && $("guidedMotionCarry").checked;
+  $("guidedMotionCarry").disabled = !source || !guidedScenarioMode() || motionMode !== "form";
+  $("guidedMotionCarryControls").hidden = !carry;
+  $("guidedMotionCarryRadiusMm").disabled = !source || !guidedScenarioMode() || !carry;
   const poseSampling = motionMode === "form" && $("guidedMotionPoseSampling").checked;
   $("guidedMotionPoseSampling").disabled = !source || !guidedScenarioMode() || motionMode !== "form";
   $("guidedMotionPoseSamplingControls").hidden = !poseSampling;
@@ -2060,6 +2064,14 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
     motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested, filePrefix);
     if (!result) continue;
+    if (Object.hasOwn(result, "carry_radius_m")) {
+      const info = document.createElement("p");
+      info.textContent = `${row.key}: carried Newton start within ${metric(typeof result.carry_radius_m === "number" ? result.carry_radius_m * 1000 : null)} mm of the body. ` +
+        "This changes only the starting guess; the mechanical solve determines cloth positions and velocities with unchanged collision and physical checks. " +
+        "This guess is used only by Implicit Euler without material relaxation or plasticity history. " +
+        "Generalized-α and materials with those histories use the ordinary solve.";
+      parent.append(info);
+    }
     if (result.source_pose_sampling) {
       const sampling = result.source_pose_sampling, info = document.createElement("p");
       info.textContent = `${row.key}: ${metric(sampling.generated_segments)} intermediate source-pose segments, ` +
@@ -2140,6 +2152,7 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
       retained_vertex_samples: result.retained_vertex_samples, pairs_tested: result.pairs_tested,
       membrane_history: result.membrane_history, bending_history: result.bending_history,
       membrane_plasticity_history: result.membrane_plasticity_history,
+      ...(Object.hasOwn(result, "carry_radius_m") ? { carry_radius_m: result.carry_radius_m } : {}),
       ...(Array.isArray(result.air_velocity_schedule_m_s) ? { air_velocity_schedule_m_s: result.air_velocity_schedule_m_s } : {}),
       endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
         ...(Object.hasOwn(e, "air_velocity_m_s") ? { air_velocity_m_s: e.air_velocity_m_s } : {}),
@@ -6961,6 +6974,9 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     max_pairs: number("guidedMotionPairs", "collision candidate allowance"),
     max_sample_vertices: number("guidedMotionVertices", "retained motion vertex allowance"),
   };
+  if ($("guidedMotionCarry").checked) {
+    motion.carry_radius_m = number("guidedMotionCarryRadiusMm", "carry radius in millimetres") * 1e-3;
+  }
   if (includeWind && $("guidedMotionWind").checked) {
     motion.air_velocity_schedule_m_s = keyframes.map((frame, index) => {
       if (!Array.isArray(frame.air_velocity_m_s) || frame.air_velocity_m_s.length !== 3) {
@@ -7514,6 +7530,7 @@ function showGuidedScenarioDrafts() {
       (value.options.start_self_repulsion ? `start self-repulsion (${value.options.start_self_repulsion.min_separation_m * 1e3} mm${value.options.start_self_repulsion.max_candidate_checks !== undefined ? `, max ${value.options.start_self_repulsion.max_candidate_checks} checks` : ""}); ` : "") +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
+      (value.motion?.carry_radius_m != null ? `carried Newton start within ${value.motion.carry_radius_m * 1000} mm; ` : "") +
       (value.motion?.source_pose_sampling ? `source body poses at most ${value.motion.source_pose_sampling.max_step_s} s apart, ` +
         `${value.motion.source_pose_sampling.max_segments} source segments allowed; ` : "") +
       `${value.material_strain ? `directional strain on ${value.material_strain.regions ?
@@ -8247,6 +8264,14 @@ for (const id of ["guidedMotionStep", "guidedMotionTrials", "guidedMotionPairs",
   };
   $(id).addEventListener("change", changed); $(id).addEventListener("input", changed);
 }
+for (const id of ["guidedMotionCarry", "guidedMotionCarryRadiusMm"]) {
+  const changed = () => {
+    if (guidedMotionMode() === "form" && (id === "guidedMotionCarry" || $("guidedMotionCarry").checked)) changedGuidedMotionDraft();
+    else controls();
+  };
+  $(id).addEventListener("change", changed);
+  if (id !== "guidedMotionCarry") $(id).addEventListener("input", changed);
+}
 for (const id of ["guidedMotionPoseSampling", "guidedMotionPoseStep", "guidedMotionPoseSegments"]) {
   const changed = () => {
     if (guidedMotionMode() === "form" && (id === "guidedMotionPoseSampling" || $("guidedMotionPoseSampling").checked)) changedGuidedMotionDraft();
@@ -8766,6 +8791,7 @@ function resetGuidedScenarios() {
   guidedScenarioDrafts.length = 0; guidedScenarioDraftSource = {};
   $("guidedScenarioCaseName").value = ""; showGuidedScenarioDrafts();
   guidedMotionKeyframes.length = 0; $("guidedScenarioMotion").checked = false; $("guidedMotionSource").value = "form";
+  $("guidedMotionCarry").checked = false; $("guidedMotionCarryRadiusMm").value = "";
   $("guidedMotionPoseSampling").checked = false;
   $("guidedMotionWind").checked = false;
   for (const axis of ["X", "Y", "Z"]) $("guidedMotionWind" + axis).value = "";

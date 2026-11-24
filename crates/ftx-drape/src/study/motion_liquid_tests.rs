@@ -79,7 +79,22 @@ fn mapped_initial_phase_recoil_restores_whole_solver_and_replays_identically() {
 
 #[test]
 fn source_pose_sampling_keeps_authored_liquid_intervals_and_rolls_back() {
-    rollback_with_source_sampling(true, true, false, true, false, false, false, true);
+    rollback_with_source_sampling(true, true, false, true, false, false, false, true, None);
+}
+
+#[test]
+fn carried_start_keeps_coupled_liquid_transfers_and_whole_path_rollback() {
+    rollback_with_source_sampling(
+        true,
+        true,
+        false,
+        true,
+        false,
+        false,
+        false,
+        true,
+        Some(0.02),
+    );
 }
 
 fn rollback_after_liquid_transfer(
@@ -100,6 +115,7 @@ fn rollback_after_liquid_transfer(
         recoil,
         mapped_initial,
         false,
+        None,
     );
 }
 
@@ -113,6 +129,7 @@ fn rollback_with_source_sampling(
     recoil: bool,
     mapped_initial: bool,
     source_sampling: bool,
+    carry_radius_m: Option<f64>,
 ) {
     let mut raw: Value = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
@@ -314,6 +331,7 @@ fn rollback_with_source_sampling(
         }
         heat.surface_water = Some(serde_json::from_value(water).unwrap());
     }
+    request.carry_radius_m = carry_radius_m;
     let heights = if source_sampling {
         request.source_pose_sampling = Some(SourcePoseSampling {
             max_step_s: 0.001,
@@ -345,6 +363,10 @@ fn rollback_with_source_sampling(
         |_| {},
     )
     .unwrap();
+    assert_eq!(
+        complete.get("carry_radius_m"),
+        carry_radius_m.map(|r| json!(r)).as_ref()
+    );
     let complete_debug = format!("{:?}", run.scene.solver);
     assert_ne!(run.scene.solver.x, original.x);
     if mapped_initial {
@@ -464,6 +486,14 @@ fn rollback_with_source_sampling(
         );
         assert_eq!(complete["keyframes"].as_array().unwrap().len(), 2);
         assert_eq!(complete["samples"].as_array().unwrap().len(), 4);
+        for (sample, endpoint) in complete["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(&endpoints)
+        {
+            assert_eq!(sample["body_positions_m"], json!(endpoint));
+        }
         assert_eq!(
             trace
                 .iter()

@@ -1934,6 +1934,16 @@ Disabling motion keeps this draft for return. Saving a named case freezes its ow
 <label>Collision candidate pairs per query <input id="guidedMotionPairs" type="number" min="1" max="1000000" step="1" value="100000"></label>
 <label>Retained body/cloth vertex allowance <input id="guidedMotionVertices" type="number" min="1" max="2000000" step="1" value="500000"></label>
 </div>
+<fieldset><legend>Starting guess for moving cloth</legend>
+<label><input id="guidedMotionCarry" type="checkbox"> Start each motion solve with nearby cloth carried along by the body</label>
+<div id="guidedMotionCarryControls" class="study-fields" hidden>
+<label>Distance from the body (mm, greater than zero, at most 100) <input id="guidedMotionCarryRadiusMm" type="number" min="0" max="100" step="any" placeholder="Explicit radius" disabled></label>
+</div>
+<p class="note">This radius applies to the whole movement. Carry changes only the Newton starting guess;
+cloth positions and velocities still come from the mechanical solve. It adds no attachment and retains the same collision and physical checks.
+This guess is used only by Implicit Euler without material relaxation or plasticity history.
+Generalized-α and materials with those histories use the ordinary solve.</p>
+</fieldset>
 <fieldset><legend>Body poses between saved endpoints</legend>
 <label><input id="guidedMotionPoseSampling" type="checkbox"> Evaluate intermediate poses from the selected body model</label>
 <div id="guidedMotionPoseSamplingControls" class="study-fields" hidden>

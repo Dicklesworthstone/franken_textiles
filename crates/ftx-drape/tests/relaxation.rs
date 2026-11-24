@@ -668,14 +668,29 @@ fn captured_viscous_work_matches_independent_dashpot_quadrature_not_spring_energ
 
 #[test]
 fn relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() {
+    captured_motion_work(None);
+}
+
+#[test]
+fn carried_relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() {
+    captured_motion_work(Some(0.05));
+}
+
+fn captured_motion_work(carry_radius_m: Option<f64>) {
     use ftx_drape::motion::{
-        DissipationCapture, advance_body_with_dissipation, advance_body_with_work,
+        DissipationCapture, advance_body_carried, advance_body_carried_with_work,
+        advance_body_with_dissipation, advance_body_with_work,
+    };
+    let body_height = if carry_radius_m.is_some() {
+        -0.01
+    } else {
+        -0.1
     };
     let body = Body::new(
         vec![
-            Vec3::new(-1., -1., -0.1),
-            Vec3::new(1., -1., -0.1),
-            Vec3::new(0., 1., -0.1),
+            Vec3::new(-1., -1., body_height),
+            Vec3::new(1., -1., body_height),
+            Vec3::new(0., 1., body_height),
         ],
         vec![[0, 1, 2]],
         0.1,
@@ -707,7 +722,11 @@ fn relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() 
         bending: false,
     };
     let mut captured = original.clone();
-    let result = advance_body_with_work(&mut captured, &target, 0.03, opts, capture).unwrap();
+    let advance = |s: &mut Solver, options| match carry_radius_m {
+        Some(radius) => advance_body_carried_with_work(s, &target, 0.03, options, capture, radius),
+        None => advance_body_with_work(s, &target, 0.03, options, capture),
+    };
+    let result = advance(&mut captured, opts).unwrap();
     assert_eq!(result.samples.len(), 3);
     let mut previous = 0.;
     for sample in &result.samples {
@@ -722,7 +741,11 @@ fn relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() 
         max_sample_vertices: 18,
         ..opts
     };
-    let old = advance_body(&mut ordinary, &target, 0.03, geometry_budget).unwrap();
+    let old = match carry_radius_m {
+        Some(radius) => advance_body_carried(&mut ordinary, &target, 0.03, geometry_budget, radius),
+        None => advance_body(&mut ordinary, &target, 0.03, geometry_budget),
+    }
+    .unwrap();
     assert_eq!(format!("{ordinary:?}"), format!("{captured:?}"));
     for (a, b) in old.samples.iter().zip(&result.samples) {
         assert!(a.membrane_relaxation_dissipation_j.is_none());
@@ -732,9 +755,7 @@ fn relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() 
     }
     let mut limited = original.clone();
     assert_eq!(
-        advance_body_with_work(&mut limited, &target, 0.03, geometry_budget, capture)
-            .unwrap_err()
-            .code,
+        advance(&mut limited, geometry_budget).unwrap_err().code,
         RefusalCode::BudgetExceeded
     );
     assert_eq!(format!("{limited:?}"), format!("{original:?}"));

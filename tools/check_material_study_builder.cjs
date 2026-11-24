@@ -896,6 +896,50 @@ test('guided fractional-Zener lowering builds exact requests with optional repla
   ]) assert.throws(()=>build(bad));
 });
 
+test('motion carry retains the whole-trajectory policy with wind sampling and independently frozen cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const ordinary=motionState(),legacy=motion(ordinary);
+  const input={...ordinary,carry_radius_m:0.02,source_pose_sampling:{max_step_s:0.05,max_segments:10},
+    air_velocity_schedule_m_s:[[1.25,-0.5,0]]};
+  const before=JSON.stringify(input),authored=motion(input);
+  assert.deepEqual(JSON.parse(authored),{schema:'ftx-drape-motion/1',...input});
+  assert.equal(JSON.stringify(input),before);
+  const options={...scenarioState().options,damping:{air_drag:{rho_air_kg_m3:1.225,c_normal:1.2,c_tangent:0.05,eps_v_m_s:0.001}}};
+  const scenario={...scenarioState(),options,maxVertexFrames:32000000,maxMotionTrials:128};
+  const first=single({...scenario,motion:input});input.carry_radius_m=0.1;
+  const second=single({...scenario,motion:input});
+  const frozen=matrix({maxEvaluations:2,cases:[{key:'nearby',scenario:first},{key:'wider',scenario:second}]});
+  assert.ok(frozen.includes(first));assert.ok(frozen.includes(second));
+  assert.deepEqual(JSON.parse(frozen).cases.map(item=>item.scenario.motion.carry_radius_m),[0.02,0.1]);
+  assert.equal(motion(ordinary),legacy);assert.equal(Object.hasOwn(JSON.parse(legacy),'carry_radius_m'),false);
+  const wet={...ordinary,carry_radius_m:0.02,transient_surface:{...dryMotionHeat(),plastic_dissipation_heat:'uniform_reference_thickness'}};
+  const liquid={surface_water:' {"schema":"ftx-textile-surface-water/5","source_value":1.25000e-2} ',
+    mechanical_coupling:' {"schema":"ftx-coupled-liquid-mechanics/6","source_value":18446744073709551615} '};
+  const coupled=motion(wet,liquid);assert.equal(JSON.parse(coupled).carry_radius_m,0.02);
+  for(const raw of Object.values(liquid))assert.ok(coupled.includes(raw));
+});
+
+test('motion carry refuses invalid authored and original policies while preserving exact source tokens', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const scenario={...scenarioState(),maxMotionTrials:128};
+  for(const carry_radius_m of [undefined,null,false,true,0,-0,-0.02,0.10000000000000002,NaN,Infinity,-Infinity,'0.02',[],{}]) {
+    const input={...motionState(),carry_radius_m};
+    assert.throws(()=>motion(input),/carry_radius_m/);
+    assert.throws(()=>single({...scenario,motion:input}),/carry_radius_m/);
+    if(carry_radius_m!==undefined)assert.throws(()=>single({...scenario,motion:JSON.stringify({schema:'ftx-drape-motion/1',...input})}),/carry_radius_m/);
+  }
+  const original=' {\r\n"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.25,"arm_abduction_deg":30.0}],'+
+    '"max_step_s":0.125,"max_trials":128,"max_pairs":100000,"carry_radius_m":2.000e-2,'+
+    '"transient_surface":{"source_value":18446744073709551615,"zero":-0.0}}\r\n';
+  assert.throws(()=>single({...scenario,motion:original.replace('2.000e-2','1e309')}),/carry_radius_m/);
+  const saved=single({...scenario,motion:original});assert.ok(saved.includes(original));
+  assert.equal(JSON.parse(saved).motion.carry_radius_m,0.02);
+  const frozen=matrix({maxEvaluations:1,cases:[{key:'original carry',scenario:saved}]});
+  assert.ok(frozen.includes(saved));assert.ok(frozen.includes(original));
+  const misplaced={...motionState(),keyframes:[{...motionState().keyframes[0],carry_radius_m:0.02}]};
+  assert.throws(()=>motion(misplaced),/unsupported/,'The carry policy belongs to the entire trajectory');
+});
+
 test('motion wind schedules retain authored intervals through sampling and independently frozen cases', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
   const ordinary=motionState(),legacy=motion(ordinary);

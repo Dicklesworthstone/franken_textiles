@@ -288,6 +288,20 @@ FrankenSim `fs-query` algorithm pinned in `bvh.rs`; geometry and all indices pub
 Brute-force/rebuilt-body equivalence and actual sewn-cloth continuation tests cover this reuse;
 no runtime speedup or physical fit is inferred.
 
+Optional motion `carry_radius_m` in `(0, 0.1]` metres uses the existing nearest-body carried
+Newton start in ordinary material studies, including source-pose subdivisions and accepted-step
+liquid/thermal coupling. The nearest body's barycentric displacement supplies only a starting
+guess, with the existing distance fade and fixed-DOF handling; it neither prescribes cloth motion
+nor changes mass, forces or physical velocity. The same body/cloth continuous contact, endpoint,
+material-domain and convergence gates remain mandatory. The existing kernel uses the guess for
+history-free `ImplicitEuler`; `GeneralizedAlpha` and relaxation/plasticity histories retain their
+ordinary physical solves. Captured material dissipation comes
+only from accepted solves, and a late mechanical or coupled refusal restores the complete initial
+solver and histories. The exact opt-in radius is retained at the motion result's top level and
+in its source identity. Omission preserves the existing policy and output; explicit null, zero,
+negative, nonfinite or excessive values refuse before model work. This numerical policy does not
+establish physical garment fit or a general speedup.
+
 Optional `arm_pose: {left_abduction_deg, right_abduction_deg}` supplies a complete pair of finite
 absolute angles in `0..180` degrees, overriding the endpoint's required common arm angle.
 Omission/null means that endpoint's symmetric angle, never an inherited earlier pair. The shared
