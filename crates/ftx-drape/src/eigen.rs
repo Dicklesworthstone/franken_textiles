@@ -96,8 +96,137 @@ pub fn jacobi_eigh(a: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
 /// Projects a symmetric matrix onto the positive semidefinite cone in place (`V·max(Λ, 0)·Vᵀ`), the
 /// standard fix for indefinite element Hessians in projected Newton. Returns whether anything changed.
 /// Non-finite matrices are left untouched (never zeroed) so upstream callers fail closed.
+///
+/// The element sizes (3 to 15) run in fixed-size stack buffers ([`project_psd_fixed`]), which perform
+/// the same operations in the same order as the general path, so the result is the same bit for bit.
 pub fn project_psd(h: &mut [f64], n: usize) -> bool {
     assert_eq!(h.len(), n * n, "h must be n*n = {}", n * n);
+    match n {
+        3 => project_psd_fixed::<3>(h),
+        6 => project_psd_fixed::<6>(h),
+        9 => project_psd_fixed::<9>(h),
+        12 => project_psd_fixed::<12>(h),
+        15 => project_psd_fixed::<15>(h),
+        _ => project_psd_general(h, n),
+    }
+}
+
+/// [`jacobi_eigh`] of a finite N × N matrix in fixed-size arrays: the same rotations, in the same
+/// order, on the same values, without heap buffers or a run-time size.
+fn jacobi_eigh_fixed<const N: usize>(a: &[f64]) -> ([f64; N], [[f64; N]; N]) {
+    let mut v = [[0.0f64; N]; N];
+    for (i, row) in v.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    let max_abs = a.iter().map(|val| val.abs()).fold(0.0f64, f64::max);
+    let scale_all = if max_abs > 0.0 && !(1e-150..=1e150).contains(&max_abs) {
+        max_abs
+    } else {
+        1.0
+    };
+    let mut m = [[0.0f64; N]; N];
+    for (i, row) in m.iter_mut().enumerate() {
+        for (j, entry) in row.iter_mut().enumerate() {
+            *entry = if scale_all == 1.0 {
+                a[i * N + j]
+            } else {
+                a[i * N + j] / scale_all
+            };
+        }
+    }
+    for _sweep in 0..60 {
+        let mut rotated = false;
+        for p in 0..N {
+            for q in p + 1..N {
+                let apq = m[p][q];
+                let scale = (m[p][p].abs() + m[q][q].abs()).max(f64::MIN_POSITIVE);
+                if apq.abs() <= 1e-16 * scale {
+                    continue;
+                }
+                rotated = true;
+                let theta = (m[q][q] - m[p][p]) / (2.0 * apq);
+                let hypot_theta = if theta.abs() > 1e150 {
+                    ftx_core::det::hypot(1.0, theta)
+                } else {
+                    (1.0 + theta * theta).sqrt()
+                };
+                let t = if theta >= 0.0 {
+                    1.0 / (theta + hypot_theta)
+                } else {
+                    -1.0 / (-theta + hypot_theta)
+                };
+                let c = 1.0 / (1.0 + t * t).sqrt();
+                let s = c * t;
+                for row in &mut m {
+                    let (mkp, mkq) = (row[p], row[q]);
+                    row[p] = c * mkp - s * mkq;
+                    row[q] = s * mkp + c * mkq;
+                }
+                for k in 0..N {
+                    let (mpk, mqk) = (m[p][k], m[q][k]);
+                    m[p][k] = c * mpk - s * mqk;
+                    m[q][k] = s * mpk + c * mqk;
+                }
+                for row in &mut v {
+                    let (vkp, vkq) = (row[p], row[q]);
+                    row[p] = c * vkp - s * vkq;
+                    row[q] = s * vkp + c * vkq;
+                }
+            }
+        }
+        if !rotated {
+            break;
+        }
+    }
+    let vals: [f64; N] = std::array::from_fn(|i| {
+        if scale_all == 1.0 {
+            m[i][i]
+        } else {
+            m[i][i] * scale_all
+        }
+    });
+    let mut order: [usize; N] = std::array::from_fn(|i| i);
+    order.sort_by(|&x, &y| vals[x].total_cmp(&vals[y]).then(x.cmp(&y)));
+    let mut evals = [0.0f64; N];
+    let mut evecs = [[0.0f64; N]; N];
+    for (slot, &src) in order.iter().enumerate() {
+        evals[slot] = vals[src];
+        for (row, from) in evecs.iter_mut().zip(&v) {
+            row[slot] = from[src];
+        }
+    }
+    (evals, evecs)
+}
+
+/// [`project_psd_general`] for an N × N matrix (`h.len() == N * N`), bit for bit.
+fn project_psd_fixed<const N: usize>(h: &mut [f64]) -> bool {
+    if h.iter().any(|v| !v.is_finite()) {
+        return false;
+    }
+    let (vals, vecs) = jacobi_eigh_fixed::<N>(h);
+    if vals.iter().any(|l| !l.is_finite()) || vecs.iter().flatten().any(|v| !v.is_finite()) {
+        h.fill(f64::NAN);
+        return false;
+    }
+    if vals[0] >= 0.0 {
+        return false;
+    }
+    for i in 0..N {
+        for j in 0..N {
+            let mut acc = 0.0;
+            for (k, &l) in vals.iter().enumerate() {
+                if l > 0.0 {
+                    acc += vecs[i][k] * l * vecs[j][k];
+                }
+            }
+            h[i * N + j] = acc;
+        }
+    }
+    true
+}
+
+/// [`project_psd`] for any size, with heap buffers.
+fn project_psd_general(h: &mut [f64], n: usize) -> bool {
     if h.iter().any(|v| !v.is_finite()) {
         return false;
     }
@@ -137,18 +266,113 @@ pub fn project_psd_translation_free(h: &mut [f64], v: usize) -> bool {
     if v == 1 {
         return project_psd(h, 3);
     }
-    let r = 3 * (v - 1);
-    // Helmert basis of {1}⊥ in Rᵛ: q_j = (1, …, 1, −j, 0, …) / √(j(j + 1)), j = 1..v−1.
-    let q = |j: usize, i: usize| -> f64 {
-        let s = ((j * (j + 1)) as f64).sqrt();
-        match i.cmp(&j) {
-            std::cmp::Ordering::Less => 1.0 / s,
-            std::cmp::Ordering::Equal => -(j as f64) / s,
-            std::cmp::Ordering::Greater => 0.0,
+    // The element sizes in fixed-size buffers, bit for bit the general path below.
+    match v {
+        2 => return translation_free_fixed::<2, 6, 3>(h),
+        3 => return translation_free_fixed::<3, 9, 6>(h),
+        4 => return translation_free_fixed::<4, 12, 9>(h),
+        6 => return translation_free_fixed::<6, 18, 15>(h),
+        _ => {}
+    }
+    translation_free_general(h, v)
+}
+
+/// The Helmert basis vector `q_j` (j ≥ 1) of {1}⊥ in Rᵛ at component `i`:
+/// `(1, …, 1, −j, 0, …) / √(j(j + 1))`.
+fn helmert(j: usize, i: usize) -> f64 {
+    let s = ((j * (j + 1)) as f64).sqrt();
+    match i.cmp(&j) {
+        std::cmp::Ordering::Less => 1.0 / s,
+        std::cmp::Ordering::Equal => -(j as f64) / s,
+        std::cmp::Ordering::Greater => 0.0,
+    }
+}
+
+/// [`translation_free_general`] for `V` vertices (`N = 3V`, `R = 3(V − 1)`), in fixed-size arrays:
+/// the same sums in the same order, so the same bits.
+fn translation_free_fixed<const V: usize, const N: usize, const R: usize>(h: &mut [f64]) -> bool {
+    debug_assert!(N == 3 * V && R + 3 == N && h.len() == N * N);
+    let mut qm = [[0.0f64; V]; V]; // rows 0..V−1: qm[j][i] = q_{j+1}[i]
+    for (j, row) in qm.iter_mut().take(V - 1).enumerate() {
+        for (i, entry) in row.iter_mut().enumerate() {
+            *entry = helmert(j + 1, i);
         }
-    };
+    }
+    let mut half = [[0.0f64; R]; N]; // H Q
+    for (a, row) in half.iter_mut().enumerate() {
+        for l in 0..V - 1 {
+            for d in 0..3 {
+                let mut acc = 0.0;
+                for i2 in 0..V {
+                    acc += h[a * N + 3 * i2 + d] * qm[l][i2];
+                }
+                row[3 * l + d] = acc;
+            }
+        }
+    }
+    let mut red_rows = [[0.0f64; R]; R]; // Qᵀ H Q
+    for j in 0..V - 1 {
+        for c in 0..3 {
+            for b in 0..R {
+                let mut acc = 0.0;
+                for i in 0..V {
+                    acc += qm[j][i] * half[3 * i + c][b];
+                }
+                red_rows[3 * j + c][b] = acc;
+            }
+        }
+    }
+    for a in 0..R {
+        for b in a + 1..R {
+            let s = 0.5 * (red_rows[a][b] + red_rows[b][a]);
+            red_rows[a][b] = s;
+            red_rows[b][a] = s;
+        }
+    }
+    let mut red = [0.0f64; 15 * 15];
+    let red = &mut red[..R * R];
+    for (a, row) in red_rows.iter().enumerate() {
+        red[a * R..(a + 1) * R].copy_from_slice(row);
+    }
+    if !project_psd_fixed::<R>(red) {
+        if red.iter().any(|x| !x.is_finite()) {
+            h.fill(f64::NAN);
+        }
+        return false;
+    }
+    let mut back = [[0.0f64; R]; N]; // Q R⁺
+    for i in 0..V {
+        for c in 0..3 {
+            for b in 0..R {
+                let mut acc = 0.0;
+                for j in 0..V - 1 {
+                    acc += qm[j][i] * red[(3 * j + c) * R + b];
+                }
+                back[3 * i + c][b] = acc;
+            }
+        }
+    }
+    for (a, row) in back.iter().enumerate() {
+        for i2 in 0..V {
+            for d in 0..3 {
+                let mut acc = 0.0;
+                for l in 0..V - 1 {
+                    acc += row[3 * l + d] * qm[l][i2];
+                }
+                h[a * N + 3 * i2 + d] = acc;
+            }
+        }
+    }
+    true
+}
+
+/// [`project_psd_translation_free`] for any vertex count ≥ 2, with heap buffers.
+fn translation_free_general(h: &mut [f64], v: usize) -> bool {
+    let n = 3 * v;
+    let r = 3 * (v - 1);
+    // Helmert basis of {1}⊥ in Rᵛ, j = 1..v−1.
     let qm: Vec<f64> = (0..v - 1)
-        .flat_map(|j| (0..v).map(move |i| q(j + 1, i)))
+        .flat_map(|j| (0..v).map(move |i| helmert(j + 1, i)))
         .collect(); // qm[j * v + i]
     // Reduced matrix: R[(3j+c),(3l+d)] = Σ_{i,i'} q_j[i] q_l[i'] H[(3i+c),(3i'+d)].
     let mut half = vec![0.0f64; n * r]; // H Q: half[a * r + (3l+d)]
@@ -305,6 +529,53 @@ mod tests {
             let before = psd.clone();
             assert!(!project_psd_translation_free(&mut psd, v));
             assert_eq!(psd, before);
+        }
+    }
+
+    /// The fixed-size paths give the general paths' results bit for bit, across element sizes,
+    /// definite and indefinite matrices, and the rescaled extremes.
+    #[test]
+    fn fixed_size_projections_match_the_general_ones_bit_for_bit() {
+        let bits = |h: &[f64]| h.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        for n in [3, 6, 9, 12, 15] {
+            for seed in 0..12u64 {
+                for (scale, shift) in [(1.0, -0.4), (1.0, 0.3), (1e-170, -0.2), (1e170, -0.2)] {
+                    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ n as u64;
+                    let mut rnd = || {
+                        s = s
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+                    };
+                    let b: Vec<f64> = (0..n * n).map(|_| rnd()).collect();
+                    let mut h = vec![0.0; n * n];
+                    for i in 0..n {
+                        for j in 0..n {
+                            let dot: f64 = (0..n).map(|k| b[i * n + k] * b[j * n + k]).sum();
+                            h[i * n + j] = (dot + if i == j { shift } else { 0.0 }) * scale;
+                        }
+                    }
+                    let (mut fixed, mut general) = (h.clone(), h.clone());
+                    assert_eq!(
+                        project_psd(&mut fixed, n),
+                        project_psd_general(&mut general, n)
+                    );
+                    assert_eq!(bits(&fixed), bits(&general), "n {n}, seed {seed}");
+                }
+            }
+        }
+        for v in [2, 3, 4, 6] {
+            for seed in 0..12u64 {
+                for shift in [-0.4, 0.1] {
+                    let h = translation_free(v, seed + 100, shift);
+                    let (mut fixed, mut general) = (h.clone(), h.clone());
+                    assert_eq!(
+                        project_psd_translation_free(&mut fixed, v),
+                        translation_free_general(&mut general, v)
+                    );
+                    assert_eq!(bits(&fixed), bits(&general), "v {v}, seed {seed}");
+                }
+            }
         }
     }
 
