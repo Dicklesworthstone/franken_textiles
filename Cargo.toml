@@ -69,7 +69,7 @@ debug = "line-tables-only"
 [profile.wasm-release]
 inherits = "release"
 # Speed over size: the posing room's browser sew took 31.0 s at "s" and 24.7 s at 3 (Node, same
-# digest; 2026-11-24), and the 3 build was the smaller one (25.6 against 27.6 MB with names).
+# digest; 2026-11-24). The level-3 module is larger: 22.1 MB, 7.0 MB gzipped, against 16.5 and 4.8 MB.
 opt-level = 3
 lto = "thin"
 codegen-units = 1
