@@ -224,7 +224,8 @@ fn shared_settings_records_time_subdivision_and_elastic_hold_and_preflights_alte
     let err = two_start::drape(&pattern(), &json!({}), &body, &opts, &too_tight, |_| {
         called = true;
     })
-    .unwrap_err();
+    .err()
+    .expect("alternate subdivision trial budget must refuse before solving");
     assert_eq!(err.code, ftx_core::RefusalCode::BudgetExceeded);
     assert!(!called);
 

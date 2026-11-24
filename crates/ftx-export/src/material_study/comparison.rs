@@ -4605,10 +4605,10 @@ fn same_opt_leg_pose(a: &Value, b: &Value) -> bool {
     if a.is_null() && b.is_null() {
         return true;
     }
-    let parse = |value: &Value| -> Option<(&str, f64)> {
+    fn parse(value: &Value) -> Option<(&str, f64)> {
         let obj = value.as_object().filter(|o| o.len() == 2)?;
         Some((obj.get("posture")?.as_str()?, finite(obj.get("fraction")?)?))
-    };
+    }
     matches!((parse(a), parse(b)), (Some(pa), Some(pb)) if pa == pb)
 }
 
