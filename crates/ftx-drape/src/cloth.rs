@@ -2239,7 +2239,10 @@ impl Solver {
         let mut projecting = false;
         let mut retried_exact_noop = false;
         let mut force_base_lin_tol = false;
+        let mut force_exact_ldlt = false;
         for it in 0..self.max_newton {
+            let iter_adaptive_ilu = if force_exact_ldlt { None } else { adaptive_ilu };
+            force_exact_ldlt = false;
             let mut iter_lin_tol: Option<f64> = None;
             let mut next_lin_tol = |g_vec: &[f64]| -> f64 {
                 if let Some(t) = iter_lin_tol {
@@ -2274,7 +2277,7 @@ impl Solver {
                     false,
                     lin_tol,
                     base_linear_tol,
-                    adaptive_ilu,
+                    iter_adaptive_ilu,
                     &mut rep,
                 )?;
                 (g, Some(a), p, lin_tol)
@@ -2293,7 +2296,7 @@ impl Solver {
                     true,
                     lin_tol,
                     base_linear_tol,
-                    adaptive_ilu,
+                    iter_adaptive_ilu,
                     &mut rep,
                 )?;
                 if p.is_none() {
@@ -2474,19 +2477,23 @@ impl Solver {
                     force_base_lin_tol = true;
                     continue;
                 }
-                if !retried_exact_noop && self.pcg_iters > 0 && self.precond.is_some() {
+                if !retried_exact_noop
+                    && (adaptive_ilu.is_some() || (self.pcg_iters > 0 && self.precond.is_some()))
+                {
                     self.precond = None;
+                    force_exact_ldlt = true;
                     retried_exact_noop = true;
                     continue;
                 }
                 // The accepted step rounded bit-identically onto `self.x` at `base_linear_tol`
-                // with no barrier escalation and (when enabled) after retrying without a cached
-                // preconditioner; further iterations would replay the same factorization without
+                // with no barrier escalation and (when enabled) after retrying with an exact LDLT
+                // factorization; further iterations would replay the same factorization without
                 // making progress. Stay fail-closed (NotConverged).
                 break;
             } else {
                 retried_exact_noop = false;
                 force_base_lin_tol = false;
+                force_exact_ldlt = false;
             }
         }
         rep.energy_end = energy;
@@ -5704,9 +5711,10 @@ mod strategy_and_integrator_tests {
             Vec3::new(-0.02, 0.01, 0.0),
             Vec3::new(0.019, 0.011, 0.004),
         ];
-        for strategy in [
-            NewtonStrategy::ProjectedNewton,
-            NewtonStrategy::adaptive_ilu_default(),
+        for (strategy, pcg_iters) in [
+            (NewtonStrategy::ProjectedNewton, 0),
+            (NewtonStrategy::ProjectedNewton, 20),
+            (NewtonStrategy::adaptive_ilu_default(), 0),
         ] {
             let mut solver = Solver::new(
                 model.clone(),
@@ -5716,10 +5724,12 @@ mod strategy_and_integrator_tests {
             );
             solver.v[3] = Vec3::new(0.25, -0.1, 0.4);
             // Demanding tol * h = 1e-19 m is below 0.5 ULP(0.019 m) (~1.73e-18 m), so the final
-            // Newton update rounds bit-identically onto `self.x`. Both exact direct and Eisenstat–Walker
-            // AdaptiveIlu solves must remain fail-closed (NotConverged) without replaying 300 iterations.
+            // Newton update rounds bit-identically onto `self.x`. Exact direct, cached-factor PCG,
+            // and Eisenstat–Walker AdaptiveIlu solves must remain fail-closed (NotConverged)
+            // without replaying 300 iterations.
             solver.tol = 1e-13;
             solver.max_newton = 300;
+            solver.pcg_iters = pcg_iters;
             solver.newton_strategy = strategy;
             solver.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
             solver.damping = DampingOptions {
@@ -5731,7 +5741,7 @@ mod strategy_and_integrator_tests {
             assert_eq!(err.code, RefusalCode::NotConverged);
             assert!(
                 !err.message.contains("after 300 iterations"),
-                "{strategy:?}: sub-ULP no-op step must terminate early instead of burning all max_newton iterations: {}",
+                "{strategy:?} (pcg_iters={pcg_iters}): sub-ULP no-op step must terminate early instead of burning all max_newton iterations: {}",
                 err.message
             );
         }
