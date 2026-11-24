@@ -2177,7 +2177,8 @@ fn native_fit_starts_materializes_and_releases_per_frame_fixed_poses_with_refusa
     write(&dir, "input.json", &input);
 
     let rev = review(&dir, "rev", 0);
-    assert_eq!(rev["status"], "OK");
+    assert_eq!(rev["ok"], true);
+    assert_eq!(rev["result"]["body_fitted"], false);
     let mut ann = read(&dir, "rev/body-starts.json");
     // Reversed frame 0 is fixture pose[1] (true root_x_m = 0.2 m).
     let fixed_val = 0.2_f64;
@@ -2237,7 +2238,8 @@ fn native_fit_starts_materializes_and_releases_per_frame_fixed_poses_with_refusa
         ],
         0,
     );
-    assert_eq!(rev2["status"], "OK");
+    assert_eq!(rev2["ok"], true);
+    assert_eq!(rev2["result"]["body_fitted"], false);
     let mut release = read(&dir, "rev2/body-starts.json");
     release["fixed_poses"] = json!([
         {"frame_index": 0, "fixed_pose": Value::Null},

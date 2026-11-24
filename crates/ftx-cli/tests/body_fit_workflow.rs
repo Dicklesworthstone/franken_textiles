@@ -827,9 +827,9 @@ fn per_frame_fixed_pose_replays_mixed_controls_and_check_only_views() {
     // Keep source ordinals distinct from canonical time order.
     input["fit"]["frames"].as_array_mut().unwrap().reverse();
     save(&dir, &input);
+    let source = std::fs::read_to_string(dir.join("input.json")).unwrap();
     let native = run(&dir, &["--out", "frame-fixed.json"], 0)["result"].clone();
-    let portable =
-        ftx_wasm::body_fit::fit_body(&bytes, &input.to_string(), "50", "100000").unwrap();
+    let portable = ftx_wasm::body_fit::fit_body(&bytes, &source, "50", "100000").unwrap();
     assert_eq!(native, portable);
     assert_eq!(native["status"], "ACCEPTED");
     let accepted =
@@ -879,10 +879,11 @@ fn per_frame_fixed_pose_replays_mixed_controls_and_check_only_views() {
     let pixel = &mut bad_check["fit"]["frames"][0]["keypoints"][0]["pixel_px"][0];
     *pixel = json!(pixel.as_f64().unwrap() + 10.0);
     save(&dir, &bad_check);
+    let bad_source = std::fs::read_to_string(dir.join("input.json")).unwrap();
     let rejected = run(&dir, &[], 2)["result"].clone();
     assert_eq!(
         rejected,
-        ftx_wasm::body_fit::fit_body(&bytes, &bad_check.to_string(), "50", "100000").unwrap()
+        ftx_wasm::body_fit::fit_body(&bytes, &bad_source, "50", "100000").unwrap()
     );
     assert_eq!(rejected["status"], "REJECTED");
     assert!(rejected["solution"].is_null());
