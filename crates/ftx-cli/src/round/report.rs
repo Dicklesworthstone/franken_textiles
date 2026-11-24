@@ -963,6 +963,34 @@ mod tests {
     }
 
     #[test]
+    fn drape_summary_preserves_the_declared_ambient_wind() {
+        let mut entry = json!({
+            "round": 0,
+            "sim": {
+                "settled": true,
+                "gating": [],
+                "advisory": [],
+                "numerical": {"damping": {"air_drag": {
+                    "rho_air_kg_m3": 1.225,
+                    "c_normal": 1.2,
+                    "c_tangent": 0.05,
+                    "eps_v_m_s": 0.001,
+                    "air_velocity_m_s": [-2.5, 0.25, 1.5]
+                }}}
+            }
+        });
+        let wind = render(Path::new("."), &[entry.clone()]).unwrap();
+        assert!(wind.contains("Damping: air drag (wind [-2.5, 0.25, 1.5] m/s)."));
+        entry["sim"]["numerical"]["damping"]["air_drag"]
+            .as_object_mut()
+            .unwrap()
+            .remove("air_velocity_m_s");
+        let still = render(Path::new("."), &[entry]).unwrap();
+        assert!(still.contains("Damping: air drag."));
+        assert!(!still.contains("air drag (wind"));
+    }
+
+    #[test]
     fn drape_summary_shows_opt_in_skinning_and_solver_controls_without_changing_defaults() {
         let default_entry = json!({
             "round": 0,

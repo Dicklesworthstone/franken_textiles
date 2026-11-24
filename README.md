@@ -131,6 +131,14 @@ trajectory. Configured portable folds and material/scenario options accept the s
 The browser fold forms expose the policy as **Split stalled time steps**; checked garment transfers
 between the pattern and material workbenches retain the selected limits.
 
+**Prescribed wind.** `drape --air-drag --air-velocity 2,0,0` applies uniform air moving at
+2 m/s along world +x; the same options work with `round --sim`. Components are world XYZ in m/s
+(z up). Aerodynamic forces use cloth velocity relative to this air, so wind can move initially
+stationary cloth. Omitting the velocity retains still air. Both browser workbenches expose the
+three components with air drag, and material scenarios retain them for replay. Drag coefficients
+remain uncalibrated reference values; this input does not set thermal convection. The optional
+static gravity comparison reports a refusal with nonzero wind while retaining the dynamic result.
+
 Photo/video body fitting requires prepared, calibrated frames and reviewed correspondences or masks.
 The [decoded-frame selection](docs/video-frame-selection.md), [multi-frame fitting](docs/multi-frame-body-fit.md)
 and [accepted-shape reuse](docs/reuse-body-fit.md) guides document those stages. An arbitrary phone clip

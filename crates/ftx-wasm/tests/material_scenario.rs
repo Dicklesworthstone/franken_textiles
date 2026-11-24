@@ -583,6 +583,86 @@ fn file_free_study_matches_real_consumers_and_keeps_manufacturing_after_drape_re
     assert_eq!(p.raw(), &serde_json::from_str::<Value>(PATTERN).unwrap());
 }
 #[test]
+fn prescribed_wind_reaches_actual_scenario_draping_and_frozen_replay() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.0,
+    };
+    let mut request = request();
+    request.variants.truncate(1);
+    let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
+    scenario["options"]["damping"] = json!({"air_drag": {
+        "air_velocity_m_s": [3.0, -2.0, 0.5]
+    }});
+    let run = |request: &Request, scenario: &Value| -> Value {
+        serde_json::from_str(
+            &on_body(
+                &body,
+                PATTERN,
+                &serde_json::to_string(request).unwrap(),
+                &scenario.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let result = run(&request, &scenario);
+    let evaluation = &result["simulations"][0]["evaluation"];
+    assert_eq!(evaluation["status"], "available", "{evaluation}");
+    assert_eq!(
+        evaluation["result"]["drape"]["numerical"]["damping"]["air_drag"]["air_velocity_m_s"],
+        json!([3.0, -2.0, 0.5])
+    );
+    let parsed: Scenario = serde_json::from_value(scenario.clone()).unwrap();
+    let mut direct = Session::new(&parsed, &body).unwrap();
+    let native = request
+        .evaluate_with(
+            &Pattern::from_json(PATTERN).unwrap(),
+            &direct.descriptor(),
+            |_, pattern| direct.evaluate(pattern, |_| {}),
+        )
+        .unwrap();
+    assert_eq!(result, serde_json::to_value(native).unwrap());
+
+    request.variants[0].changes = serde_json::from_value(
+        result["manufacturing"]["alternatives"][0]["frozen_changes"].clone(),
+    )
+    .unwrap();
+    let replay = run(&request, &scenario);
+    assert_eq!(result["simulations"], replay["simulations"]);
+    scenario["options"]["damping"]["air_drag"]["air_velocity_m_s"] = json!([0.0, 0.0, 0.0]);
+    let still = run(&request, &scenario);
+    let still_evaluation = &still["simulations"][0]["evaluation"];
+    assert_eq!(
+        still_evaluation["status"], "available",
+        "{still_evaluation}"
+    );
+    assert_ne!(
+        evaluation["result"]["scenario_sha256"],
+        still_evaluation["result"]["scenario_sha256"]
+    );
+    assert_ne!(
+        evaluation["result"]["positions_sha256"],
+        still_evaluation["result"]["positions_sha256"]
+    );
+    scenario["options"]["damping"]["air_drag"]["air_velocity_m_s"] = json!([1.0, 2.0]);
+    assert!(
+        on_body(
+            &body,
+            PATTERN,
+            &serde_json::to_string(&request).unwrap(),
+            &scenario.to_string(),
+            |_| {},
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn draped_vapor_objectives_use_real_sewn_geometry_and_independent_material_evidence() {
     let form = form();
     let body = DrapeBody {

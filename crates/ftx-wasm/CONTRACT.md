@@ -1,5 +1,15 @@
 # ftx-wasm
 
+**Prescribed ambient wind.** Fold settings, live session settings and material-scenario
+options share `damping.air_drag.air_velocity_m_s: [X,Y,Z]`, a finite uniform constant
+world-space velocity in metres/second (z up). The common solver uses relative cloth/air
+velocity during sewing, draping and subsequent motion; reports and frozen scenario
+identity retain the exact vector. Omitted and explicit zero vectors retain still-air
+serialization and behavior. Malformed vectors and non-finite native settings refuse.
+An active nonzero wind refuses only the optional conservative static comparison,
+preserving dynamic results. Reference drag coefficients remain uncalibrated; this is
+neither a resolved airflow field nor empirical garment qualification.
+
 **Opt-in drape solver strategies, Generalized-α, hand colliders, microclimate, and viscoelastic lowering.**
 `fold::FoldSettings` carries opt-in `hand_collider` (`"wrist"` default reference cap omitted from
 JSON; `"palm"`, `"knuckle"` and `"full"` native sleeve colliders forwarding into `clothing_skin_with_hands`

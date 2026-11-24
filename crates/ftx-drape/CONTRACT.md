@@ -79,6 +79,15 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   area, ignore preferred-curvature offsets, and dissipate no rigid translation or rotation.
   Replaced scalar hinges are not counted again. Internal rates use endpoint backward differences
   under both integrators; this is not a second-order Kelvin–Voigt discretization under GeneralizedAlpha.
+  `AirDrag.air_velocity_m_s` optionally prescribes one finite world-space `[x, y, z]` air velocity
+  in m/s (z up). Both the variational drag terms and consistent initial acceleration use cloth
+  velocity relative to that air. Omission or an all-zero vector preserves the original still-air
+  arithmetic and JSON. Moving air can supply mechanical energy; it is not a thermal-convection
+  boundary, a spatial flow solve or measured fabric drag. Nonzero prescribed wind refuses the
+  optional static comparison because its gravity-only potential cannot balance that load;
+  the accepted dynamic result remains available. Analytical forces, common-velocity invariance,
+  both integrators' derivatives and actual resting/comoving cloth are covered by focused tests
+  in `damping::tests` and `tests/kat_realism.rs` (`ftx-aero-wind`).
 - **Principal-strain tension-field softening (`FTX-27c`)**: `CompressionModel::Principal` applies
   the `C²` `tanh` blend to Green-strain eigenvalues through a shared spectral transform for linear
   and characterized nonlinear membranes, Maxwell histories, and homogeneous elastic adjoints.

@@ -500,7 +500,8 @@ pub struct SessionSettings {
     pub bending_model: BendingModel,
     /// Membrane compression-softening formulation.
     pub compression_model: CompressionModel,
-    /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping.
+    /// Opt-in aerodynamic drag with a retained uniform world-space air velocity, and
+    /// SE(3)-invariant Rayleigh internal damping.
     pub damping: DampingOptions,
     /// Opt-in Li et al. (2020) adaptive IPC barrier stiffness scaling.
     pub adaptive_barrier: Option<AdaptiveBarrierPolicy>,
@@ -1166,10 +1167,22 @@ mod tests {
         let body = PosableBody::parse(&header, &data).unwrap();
         let mut live =
             Session::start(body, &uncharacterized, &json!({}), settings, |_| {}).unwrap();
+        assert_eq!(
+            live.summary()["report"]["numerical"]["damping"]["air_drag"]["air_velocity_m_s"],
+            json!([0.5, -1.5, 0.25])
+        );
+        assert_eq!(
+            live.scene.solver.damping.air_drag.unwrap().air_velocity_m_s,
+            [0.5, -1.5, 0.25]
+        );
         live.scene.solver.gravity = Vec3::ZERO;
         let samples = live.advance(40.0, 35.0, 0.15).unwrap();
         assert!(!samples.is_empty());
         assert_eq!(live.arms(), [40.0, 35.0]);
+        assert_eq!(
+            live.scene.solver.damping.air_drag.unwrap().air_velocity_m_s,
+            [0.5, -1.5, 0.25]
+        );
 
         // Fail-closed: self_stick_slip without self_contact_mm > 0 must be refused.
         let bad: SessionSettings = serde_json::from_value(json!({
