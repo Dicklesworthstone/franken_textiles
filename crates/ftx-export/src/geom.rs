@@ -499,7 +499,7 @@ fn parse_crease_angle_deg(raw: Option<&Value>, context: &str) -> Result<Option<f
     Ok((deg != 0.0).then_some(deg))
 }
 
-fn format_crease_angle(prefix: &str, deg: f64) -> String {
+pub(crate) fn format_crease_angle(prefix: &str, deg: f64) -> String {
     let (sign, dir) = if deg > 0.0 {
         ("+", "valley")
     } else {
