@@ -1801,21 +1801,10 @@ pub(super) fn evaluate(
             "ftx-sewing-parallel/12"
         } else if policy.availability_calendars.is_some() {
             "ftx-sewing-parallel/10"
-        } else if feed_time_search.is_some() && shared_operator.is_some() {
-            "ftx-sewing-parallel/9"
         } else if feed_time_search.is_some() {
             "ftx-sewing-parallel/8"
         } else if thread_order_search.is_some() {
             "ftx-sewing-parallel/7"
-        } else if shared_operator
-            .as_ref()
-            .is_some_and(|operator| operator.availability_calendars.is_some())
-        {
-            "ftx-sewing-parallel/6"
-        } else if shared_workholding.is_some() {
-            "ftx-sewing-parallel/5"
-        } else if shared_operator.is_some() {
-            "ftx-sewing-parallel/4"
         } else if availability.is_some() {
             "ftx-sewing-parallel/3"
         } else if cell_plans.is_empty() {
