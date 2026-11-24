@@ -193,7 +193,7 @@ impl Contact {
                     "swept contact starts at a non-positive gap",
                 ));
             }
-            let fraction = accd(pair, st.pts, dp, p.thickness, result.fraction);
+            let fraction = accd_chord(pair, st.pts, dp, p.thickness, result.fraction);
             if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
                 return Err(Refusal::new(
                     RefusalCode::NonFinite,
@@ -304,7 +304,7 @@ impl Body {
                     "swept body self-contact starts at a non-positive separation",
                 ));
             }
-            let fraction = accd(pair, pts, ids.map(|i| dp[i]), 0.0, result.fraction);
+            let fraction = accd_chord(pair, pts, ids.map(|i| dp[i]), 0.0, result.fraction);
             if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
                 return Err(Refusal::new(
                     RefusalCode::NonFinite,
@@ -380,7 +380,7 @@ mod tests {
                     let t = body.triangles[ct];
                     let ids = [v, t[0], t[1], t[2]];
                     assert_eq!(
-                        accd(
+                        accd_chord(
                             Pair::SelfVertexTri { cv: v, ct },
                             ids.map(|i| body.vertices[i]),
                             ids.map(|i| end[i] - body.vertices[i]),
@@ -526,7 +526,7 @@ mod tests {
                 let st = stencil(pair, &x, &c.body, &c.cloth);
                 let db = body_delta(pair, &c.body.vertices, &b, &c.body);
                 let dp = std::array::from_fn(|i| st.cloth[i].map_or(db[i], |j| y[j] - x[j]));
-                fraction = fraction.min(accd(pair, st.pts, dp, c.params.thickness, fraction));
+                fraction = fraction.min(accd_chord(pair, st.pts, dp, c.params.thickness, fraction));
             };
             for cv in 0..x.len() {
                 for (bt, t) in c.body.triangles.iter().enumerate() {

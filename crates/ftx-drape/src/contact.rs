@@ -2535,6 +2535,29 @@ impl Contact {
 /// Returns `0.0` when the starting gap is non-positive or when inputs/motion are invalid.
 #[must_use]
 pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f64 {
+    accd_probing(pair, pts, dp, xi, t_max, false)
+}
+
+/// [`accd`] for a trajectory that ends at `t_max`, such as a motion substep's linear chord: the
+/// probe that would step past `t_max` is placed on `t_max` instead, so the answer never depends on a
+/// point beyond the trajectory. Every probe is still at most one safe step (`0.9 · gap / l_p`) after
+/// the previous one, so the guarantee is [`accd`]'s on `[0, t_max]`: the gap stays positive and is at
+/// least 10 % of its start value at every probe. [`accd`] itself also tests the point one step past
+/// `t_max`, and refuses the whole trajectory when the gap there is below target, even where it never
+/// is on the trajectory (a pair closing from 4 mm to 0.7 mm over a substep).
+#[must_use]
+pub fn accd_chord(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f64 {
+    accd_probing(pair, pts, dp, xi, t_max, true)
+}
+
+fn accd_probing(
+    pair: Pair,
+    pts: [Vec3; 4],
+    dp: [Vec3; 4],
+    xi: f64,
+    t_max: f64,
+    land_on_end: bool,
+) -> f64 {
     if !(xi.is_finite() && xi >= 0.0 && t_max.is_finite() && t_max >= 0.0)
         || pts.iter().chain(&dp).any(|v| !v.is_finite())
     {
@@ -2588,8 +2611,16 @@ pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f
         if !(tl.is_finite() && tl > 0.0) {
             return t;
         }
-        for (qi, ri) in q.iter_mut().zip(&rel) {
-            *qi += *ri * tl;
+        // The end of the trajectory is less than one safe step away: probe it.
+        let last = land_on_end && t + tl >= t_max;
+        if last {
+            for ((qi, pi), ri) in q.iter_mut().zip(&pts).zip(&rel) {
+                *qi = *pi + *ri * t_max;
+            }
+        } else {
+            for (qi, ri) in q.iter_mut().zip(&rel) {
+                *qi += *ri * tl;
+            }
         }
         d2 = dist2(&q);
         let gap = gap_of(d2);
@@ -2598,6 +2629,9 @@ pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f
         }
         if t > 0.0 && gap < target {
             return t;
+        }
+        if last {
+            return t_max;
         }
         t += tl;
         if t > t_max {
@@ -3212,6 +3246,40 @@ mod tests {
             1.0,
         );
         assert_eq!(t, 1.0);
+    }
+
+    /// A vertex closing on a large triangle from a gap of 1 to 0.18 (target 0.1) while sliding: the
+    /// chord never comes within the target, but [`accd`]'s second probe lands beyond the chord's end
+    /// (t ≈ 1.13, gap 0.075) and refuses it. [`accd_chord`] probes the end instead and admits it, and
+    /// still stops a chord whose own end is below target. Both agree on the first probe's stretch.
+    #[test]
+    fn chord_ccd_judges_the_chord_not_a_point_past_its_end() {
+        let tri = [
+            Vec3::new(-5.0, -5.0, 0.0),
+            Vec3::new(5.0, -5.0, 0.0),
+            Vec3::new(0.0, 5.0, 0.0),
+        ];
+        let pair = Pair::VertexTri { cv: 0, bt: 0 };
+        let pts = [Vec3::new(0.0, 0.0, 1.0), tri[0], tri[1], tri[2]];
+        let moving = |d: Vec3| [d, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO];
+        let sliding = moving(Vec3::new(0.6, 0.0, -0.82));
+        let plain = accd(pair, pts, sliding, 0.0, 1.0);
+        assert!(plain > 0.85 && plain < 0.9, "plain {plain}");
+        assert_eq!(accd_chord(pair, pts, sliding, 0.0, 1.0), 1.0);
+        // The same chord cut short is judged on its own end too.
+        assert_eq!(accd_chord(pair, pts, sliding, 0.0, 0.95), 0.95);
+        // Ending at a gap of 0.05 (below the target 0.1): stopped at the last probe before the end.
+        let closing = moving(Vec3::new(0.0, 0.0, -0.95));
+        let t = accd_chord(pair, pts, closing, 0.0, 1.0);
+        assert!(t > 0.9 && t < 1.0, "t = {t}");
+        assert_eq!(t, accd(pair, pts, closing, 0.0, 1.0));
+        // Through the plane: refused before contact, exactly as plain ACCD.
+        let through = moving(Vec3::new(0.0, 0.0, -2.0));
+        assert_eq!(
+            accd_chord(pair, pts, through, 0.0, 1.0),
+            accd(pair, pts, through, 0.0, 1.0)
+        );
+        assert!(accd_chord(pair, pts, through, 0.0, 1.0) < 0.5);
     }
 
     #[test]
