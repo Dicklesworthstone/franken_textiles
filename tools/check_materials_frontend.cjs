@@ -20289,6 +20289,132 @@ test('guided motion forwards explicit endpoint poses and independent work limits
   assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);assert.match(visibleText(result),/not transient heat/);
 });
 
+function guidedIntervalWindDraft(p, wind) {
+  for (const [index, axis] of ['X', 'Y', 'Z'].entries()) {
+    p.e['guidedMotionWind' + axis].value = String(wind[index]);
+    p.e['guidedMotionWind' + axis].handlers.input();
+  }
+}
+
+test('guided interval wind forwards explicit vectors through both saved motion and worker replay', async () => {
+  const {p} = await guidedScenarioSetup(); guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionWind.checked, false);
+  assert.ok(['X', 'Y', 'Z'].every(axis => p.e['guidedMotionWind' + axis].value === '' && p.e['guidedMotionWind' + axis].disabled));
+  p.e.guidedMotionWind.checked = true; p.e.guidedMotionWind.handlers.change();
+  p.e.guidedScenarioAirDrag.checked = true; p.e.guidedScenarioAirDrag.handlers.change();
+  p.e.guidedScenarioAirWindX.value = '-0.25'; p.e.guidedScenarioAirWindY.value = '1'; p.e.guidedScenarioAirWindZ.value = '0';
+  p.e.guidedMotionPoseSampling.checked = true; p.e.guidedMotionPoseStep.value = '0.001'; p.e.guidedMotionPoseSegments.value = '32';
+  p.e.guidedMotionPoseSampling.handlers.change();
+  guidedIntervalWindDraft(p, [2.5, -1.25, 0.5]); await addGuidedMotion(p, 0.002, 35);
+  guidedIntervalWindDraft(p, [0, 0, 0]); await addGuidedMotion(p, 0.004, 36);
+  assert.match(visibleText(p.e.guidedMotionKeyframes), /Saved wind for 0–0.002 s: \[2.5, -1.25, 0.5\] m\/s/);
+  await p.e.scenario.onclick(); const sent = p.current().messages.at(-1);
+  assert.equal(sent.type, 'scenario', p.e.error.textContent);
+  const request = JSON.parse(sent.scenarioRequest);
+  assert.deepEqual(request.motion.air_velocity_schedule_m_s, [[2.5, -1.25, 0.5], [0, 0, 0]]);
+  assert.deepEqual(request.motion.keyframes, [{time_s: 0.002, arm_abduction_deg: 35}, {time_s: 0.004, arm_abduction_deg: 36}]);
+  assert.deepEqual(request.motion.source_pose_sampling, {max_step_s: 0.001, max_segments: 32});
+  assert.deepEqual(request.options.damping.air_drag.air_velocity_m_s, [-0.25, 1, 0]);
+  const report = scenarioReport(); report.scenario.scenario = request;
+  const worker = await workerModule({bindings: {default: async () => {}, WebBody: class {free() {}},
+    material_scenario_study: (_model, ...args) => {
+      assert.deepEqual(args, [sent.pattern, sent.studyRequest, sent.scenarioRequest, sent.measurements]);
+      return JSON.stringify(report);
+    }}});
+  const response = await worker.send(sent); assert.equal(response.type, 'result', response.message);
+  p.current().emit(response);
+  const result = section(p, 'Fresh drape and heat alternatives');
+  const download = descendants(result).find(node => node.download === 'scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(), sent.scenarioRequest);
+});
+
+test('guided interval wind requires complete saved endpoints and retains inactive vectors without metadata leaks', async () => {
+  const {p} = await guidedScenarioSetup(); guidedMotionControls(p);
+  await addGuidedMotion(p, 0.002, 35); await addGuidedMotion(p, 0.004, 36);
+  p.e.guidedMotionWind.checked = true; p.e.guidedMotionWind.handlers.change();
+  assert.match(visibleText(p.e.guidedMotionKeyframes), /Wind not saved/);
+  guidedIntervalWindDraft(p, [1, -2, 3]); guidedMotionDraft(p, 0.002, 35);
+  await guidedMotionAction(p, 'Replace keyframe 1 from current controls');
+  assert.match(visibleText(p.e.guidedMotionKeyframes), /Saved wind for 0–0.002 s: \[1, -2, 3\]/);
+  const before = p.current().messages.length; await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length, before); assert.match(p.e.error.textContent, /endpoint 2/);
+  guidedMotionDraft(p, 0.004, 36);
+  for (const wind of [['', 0, 0], [0, 'NaN', 0], [0, 0, 'Infinity'], [1e120, 0, 0]]) {
+    guidedIntervalWindDraft(p, wind); await guidedMotionAction(p, 'Replace keyframe 2 from current controls');
+    assert.equal(p.e.guidedMotionKeyframes.children.length, 2); assert.equal(p.e.error.hidden, false);
+    assert.match(visibleText(p.e.guidedMotionKeyframes), /Wind not saved/);
+  }
+  guidedIntervalWindDraft(p, [0, 0, 0]); await guidedMotionAction(p, 'Replace keyframe 2 from current controls');
+  await p.e.scenario.onclick(); assert.equal(p.current().messages.length, before);
+  assert.match(p.e.error.textContent, /damping.air_drag/);
+  p.e.guidedScenarioAirDrag.checked = true; p.e.guidedScenarioAirDrag.handlers.change();
+  await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.air_velocity_schedule_m_s, [[1, -2, 3], [0, 0, 0]]);
+  p.emit(scenarioReport()); p.e.guidedMotionWind.checked = false; p.e.guidedMotionWind.handlers.change();
+  guidedIntervalWindDraft(p, ['invalid', 'unused', 'draft']);
+  await guidedMotionAction(p, 'Replace keyframe 2 from current controls');
+  assert.match(visibleText(p.e.guidedMotionKeyframes), /\(inactive\)/);
+  await p.e.scenario.onclick(); let motion = JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+  assert.equal(Object.hasOwn(motion, 'air_velocity_schedule_m_s'), false);
+  assert.ok(motion.keyframes.every(frame => !Object.hasOwn(frame, 'air_velocity_m_s')));
+  p.emit(scenarioReport()); p.e.guidedMotionWind.checked = true; p.e.guidedMotionWind.handlers.change();
+  await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.air_velocity_schedule_m_s, [[1, -2, 3], [0, 0, 0]]);
+  p.emit(scenarioReport()); await guidedMotionAction(p, 'Remove keyframe 1'); await p.e.scenario.onclick();
+  motion = JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+  assert.deepEqual(motion.air_velocity_schedule_m_s, [[0, 0, 0]]); assert.equal(motion.keyframes[0].time_s, 0.004);
+  p.emit(scenarioReport()); p.e.guidedMotionWind.checked = false; p.e.guidedMotionWind.handlers.change();
+  await addGuidedMotion(p, 0.006, 37); p.e.guidedMotionWind.checked = true; p.e.guidedMotionWind.handlers.change();
+  const missing = p.current().messages.length; await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length, missing); assert.match(p.e.error.textContent, /endpoint 2/);
+});
+
+test('guided interval wind freezes named cases and resets authored state with the garment', async () => {
+  const {p} = await guidedScenarioSetup(); guidedNamedCases(p); guidedMotionControls(p);
+  p.e.guidedScenarioAirDrag.checked = true; p.e.guidedScenarioAirDrag.handlers.change();
+  p.e.guidedMotionWind.checked = true; p.e.guidedMotionWind.handlers.change();
+  guidedIntervalWindDraft(p, [1, -2, 3]); await addGuidedMotion(p, 0.002, 35); await saveGuidedCase(p, 'breeze');
+  guidedIntervalWindDraft(p, [-4, 5, -6]); await guidedMotionAction(p, 'Replace keyframe 1 from current controls');
+  await saveGuidedCase(p, 'reverse'); assert.match(visibleText(p.e.guidedScenarioCases), /1 prescribed wind intervals/);
+  await p.e.scenario.onclick(); const original = p.current().messages.at(-1).scenarioRequest;
+  assert.deepEqual(JSON.parse(original).cases.map(item => item.scenario.motion.air_velocity_schedule_m_s), [[[1, -2, 3]], [[-4, 5, -6]]]);
+  p.emit(scenarioReport()); const result = section(p, 'Fresh drape and heat alternatives');
+  guidedIntervalWindDraft(p, [99, 88, 77]); p.e.guidedMotionWind.checked = false; p.e.guidedMotionWind.handlers.change();
+  p.e.clearMotionKeyframes.onclick(); assert.equal(result.hidden, false);
+  await p.e.scenario.onclick(); assert.equal(p.current().messages.at(-1).scenarioRequest, original);
+  p.emit(scenarioReport()); await p.load();
+  assert.equal(p.e.guidedMotionWind.checked, false); assert.equal(p.e.guidedMotionKeyframes.children.length, 0);
+  assert.ok(['X', 'Y', 'Z'].every(axis => p.e['guidedMotionWind' + axis].value === '' && p.e['guidedMotionWind' + axis].disabled));
+});
+
+test('guided interval wind snapshots drafts and cancels delayed or dispatched work only on accepted changes', async () => {
+  for (const change of ['draft', 'replace', 'toggle']) {
+    const {p, sources} = await guidedScenarioSetup(); guidedMotionControls(p);
+    p.e.guidedScenarioAirDrag.checked = true; p.e.guidedScenarioAirDrag.handlers.change();
+    p.e.guidedMotionWind.checked = true; p.e.guidedMotionWind.handlers.change();
+    guidedIntervalWindDraft(p, [1, 2, 3]); await addGuidedMotion(p, 0.002, 35);
+    const delay = deferred(); let reading = false;
+    p.e.fit.files[0].arrayBuffer = async () => {reading = true; return utf8Buffer(await delay.promise);};
+    const old = p.current(), before = old.messages.length, running = p.e.scenario.onclick();
+    assert.equal(reading, true); guidedIntervalWindDraft(p, [-1, -2, -3]); assert.equal(old.dead, false);
+    if (change === 'replace') await guidedMotionAction(p, 'Replace keyframe 1 from current controls');
+    if (change === 'toggle') {p.e.guidedMotionWind.checked = false; p.e.guidedMotionWind.handlers.change();}
+    assert.equal(old.dead, change !== 'draft'); if (old.dead) p.ready();
+    delay.resolve(sources.fit); await running;
+    if (change === 'draft') {
+      assert.equal(old.messages.length, before + 1);
+      assert.deepEqual(JSON.parse(old.messages.at(-1).scenarioRequest).motion.air_velocity_schedule_m_s, [[1, 2, 3]]);
+      const stale = old.messages.at(-1).request;
+      await guidedMotionAction(p, 'Replace keyframe 1 from current controls'); assert.equal(old.dead, true); p.ready();
+      old.emit({type: 'result', request: stale, result: scenarioReport(), files: [{name: 'stale-wind.json', text: '{}'}]});
+      assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true); assert.equal(p.live.size, 0);
+    } else assert.equal(old.messages.length, before);
+    await p.e.scenario.onclick(); const motion = JSON.parse(p.current().messages.at(-1).scenarioRequest).motion;
+    if (change === 'toggle') assert.equal(Object.hasOwn(motion, 'air_velocity_schedule_m_s'), false);
+    else assert.deepEqual(motion.air_velocity_schedule_m_s, [[-1, -2, -3]]);
+  }
+});
+
 function guidedRootMotionDraft(p,offset,enabled=true) {
   p.e.guidedMotionTranslate.checked=enabled;p.e.guidedMotionTranslate.handlers.change();
   for(const [index,axis] of ['X','Y','Z'].entries()) {
