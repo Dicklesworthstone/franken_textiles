@@ -22,6 +22,13 @@ check "http redirects to https" 301 "$(code "http://$host/")"
 check "www redirects to the bare domain" "$site/get-started/" "$(curl -s -o /dev/null -A "$agent" -m 30 -w '%{redirect_url}' "https://www.$host/get-started/")"
 check "films answer byte-range requests (needed by Safari)" 206 "$(code -H 'Range: bytes=0-99' "$site/media/bolero.mp4")"
 check "wasm content type" "application/wasm" "$(header content-type "$site/workbench/pkg/ftx_wasm_bg.wasm")"
+# The posing room's threaded engine needs a cross-origin isolated page and the same embedder policy on
+# every worker script it starts (public/_headers); without them it quietly runs on one thread.
+check "posing room opener policy" "same-origin" "$(header cross-origin-opener-policy "$site/studies/pose/")"
+check "posing room embedder policy" "require-corp" "$(header cross-origin-embedder-policy "$site/studies/pose/")"
+check "posing worker embedder policy" "require-corp" "$(header cross-origin-embedder-policy "$site/labs/pose-worker.mjs")"
+check "threaded engine embedder policy" "require-corp" "$(header cross-origin-embedder-policy "$site/workbench/pkg-threads/ftx_wasm.js")"
+check "threaded wasm content type" "application/wasm" "$(header content-type "$site/workbench/pkg-threads/ftx_wasm_bg.wasm")"
 case "$(header content-security-policy "$site/")" in *"default-src 'self'"*) echo "ok    content security policy";; *) echo "FAIL  content security policy missing"; failed=1;; esac
 # Without no-transform the edge appends its analytics tag to the page, which the policy above then refuses.
 # One page at each depth of path, because the header rules are written per depth.
