@@ -4385,6 +4385,67 @@ test('heterogeneous cell thread orders retain cost and time proofs independently
   for(const url of downloads)assert.equal(p.live.has(url),false);
 });
 
+test('shared-operator thread-order allocation surfaces retained-order proof and avoids false deadline baseline claims', async () => {
+  const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);p.select('sewOptions');
+  const source=cell=>({cell,machine_sha256:cell+'-lock',plan:{options:{machine:{id:cell+'-machine'}},
+    seams:[{pass:{id:'join',needle:cell+'-needle',thread:cell+'-thread',max_stitch_mm:2.5,stitches_per_minute:600}}]}});
+  const schedule={feed_seconds:1,operations:[{id:'0/join',copy:0,operation_id:'join',seam_index:0,after:[]}],
+    ordering:{selected_order:['0/join'],optimality_proven:true}};
+  const selected={makespan_milliseconds:2200,feed_seconds:2,scheduled_feed_milliseconds:2000,
+    setup_milliseconds:100,handling_milliseconds:100,cells:['a','b'].map((cell,i)=>({cell,copies:[i],
+      available_at_milliseconds:0,finish_milliseconds:2200,feed_padding_seconds:0,schedule}))};
+  const timeline={steps:[],busy_milliseconds:200,transfer_milliseconds:0,waiting_milliseconds:2000};
+  const parallel={schema:'ftx-sewing-parallel/11',time_basis:'ceil_operation_feed_milliseconds/1',
+    baseline:selected,selected,cell_plans:['a','b'].map(source),
+    lower_bound_makespan_milliseconds:1500,search_nodes:40,optimality_proven:false,budget_exhausted:false,
+    shared_operator:{operator:'one worker',baseline:timeline,selected:timeline,baseline_replaced:true,
+      serial_order_scope:'retained_serial_incumbents/1',search_complete:true,budget_exhausted:false}};
+  const plan={schema:'ftx-sewing-plan/38',seams:[],hardware_execution_authorized:false,
+    options:{production:{parallel:{model:'independent_whole_garment_cells/2',
+      objective:'minimize_thread_observed_order_cost',shared_operator:{},cells:[]}}},
+    production:{schema:'ftx-sewing-production/26',production_copies:2,feed_seconds:2,stitch_intervals:80,
+      ordering:{optimality_proven:true},parallel}};
+  for(const mode of ['proved','unproved','absent']) {
+    parallel.thread_order_search={currency:'USD',search_scope:'shared_operator_retained_serial_incumbents/1',
+      ...(mode==='unproved'?{completion_deadline_milliseconds:2200}:{}),
+      selected_order_cost:mode==='unproved'?null:7,search_nodes:9,search_complete:mode==='proved',
+      order_evaluations:3,unresolved_assignments:mode==='unproved'?1:0,unresolved_cell_counts:0,
+      baseline_replaced:true,assignment_budget_exhausted:false,order_budget_exhausted:mode==='unproved',
+      optimality_proven:false,
+      ...(mode==='absent'?{}:{retained_order_optimality_proven:mode==='proved'})};
+    for(const op of ['sew','study','scenario']) {
+      const row=studyRow('shared-priced');row.sewing=outcome(plan);row.metrics.sewing_parallel_makespan_seconds=2.2;
+      const study=studyReport([row]);
+      const report=op==='sew'?{schema:'ftx-sewing-program/1',plan,stitches:[]}:
+        op==='study'?study:{...scenarioReport(),manufacturing:study};
+      const raw=JSON.stringify(report);
+      await p.e[op].onclick();p.emit(report,[{name:'shared-priced.json',text:raw,mime:'application/json'}]);
+      const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+      const table=ending=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith(ending));
+      assert.equal(table('complete thread-order allocation').children[1].children.at(-1).textContent,'Retained-order cost minimum proved');
+      assert.deepEqual(plain(table('complete thread-order allocation').children[2].children.map(n=>n.textContent)),
+        ['USD',mode==='unproved'?'Unknown':'7',mode==='unproved'?'2200':'None',String(mode==='proved'),'false',
+          '9','3',mode==='unproved'?'1':'0','0','false',String(mode==='unproved'),
+          mode==='absent'?'Unknown':String(mode==='proved')]);
+      const text=visibleText(s);
+      assert.match(text,/Cost candidates must complete the actual shared-operator timeline/);
+      assert.match(text,/retained-order cost proof covers the selected serial operation orders/);
+      // When shared_operator replaces the baseline without a deadline, never emit a duplicate/false deadline claim.
+      assert.doesNotMatch(text,/The first-cell baseline missed the inclusive completion deadline/);
+      if(mode==='unproved') {
+        assert.match(text,/The first-cell baseline failed a qualified cell or operator window or inclusive completion deadline/);
+      } else {
+        assert.match(text,/The first-cell baseline failed a qualified cell or operator window;/);
+        assert.doesNotMatch(text,/or inclusive completion deadline/);
+      }
+      const download=descendants(s).find(n=>n.download==='shared-priced.json');
+      assert.equal(await p.blobs.get(download.href).text(),raw);
+      assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    }
+  }
+  p.e.sewOptions.handlers.change();p.e.studyRequest.handlers.change();
+});
+
 test('partial sewing spans display both source sides without an ordering policy or new geometry', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
   await p.e.sew.onclick();

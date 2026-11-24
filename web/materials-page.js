@@ -4163,8 +4163,8 @@ function sewingParallel(parent, plan, label = "Selected sewing plan") {
     (windowed ? "Every used cell finishes inside its inclusive qualified availability window, including final unloading. " +
       "A lower bound that still fits leaves an over-limit incumbent unresolved. " : "") +
     (report.availability?.baseline_replaced || operator?.baseline_replaced ?
-      `The first-cell baseline failed a qualified cell or operator window${pools ? " or shared fixture constraint" : ""}; the displayed replacement is the complete selected feasible assignment. ` : "") +
-    ((orderSearch?.baseline_replaced || feedSearch?.baseline_replaced) && !report.availability?.baseline_replaced ?
+      `The first-cell baseline failed a qualified cell or operator window${pools ? ", shared fixture constraint" : ""}${orderSearch?.completion_deadline_milliseconds != null || feedSearch?.completion_deadline_milliseconds != null ? " or inclusive completion deadline" : ""}; the displayed replacement is the complete selected feasible assignment. ` : "") +
+    ((orderSearch?.baseline_replaced || feedSearch?.baseline_replaced) && !report.availability?.baseline_replaced && !operator?.baseline_replaced ?
       "The first-cell baseline missed the inclusive completion deadline; the displayed replacement is the complete selected feasible assignment. " : "") +
     "Every garment stays in one physical cell. " +
     (operator ? "One qualified operator performs exclusive travel, handling, setup and final unloading while explicitly qualified autonomous machine feed may overlap. " +
