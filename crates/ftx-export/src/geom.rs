@@ -478,6 +478,36 @@ pub fn notch_depth(sa: f64) -> f64 {
     3f64.max(6f64.min(0.5 * sa))
 }
 
+fn parse_crease_angle_deg(raw: Option<&Value>, context: &str) -> Result<Option<f64>, Refusal> {
+    let Some(v) = raw.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let deg = v.as_f64().ok_or_else(|| {
+        Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{context}: crease_angle_deg must be a finite number"),
+        )
+    })?;
+    if !(deg.is_finite() && deg.abs() < 180.0) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "{context}: crease_angle_deg {deg} must be finite and strictly within (-180, 180)"
+            ),
+        ));
+    }
+    Ok((deg != 0.0).then_some(deg))
+}
+
+fn format_crease_angle(prefix: &str, deg: f64) -> String {
+    let (sign, dir) = if deg > 0.0 {
+        ("+", "valley")
+    } else {
+        ("-", "mountain")
+    };
+    format!("{prefix} {sign}{} deg ({dir})", fnum(deg.abs(), 1))
+}
+
 fn stem(eid: &str) -> &str {
     if eid.ends_with(".R") || eid.ends_with(".L") {
         &eid[..eid.len() - 2]
@@ -738,7 +768,30 @@ pub fn build_geom(
     }
 
     for item in pv["internal"].as_array().cloned().unwrap_or_default() {
+        let crease_deg =
+            parse_crease_angle_deg(item.get("crease_angle_deg"), &format!("{} internal", g.iid))?;
+        if crease_deg.is_some() && item["kind"] == "cut" {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "{}: internal cut mark cannot carry crease_angle_deg; use kind \"draw\" for pressed creases/pleats",
+                    g.iid
+                ),
+            ));
+        }
+        let raw_pts_len = item["pts"].as_array().map_or(0, Vec::len);
         let pts = points(&item["pts"]);
+        if crease_deg.is_some()
+            && (raw_pts_len < 2 || pts.len() != raw_pts_len || pts.iter().any(|p| !p.is_finite()))
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "{}: internal crease requires pts with at least 2 finite [x, y] points",
+                    g.iid
+                ),
+            ));
+        }
         if pts.is_empty() {
             continue;
         }
@@ -749,42 +802,6 @@ pub fn build_geom(
                     let (a, b) = (pts[0], pts[pts.len() - 1]);
                     (a.x - b.x).abs() <= 1e-8 + 1e-5 * b.x.abs()
                         && (a.y - b.y).abs() <= 1e-8 + 1e-5 * b.y.abs()
-                }
-            }
-        };
-        let crease_deg = match item.get("crease_angle_deg").filter(|v| !v.is_null()) {
-            None => None,
-            Some(v) => {
-                let deg = v.as_f64().ok_or_else(|| {
-                    Refusal::new(
-                        RefusalCode::InvalidDocument,
-                        format!(
-                            "{}: internal crease_angle_deg must be a finite number",
-                            g.iid
-                        ),
-                    )
-                })?;
-                if !(deg.is_finite() && deg.abs() < 180.0) {
-                    return Err(Refusal::new(
-                        RefusalCode::OutOfRange,
-                        format!(
-                            "{}: internal crease_angle_deg {deg} must be finite and strictly within (-180, 180)",
-                            g.iid
-                        ),
-                    ));
-                }
-                if deg == 0.0 {
-                    None
-                } else if item["kind"] == "cut" {
-                    return Err(Refusal::new(
-                        RefusalCode::InvalidDocument,
-                        format!(
-                            "{}: internal cut mark cannot carry crease_angle_deg; use kind \"draw\" for pressed creases/pleats",
-                            g.iid
-                        ),
-                    ));
-                } else {
-                    Some(deg)
                 }
             }
         };
@@ -799,15 +816,7 @@ pub fn build_geom(
                 .get("label")
                 .filter(|l| truthy(l))
                 .map(py_str)
-                .or_else(|| {
-                    let deg = crease_deg?;
-                    let (sign, dir) = if deg > 0.0 {
-                        ("+", "valley")
-                    } else {
-                        ("-", "mountain")
-                    };
-                    Some(format!("CREASE {sign}{} deg ({dir})", fnum(deg.abs(), 1)))
-                });
+                .or_else(|| crease_deg.map(|deg| format_crease_angle("CREASE", deg)));
             if let Some(lab) = lab {
                 let at = if closed {
                     let s = q.iter().fold(Vec2::ZERO, |acc, &p| acc + p);
@@ -828,6 +837,71 @@ pub fn build_geom(
                 });
             }
         }
+    }
+
+    // Authored seam creases (FTX-27a): validate fail-closed across all seams and annotate matched
+    // sew edges inward so SVG, PDF, ASTM/flat DXF and HPGL exports surface pressed seam creases.
+    let mut seam_creases: std::collections::BTreeMap<usize, Vec<f64>> =
+        std::collections::BTreeMap::new();
+    for seam in pattern.seams() {
+        let Some(deg) = parse_crease_angle_deg(
+            seam.0.get("crease_angle_deg"),
+            &format!("seam {}", seam.id_text()),
+        )?
+        else {
+            continue;
+        };
+        for key in ["a", "b"] {
+            let Some(side_ref) = seam.side_ref(key) else {
+                continue;
+            };
+            let Ok((seam_inst, eids)) = pattern.side(side_ref) else {
+                continue;
+            };
+            let inst_matches = if is_inst {
+                seam_inst.id == inst.id
+            } else {
+                seam_inst.piece_index == inst.piece_index
+            };
+            if !inst_matches {
+                continue;
+            }
+            for eid in &eids {
+                let target = if is_inst { eid.as_str() } else { stem(eid) };
+                for (loop_idx, l) in loops.iter().enumerate() {
+                    if l.id == target {
+                        let entry = seam_creases.entry(loop_idx).or_default();
+                        if !entry.iter().any(|&prev| (prev - deg).abs() <= 1e-9) {
+                            entry.push(deg);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (loop_idx, degs) in seam_creases {
+        let l = &loops[loop_idx];
+        if l.pts.len() < 2 {
+            continue;
+        }
+        let txt = if degs.len() == 1 {
+            format_crease_angle("SEAM CREASE", degs[0])
+        } else {
+            degs.iter()
+                .map(|&d| format_crease_angle("SEAM CREASE", d))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        };
+        let (mid, tan) = point_on(&l.pts, 0.5);
+        let inward = Vec2::new(-tan.y, tan.x);
+        let tw = text_width(&txt, 3.0, false);
+        let shift = 2.0 + inward.x.abs() * tw / 2.0 + inward.y.abs() * 3.0;
+        g.labels.push(Label {
+            p: mid + inward * shift,
+            lines: vec![(txt, 1.0, false)],
+            size: 3.0,
+            kind: "internal".into(),
+        });
     }
     for d in pv["drills"].as_array().cloned().unwrap_or_default() {
         let dia = match d.get("d") {
@@ -1601,13 +1675,25 @@ mod tests {
             ]
         );
 
-        // An internal cut mark carrying a non-zero crease_angle_deg and an out-of-range or
-        // non-numeric crease_angle_deg on a draw mark must refuse fail-closed rather than
-        // mislabeling a slit or silently dropping an invalid crease angle.
+        // An internal cut mark carrying a non-zero crease_angle_deg, a crease with fewer than 2
+        // points, and an out-of-range or non-numeric crease_angle_deg on a draw mark must refuse
+        // fail-closed rather than mislabeling a slit or silently dropping an invalid crease angle.
         for (mark, expected_code) in [
             (
                 json!({"kind": "cut", "pts": [[25, 10], [25, 70]], "crease_angle_deg": 45.0}),
                 RefusalCode::InvalidDocument,
+            ),
+            (
+                json!({"kind": "cut", "pts": [], "crease_angle_deg": 45.0}),
+                RefusalCode::InvalidDocument,
+            ),
+            (
+                json!({"kind": "draw", "pts": [[25, 10]], "crease_angle_deg": 45.0}),
+                RefusalCode::InvalidDocument,
+            ),
+            (
+                json!({"kind": "draw", "pts": [], "crease_angle_deg": 180.0}),
+                RefusalCode::OutOfRange,
             ),
             (
                 json!({"kind": "draw", "pts": [[25, 10], [25, 70]], "crease_angle_deg": 180.0}),
@@ -1641,6 +1727,140 @@ mod tests {
                     .geom(Source::Piece(0), 6.0)
                     .unwrap_err()
                     .code,
+                expected_code
+            );
+        }
+    }
+
+    #[test]
+    fn build_geom_annotates_seam_creases_and_refuses_invalid_seam_crease_angles() {
+        let pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "SEAMCREASE",
+            "units": "mm",
+            "meta": {"size_label": "2T", "sa_mm": 10, "created": "2026-10-11T12:00"},
+            "pieces": [
+                {
+                    "id": "front",
+                    "name": "Front",
+                    "vertices": {"a": [0, 0], "b": [120, 0], "c": [120, 140], "d": [0, 140]},
+                    "edges": [
+                        {"id": "hem", "from": "a", "to": "b"},
+                        {"id": "side", "from": "b", "to": "c"},
+                        {"id": "top", "from": "c", "to": "d"},
+                        {"id": "cf", "from": "d", "to": "a"}
+                    ],
+                    "cut": {"qty": 2}
+                },
+                {
+                    "id": "back",
+                    "name": "Back",
+                    "vertices": {"a": [0, 0], "b": [120, 0], "c": [120, 140], "d": [0, 140]},
+                    "edges": [
+                        {"id": "hem", "from": "a", "to": "b"},
+                        {"id": "side", "from": "b", "to": "c"},
+                        {"id": "top", "from": "c", "to": "d"},
+                        {"id": "cb", "from": "d", "to": "a"}
+                    ],
+                    "cut": {"qty": 1, "on_fold": "cb"}
+                }
+            ],
+            "seams": [
+                {"id": "side_r", "a": "front.R/side", "b": "back/side.R", "reverse": true, "crease_angle_deg": 45.0},
+                {"id": "side_l", "a": "front.L/side", "b": "back/side.L", "reverse": true, "crease_angle_deg": 45.0},
+                {"id": "sh_r", "a": "front.R/top", "b": "back/top.R", "reverse": true, "crease_angle_deg": -60.5},
+                {"id": "sh_l", "a": "front.L/top", "b": "back/top.L", "reverse": true, "crease_angle_deg": 0.0}
+            ]
+        }));
+        let ctx = Ctx::new(&pat, ExportOptions::default()).unwrap();
+
+        // Drafted mirror pair (`Source::Piece(0)`): symmetric side_r/side_l deduplicate to one
+        // inward label; sh_r adds its mountain crease while sh_l (0 deg) emits nothing.
+        let front_draft = ctx.geom(Source::Piece(0), 6.0).unwrap();
+        assert_eq!(front_draft.labels[0].kind, "label");
+        let front_labels: Vec<&str> = front_draft
+            .labels
+            .iter()
+            .filter(|lb| lb.kind == "internal")
+            .map(|lb| lb.lines[0].0.as_str())
+            .collect();
+        assert_eq!(
+            front_labels,
+            vec![
+                "SEAM CREASE +45 deg (valley)",
+                "SEAM CREASE -60.5 deg (mountain)",
+            ]
+        );
+        // Every seam-crease anchor sits inside the sew outline.
+        for lb in front_draft.labels.iter().filter(|lb| lb.kind == "internal") {
+            assert!(
+                covers(&[front_draft.sew.as_slice()], lb.p),
+                "seam crease label {:?} anchor {:?} must sit inside sew ring",
+                lb.lines,
+                lb.p
+            );
+        }
+
+        // Unfolded on-fold instance (`back`): both `side.R` and `side.L` carry +45, while only
+        // `top.R` carries -60.5 (`top.L` has 0.0 -> unannotated).
+        let back_inst = pat.instance("back").unwrap();
+        let back_unfolded = ctx.geom(Source::Instance(back_inst), 6.0).unwrap();
+        let back_labels: Vec<&str> = back_unfolded
+            .labels
+            .iter()
+            .filter(|lb| lb.kind == "internal")
+            .map(|lb| lb.lines[0].0.as_str())
+            .collect();
+        assert_eq!(
+            back_labels,
+            vec![
+                "SEAM CREASE +45 deg (valley)",
+                "SEAM CREASE -60.5 deg (mountain)",
+                "SEAM CREASE +45 deg (valley)",
+            ]
+        );
+
+        // End-to-end export across SVG, ASTM DXF, flat DXF, HPGL, Letter PDF and Projector PDF:
+        // seam crease text surfaces in master SVG & ASTM DXF and all acceptance checks pass.
+        let exported = crate::export_targets(
+            &ctx,
+            &[
+                crate::Target::Svg,
+                crate::Target::Astm,
+                crate::Target::FlatDxf,
+                crate::Target::Hpgl,
+                crate::Target::Letter,
+                crate::Target::Projector,
+            ],
+            None,
+        )
+        .unwrap();
+        let svg_text = std::str::from_utf8(&exported.files["SEAMCREASE_master_mm.svg"]).unwrap();
+        assert!(svg_text.contains("SEAM CREASE +45 deg (valley)"));
+        assert!(svg_text.contains("SEAM CREASE -60.5 deg (mountain)"));
+        let astm_text = std::str::from_utf8(&exported.files["SEAMCREASE_ASTM_METRIC.dxf"]).unwrap();
+        assert!(astm_text.contains("SEAM CREASE +45 deg (valley)"));
+        assert!(astm_text.contains("SEAM CREASE -60.5 deg (mountain)"));
+        let checks = crate::check_files(&exported.files, "mem", Some(&pat));
+        assert!(
+            checks.iter().all(|c| c.ok),
+            "export acceptance checks failed on seam-creased pattern: {:?}",
+            checks.iter().filter(|c| !c.ok).collect::<Vec<_>>()
+        );
+
+        // Invalid seam crease_angle_deg must refuse fail-closed.
+        for (bad_val, expected_code) in [
+            (json!(180.0), RefusalCode::OutOfRange),
+            (json!(-180.0), RefusalCode::OutOfRange),
+            (json!("45"), RefusalCode::InvalidDocument),
+            (json!(true), RefusalCode::InvalidDocument),
+        ] {
+            let mut raw = pat.raw().clone();
+            raw["seams"][0]["crease_angle_deg"] = bad_val;
+            let bad_pat = Pattern::new(raw);
+            let bad_ctx = Ctx::new(&bad_pat, ExportOptions::default()).unwrap();
+            assert_eq!(
+                bad_ctx.geom(Source::Piece(0), 6.0).unwrap_err().code,
                 expected_code
             );
         }

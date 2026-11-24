@@ -349,6 +349,20 @@ pub fn seam_walk(pat: &Pattern, tol_mm: f64) -> Vec<SeamRow> {
     for s in pat.seams() {
         let o = Value::Object(s.0.clone());
         let id = o.get("id").cloned().unwrap_or(Value::Null);
+        if let Some(v) = s.0.get("crease_angle_deg").filter(|v| !v.is_null())
+            && !v
+                .as_f64()
+                .is_some_and(|deg| deg.is_finite() && deg.abs() < 180.0)
+        {
+            rows.push(SeamRow::error(
+                id,
+                format!(
+                    "seam {}: crease_angle_deg must be a finite number strictly within (-180, 180)",
+                    s.id_text()
+                ),
+            ));
+            continue;
+        }
         let pr = match pat.seam_pairs(s, 5.0) {
             Ok(pr) => pr,
             Err(e) => {
@@ -838,6 +852,50 @@ pub fn validate(pat: &Pattern, spec: &Value, body: &dyn BodyMeasure) -> Report {
         if !p.get("cut").is_some_and(crate::doc::truthy) {
             completeness.push(format!("{pid}: no cut instruction"));
         }
+        if let Some(internals) = p.get("internal").and_then(Value::as_array) {
+            for (idx, item) in internals.iter().enumerate() {
+                let Some(v) = item.get("crease_angle_deg").filter(|v| !v.is_null()) else {
+                    continue;
+                };
+                match v.as_f64() {
+                    Some(deg) if deg.is_finite() && deg.abs() < 180.0 => {
+                        if deg != 0.0 {
+                            if item.get("kind").and_then(Value::as_str) == Some("cut") {
+                                completeness.push(format!(
+                                    "{pid}: internal[{idx}] cut mark cannot carry crease_angle_deg"
+                                ));
+                            } else {
+                                let valid_pts = item
+                                    .get("pts")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|pts| {
+                                        pts.len() >= 2
+                                            && pts.iter().all(|pt| {
+                                                pt.as_array().is_some_and(|xy| {
+                                                    xy.len() == 2
+                                                        && xy[0]
+                                                            .as_f64()
+                                                            .is_some_and(f64::is_finite)
+                                                        && xy[1]
+                                                            .as_f64()
+                                                            .is_some_and(f64::is_finite)
+                                                })
+                                            })
+                                    });
+                                if !valid_pts {
+                                    completeness.push(format!(
+                                        "{pid}: internal[{idx}] crease requires pts with at least 2 finite [x, y] points"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => completeness.push(format!(
+                        "{pid}: internal[{idx}] crease_angle_deg must be a finite number strictly within (-180, 180)"
+                    )),
+                }
+            }
+        }
     }
     // Failures in report order, each with its sort key and text.
     let mut fails: Vec<(f64, String)> = Vec::new();
@@ -1202,5 +1260,86 @@ mod raw_point_tests {
             measure_point(&pattern, &point, &body).status,
             "UNMEASURABLE"
         );
+    }
+
+    #[test]
+    fn validate_accepts_valid_creases_and_flags_malformed_internal_or_seam_creases() {
+        let base = || {
+            json!({
+                "schema": "fabric-pattern/1",
+                "units": "mm",
+                "pieces": [
+                    {
+                        "id": "front",
+                        "cut": {"qty": 1},
+                        "grain": [[10, 10], [10, 70]],
+                        "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                        "edges": [
+                            {"id": "bot", "from": "a", "to": "b"},
+                            {"id": "right", "from": "b", "to": "c"},
+                            {"id": "top", "from": "c", "to": "d"},
+                            {"id": "left", "from": "d", "to": "a"}
+                        ],
+                        "internal": [
+                            {"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": -60.0}
+                        ]
+                    },
+                    {
+                        "id": "back",
+                        "cut": {"qty": 1},
+                        "grain": [[10, 10], [10, 70]],
+                        "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                        "edges": [
+                            {"id": "bot", "from": "a", "to": "b"},
+                            {"id": "right", "from": "b", "to": "c"},
+                            {"id": "top", "from": "c", "to": "d"},
+                            {"id": "left", "from": "d", "to": "a"}
+                        ]
+                    }
+                ],
+                "seams": [
+                    {"id": "side", "a": "front/right", "b": "back/left", "reverse": true, "crease_angle_deg": 45.0}
+                ]
+            })
+        };
+        let body = Measurements(json!({}));
+        let spec = json!({});
+
+        // Valid authored creases on both internal marks and seams converge cleanly.
+        assert_eq!(
+            validate(&Pattern::new(base()), &spec, &body).status(),
+            "CONVERGED"
+        );
+
+        // Invalid seam crease_angle_deg fails the seam walk with ERROR -> NOT_CONVERGED.
+        for bad in [json!(180.0), json!(-180.0), json!("45"), json!(true)] {
+            let mut raw = base();
+            raw["seams"][0]["crease_angle_deg"] = bad;
+            let report = validate(&Pattern::new(raw), &spec, &body);
+            assert_eq!(report.status(), "NOT_CONVERGED");
+            let Report::Full { seams, summary, .. } = report else {
+                panic!("expected Full report");
+            };
+            assert_eq!(summary.seams_failing, 1);
+            assert_eq!(seams[0].status, "ERROR");
+        }
+
+        // Invalid internal crease_angle_deg (cut mark, <2 pts, out-of-range, non-numeric)
+        // records a completeness error -> NOT_CONVERGED.
+        for bad_mark in [
+            json!({"kind": "cut", "pts": [[50, 0], [50, 80]], "crease_angle_deg": 45.0}),
+            json!({"kind": "draw", "pts": [[50, 0]], "crease_angle_deg": 45.0}),
+            json!({"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": 180.0}),
+            json!({"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": "90"}),
+        ] {
+            let mut raw = base();
+            raw["pieces"][0]["internal"] = json!([bad_mark]);
+            let report = validate(&Pattern::new(raw), &spec, &body);
+            assert_eq!(report.status(), "NOT_CONVERGED");
+            let Report::Full { completeness, .. } = report else {
+                panic!("expected Full report");
+            };
+            assert!(!completeness.is_empty());
+        }
     }
 }
