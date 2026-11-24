@@ -876,6 +876,10 @@ impl Session {
         self.last_move = json!({
             "trials": report.trials,
             "substeps": report.samples.len(),
+            "rejected_before_solve": report.rejected_before_solve,
+            "rejected_unsolved": report.rejected_unsolved,
+            "rejected_after_solve": report.rejected_after_solve,
+            "rejected_newton_iterations": report.rejected_newton_iterations,
             "newton_iterations": per_substep(|r| r.iterations),
             "ccd_limited": per_substep(|r| r.ccd_limited),
             "halvings": per_substep(|r| r.halvings),
@@ -1174,6 +1178,21 @@ mod tests {
                 "the cloth stays outside the moved cylinder (carry {carry_m:?})"
             );
             assert_eq!(session.arms(), [45.0, 35.0]);
+            // Every trial was accepted or rejected for exactly one recorded reason.
+            let work = session.last_move();
+            let field = |name: &str| work[name].as_u64().unwrap();
+            assert_eq!(
+                field("trials"),
+                field("substeps")
+                    + field("rejected_before_solve")
+                    + field("rejected_unsolved")
+                    + field("rejected_after_solve"),
+                "{work}"
+            );
+            assert_eq!(
+                work["ccd_limited"].as_array().unwrap().len() as u64,
+                field("substeps")
+            );
             samples.len() / (1 + count * 3)
         };
         let (plain, carried) = (move_samples(None), move_samples(Some(0.02)));

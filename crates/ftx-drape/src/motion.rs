@@ -90,6 +90,16 @@ pub struct MotionReport {
     pub pairs_tested: u64,
     /// Accepted endpoint samples; the initial state is the caller's original solver state.
     pub samples: Vec<MotionSample>,
+    /// Attempts rejected before their solve: an irregular body path, the body's own clearance, or
+    /// the motion bound.
+    pub rejected_before_solve: usize,
+    /// Attempts whose solve failed: Newton did not converge, or its start was intersecting.
+    pub rejected_unsolved: usize,
+    /// Attempts solved and then rejected by the continuous, crossing or endpoint-gap checks.
+    pub rejected_after_solve: usize,
+    /// Newton iterations of the attempts in `rejected_after_solve` and of unconverged solves that
+    /// returned a report (a refused solve reports none).
+    pub rejected_newton_iterations: usize,
 }
 
 fn invalid(message: &str) -> Refusal {
@@ -413,6 +423,10 @@ fn advance_body_inner<S: Clone>(
             + target_audit.pairs_tested as u64
             + initial_bound.pairs_tested as u64,
         samples: Vec::new(),
+        rejected_before_solve: 0,
+        rejected_unsolved: 0,
+        rejected_after_solve: 0,
+        rejected_newton_iterations: 0,
     };
     let mut time = 0.0;
     let mut step = options.max_step_s.min(duration_s);
@@ -460,6 +474,7 @@ fn advance_body_inner<S: Clone>(
         let c = work.contact.as_ref().expect("checked collider is retained");
         // A non-regular body chord is subdivided before any distance derivative runs on it.
         if !regular_path(&c.body.vertices, &end, &triangles) {
+            report.rejected_before_solve += 1;
             step = h * 0.5;
             continue;
         }
@@ -470,6 +485,7 @@ fn advance_body_inner<S: Clone>(
         let body_safe = c.body.self_motion_bound(&end, options.max_pairs)?;
         report.pairs_tested += body_safe.pairs_tested as u64;
         if body_safe.fraction < 1.0 {
+            report.rejected_before_solve += 1;
             step = h * (0.8 * body_safe.fraction).min(0.5);
             continue;
         }
@@ -493,6 +509,7 @@ fn advance_body_inner<S: Clone>(
         )?;
         report.pairs_tested += safe.pairs_tested as u64;
         if safe.fraction < 1.0 {
+            report.rejected_before_solve += 1;
             step = h * (0.8 * safe.fraction).min(0.5);
             continue;
         }
@@ -518,7 +535,9 @@ fn advance_body_inner<S: Clone>(
             {
                 r
             }
-            Ok(_) => {
+            Ok(r) => {
+                report.rejected_unsolved += 1;
+                report.rejected_newton_iterations += r.iterations;
                 step = h * 0.5;
                 continue;
             }
@@ -528,6 +547,7 @@ fn advance_body_inner<S: Clone>(
                     RefusalCode::NotConverged | RefusalCode::IntersectingStart
                 ) =>
             {
+                report.rejected_unsolved += 1;
                 step = h * 0.5;
                 continue;
             }
@@ -544,6 +564,8 @@ fn advance_body_inner<S: Clone>(
             || !regular_path(&work.x, &trial.x, &c.cloth.triangles)
             || new_c.first_intersection(&trial.x).is_some()
         {
+            report.rejected_after_solve += 1;
+            report.rejected_newton_iterations += solve.iterations;
             step = h * 0.5;
             continue;
         }
@@ -552,6 +574,8 @@ fn advance_body_inner<S: Clone>(
             .min_gap(&trial.x, new_c.params.dhat)
             .is_some_and(|g| !g.is_finite() || g <= 0.0)
         {
+            report.rejected_after_solve += 1;
+            report.rejected_newton_iterations += solve.iterations;
             step = h * 0.5;
             continue;
         }
