@@ -668,17 +668,31 @@ impl SymbolicLdlt {
             stats.nnz_l as f64 / a.nnz() as f64
         };
         #[cfg(feature = "parallel")]
-        let tasks = self
-            .subtree_tasks()
-            .into_iter()
-            .map(|(first, last)| SolveTask {
-                sids: (first, last),
-                vars: (
-                    self.snodes[first].col_start,
-                    self.snodes[last].col_start + self.snodes[last].width,
-                ),
-            })
-            .collect();
+        let tasks = {
+            // A solve touches each entry of L about twice. A subtree with fewer than
+            // SOLVE_TASK_ENTRIES finishes sooner than a thread wakes for it (WebAssembly workers
+            // especially), so it stays in the serial part of the solves, which is always correct:
+            // only ancestors and earlier supernodes are read, whichever thread runs a subtree.
+            let tasks: Vec<SolveTask> = self
+                .subtree_tasks()
+                .into_iter()
+                .filter(|&(first, last)| {
+                    snodes_num[first..=last]
+                        .iter()
+                        .map(|s| s.l.len())
+                        .sum::<usize>()
+                        >= SOLVE_TASK_ENTRIES
+                })
+                .map(|(first, last)| SolveTask {
+                    sids: (first, last),
+                    vars: (
+                        self.snodes[first].col_start,
+                        self.snodes[last].col_start + self.snodes[last].width,
+                    ),
+                })
+                .collect();
+            if tasks.len() < 2 { Vec::new() } else { tasks }
+        };
         #[cfg(not(feature = "parallel"))]
         let tasks = Vec::new();
         Ok(LdltFactor {
@@ -1199,6 +1213,9 @@ impl SymbolicLdlt {
 const PANEL_PARALLEL_WORK: usize = 1 << 18;
 /// Multiply-adds per task of a large front's panel update.
 const PANEL_TASK_WORK: usize = 1 << 16;
+/// Entries of L below which a subtree's share of a solve is not worth a task of its own.
+#[cfg(feature = "parallel")]
+const SOLVE_TASK_ENTRIES: usize = 1 << 16;
 
 /// One front's share of [`FactorStats`] and [`Inertia`], and the size of the update it passes up.
 #[derive(Debug, Clone, Copy, Default)]
@@ -2292,7 +2309,21 @@ mod tests {
             shifted(&crate::sparse::tests::laplacian_2d(40), 0.37),
             random_sym(2000, 3, 0xBEEF),
             blocks(&[grid.clone(), singular(1.0), grid, singular(2.0)]),
+            // Large enough for subtree tasks in the solves too (each of at least SOLVE_TASK_ENTRIES).
+            crate::sparse::tests::laplacian_2d(160),
         ];
+        let solve_tasks = on(4, &|| {
+            let a = &cases[4];
+            let sym = SymbolicLdlt::analyze(a, DirectOrdering::Amd).unwrap();
+            format!(
+                "{}",
+                sym.factor(a, &LdltOptions::default()).unwrap().tasks.len()
+            )
+        });
+        assert_ne!(
+            solve_tasks, "0",
+            "the large grid's solves run subtree tasks"
+        );
         let mut split = 0;
         for (case, a) in cases.iter().enumerate() {
             let sym = SymbolicLdlt::analyze(a, DirectOrdering::Amd).unwrap();
