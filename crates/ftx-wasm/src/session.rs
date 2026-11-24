@@ -23,7 +23,8 @@ use ftx_drape::scene::{PartFrames, Scene};
 use ftx_drape::stepping::SubdivisionOptions;
 use ftx_drape::{
     AdaptiveBarrierPolicy, BendingModel, CompressionModel, ConstructionMechanicsOptions,
-    DampingOptions, MeshOptions, PartFrame, SelfRepulsionOptions, StickSlipFriction,
+    DampingOptions, MeshOptions, NewtonStrategy, PartFrame, SelfRepulsionOptions,
+    StickSlipFriction, TimeIntegrator,
 };
 use ftx_pattern::Pattern;
 use serde::Deserialize;
@@ -491,6 +492,10 @@ pub struct SessionSettings {
     pub time_subdivision: bool,
     /// Cloth–cloth contact thickness (mm); zero leaves cloth self-contact unsimulated.
     pub self_contact_mm: f64,
+    /// Nonlinear globalization and linear-solve strategy (default: `ProjectedNewton`).
+    pub newton_strategy: NewtonStrategy,
+    /// Structural time-integration scheme (default: `ImplicitEuler`).
+    pub integrator: TimeIntegrator,
     /// Hinge bending formulation.
     pub bending_model: BendingModel,
     /// Membrane compression-softening formulation.
@@ -523,6 +528,8 @@ impl Default for SessionSettings {
             max_settle_steps: 0,
             time_subdivision: true,
             self_contact_mm: 0.0,
+            newton_strategy: drape.newton_strategy,
+            integrator: drape.integrator,
             bending_model: drape.bending_model,
             compression_model: drape.compression_model,
             damping: drape.damping,
@@ -592,6 +599,8 @@ impl Session {
             max_settle_steps,
             time_subdivision,
             self_contact_mm,
+            newton_strategy,
+            integrator,
             bending_model,
             compression_model,
             damping,
@@ -618,6 +627,17 @@ impl Session {
                 "the opening drape exceeds the {MAX_OPENING_STEPS}-step browser work budget (sew + drape + settle)"
             ));
         }
+        let strategy_within_budget = match newton_strategy {
+            NewtonStrategy::ProjectedNewton => true,
+            NewtonStrategy::AdaptiveIlu {
+                pcg_iters,
+                max_shifts,
+            } => pcg_iters <= 256 && max_shifts <= 16,
+            NewtonStrategy::TrustRegionSteihaug { cg_iters, .. } => cg_iters <= 4096,
+        };
+        if !strategy_within_budget {
+            return Err("configured newton_strategy exceeds the browser solver work budget".into());
+        }
         let defaults = DrapeOptions::default();
         let mut options = DrapeOptions {
             spacing: spacing_mm,
@@ -625,6 +645,8 @@ impl Session {
             drape_steps,
             max_settle_steps,
             time_subdivision: time_subdivision.then(SubdivisionOptions::default),
+            newton_strategy,
+            integrator,
             bending_model,
             compression_model,
             damping,
@@ -1080,6 +1102,8 @@ mod tests {
     #[test]
     fn session_settings_accepts_opt_in_realism_options_while_preserving_defaults() {
         let def: SessionSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(def.newton_strategy, NewtonStrategy::ProjectedNewton);
+        assert_eq!(def.integrator, TimeIntegrator::ImplicitEuler);
         assert_eq!(def.bending_model, BendingModel::Quadratic);
         assert_eq!(def.compression_model, CompressionModel::AxisAligned);
         assert!(def.damping.is_default());
@@ -1095,6 +1119,8 @@ mod tests {
             "sew_steps": 24,
             "drape_steps": 0,
             "self_contact_mm": 2.0,
+            "newton_strategy": { "kind": "adaptive_ilu", "pcg_iters": 40, "max_shifts": 6 },
+            "integrator": { "kind": "generalized_alpha", "rho_inf": 0.25 },
             "bending_model": "discrete_shells",
             "compression_model": "principal",
             "damping": {
@@ -1155,5 +1181,21 @@ mod tests {
         .unwrap();
         let body2 = PosableBody::parse(&header, &data).unwrap();
         assert!(Session::start(body2, &uncharacterized, &json!({}), bad, |_| {}).is_err());
+
+        // Fail-closed: excessive browser solver work budgets must be refused before meshing.
+        let over_budget: SessionSettings = serde_json::from_value(json!({
+            "sew_steps": 12,
+            "drape_steps": 0,
+            "newton_strategy": { "kind": "adaptive_ilu", "pcg_iters": 512, "max_shifts": 6 }
+        }))
+        .unwrap();
+        let body3 = PosableBody::parse(&header, &data).unwrap();
+        let budget_err = Session::start(body3, &uncharacterized, &json!({}), over_budget, |_| {})
+            .err()
+            .expect("over-budget adaptive_ilu pcg_iters must be refused");
+        assert!(
+            budget_err.contains("browser solver work budget"),
+            "{budget_err}"
+        );
     }
 }
