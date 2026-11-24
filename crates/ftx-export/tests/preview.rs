@@ -136,3 +136,78 @@ fn blocked_and_unscaled_inputs_do_not_look_like_manufacturing_patterns() {
     assert!(!svg.contains("<script>"));
     assert!(!svg.contains("data-instance="));
 }
+
+#[test]
+fn diagnostic_svg_renders_internal_and_seam_creases_on_physical_instances() {
+    let doc = json!({
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "meta": {"title": "Creased test", "sa_mm": 10},
+        "pieces": [
+            {
+                "id": "front",
+                "name": "FRONT",
+                "cut": {"qty": 2},
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "bot", "from": "a", "to": "b"},
+                    {"id": "side", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "cf", "from": "d", "to": "a"}
+                ],
+                "grain": [[20, 10], [20, 70]],
+                "internal": [
+                    {"kind": "draw", "pts": [[30, 10], [30, 70]], "label": "PLEAT <A>", "crease_angle_deg": 45.0},
+                    {"kind": "draw", "pts": [[60, 20], [80, 20], [70, 60]], "closed": true, "crease_angle_deg": -60.5},
+                    {"kind": "draw", "pts": [[10, 10], [10, 70]], "crease_angle_deg": 0.0},
+                    {"kind": "cut", "pts": [[50, 10], [50, 70]], "crease_angle_deg": 30.0}
+                ]
+            },
+            {
+                "id": "back",
+                "name": "BACK",
+                "cut": {"qty": 1, "on_fold": "cb"},
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "bot", "from": "a", "to": "b"},
+                    {"id": "side", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "cb", "from": "d", "to": "a"}
+                ],
+                "grain": [[20, 10], [20, 70]],
+                "internal": [
+                    {"kind": "draw", "pts": [[40, 10], [40, 70]], "crease_angle_deg": -35.0}
+                ]
+            }
+        ],
+        "seams": [
+            {"id": "side_R", "a": "front.R/side", "b": "back/side.R", "reverse": true, "crease_angle_deg": 45.0},
+            {"id": "side_L", "a": "front.L/side", "b": "back/side.L", "reverse": true, "crease_angle_deg": 0.0}
+        ]
+    });
+    let pattern = Pattern::new(doc);
+    let report = validate(&pattern, &json!({"points": []}), &Measurements(json!({})));
+    for dark in [false, true] {
+        let svg = diagnostic_svg(&pattern, &report, dark).unwrap();
+        // front.R and front.L each get 2 valid internal creases (valley + closed mountain);
+        // back is unfolded on_fold so its off-fold crease appears on both halves (2 paths).
+        assert_eq!(svg.matches("data-crease-instance=\"front.R\"").count(), 2);
+        assert_eq!(svg.matches("data-crease-instance=\"front.L\"").count(), 2);
+        assert_eq!(svg.matches("data-crease-instance=\"back\"").count(), 2);
+        assert!(svg.contains("data-crease-angle-deg=\"+45\" data-crease-fold=\"valley\""));
+        assert!(svg.contains("data-crease-angle-deg=\"-60.5\" data-crease-fold=\"mountain\""));
+        assert!(svg.contains("data-crease-angle-deg=\"-35\" data-crease-fold=\"mountain\""));
+        assert!(svg.contains("PLEAT &lt;A&gt;: CREASE +45 deg (valley)"));
+        assert!(!svg.contains("PLEAT <A>"));
+        // Cut mark crease and 0-degree crease are not emitted as crease paths.
+        assert!(!svg.contains("data-crease-angle-deg=\"+30\""));
+        assert!(!svg.contains("data-crease-angle-deg=\"+0\""));
+        // Creased seam carries angle attribute and title; 0-degree seam does not.
+        assert!(svg.contains("data-seam=\"side_R\" data-side=\"a\" data-failing=\"false\" data-crease-angle-deg=\"+45\""));
+        assert!(svg.contains("front.R/side (crease +45 deg (valley))"));
+        assert!(!svg.contains(
+            "data-seam=\"side_L\" data-side=\"a\" data-failing=\"false\" data-crease-angle-deg="
+        ));
+        assert_eq!(svg, diagnostic_svg(&pattern, &report, dark).unwrap());
+    }
+}

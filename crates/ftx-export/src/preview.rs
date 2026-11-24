@@ -6,9 +6,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use ftx_core::{Refusal, RefusalCode, Vec2, py};
-use ftx_pattern::{Instance, Pattern, Report};
+use ftx_core::{Refusal, RefusalCode, Vec2, det, py};
+use ftx_pattern::{Instance, Pattern, Report, doc::truthy};
+use serde_json::Value;
 
+use crate::geom::format_crease_angle;
 use crate::text::{fnum, xml_escape};
 
 const GAP: f64 = 25.0;
@@ -35,6 +37,147 @@ fn invalid(message: impl Into<String>) -> Refusal {
 
 fn family(id: &str) -> &str {
     id.rsplit_once('_').map_or(id, |(stem, _)| stem)
+}
+
+fn nonzero_crease_deg(raw: Option<&Value>) -> Option<f64> {
+    let deg = raw.and_then(Value::as_f64)?;
+    (deg.is_finite() && deg != 0.0 && deg.abs() < 180.0).then_some(deg)
+}
+
+fn signed_crease_deg(deg: f64) -> String {
+    let sign = if deg > 0.0 { "+" } else { "-" };
+    format!("{sign}{}", fnum(deg.abs(), 1))
+}
+
+fn fold_axis_for_piece(piece: &Value) -> Option<(Vec2, Vec2)> {
+    let fold_id = piece
+        .get("cut")
+        .and_then(|c| c.get("on_fold"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?;
+    let edge = piece
+        .get("edges")?
+        .as_array()?
+        .iter()
+        .find(|e| e.get("id").and_then(Value::as_str) == Some(fold_id))?;
+    let (from, to) = (edge.get("from")?.as_str()?, edge.get("to")?.as_str()?);
+    let verts = piece.get("vertices")?.as_object()?;
+    let pt = |k: &str| -> Option<Vec2> {
+        let a = verts.get(k)?.as_array()?;
+        Some(Vec2::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+    };
+    let (a, b) = (pt(from)?, pt(to)?);
+    let len = det::hypot(b.x - a.x, b.y - a.y);
+    (a.is_finite() && b.is_finite() && len.is_finite() && len > 0.0).then_some((a, b))
+}
+
+fn reflect_across(p: Vec2, a: Vec2, b: Vec2) -> Vec2 {
+    let ab = b - a;
+    let len = det::hypot(ab.x, ab.y);
+    let d = Vec2::new(ab.x / len, ab.y / len);
+    let w = p - a;
+    let k = 2.0 * (w.x * d.x + w.y * d.y);
+    Vec2::new((a.x + k * d.x) - w.x, (a.y + k * d.y) - w.y)
+}
+
+struct InstanceCrease {
+    points: Vec<Vec2>,
+    deg: f64,
+    label: Option<String>,
+}
+
+fn instance_creases(pattern: &Pattern, instance: &Instance) -> Vec<InstanceCrease> {
+    let Some(piece) = pattern.raw()["pieces"].get(instance.piece_index) else {
+        return Vec::new();
+    };
+    let Some(marks) = piece.get("internal").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let fold_axis = fold_axis_for_piece(piece);
+    let mut out = Vec::new();
+    for item in marks {
+        let Some(deg) = nonzero_crease_deg(item.get("crease_angle_deg")) else {
+            continue;
+        };
+        if item.get("kind").and_then(Value::as_str) == Some("cut") {
+            continue;
+        }
+        let Some(raw_pts) = item.get("pts").and_then(Value::as_array) else {
+            continue;
+        };
+        if raw_pts.len() < 2 {
+            continue;
+        }
+        let Some(mut drafted) = raw_pts
+            .iter()
+            .map(|pt| {
+                let xy = pt.as_array()?;
+                if xy.len() != 2 {
+                    return None;
+                }
+                let x = xy[0].as_f64().filter(|v| v.is_finite())?;
+                let y = xy[1].as_f64().filter(|v| v.is_finite())?;
+                Some(Vec2::new(x, y))
+            })
+            .collect::<Option<Vec<Vec2>>>()
+        else {
+            continue;
+        };
+        if item.get("closed").is_some_and(truthy) {
+            let mut ring: Vec<Vec2> = Vec::with_capacity(drafted.len());
+            for pt in drafted {
+                if ring
+                    .last()
+                    .is_none_or(|&prev| det::hypot(pt.x - prev.x, pt.y - prev.y) > 1e-6)
+                {
+                    ring.push(pt);
+                }
+            }
+            if ring.len() > 1
+                && det::hypot(
+                    ring[0].x - ring.last().unwrap().x,
+                    ring[0].y - ring.last().unwrap().y,
+                ) <= 1e-6
+            {
+                ring.pop();
+            }
+            if ring.len() < 3 {
+                continue;
+            }
+            ring.push(ring[0]);
+            drafted = ring;
+        }
+        let label = item
+            .get("label")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let mut copies = vec![drafted.clone()];
+        if let Some((fa, fb)) = fold_axis {
+            let off_fold = drafted.iter().any(|&p| {
+                let r = reflect_across(p, fa, fb);
+                det::hypot(r.x - p.x, r.y - p.y) > 1e-3
+            });
+            if off_fold {
+                copies.push(drafted.iter().map(|&p| reflect_across(p, fa, fb)).collect());
+            }
+        }
+        for copy in copies {
+            let points: Vec<Vec2> = if instance.mirrored {
+                copy.into_iter().map(|p| Vec2::new(-p.x, p.y)).collect()
+            } else {
+                copy
+            };
+            if points.iter().all(|p| p.is_finite()) {
+                out.push(InstanceCrease {
+                    points,
+                    deg,
+                    label: label.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 struct Panel<'a> {
@@ -213,6 +356,30 @@ pub fn diagnostic_svg(pattern: &Pattern, report: &Report, dark: bool) -> Result<
             p.path(&p.outline)
         );
     }
+    let valley_colour = if dark { "#38bdf8" } else { "#0e7490" };
+    let mountain_colour = if dark { "#fbbf24" } else { "#b45309" };
+    for p in &panels {
+        for crease in instance_creases(pattern, p.instance) {
+            checked_points(&crease.points, &mut total)?;
+            let (fold, colour, dash) = if crease.deg > 0.0 {
+                ("valley", valley_colour, "8 4")
+            } else {
+                ("mountain", mountain_colour, "8 3 2 3")
+            };
+            let title = match &crease.label {
+                Some(label) => format!("{label}: {}", format_crease_angle("CREASE", crease.deg)),
+                None => format_crease_angle("CREASE", crease.deg),
+            };
+            let _ = writeln!(
+                svg,
+                "<path data-crease-instance=\"{}\" data-crease-angle-deg=\"{}\" data-crease-fold=\"{fold}\" d=\"{}\" fill=\"none\" stroke=\"{colour}\" stroke-width=\"2.5\" stroke-dasharray=\"{dash}\"><title>{}</title></path>",
+                xml_escape(&p.instance.id),
+                signed_crease_deg(crease.deg),
+                p.path(&crease.points),
+                xml_escape(&title)
+            );
+        }
+    }
     let mut failed = BTreeSet::new();
     if let Report::Full { seams, truing, .. } = report {
         for row in seams
@@ -266,13 +433,23 @@ pub fn diagnostic_svg(pattern: &Pattern, report: &Report, dark: bool) -> Result<
                         .edge_dense(&edge, 80)
                         .map_err(|e| invalid(e.to_string()))?;
                     checked_points(&points, &mut total)?;
+                    let crease_deg = nonzero_crease_deg(seam.0.get("crease_angle_deg"));
+                    let crease_attr = crease_deg.map_or_else(String::new, |deg| {
+                        format!(" data-crease-angle-deg=\"{}\"", signed_crease_deg(deg))
+                    });
+                    let title = match crease_deg {
+                        Some(deg) => {
+                            format!("{reference} ({})", format_crease_angle("crease", deg))
+                        }
+                        None => reference.to_string(),
+                    };
                     let _ = writeln!(
                         svg,
-                        "<path data-seam=\"{}\" data-side=\"{side}\" data-failing=\"{failing}\" d=\"{}\" fill=\"none\" stroke=\"{colour}\" stroke-width=\"{}\"><title>{}</title></path>",
+                        "<path data-seam=\"{}\" data-side=\"{side}\" data-failing=\"{failing}\"{crease_attr} d=\"{}\" fill=\"none\" stroke=\"{colour}\" stroke-width=\"{}\"><title>{}</title></path>",
                         xml_escape(id),
                         panel.path(&points),
                         if failing { 6 } else { 4 },
-                        xml_escape(reference)
+                        xml_escape(&title)
                     );
                 }
             }
