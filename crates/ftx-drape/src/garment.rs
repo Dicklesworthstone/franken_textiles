@@ -1689,9 +1689,13 @@ fn extract_piece_creases(
                     sampled.push(pt);
                 }
             }
-            if sampled.len() >= 2 {
-                out.push((sampled, angle_rad));
+            if sampled.len() < 2 {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    format!("{context}: crease polyline has zero length"),
+                ));
             }
+            out.push((sampled, angle_rad));
         }
     }
     Ok(out)
@@ -1824,7 +1828,15 @@ fn triangulate_with_creases(
     let mut record_crease = |su: usize, sv: usize, angle: f64| -> Result<(), Refusal> {
         let sk = edge_key(su, sv);
         if boundary_constraints.contains(&sk) {
-            return Ok(());
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "{inst}: authored piece internal crease lies along a boundary edge"
+                ),
+            )
+            .repair(
+                "Place piece internal creases inside the piece outline, or set crease_angle_deg on the seam for a creased seam.",
+            ));
         }
         let (ia, ib) = (first[&su], first[&sv]);
         if ia == ib {

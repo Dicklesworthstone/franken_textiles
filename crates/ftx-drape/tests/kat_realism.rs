@@ -1226,4 +1226,46 @@ fn kat_authored_internal_and_seam_creases_fold_under_discrete_shells_and_refuse_
         RefusalCode::DegenerateGeometry,
         "{seam_t_err:?}"
     );
+
+    // Zero-length crease polyline must refuse DegenerateGeometry instead of silently dropping.
+    let mut zero_len_raw = creased_pat.raw().clone();
+    zero_len_raw["pieces"][0]["internal"] = json!([{
+        "kind": "draw",
+        "pts": [[half_w * 0.5, 20.0], [half_w * 0.5, 20.0]],
+        "crease_angle_deg": -45.0
+    }]);
+    let zero_len_err = build_garment(&Pattern::new(zero_len_raw), 12.0).unwrap_err();
+    assert_eq!(
+        zero_len_err.code,
+        RefusalCode::DegenerateGeometry,
+        "{zero_len_err:?}"
+    );
+
+    // Crease authored along an unsewn boundary edge has no interior two-triangle hinge and must
+    // refuse fail-closed instead of silently disappearing.
+    let mut boundary_raw = creased_pat.raw().clone();
+    boundary_raw["pieces"][0]["internal"] = json!([{
+        "kind": "draw",
+        "pts": [[0.0, 0.0], [half_w, 0.0]],
+        "crease_angle_deg": -60.0
+    }]);
+    boundary_raw["seams"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("crease_angle_deg");
+    let boundary_err = drape(
+        &Pattern::new(boundary_raw),
+        &json!({}),
+        &body,
+        &ds_opts,
+        |_| {},
+    )
+    .err()
+    .expect("crease along unsewn boundary edge must refuse fail-closed");
+    assert_eq!(boundary_err.code, RefusalCode::InvalidDocument);
+    assert!(
+        boundary_err.message.contains("boundary edge"),
+        "{}",
+        boundary_err.message
+    );
 }

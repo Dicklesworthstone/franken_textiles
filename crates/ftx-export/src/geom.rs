@@ -759,8 +759,23 @@ pub fn build_geom(
             } else {
                 g.internal_draw.push((q.clone(), closed));
             }
-            if let Some(lab) = item.get("label").filter(|l| truthy(l)) {
-                let lab = py_str(lab);
+            let lab = item
+                .get("label")
+                .filter(|l| truthy(l))
+                .map(py_str)
+                .or_else(|| {
+                    let deg = item
+                        .get("crease_angle_deg")
+                        .and_then(Value::as_f64)
+                        .filter(|d| d.is_finite() && *d != 0.0 && d.abs() < 180.0)?;
+                    let (sign, dir) = if deg > 0.0 {
+                        ("+", "valley")
+                    } else {
+                        ("-", "mountain")
+                    };
+                    Some(format!("CREASE {sign}{} deg ({dir})", fnum(deg.abs(), 1)))
+                });
+            if let Some(lab) = lab {
                 let at = if closed {
                     let s = q.iter().fold(Vec2::ZERO, |acc, &p| acc + p);
                     Vec2::new(s.x / q.len() as f64, s.y / q.len() as f64)
@@ -1509,5 +1524,48 @@ mod tests {
             &[("A".into(), f64::NAN, true)],
             6.0
         ));
+
+        // Internal crease marks without an explicit label synthesize an ASCII direction/angle
+        // annotation, while explicit labels and uncreased/zero-angle internal lines are preserved.
+        let creased_pat = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "style": "CREASE",
+            "units": "mm",
+            "pieces": [{
+                "id": "p1",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [100, 80], "d": [0, 80]},
+                "edges": [
+                    {"id": "e0", "from": "a", "to": "b"},
+                    {"id": "e1", "from": "b", "to": "c"},
+                    {"id": "e2", "from": "c", "to": "d"},
+                    {"id": "e3", "from": "d", "to": "a"}
+                ],
+                "internal": [
+                    {"kind": "draw", "pts": [[25, 0], [25, 80]], "crease_angle_deg": 90.0},
+                    {"kind": "draw", "pts": [[50, 0], [50, 80]], "crease_angle_deg": -45.5},
+                    {"kind": "draw", "pts": [[75, 0], [75, 80]], "label": "PLEAT A", "crease_angle_deg": -60.0},
+                    {"kind": "draw", "pts": [[10, 10], [10, 70]], "crease_angle_deg": 0.0}
+                ],
+                "cut": {"qty": 1}
+            }]
+        }));
+        let creased_geom = Ctx::new(&creased_pat, ExportOptions::default())
+            .unwrap()
+            .geom(Source::Piece(0), 6.0)
+            .unwrap();
+        let internal_labels: Vec<&str> = creased_geom
+            .labels
+            .iter()
+            .filter(|lb| lb.kind == "internal")
+            .map(|lb| lb.lines[0].0.as_str())
+            .collect();
+        assert_eq!(
+            internal_labels,
+            vec![
+                "CREASE +90 deg (valley)",
+                "CREASE -45.5 deg (mountain)",
+                "PLEAT A",
+            ]
+        );
     }
 }

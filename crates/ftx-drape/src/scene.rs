@@ -1398,12 +1398,23 @@ fn build_scene_inner(
     let mut authored_crease_hinges = 0usize;
     if !crease_map.is_empty() {
         let mut angles = vec![0.0_f64; model.hinges.len()];
+        let mut matched_keys = std::collections::BTreeSet::new();
         for (i, h) in model.hinges.iter().enumerate() {
             let key = (h.v[0].min(h.v[1]), h.v[0].max(h.v[1]));
             if let Some(&theta) = crease_map.get(&key) {
                 angles[i] = theta;
                 authored_crease_hinges += 1;
+                matched_keys.insert(key);
             }
+        }
+        if matched_keys.len() < crease_map.len() {
+            return Err(bad(
+                "authored crease edge does not lie on an interior two-triangle hinge (e.g. lies on an unsewn boundary edge)"
+                    .into(),
+            )
+            .repair(
+                "Place interior crease polylines inside the piece outline (not along an unsewn boundary) or author seam creases on simulated seams.",
+            ));
         }
         if authored_crease_hinges > 0 {
             if !model.panel_bending_patches().is_empty() {
