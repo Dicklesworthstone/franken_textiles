@@ -1628,7 +1628,7 @@ mod tests {
                 "disallowed qualify flag {argv:?} must be refused as unknown"
             );
             assert!(
-                err.message.contains("unknown option"),
+                err.message.contains("has no option"),
                 "expected unknown-option refusal for {argv:?}, got: {err}"
             );
         }

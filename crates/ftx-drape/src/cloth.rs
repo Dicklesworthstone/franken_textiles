@@ -3782,6 +3782,7 @@ mod self_contact_tests {
             0.2,
         )
         .unwrap();
+        let mean_m = model.mass.iter().sum::<f64>() / model.mass.len() as f64;
         let cparams = ContactParams {
             dhat: 1e-3,
             thickness: 1e-4,
@@ -3789,22 +3790,18 @@ mod self_contact_tests {
             mu: 0.0,
             eps_v: 1e-3,
         };
+        let overload = Vec3::new(0.0, 0.0, -9.81 * 10.0);
         let mut legacy = Solver::new(
             model.clone(),
             x0.clone(),
             &[[true, true, false]; 3],
-            Vec3::new(0.0, 0.0, -9.81),
+            overload,
         )
         .with_contact(body.clone(), cparams)
         .unwrap();
-        let mut adaptive = Solver::new(
-            model,
-            x0,
-            &[[true, true, false]; 3],
-            Vec3::new(0.0, 0.0, -9.81),
-        )
-        .with_contact(body, cparams)
-        .unwrap();
+        let mut adaptive = Solver::new(model, x0, &[[true, true, false]; 3], overload)
+            .with_contact(body, cparams)
+            .unwrap();
         let policy = crate::contact::AdaptiveBarrierPolicy {
             target_gap_fraction: 0.5,
             min_gap_fraction: 0.35,
@@ -3817,7 +3814,7 @@ mod self_contact_tests {
             .contact
             .as_mut()
             .unwrap()
-            .set_adaptive_barrier(policy, 1e-3, 1000.0, 9.81)
+            .set_adaptive_barrier(policy, mean_m, 1000.0, 9.81)
             .unwrap();
         let legacy_k0 = legacy.contact.as_ref().unwrap().params.kappa;
         let adaptive_k0 = adaptive.contact.as_ref().unwrap().params.kappa;
