@@ -220,6 +220,7 @@ mod tests {
             collision: (&positions, &triangles),
             display: (&positions, &triangles),
             arm_deg: 35.,
+            arm_pose: None,
         };
         let mut source: Value = serde_json::from_str(include_str!(
             "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"

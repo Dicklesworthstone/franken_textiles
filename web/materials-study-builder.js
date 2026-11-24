@@ -2,6 +2,13 @@
 export const MAX_GUIDED_STUDY_CANDIDATES = 7;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const own = (value, key) => Object.hasOwn(value, key);
+function checkedArmPose(value) {
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+  if (!keys || keys.length !== 2 || !own(value, "left_abduction_deg") || !own(value, "right_abduction_deg") ||
+      [value.left_abduction_deg, value.right_abduction_deg].some(angle => !Number.isFinite(angle) || angle < 0 || angle > 180)) {
+    throw Error("Independent arm pose needs only finite left_abduction_deg and right_abduction_deg from 0 to 180 degrees.");
+  }
+}
 function checkedThumbPose(value) {
   const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
   if (!keys || keys.length !== 2 || !own(value, "left_rotation_vector_rad") || !own(value, "right_rotation_vector_rad")) {
@@ -2456,7 +2463,7 @@ function workbenchStudyBundle(value) {
         throw Error("Supplemental accepted-fit replay requires original primary measurements and a valid arm angle.");
       }
       if (own(request, "measurementAcceptedPose")) {
-        const pose = object(request.measurementAcceptedPose, ["legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"], [], "Supplemental accepted-fit pose");
+        const pose = object(request.measurementAcceptedPose, ["arm_pose", "legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"], [], "Supplemental accepted-fit pose");
         if (!Object.keys(pose).length
           || (own(pose, "legs") && !["standing", "seated", "squat"].includes(pose.legs))
           || (own(pose, "leg_fraction") && (!Number.isFinite(pose.leg_fraction) || pose.leg_fraction < 0 || pose.leg_fraction > 1))
@@ -2465,12 +2472,13 @@ function workbenchStudyBundle(value) {
           throw Error("Supplemental accepted-fit pose needs valid leg, skinning, hand-collider and thumb-pose settings.");
         }
         if (own(pose, "thumb_pose")) checkedThumbPose(pose.thumb_pose);
+        if (own(pose, "arm_pose")) checkedArmPose(pose.arm_pose);
       }
     } else if (own(request, "measurementArmDeg") || own(request, "measurementAcceptedPose")) {
       throw Error("Supplemental accepted-fit pose metadata requires an accepted body-fit source.");
     }
     if (own(request, "measurementPose")) {
-      const pose = object(request.measurementPose, ["arm_abduction_deg", "legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"],
+      const pose = object(request.measurementPose, ["arm_abduction_deg", "arm_pose", "legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"],
         ["arm_abduction_deg", "legs", "leg_fraction"], "Supplemental preview pose");
       if (!own(request, "measurementPrimary") || own(request, "measurementAcceptedFit")
         || !Number.isFinite(pose.arm_abduction_deg) || pose.arm_abduction_deg < 0 || pose.arm_abduction_deg > 180
@@ -2481,6 +2489,7 @@ function workbenchStudyBundle(value) {
         throw Error("Supplemental preview pose needs original primary measurements, valid arm, leg, skinning, hand-collider and thumb-pose settings, and no accepted fit.");
       }
       if (own(pose, "thumb_pose")) checkedThumbPose(pose.thumb_pose);
+      if (own(pose, "arm_pose")) checkedArmPose(pose.arm_pose);
     }
   } else if (["measurementConsent", "measurementPrimary", "measurementAcceptedFit", "measurementArmDeg", "measurementAcceptedPose", "measurementPose"].some(key => own(request, key))) {
     throw Error("Supplemental replay metadata requires original additional measurement sources.");
@@ -2497,11 +2506,13 @@ function workbenchStudyBundle(value) {
   if (request.measurementPose) {
     const mp = { ...request.measurementPose };
     if (own(mp, "thumb_pose")) mp.thumb_pose = freezeThumbPose(mp.thumb_pose);
+    if (own(mp, "arm_pose")) mp.arm_pose = Object.freeze({ ...mp.arm_pose });
     frozenRequest.measurementPose = Object.freeze(mp);
   }
   if (request.measurementAcceptedPose) {
     const map = { ...request.measurementAcceptedPose };
     if (own(map, "thumb_pose")) map.thumb_pose = freezeThumbPose(map.thumb_pose);
+    if (own(map, "arm_pose")) map.arm_pose = Object.freeze({ ...map.arm_pose });
     frozenRequest.measurementAcceptedPose = Object.freeze(map);
   }
   if (request.outfit) frozenRequest.outfit = Object.freeze({ ...request.outfit });

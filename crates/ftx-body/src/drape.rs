@@ -1356,6 +1356,27 @@ impl HandCollider {
         }
     }
 
+    /// Describes an explicit left/right pair without mislabelling it as the fallback angle.
+    /// An absent pair preserves the reference report wording exactly.
+    #[must_use]
+    pub fn drape_pose_line_with_arms(self, arm_deg: f64, arms: Option<ArmPose>) -> String {
+        let Some(arms) = arms else {
+            return self.drape_pose_line(arm_deg);
+        };
+        let angles = format!(
+            "left arm at {}° and right arm at {}°, both straight",
+            arms.left_abduction_deg, arms.right_abduction_deg
+        );
+        match self {
+            Self::Wrist => format!("drape: {angles}, hands and feet left out of contact"),
+            Self::Palm | Self::Knuckle => format!(
+                "drape: {angles}, hand collider {} (outer fingers and feet left out of contact)",
+                self.as_str()
+            ),
+            Self::Full => format!("drape: {angles}, hand collider full (feet left out of contact)"),
+        }
+    }
+
     /// The bones whose regions are cut away from each hand, right then left. None for the whole hand.
     const fn roots(self) -> &'static [&'static str] {
         match self {
@@ -2204,6 +2225,27 @@ mod tests {
         assert_eq!(
             HandCollider::Full.drape_pose_line(37.5),
             "drape: arms at 37.5° and straight, hand collider full (feet left out of contact)"
+        );
+        for hands in [
+            HandCollider::Wrist,
+            HandCollider::Palm,
+            HandCollider::Knuckle,
+            HandCollider::Full,
+        ] {
+            assert_eq!(
+                hands.drape_pose_line_with_arms(35.0, None),
+                hands.drape_pose_line(35.0)
+            );
+        }
+        assert_eq!(
+            HandCollider::Full.drape_pose_line_with_arms(
+                35.0,
+                Some(ArmPose {
+                    left_abduction_deg: 20.0,
+                    right_abduction_deg: 80.0,
+                })
+            ),
+            "drape: left arm at 20° and right arm at 80°, both straight, hand collider full (feet left out of contact)"
         );
         // The reference collider cuts at the two wrists, in the order `clothing_skin` always used.
         assert_eq!(HandCollider::Wrist.roots(), ["wrist.R", "wrist.L"]);

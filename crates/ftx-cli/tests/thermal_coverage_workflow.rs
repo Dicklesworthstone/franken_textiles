@@ -150,6 +150,7 @@ fn sewn_report_with_oriented_optics(
             collision: (&body.vertices, &body.triangles),
             display: (&body.vertices, &body.triangles),
             arm_deg: 35.,
+            arm_pose: None,
         },
         &DrapeOptions {
             spacing: 24.,

@@ -137,6 +137,44 @@ fn whole_outfit_is_portable_deterministic_and_uses_final_native_frames() {
 }
 
 #[test]
+fn independent_arm_pose_is_preserved_and_compares_actual_angles_before_rendering() {
+    let dir = setup();
+    let arms = json!({"left_abduction_deg":20.0,"right_abduction_deg":80.0});
+    for (garment, common) in [("jacket", 35.0), ("trousers", 50.0)] {
+        let path = dir.join(garment).join("sim_report.json");
+        let mut report = read(&path);
+        report["arm_pose"] = arms.clone();
+        // Explicit pairs override the otherwise different symmetric fallback.
+        report["arm_deg"] = json!(common);
+        save(&path, &report);
+    }
+    let report = run(&dir, &["--out", "paired"], 0);
+    assert_eq!(report["result"]["pose"]["arm_pose"], arms);
+    let html = std::fs::read_to_string(dir.join("paired/report.html")).unwrap();
+    assert!(html.contains("Arms: left 20.0 degrees, right 80.0 degrees"));
+    for invalid in [
+        Value::Null,
+        json!({"left_abduction_deg":20.0}),
+        json!({"left_abduction_deg":20.0,"right_abduction_deg":181.0}),
+        json!({"left_abduction_deg":20.0,"right_abduction_deg":70.0}),
+    ] {
+        let path = dir.join("trousers/sim_report.json");
+        let mut report = read(&path);
+        report["arm_pose"] = invalid;
+        save(&path, &report);
+        run(&dir, &["--out", "invalid-pose"], 3);
+        assert!(!dir.join("invalid-pose").exists());
+    }
+    // An explicit equal pair and the same omitted pair describe the same physical pose.
+    let dir = setup();
+    let path = dir.join("trousers/sim_report.json");
+    let mut report = read(&path);
+    report["arm_pose"] = json!({"left_abduction_deg":35.0,"right_abduction_deg":35.0});
+    save(&path, &report);
+    run(&dir, &["--out", "equal-pair"], 0);
+}
+
+#[test]
 fn flags_and_unsettled_runs_remain_visible_and_return_two() {
     let dir = setup();
     let file = dir.join("trousers/sim_report.json");

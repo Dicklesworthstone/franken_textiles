@@ -243,7 +243,7 @@ impl<'a, 'body> Session<'a, 'body> {
     /// Bind one immutable posed body; material edits cannot change it inside this session.
     ///
     /// # Errors
-    /// Invalid scenario, malformed or excessive body geometry, or non-finite pose angle.
+    /// Invalid scenario, malformed or excessive body geometry, or invalid authored arm angles.
     pub fn new(scenario: &'a Scenario, body: &'a DrapeBody<'body>) -> Result<Self, Refusal> {
         scenario.validate()?;
         for (vertices, triangles) in [body.collision, body.display] {
@@ -257,7 +257,13 @@ impl<'a, 'body> Session<'a, 'body> {
             ftx_core::intersection::validate_mesh(vertices, triangles)?;
         }
         Refusal::finite("scenario arm angle", body.arm_deg)?;
-        let body_sha256 = hash(&(body.collision, body.display, body.arm_deg))?;
+        let body_sha256 = if let Some(arms) = body.arm_pose {
+            arms.validate()?;
+            hash(&(body.collision, body.display, body.arm_deg, arms))?
+        } else {
+            // Preserve the established body/scenario identity when independent arms are omitted.
+            hash(&(body.collision, body.display, body.arm_deg))?
+        };
         let scenario_sha256 = hash(&(scenario, &body_sha256))?;
         Ok(Self {
             scenario,

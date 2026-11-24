@@ -467,6 +467,7 @@ fn run_with_options(raw: Value, options: DrapeOptions) -> Result<DrapeRun, Refus
             collision: (&body.vertices, &body.triangles),
             display: (&body.vertices, &body.triangles),
             arm_deg: 35.,
+            arm_pose: None,
         },
         &options,
         |_| {},

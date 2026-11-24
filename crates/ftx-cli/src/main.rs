@@ -66,6 +66,7 @@ const USAGE: &str = "usage:
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
             [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N] [--res WIDTHxHEIGHT] [--shading standard|legible|both]
             [--thumb-pose JSON] [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
+            [--left-arm-deg DEG --right-arm-deg DEG] (independent initial arms; overrides --arm-deg)
             [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--air-velocity VX,VY,VZ] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
@@ -79,6 +80,7 @@ const USAGE: &str = "usage:
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--compression F] [--self-contact-mm MM] [--self-mu MU] [--json]
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--max-settle-steps N]
+            [--left-arm-deg DEG --right-arm-deg DEG] (both in 0..=180 degrees from vertical)
             [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300] (independent frictionless comparison)
             [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
@@ -90,6 +92,7 @@ const USAGE: &str = "usage:
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
+              [--left-arm-deg DEG --right-arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON]
               [--compression F] [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
               [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--air-velocity VX,VY,VZ] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
@@ -98,6 +101,7 @@ const USAGE: &str = "usage:
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
+            [--left-arm-deg DEG --right-arm-deg DEG]
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
             [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON] [--res 960x540] [--shading standard|legible] [--json] (start-state stills and numbers; no drape)
@@ -1191,6 +1195,36 @@ fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
         }
         pose.arm_abduction_deg = Some(angle);
     }
+    match (
+        args.options.get("left-arm-deg"),
+        args.options.get("right-arm-deg"),
+    ) {
+        (None, None) => {}
+        (Some(left), Some(right)) => {
+            let angle = |value: &str, flag: &str| -> Result<f64, Refusal> {
+                let angle = value.parse::<f64>().map_err(|_| {
+                    bad_input(format!("--{flag} must be a finite angle in degrees"))
+                })?;
+                Refusal::finite(&format!("--{flag}"), angle)?;
+                if !(0.0..=180.0).contains(&angle) {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("--{flag} must be in 0..=180 degrees from vertical"),
+                    ));
+                }
+                Ok(angle)
+            };
+            pose.arm_pose = Some(ftx_body::drape::ArmPose {
+                left_abduction_deg: angle(left, "left-arm-deg")?,
+                right_abduction_deg: angle(right, "right-arm-deg")?,
+            });
+        }
+        _ => {
+            return Err(bad_input(
+                "--left-arm-deg and --right-arm-deg must be supplied together",
+            ));
+        }
+    }
     if let Some(value) = args.options.get("legs") {
         pose.legs = match value.as_str() {
             "standing" => Legs::Standing,
@@ -1359,6 +1393,8 @@ fn cmd_drape_bound(
             "elastic-ea",
             "elastic-hold-steps",
             "arm-deg",
+            "left-arm-deg",
+            "right-arm-deg",
             "thumb-pose",
             "legs",
             "leg-fraction",
@@ -1434,12 +1470,14 @@ fn cmd_drape_bound(
         })?;
     let thumb_audit = authored_hand_surface.map(Ok);
     let frames = BodyFrames::new(&model, &posed)?;
+    let posed_frames = ftx_drape::scene::PosedFrames::new(&frames, pose.arm_pose);
     let pattern = Pattern::new(pat);
     let body = DrapeBody {
-        frames: &frames,
+        frames: &posed_frames,
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
+        arm_pose: pose.arm_pose,
     };
     let started = std::time::Instant::now();
     let mut refused = None;
@@ -1489,11 +1527,12 @@ fn cmd_drape_bound(
                 mesh: material.options.mesh,
                 start_self_repulsion: material.options.start_self_repulsion,
                 elastic_ea: material.options.elastic_ea,
-                frames: &frames,
+                frames: &posed_frames,
                 collision: (&skin.vertices, &skin.triangles),
                 display: (&full.vertices, &full.triangles),
                 skinning,
                 hands,
+                arm_pose: pose.arm_pose,
                 thumbs,
                 thumb_audit: thumb_audit.as_ref(),
             },
@@ -1524,7 +1563,13 @@ fn cmd_drape_bound(
             json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
         );
         let mut b = description;
-        b.insert("pose".into(), json!(hands.drape_pose_line(body.arm_deg)));
+        b.insert(
+            "pose".into(),
+            json!(hands.drape_pose_line_with_arms(body.arm_deg, body.arm_pose)),
+        );
+        if let Some(arms) = pose.arm_pose {
+            b.insert("arm_pose".into(), json!(arms));
+        }
         if !pose.legs.is_standing() {
             b.insert("legs".into(), json!(pose.legs));
         }
@@ -1669,6 +1714,9 @@ fn cmd_drape_bound(
     }
     if let Some(thumbs) = thumbs {
         result["thumb_pose"] = json!(thumbs);
+    }
+    if let Some(arms) = pose.arm_pose {
+        result["arm_pose"] = json!(arms);
     }
     append_drape_constitutive_summary(&report, None, Some(&mut result));
     if let Some(composition) = report.get("outfit") {
@@ -2110,6 +2158,48 @@ mod tests {
             let args =
                 parse(&["drape", "absent.json", "--arm-deg", angle].map(String::from)).unwrap();
             assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
+    }
+
+    #[test]
+    fn independent_arm_angles_override_the_common_angle_and_require_both_sides() {
+        let args = parse(
+            &[
+                "drape",
+                "--arm-deg",
+                "45",
+                "--left-arm-deg",
+                "0",
+                "--right-arm-deg",
+                "180",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let pose = drape_pose(&args).unwrap();
+        assert_eq!(pose.arm_abduction_deg, Some(45.0));
+        assert_eq!(
+            pose.arm_pose,
+            Some(ftx_body::drape::ArmPose {
+                left_abduction_deg: 0.0,
+                right_abduction_deg: 180.0,
+            })
+        );
+        assert!(pose.straight_arms);
+        for flags in [
+            vec!["--left-arm-deg", "30"],
+            vec!["--right-arm-deg", "70"],
+            vec!["--left-arm-deg", "NaN", "--right-arm-deg", "70"],
+            vec!["--left-arm-deg", "30", "--right-arm-deg", "inf"],
+            vec!["--left-arm-deg", "-1", "--right-arm-deg", "70"],
+            vec!["--left-arm-deg", "30", "--right-arm-deg", "181"],
+        ] {
+            let mut raw = vec!["drape", "absent.json"];
+            raw.extend(flags);
+            let args = parse(&raw.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+            let refusal = cmd_drape(&args).unwrap_err();
+            assert_ne!(refusal.code, RefusalCode::Io);
+            assert!(refusal.message.contains("arm-deg"), "{refusal:?}");
         }
     }
 

@@ -55,6 +55,7 @@ fn body(form: &Body) -> DrapeBody<'_> {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     }
 }
 fn pattern() -> Pattern {
@@ -885,6 +886,33 @@ fn missing_thermal_and_stale_fields_do_not_erase_valid_draping() {
         .unwrap();
     assert_eq!(r["coverage"]["status"], "refused");
     assert_eq!(r["surface"]["status"], "not_requested");
+}
+
+#[test]
+fn explicit_initial_arm_pairs_are_validated_and_bound_before_any_solver_work() {
+    let form = form();
+    let mut body = body(&form);
+    let scenario = scenario();
+    let legacy = Session::new(&scenario, &body).unwrap().descriptor();
+    body.arm_pose = Some(ftx_body::drape::ArmPose {
+        left_abduction_deg: 35.,
+        right_abduction_deg: 35.,
+    });
+    let explicit = Session::new(&scenario, &body).unwrap().descriptor();
+    assert_ne!(
+        explicit["body_geometry_sha256"],
+        legacy["body_geometry_sha256"]
+    );
+    assert_ne!(explicit["scenario_sha256"], legacy["scenario_sha256"]);
+    body.arm_pose = None;
+    assert_eq!(Session::new(&scenario, &body).unwrap().descriptor(), legacy);
+    for value in [f64::NAN, f64::INFINITY, -1., 181.] {
+        body.arm_pose = Some(ftx_body::drape::ArmPose {
+            left_abduction_deg: value,
+            right_abduction_deg: 35.,
+        });
+        assert!(Session::new(&scenario, &body).is_err());
+    }
 }
 
 #[test]

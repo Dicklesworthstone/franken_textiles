@@ -362,6 +362,17 @@ fn pose_and_still_options_are_validated_before_reserving_a_round() {
         (vec!["--arm-deg", "50"], 3),
         (vec!["--sim", "--arm-deg", "NaN"], 3),
         (vec!["--stills", "--arm-deg", "181"], 3),
+        (vec!["--left-arm-deg", "30", "--right-arm-deg", "70"], 3),
+        (vec!["--sim", "--left-arm-deg", "30"], 3),
+        (vec!["--stills", "--right-arm-deg", "70"], 3),
+        (
+            vec!["--sim", "--left-arm-deg", "NaN", "--right-arm-deg", "70"],
+            3,
+        ),
+        (
+            vec!["--stills", "--left-arm-deg", "30", "--right-arm-deg", "181"],
+            3,
+        ),
         (vec!["--stills", "--res", "48X32"], 3),
         (vec!["--stills", "--res", "0x32"], 3),
         (vec!["--res", "48x32"], 3),

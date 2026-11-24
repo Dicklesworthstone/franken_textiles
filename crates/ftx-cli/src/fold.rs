@@ -519,6 +519,12 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "arm_deg": report["arm_deg"].as_f64().unwrap_or(35.0),
         },
     });
+    if let Some(value) = report.get("arm_pose") {
+        let arms: ftx_body::drape::ArmPose = serde_json::from_value(value.clone())
+            .map_err(|e| bad_input(format!("saved drape arm_pose: {e}")))?;
+        arms.validate()?;
+        payload["report"]["arm_pose"] = json!(arms);
+    }
     if contact {
         let cut = kept.partition_point(|&k| k < physical_start);
         let setup = if stations {

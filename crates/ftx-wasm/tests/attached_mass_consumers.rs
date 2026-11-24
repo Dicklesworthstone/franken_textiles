@@ -103,6 +103,7 @@ fn file_free_manufacturing_and_scenario_share_exact_source_mass_and_real_dynamic
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let text = on_body(&body, &pattern_text, &request_text, SCENARIO, |_| {}).unwrap();
     let report: Value = serde_json::from_str(&text).unwrap();
@@ -161,6 +162,7 @@ fn unknown_or_denied_attachment_mass_refuses_browser_dynamics_without_erasing_ma
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     for denied in [false, true] {
         let (mut pattern, mut request) = inputs();

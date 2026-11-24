@@ -68,6 +68,7 @@ fn paired_pipeline_preserves_primary_and_records_both_paths() {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 24.0,
@@ -128,6 +129,7 @@ fn an_unsettled_pair_is_gating_even_when_both_paths_agree() {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     // The loose ring falls along the cylinder; agreement between falling runs is not settledness.
     let opts = DrapeOptions {
@@ -173,6 +175,7 @@ fn preflight_rejects_identical_paths_before_progress_or_meshing() {
         collision: (&empty, &triangles),
         display: (&empty, &triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let opts = DrapeOptions::default();
     let policy = TwoStartOptions {
@@ -200,6 +203,7 @@ fn shared_settings_records_time_subdivision_and_elastic_hold_and_preflights_alte
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let subdivision = ftx_drape::stepping::SubdivisionOptions {
         max_halvings: 4,

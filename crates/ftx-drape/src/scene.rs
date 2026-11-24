@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_body::BodyFrames;
+use ftx_body::{BodyFrames, drape::ArmPose};
 use ftx_core::np::linspace;
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
 use ftx_pattern::{Pattern, Side, instance::physical_side, material_elastic::ElasticBand, truthy};
@@ -73,6 +73,41 @@ impl PartFrames for BodyFrames {
     }
     fn section_radius(&self, part: &str, h: f64) -> f64 {
         BodyFrames::section_radius(self, part, h)
+    }
+}
+
+/// Placement frames for an explicitly selected initial arm pose. Equal arm angles retain the
+/// reference mirror convention; distinct angles place each generated sleeve on its actual limb.
+/// The source pose is validated before its corresponding `BodyFrames` are constructed.
+pub struct PosedFrames<'a> {
+    frames: &'a BodyFrames,
+    arm_pose: Option<ArmPose>,
+}
+
+impl<'a> PosedFrames<'a> {
+    /// Borrow frames evaluated at the same independently authored arm pose.
+    #[must_use]
+    pub fn new(frames: &'a BodyFrames, arm_pose: Option<ArmPose>) -> Self {
+        Self { frames, arm_pose }
+    }
+}
+
+impl PartFrames for PosedFrames<'_> {
+    fn frame(&self, part: &str) -> Option<PartFrame> {
+        PartFrames::frame(self.frames, part)
+    }
+
+    fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+        PartFrames::landmark_h(self.frames, part, name)
+    }
+
+    fn section_radius(&self, part: &str, h: f64) -> f64 {
+        PartFrames::section_radius(self.frames, part, h)
+    }
+
+    fn independent_limbs(&self) -> bool {
+        self.arm_pose
+            .is_some_and(|arms| arms.left_abduction_deg != arms.right_abduction_deg)
     }
 }
 
@@ -3221,24 +3256,6 @@ mod grain_tests {
         }
     }
 
-    /// A body's frames with its limbs declared independently posed.
-    struct IndependentLimbs<'a>(&'a BodyFrames);
-
-    impl PartFrames for IndependentLimbs<'_> {
-        fn frame(&self, part: &str) -> Option<PartFrame> {
-            PartFrames::frame(self.0, part)
-        }
-        fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
-            PartFrames::landmark_h(self.0, part, name)
-        }
-        fn section_radius(&self, part: &str, h: f64) -> f64 {
-            PartFrames::section_radius(self.0, part, h)
-        }
-        fn independent_limbs(&self) -> bool {
-            true
-        }
-    }
-
     #[test]
     fn mirrored_limb_instances_wrap_their_own_limb_when_limbs_are_posed_independently() {
         let mut piece = physical_panel("pair", "arm", None);
@@ -3264,7 +3281,30 @@ mod grain_tests {
             let frames = BodyFrames::new(&model, &posed).unwrap();
             let left = PartFrames::frame(&frames, "arm_L").unwrap();
             let reference = placements(&pattern, &mesh, &frames).unwrap();
-            let own = placements(&pattern, &mesh, &IndependentLimbs(&frames)).unwrap();
+            for arms in [
+                None,
+                Some(ArmPose {
+                    left_abduction_deg: 35.,
+                    right_abduction_deg: 35.,
+                }),
+            ] {
+                let legacy = PosedFrames::new(&frames, arms);
+                assert!(!legacy.independent_limbs());
+                let unchanged = placements(&pattern, &mesh, &legacy).unwrap();
+                assert_eq!(
+                    wrapped_positions(&mesh, &unchanged),
+                    wrapped_positions(&mesh, &reference),
+                );
+            }
+            let posed = PosedFrames::new(
+                &frames,
+                Some(ArmPose {
+                    left_abduction_deg: 70.,
+                    right_abduction_deg: 35.,
+                }),
+            );
+            assert!(posed.independent_limbs());
+            let own = placements(&pattern, &mesh, &posed).unwrap();
             // The right instance is placed as before; the mirrored one stays a mirrored instance.
             assert_eq!(own[0].frame, reference[0].frame);
             assert!(own[1].mirrored && !own[1].own_side);

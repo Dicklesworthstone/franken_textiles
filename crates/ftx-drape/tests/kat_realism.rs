@@ -918,6 +918,7 @@ fn kat_drape_options_adaptive_barrier_and_stick_slip_wire_end_to_end_and_preserv
         collision: (&verts, &tris),
         display: (&verts, &tris),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
     let pat = Pattern::new(json!({
@@ -1024,6 +1025,7 @@ fn mesh_construction_and_start_repulsion_round_trip_through_drape() {
         collision: (&verts, &tris),
         display: (&verts, &tris),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
     let pat = Pattern::new(json!({
@@ -1161,6 +1163,7 @@ fn kat_all_ftx27_realism_upgrades_compose_deterministically_through_drape() {
         collision: (&verts, &tris),
         display: (&verts, &tris),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
     let pat = Pattern::new(json!({
@@ -1274,6 +1277,7 @@ fn kat_authored_internal_and_seam_creases_fold_under_discrete_shells_and_refuse_
         collision: (&verts, &tris),
         display: (&verts, &tris),
         arm_deg: 35.0,
+        arm_pose: None,
     };
 
     // Two panels joined into a band around the cylinder:

@@ -86,7 +86,9 @@ try {
   const r = D.report || {};
   const gate = (r.gating || []).length;
   $("verdict").innerHTML = (gate ? `<span class="bad">${gate} gating flag(s)</span>` : `<span class="ok">no gating flags</span>`) +
-    ` · ${(r.advisory || []).length} advisory · ${r.settled ? "settled" : "not settled"}` + (r.arm_deg ? ` · arms at ${r.arm_deg}°` : "");
+    ` · ${(r.advisory || []).length} advisory · ${r.settled ? "settled" : "not settled"}` +
+    (r.arm_pose ? ` · left arm ${r.arm_pose.left_abduction_deg}°, right arm ${r.arm_pose.right_abduction_deg}°` :
+      Number.isFinite(r.arm_deg) ? ` · arms at ${r.arm_deg}°` : "");
   $("verdict").title = [...(r.gating || []), ...(r.advisory || [])].join("\n");
 
   const V = D.vertices, F = D.frames;

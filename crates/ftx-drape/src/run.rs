@@ -92,8 +92,10 @@ pub struct DrapeBody<'a> {
     pub collision: (&'a [Vec3], &'a [[usize; 3]]),
     /// The surface the viewer shows.
     pub display: (&'a [Vec3], &'a [[usize; 3]]),
-    /// Arm abduction of the pose (degrees).
+    /// Common arm abduction (degrees), overridden by `arm_pose` when present.
     pub arm_deg: f64,
+    /// Exact independently authored initial arm angles, when supplied.
+    pub arm_pose: Option<ftx_body::drape::ArmPose>,
 }
 
 /// Run settings.
@@ -510,6 +512,9 @@ pub fn drape_observed(
     refused: &mut Option<RefusedRun>,
 ) -> Result<DrapeRun, Refusal> {
     *refused = None;
+    if let Some(arms) = &body.arm_pose {
+        arms.validate()?;
+    }
     let scope = simulation_scope(pattern)?;
     let material = crate::material::resolve(pattern, opts)?;
     let opts = &material.options;
@@ -810,6 +815,7 @@ pub fn drape_observed(
         fit_spec,
         spacing: opts.spacing,
         arm_deg: body.arm_deg,
+        arm_pose: body.arm_pose,
     };
     let mut report = metrics(&scene.mesh, &input);
     let casing_mu: Vec<_> = elastics
@@ -1392,6 +1398,9 @@ fn add_run_fields(
     );
     o.insert("presew".into(), json!(true));
     o.insert("arm_deg".into(), json!(input.arm_deg));
+    if let Some(arms) = input.arm_pose {
+        o.insert("arm_pose".into(), json!(arms));
+    }
     o.insert(
         "gather_zone_vertices".into(),
         json!(w.iter().filter(|&&v| v < 1.0).count()),
@@ -1594,7 +1603,7 @@ pub fn viewer(
     let raw = pattern.raw();
     let style = raw["style"].as_str().unwrap_or("");
     let title = raw["meta"]["title"].as_str().unwrap_or(style);
-    let payload = viewer_payload(
+    let mut payload = viewer_payload(
         &run.scene.mesh,
         &run.fold,
         &ViewerExtras {
@@ -1609,6 +1618,9 @@ pub fn viewer(
         },
         150,
     );
+    if let Some(arms) = body.arm_pose {
+        payload["report"]["arm_pose"] = json!(arms);
+    }
     viewer_html(template, &payload)
 }
 
@@ -1695,6 +1707,7 @@ mod self_contact_tests {
             collision: (&[], &[]),
             display: (&[], &[]),
             arm_deg: 0.0,
+            arm_pose: None,
         };
         let refusal = drape(
             &pattern,
@@ -2079,6 +2092,7 @@ mod self_contact_tests {
             collision: (&verts, &tris),
             display: (&verts, &tris),
             arm_deg: 35.0,
+            arm_pose: None,
         };
         let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
         let pat = Pattern::new(json!({

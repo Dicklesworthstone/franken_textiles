@@ -2682,7 +2682,7 @@ fn standalone_body_check_reuses_the_exact_shape_without_a_garment_or_tape_fallba
 }
 
 #[test]
-fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
+fn browser_fold_replays_the_native_accepted_shape_and_independent_arms_without_tape_refitting() {
     let dir = setup();
     eprintln!("browser fold replay artifacts: {}", dir.display());
     let bytes = model_bytes_with_rig(true);
@@ -2705,16 +2705,23 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
         report: &raw,
         arm_deg: 50.0,
     };
-    let portable = ftx_wasm::fold::fold_up_with_body_fit(
+    let arms = ftx_body::drape::ArmPose {
+        left_abduction_deg: 45.0,
+        right_abduction_deg: 55.0,
+    };
+    let portable = ftx_wasm::fold::fold_up_configured(
         &model,
         &pattern,
         &measurements,
         &json!({}),
-        ftx_wasm::fold::FoldOptions {
+        ftx_wasm::fold::FoldSettings {
             self_contact_mm: 2.0,
             two_start: false,
+            arm_abduction_deg: 50.0,
+            arm_pose: Some(arms),
+            ..ftx_wasm::fold::FoldSettings::default()
         },
-        &source,
+        Some(&source),
         |_| {},
     )
     .unwrap();
@@ -2725,6 +2732,14 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
     );
     assert_eq!(portable.report["body"]["shape_source"]["refitted"], false);
     assert_eq!(portable.report["body"]["source_fit"], receipt(&hash));
+    assert_eq!(portable.report["arm_pose"], json!(arms));
+    assert_eq!(portable.report["body"]["arm_pose"], json!(arms));
+    assert!(
+        portable.report["body"]["pose"]
+            .as_str()
+            .unwrap()
+            .contains("left arm at 45° and right arm at 55°")
+    );
     std::fs::write(dir.join("rig.ftxbody"), &bytes).unwrap();
     std::fs::write(dir.join("accepted.json"), &raw).unwrap();
     save(&dir.join("pattern.json"), &pattern);
@@ -2742,6 +2757,10 @@ fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
             "rig.ftxbody",
             "--arm-deg",
             "50",
+            "--left-arm-deg",
+            "45",
+            "--right-arm-deg",
+            "55",
             "--self-contact-mm",
             "2",
             "--out",

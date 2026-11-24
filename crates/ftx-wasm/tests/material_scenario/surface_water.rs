@@ -73,6 +73,7 @@ fn study(raw: &Value, request: &Request, pattern: &Pattern) -> Value {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let scenario: Scenario = serde_json::from_value(raw.clone()).unwrap();
     let mut session = Session::new(&scenario, &body).unwrap();

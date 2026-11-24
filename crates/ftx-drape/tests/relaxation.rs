@@ -362,6 +362,7 @@ fn check_sewn_selection_with_model(
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut started = false;
     let refusal = drape(

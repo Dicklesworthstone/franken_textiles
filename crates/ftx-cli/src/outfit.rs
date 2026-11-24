@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use ftx_body::drape::ArmPose;
 use ftx_core::{Refusal, RefusalCode, Vec3, det, receipt::sha256_hex};
 use ftx_drape::point_cache::PointCache;
 use ftx_drape::render::{Camera, ColouredMesh, Shading, fez_frustum, png, read_obj, render_shaded};
@@ -144,6 +145,7 @@ struct Outfit {
     hat: Option<(ColouredMesh, Value)>,
     measurements_sha256: String,
     arm_deg: f64,
+    arm_pose: Option<ArmPose>,
     flagged: bool,
 }
 
@@ -163,6 +165,7 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
     let mut garments = Vec::new();
     let mut body: Option<ColouredMesh> = None;
     let mut arm_deg = 0.0;
+    let mut arm_pose = None;
     let mut flagged = false;
     let (mut vertices, mut faces) = (0, 0);
     for name in paths {
@@ -193,9 +196,24 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
                 "{name}: incomplete native simulation report"
             )));
         }
+        let requested_arms = report
+            .get("arm_pose")
+            .map(|value| {
+                let arms: ArmPose = serde_json::from_value(value.clone())
+                    .map_err(|e| bad_input(format!("{name}: invalid arm_pose: {e}")))?;
+                arms.validate()?;
+                Ok::<_, Refusal>(arms)
+            })
+            .transpose()?;
+        let actual_arms = |common, pair: Option<ArmPose>| {
+            pair.unwrap_or(ArmPose {
+                left_abduction_deg: common,
+                right_abduction_deg: common,
+            })
+        };
         let (next_body, body_hash) = read_mesh(&dir.join("body.obj"))?;
         if let Some(first) = &body {
-            if angle != Some(arm_deg)
+            if actual_arms(angle.unwrap(), requested_arms) != actual_arms(arm_deg, arm_pose)
                 || first.triangles != next_body.triangles
                 || first.vertices.len() != next_body.vertices.len()
                 || first
@@ -205,10 +223,11 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
                     .any(|(a, b)| (*a - *b).norm() > 1e-9)
             {
                 return Err(bad_input("outfit drapes use different body geometry or poses; no garment was moved or refitted")
-                    .repair("drape all garments with the same measurements, model and --arm-deg"));
+                    .repair("drape all garments with the same measurements, model and arm pose (--arm-deg or the complete --left-arm-deg / --right-arm-deg pair)"));
             }
         } else {
             arm_deg = angle.unwrap();
+            arm_pose = requested_arms;
             vertices += next_body.vertices.len();
             faces += next_body.triangles.len();
             body = Some(next_body);
@@ -247,6 +266,7 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
         hat: None,
         measurements_sha256,
         arm_deg,
+        arm_pose,
         flagged,
     })
 }
@@ -367,12 +387,20 @@ fn review(report: &Value) -> String {
     } else {
         ""
     };
+    let arms = if let Some(pair) = report["pose"].get("arm_pose") {
+        format!(
+            "left {} degrees, right {} degrees",
+            pair["left_abduction_deg"], pair["right_abduction_deg"]
+        )
+    } else {
+        format!("{} degrees", report["pose"]["arm_deg"])
+    };
     let _ = write!(
         html,
-        "<aside>{}</aside><p>Status: <strong>{}</strong>. Arms: {} degrees. No garment positions were changed.{}</p><section>",
+        "<aside>{}</aside><p>Status: <strong>{}</strong>. Arms: {}. No garment positions were changed.{}</p><section>",
         xml_escape(NOTE),
         xml_escape(report["status"].as_str().unwrap()),
-        report["pose"]["arm_deg"],
+        arms,
         shading_note
     );
     for (name, _) in VIEWS {
@@ -456,6 +484,9 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "colour_mode":if args.options.contains_key("seams"){"seams"}else{"plain"},"shading":shading.name(),
         "garments":outfit.garments.iter().map(|g| &g.record).collect::<Vec<_>>(),
         "width":width,"height":height,"stills":{},"report":"report.html","hat":outfit.hat.as_ref().map(|(_,report)|report),"turntable":null,"inter_garment_contact":"not_simulated"});
+    if let Some(arms) = outfit.arm_pose {
+        report["pose"]["arm_pose"] = json!(arms);
+    }
     for (name, _) in VIEWS {
         report["stills"][name] = json!(format!("outfit_{name}.png"));
     }

@@ -700,8 +700,12 @@ impl Session {
                     frames: &frames,
                     collision: (&collision, &body.collision.triangles),
                     display: (&display, &body.display.triangles),
-                    // The report's single pose angle; the arms may differ, and each is placed by its own frame.
+                    // Retain the legacy common angle for equal arms, and the exact pair when they differ.
                     arm_deg: left_deg.max(right_deg),
+                    arm_pose: (left_deg != right_deg).then_some(ftx_body::drape::ArmPose {
+                        left_abduction_deg: left_deg,
+                        right_abduction_deg: right_deg,
+                    }),
                 },
                 &options,
                 &mut progress,

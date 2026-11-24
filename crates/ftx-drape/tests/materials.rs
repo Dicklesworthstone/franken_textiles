@@ -90,6 +90,7 @@ fn gravity_only_drape_counts_the_first_step_when_a_band_slides() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 24.,
@@ -149,6 +150,7 @@ fn invalid_wrap_inputs_refuse_before_relaxation_or_stepping() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     for (key, value, message) in [
         ("radius_mm", json!(0), "wrap radius"),
@@ -191,6 +193,7 @@ fn ordinary_subdivision_preserves_sewn_frames_and_shares_trials_with_settling() 
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern = band(json!({"material":record(1.)}));
     let options = DrapeOptions {
@@ -284,6 +287,7 @@ fn qualification_identity_tracks_the_actual_body_and_hidden_material_properties(
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let pattern = band(json!({"material":record(1.0)}));
     let options = DrapeOptions::default();
@@ -367,6 +371,7 @@ fn bounded_settling_replays_the_exact_source_bound_gravity_trajectory() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern = band(json!({"material":record(1.)}));
     let options = DrapeOptions {
@@ -440,6 +445,7 @@ fn bounded_settling_stops_at_the_first_quiet_window_on_a_supporting_cone() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern = band(json!({"material":record(1.)}));
     let options = DrapeOptions {
@@ -502,6 +508,7 @@ fn bounded_settling_finishes_the_body_offset_even_when_the_garment_is_quiet() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     // A loose synthetic band has room for this declared offset. The short explicit time step
     // keeps its endpoint speeds quiet while the bounded offset continuation is still running.
@@ -598,6 +605,7 @@ fn independent_static_equilibrium_preserves_the_dynamic_garment_and_continuation
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern = band(json!({"material":record(1.)}));
     let options = DrapeOptions {
@@ -682,6 +690,7 @@ fn refused_static_equilibrium_publishes_no_trial_and_keeps_the_complete_dynamic_
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern = band(json!({"material":record(1.)}));
     let options = DrapeOptions {
@@ -772,6 +781,7 @@ fn static_drape_refuses_invalid_colliders_before_placement_or_solver_work() {
             collision: (&vertices, &triangles),
             display: (&valid.vertices, &valid.triangles),
             arm_deg: 35.0,
+            arm_pose: None,
         };
         for fabric in [json!({}), json!({"material":record(1.0)})] {
             let pattern = band(fabric);
@@ -876,6 +886,7 @@ fn body_only_drape_does_not_invent_or_require_self_friction() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 24.0,
@@ -920,6 +931,7 @@ fn the_real_drape_changes_when_only_material_observations_change() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 24.0,
@@ -1114,6 +1126,7 @@ fn swatch_identification_reaches_real_sewn_band_dynamics_without_pattern_edits()
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 24.0,
@@ -1203,6 +1216,7 @@ fn narrow_swatch_cannot_silently_extrapolate_during_sewn_scene_construction() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let options = DrapeOptions {
         spacing: 24.,
@@ -1236,6 +1250,7 @@ fn nonlinear_identification_changes_actual_sewn_dynamics_without_geometry_or_mas
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 24.0,

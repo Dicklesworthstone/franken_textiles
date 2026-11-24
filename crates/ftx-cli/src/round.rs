@@ -81,6 +81,8 @@ const SIM_OPTIONS: &[&str] = &[
     "self-contact-mm",
     "self-mu",
     "arm-deg",
+    "left-arm-deg",
+    "right-arm-deg",
     "thumb-pose",
     "legs",
     "leg-fraction",
@@ -442,6 +444,8 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "self-contact-mm",
             "self-mu",
             "arm-deg",
+            "left-arm-deg",
+            "right-arm-deg",
             "thumb-pose",
             "legs",
             "leg-fraction",
@@ -908,6 +912,10 @@ fn simulate(
             if let Some(thumbs) = super::parse_thumb_pose(args)? {
                 report["body"] = json!({"thumb_pose": thumbs});
             }
+            if let Some(arms) = super::drape_pose(args)?.arm_pose {
+                report["arm_pose"] = json!(arms);
+                report["body"]["arm_pose"] = json!(arms);
+            }
             write_json(&rd.join("sim_failure.json"), &report)?;
             Ok((
                 Some(report),
@@ -1001,6 +1009,8 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             "model",
             "body-fit",
             "arm-deg",
+            "left-arm-deg",
+            "right-arm-deg",
             "thumb-pose",
             "legs",
             "leg-fraction",
@@ -1129,11 +1139,13 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     let chest_girth_residual_mm = input_chest_mm.map(|target| chest_girth_mm - target);
     let wearer_target_aligned = chest_girth_residual_mm
         .is_some_and(|r| r.abs() <= ftx_drape::qualify::MAX_QUALIFIED_GIRTH_RESIDUAL_MM);
+    let posed_frames = ftx_drape::scene::PosedFrames::new(&frames, pose.arm_pose);
     let body = DrapeBody {
-        frames: &frames,
+        frames: &posed_frames,
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
+        arm_pose: pose.arm_pose,
     };
     let out = if let Some(ws) = ws_arg.as_deref() {
         regular(&published, true)?;
@@ -1144,6 +1156,9 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         published.clone()
     };
     let mut authored_pose = serde_json::Map::new();
+    if let Some(arms) = pose.arm_pose {
+        authored_pose.insert("arm_pose".into(), json!(arms));
+    }
     if let Some(thumbs) = thumbs {
         authored_pose.insert("thumb_pose".into(), json!(thumbs));
     }
@@ -1205,7 +1220,10 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
                     json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
                 );
                 let mut b = description.clone();
-                b.insert("pose".into(), json!(hands.drape_pose_line(body.arm_deg)));
+                b.insert(
+                    "pose".into(),
+                    json!(hands.drape_pose_line_with_arms(body.arm_deg, body.arm_pose)),
+                );
                 if !pose.legs.is_standing() {
                     b.insert("legs".into(), json!(pose.legs));
                 }

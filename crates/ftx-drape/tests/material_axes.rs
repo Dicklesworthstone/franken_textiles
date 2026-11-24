@@ -79,6 +79,7 @@ fn both_grain_encodings_drive_the_same_actual_orthotropic_drape() {
         collision: (&surface.vertices, &surface.triangles),
         display: (&surface.vertices, &surface.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 24.0,

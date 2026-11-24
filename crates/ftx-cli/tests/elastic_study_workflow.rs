@@ -273,6 +273,7 @@ fn production_study_changes_only_one_bands_force_and_joint_dynamics_then_replays
         collision: (&skin.vertices, &skin.triangles),
         display: (&skin.vertices, &skin.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let request: Request = serde_json::from_value(study()).unwrap();
     let mut runs = Vec::new();

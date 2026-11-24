@@ -271,8 +271,8 @@ function bodyDependentStudies(id) {
   const mode = studyBodyMode();
   const used = id === "body" || (id === "scenarioBody" && mode === "request") ||
     (id === "measurements" && ["measurements", "accepted", "preview"].includes(mode)) ||
-    (["bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose"].includes(id) && mode === "preview") ||
-    (["bodyFitFile", "bodyFitConsent", "bodyArmDeg", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose"].includes(id) && mode === "accepted");
+    (["bodyArmDeg", "drapeIndependentArms", "drapeArmLeft", "drapeArmRight", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose"].includes(id) && mode === "preview") ||
+    (["bodyFitFile", "bodyFitConsent", "bodyArmDeg", "drapeIndependentArms", "drapeArmLeft", "drapeArmRight", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose"].includes(id) && mode === "accepted");
   return used ? ["scenario", ...(studyUsesBody() || (id === "body" && savedStudy?.request.onBody) ? ["study"] : [])] : [];
 }
 function guidedSourceStudies(id) {
@@ -5258,6 +5258,7 @@ function show(op, msg, request) {
         legs: r.body?.legs || "standing", leg_fraction: r.body?.leg_fraction ?? 1,
         ...(r.body?.skinning ? { skinning: r.body.skinning } : {}),
         ...(r.hand_collider ? { hand_collider: r.hand_collider } : {}),
+        ...(r.arm_pose || r.body?.arm_pose ? { arm_pose: r.arm_pose ?? r.body.arm_pose } : {}),
         ...(r.body?.thumb_pose ? { thumb_pose: r.body.thumb_pose } : {}),
         ...(r.body?.authored_hand_surface_pairs_tested !== undefined ? { authored_hand_surface_pairs_tested: r.body.authored_hand_surface_pairs_tested } : {}),
         ...(r.numerical?.newton_strategy ? { newton_strategy: r.numerical.newton_strategy } : {}),
@@ -6171,6 +6172,34 @@ function setRealismOptions(settings) {
   $("drapeRepulsionPeriod").value = String(r.start_self_repulsion?.period ?? 5);
   $("drapeRepulsionMaxChecks").value = String(r.start_self_repulsion?.max_candidate_checks ?? 32000000);
 }
+function checkedArmPose(value) {
+  if (value === undefined) return undefined;
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+  if (!keys || keys.length !== 2 || !Object.hasOwn(value, "left_abduction_deg") || !Object.hasOwn(value, "right_abduction_deg") ||
+      [value.left_abduction_deg, value.right_abduction_deg].some(angle => !Number.isFinite(angle) || angle < 0 || angle > 180)) {
+    throw Error("Independent arm pose needs only finite left_abduction_deg and right_abduction_deg from 0 to 180 degrees.");
+  }
+  return { left_abduction_deg: value.left_abduction_deg, right_abduction_deg: value.right_abduction_deg };
+}
+function drapeArmPose() {
+  if (!$("drapeIndependentArms").checked) return undefined;
+  const left = $("drapeArmLeft").value.trim(), right = $("drapeArmRight").value.trim();
+  if (!left || !right) throw Error("Supply both independent arm angles from 0 to 180 degrees.");
+  return checkedArmPose({ left_abduction_deg: Number(left), right_abduction_deg: Number(right) });
+}
+function armPoseControls() {
+  const enabled = $("drapeIndependentArms").checked;
+  $("drapeArmPoseFields").hidden = !enabled;
+  for (const id of ["drapeArmLeft", "drapeArmRight"]) $(id).disabled = !enabled;
+  $("bodyArmDeg").disabled = enabled;
+}
+function setArmPose(value) {
+  const arms = checkedArmPose(value);
+  $("drapeIndependentArms").checked = arms !== undefined;
+  $("drapeArmLeft").value = String(arms?.left_abduction_deg ?? 35);
+  $("drapeArmRight").value = String(arms?.right_abduction_deg ?? 35);
+  armPoseControls();
+}
 function checkedThumbPose(value) {
   if (value === undefined) return undefined;
   const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
@@ -6240,7 +6269,9 @@ function section3Pose() {
   if (!["lbs", "dqs"].includes(skinning)) throw Error("Choose lbs or dqs skinning.");
   if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) throw Error("Choose wrist, palm, knuckle or full hand collider.");
   const thumbPose = drapeThumbPose();
+  const armPose = drapeArmPose();
   const pose = { arm_abduction_deg: angle, legs: $("drapeLegs").value, leg_fraction: Number(fraction),
+    ...(armPose !== undefined ? { arm_pose: armPose } : {}),
     ...(skinning !== "lbs" ? { skinning } : {}),
     ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}),
     ...(thumbPose !== undefined ? { thumb_pose: thumbPose } : {}) };
@@ -6265,6 +6296,7 @@ async function studyBodyInput(msg) {
   if (!$("bodyFitConsent").checked) throw Error("Associate the accepted fit with this wearer before running body-dependent studies.");
   const pose = section3Pose(), angle = pose.arm_abduction_deg, fit = await read("bodyFitFile");
   const extra = {
+    ...(pose.arm_pose ? { arm_pose: pose.arm_pose } : {}),
     ...(pose.legs !== "standing" ? { legs: pose.legs } : {}),
     ...(pose.leg_fraction !== 1 ? { leg_fraction: pose.leg_fraction } : {}),
     ...(pose.skinning ? { skinning: pose.skinning } : {}),
@@ -7900,11 +7932,13 @@ async function execute(op, studio = null) {
         const handCollider = $("drapeHands").value;
         if (!["wrist", "palm", "knuckle", "full"].includes(handCollider)) throw Error("Choose wrist, palm, knuckle or full hand collider.");
         const thumbPose = drapeThumbPose();
+        const armPose = drapeArmPose();
         msg.legs = $("drapeLegs").value;
         msg.legFraction = Number($("drapeLegFraction").value);
         msg.skinning = skinning;
         if (handCollider !== "wrist") msg.handCollider = handCollider;
         if (thumbPose !== undefined) msg.thumbPose = thumbPose;
+        if (armPose !== undefined) msg.armPose = armPose;
         msg.maxSettleSteps = Number($("maxSettleSteps").value);
         const subdivision = drapeTimeSubdivision();
         if (subdivision !== undefined) msg.timeSubdivision = subdivision;
@@ -7980,6 +8014,7 @@ async function execute(op, studio = null) {
           ...(msg.skinning !== "lbs" ? { skinning: msg.skinning } : {}),
           ...(msg.handCollider !== undefined ? { hand_collider: msg.handCollider } : {}),
           ...(msg.thumbPose !== undefined ? { thumb_pose: msg.thumbPose } : {}),
+          ...(msg.armPose !== undefined ? { arm_pose: { ...msg.armPose } } : {}),
           ...(msg.timeSubdivision !== undefined ? { time_subdivision: msg.timeSubdivision } : {}),
           ...(msg.newtonStrategy !== undefined ? { newton_strategy: msg.newtonStrategy } : {}),
           ...(msg.integrator !== undefined ? { integrator: msg.integrator } : {}),
@@ -9208,6 +9243,13 @@ for (const id of ["bodyFitConsent", "bodyArmDeg"]) {
     invalidate([...(id === "bodyFitConsent" ? ["bodyCheck"] : []), "fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
   });
 }
+for (const id of ["drapeIndependentArms", "drapeArmLeft", "drapeArmRight"]) {
+  for (const event of ["input", "change"]) $(id).addEventListener(event, () => {
+    armPoseControls();
+    ++roundRead; roundToken = null; window.opener = null;
+    invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
+  });
+}
 $("clearBodyFit").onclick = () => {
   ++roundRead; roundToken = null; window.opener = null;
   $("bodyFitFile").value = ""; roundFiles.delete("bodyFitFile"); $("bodyFitConsent").checked = false;
@@ -9328,6 +9370,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       checkedDrapeSchedule(settings);
       checkedStaticEquilibrium(settings?.static_equilibrium);
       checkedThumbPose(settings?.thumb_pose);
+      checkedArmPose(settings?.arm_pose);
       checkedRealismOptions(settings);
       const hasArm = settings !== undefined && Object.hasOwn(settings, "arm_abduction_deg");
       if (hasArm && (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180)) {
@@ -9370,6 +9413,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       for (const [id, raw] of files) roundFiles.set(id, raw);
       if (files.has("fit")) $("fitSource").value = "file";
       $("bodyArmDeg").value = String(hasArm ? settings.arm_abduction_deg : context?.fit ? context.armDeg : 35);
+      setArmPose(settings?.arm_pose);
       if (settings !== undefined) {
         $("selfContact").checked = settings.self_contact_mm === 2; $("twoStart").checked = settings.two_start;
         $("drapeLegs").value = settings.legs; $("drapeLegFraction").value = String(settings.leg_fraction);

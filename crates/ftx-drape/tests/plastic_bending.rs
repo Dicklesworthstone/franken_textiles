@@ -429,6 +429,7 @@ fn ordinary_sewn_drape_selects_per_piece_crease_history_and_body_motion_retains_
         collision: (&vertices, &triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 10.,

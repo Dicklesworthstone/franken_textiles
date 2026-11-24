@@ -23,6 +23,14 @@ const text = (bytes) => (bytes ? new TextDecoder().decode(bytes) : null);
 // Python truthiness, as webapp.py's has_fold_up reads a placement: {} and [] are false
 const truthy = (v) => !(v === null || v === undefined || v === false || v === 0 || v === ""
   || (Array.isArray(v) && v.length === 0) || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0));
+function checkedArmPose(value) {
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+  if (!keys || keys.length !== 2 || !Object.hasOwn(value, "left_abduction_deg") || !Object.hasOwn(value, "right_abduction_deg") ||
+      [value.left_abduction_deg, value.right_abduction_deg].some(angle => !Number.isFinite(angle) || angle < 0 || angle > 180)) {
+    throw Error("Independent arm pose needs only finite left_abduction_deg and right_abduction_deg from 0 to 180 degrees.");
+  }
+  return { left_abduction_deg: value.left_abduction_deg, right_abduction_deg: value.right_abduction_deg };
+}
 function checkedThumbPose(value) {
   const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
   if (!keys || keys.length !== 2 || !Object.hasOwn(value, "left_rotation_vector_rad") || !Object.hasOwn(value, "right_rotation_vector_rad")) {
@@ -187,7 +195,8 @@ onmessage = async (ev) => {
         leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,
         ...(skinning !== "lbs" ? { skinning } : {}),
         ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}),
-        ...(msg.thumbPose !== undefined ? { thumb_pose: checkedThumbPose(msg.thumbPose) } : {}) };
+        ...(msg.thumbPose !== undefined ? { thumb_pose: checkedThumbPose(msg.thumbPose) } : {}),
+        ...(msg.armPose !== undefined ? { arm_pose: checkedArmPose(msg.armPose) } : {}) };
       if (!["standing", "seated", "squat"].includes(settings.legs) ||
           !Number.isFinite(settings.leg_fraction) || settings.leg_fraction < 0 || settings.leg_fraction > 1) {
         throw new Error("Choose standing, seated or squat legs and a finite leg fraction from 0 to 1.");
@@ -485,7 +494,7 @@ onmessage = async (ev) => {
       }
       const configured = (!imported && armDeg !== 35) ||
         settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
-        handCollider !== "wrist" || settings.thumb_pose !== undefined ||
+        handCollider !== "wrist" || settings.thumb_pose !== undefined || settings.arm_pose !== undefined ||
         settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
         settings.newton_strategy !== undefined || settings.integrator !== undefined ||
         settings.step_s !== undefined || settings.sew_steps !== undefined ||

@@ -104,6 +104,7 @@ fn run(p: &Pattern, opts: DrapeOptions) -> DrapeRun {
             collision: (&b.vertices, &b.triangles),
             display: (&b.vertices, &b.triangles),
             arm_deg: 35.,
+            arm_pose: None,
         },
         &opts,
         |_| {},

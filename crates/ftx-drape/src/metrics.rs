@@ -47,6 +47,8 @@ pub struct MetricsInput<'a> {
     pub spacing: f64,
     /// Arm abduction of the pose (degrees, for the ride-up text).
     pub arm_deg: f64,
+    /// Exact independent arm angles, overriding the common angle in pose-dependent text.
+    pub arm_pose: Option<ftx_body::drape::ArmPose>,
 }
 
 fn norm(d: Vec3) -> f64 {
@@ -505,11 +507,20 @@ pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {
         flags.insert(0, f.clone());
         gating.insert(0, f);
     } else if !torso_rise.is_empty() && mean(&torso_rise) > 25.0 {
+        let arms = input.arm_pose.map_or_else(
+            || format!("arms at {}°", fixed(input.arm_deg, 0)),
+            |arms| {
+                format!(
+                    "left arm at {}° and right arm at {}°",
+                    fixed(arms.left_abduction_deg, 0),
+                    fixed(arms.right_abduction_deg, 0),
+                )
+            },
+        );
         flags.push(format!(
-            "the body rides up {} mm with arms at {}° (set-in sleeve pulls the side up; a lower cap or more \
+            "the body rides up {} mm with {arms} (set-in sleeve pulls the side up; a lower cap or more \
              underarm room frees the arm)",
             fixed(mean(&torso_rise), 0),
-            fixed(input.arm_deg, 0)
         ));
     }
 
@@ -671,6 +682,7 @@ mod pleat_band_slide_tests {
                 fit_spec: &json!({"points":[]}),
                 spacing: 10.0,
                 arm_deg: 35.0,
+                arm_pose: None,
             },
         )
     }
@@ -792,6 +804,7 @@ mod girth_coverage_tests {
                 fit_spec: &json!({"points":[point]}),
                 spacing: 10.0,
                 arm_deg: 35.0,
+                arm_pose: None,
             },
         )
     }
@@ -827,6 +840,68 @@ mod girth_coverage_tests {
                 .unwrap()
                 .contains(gate)
         );
+    }
+
+    #[test]
+    fn ride_up_diagnostics_retain_each_authored_initial_arm_angle() {
+        let mut raw = pattern(false).raw().clone();
+        raw["pieces"][0]["edges"][0]["id"] = json!("hem");
+        let pattern = Pattern::new(raw);
+        let mesh = build_garment(&pattern, 10.).unwrap();
+        let wrapped: Vec<_> = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * MM, p.y * MM, 0.5))
+            .collect();
+        let raised: Vec<_> = wrapped
+            .iter()
+            .map(|p| *p + Vec3::new(0., 0., 0.05))
+            .collect();
+        let seq = vec![raised; MIN_FRAMES];
+        let body = NearestTree::new(
+            vec![
+                Vec3::new(-1., -1., 0.),
+                Vec3::new(3., -1., 0.),
+                Vec3::new(-1., 3., 0.),
+            ],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        for (arm_pose, description) in [
+            (None, "with arms at 35°"),
+            (
+                Some(ftx_body::drape::ArmPose {
+                    left_abduction_deg: 70.,
+                    right_abduction_deg: 25.,
+                }),
+                "with left arm at 70° and right arm at 25°",
+            ),
+        ] {
+            let report = metrics(
+                &mesh,
+                &MetricsInput {
+                    pattern: &pattern,
+                    seq: &seq,
+                    start: &wrapped,
+                    after_sew: &wrapped,
+                    wrapped: &wrapped,
+                    body: &body,
+                    level_y: &|_, _| None,
+                    fit_spec: &json!({"points":[]}),
+                    spacing: 10.,
+                    arm_deg: 35.,
+                    arm_pose,
+                },
+            );
+            assert!(
+                report["flags"].as_array().unwrap().iter().any(|flag| {
+                    flag.as_str()
+                        .unwrap()
+                        .contains(&format!("the body rides up 50 mm {description}"))
+                }),
+                "{report}"
+            );
+        }
     }
 
     #[test]
@@ -969,6 +1044,7 @@ mod girth_coverage_tests {
                 fit_spec: &json!({"points": []}),
                 spacing: 10.0,
                 arm_deg: 35.0,
+                arm_pose: None,
             },
         );
         assert_eq!(

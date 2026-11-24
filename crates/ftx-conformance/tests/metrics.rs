@@ -152,6 +152,7 @@ fn metrics_match_the_reference() {
                 fit_spec: spec,
                 spacing: inp["spacing"].as_f64().unwrap(),
                 arm_deg: inp["arm_deg"].as_f64().unwrap(),
+                arm_pose: None,
             },
         );
         let want = &case["output"]["report"];

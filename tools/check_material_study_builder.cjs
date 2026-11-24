@@ -4862,6 +4862,22 @@ test('saved study accepted-fit pose metadata validates, freezes and refuses inva
   assert.equal(thumbAccepted.request.measurementAcceptedPose.thumb_pose.left_rotation_vector_rad[1],-0.35);
   const thumbPreview=parse(build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,thumb_pose:{left_rotation_vector_rad:[0,-0.2,0],right_rotation_vector_rad:[0,0.2,0]}}},workbenchModel()));
   assert.deepEqual(JSON.parse(JSON.stringify(thumbPreview.request.measurementPose.thumb_pose)),{left_rotation_vector_rad:[0,-0.2,0],right_rotation_vector_rad:[0,0.2,0]});
+  const arms={left_abduction_deg:15,right_abduction_deg:85};
+  const armsAccepted=parse(build({...base,measurementAcceptedPose:{arm_pose:arms}},workbenchModel()));
+  const armsPreview=parse(build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,arm_pose:arms}},workbenchModel()));
+  for (const pose of [armsAccepted.request.measurementAcceptedPose,armsPreview.request.measurementPose]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(pose.arm_pose)),arms);
+    assert.equal(Object.isFrozen(pose.arm_pose),true);
+  }
+  arms.left_abduction_deg=90;
+  assert.equal(armsAccepted.request.measurementAcceptedPose.arm_pose.left_abduction_deg,15);
+  assert.equal(armsPreview.request.measurementPose.arm_pose.left_abduction_deg,15);
+  for (const arm_pose of [null,{},[],{left_abduction_deg:15},{left_abduction_deg:15,right_abduction_deg:85,extra:true},
+    {left_abduction_deg:-1,right_abduction_deg:85},{left_abduction_deg:15,right_abduction_deg:181},
+    {left_abduction_deg:NaN,right_abduction_deg:85},{left_abduction_deg:15,right_abduction_deg:'85'}]) {
+    assert.throws(()=>build({...base,measurementAcceptedPose:{arm_pose}},workbenchModel()));
+    assert.throws(()=>build({...previewBase,measurementPose:{arm_abduction_deg:40,legs:'standing',leg_fraction:1,arm_pose}},workbenchModel()));
+  }
   for(const bad of [
     {...base,measurementAcceptedPose:{}},
     {...base,measurementAcceptedPose:{legs:'kneeling'}},

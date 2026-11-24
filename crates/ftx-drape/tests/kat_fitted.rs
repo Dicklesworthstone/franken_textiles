@@ -84,6 +84,7 @@ fn drape_result_with_targets(
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: Pose::A_POSE_DEG,
+        arm_pose: None,
     };
     drape(
         &Pattern::new(case["input"]["pattern"].clone()),
@@ -469,6 +470,7 @@ fn kat9_fitted_pipeline_digest() {
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: Pose::A_POSE_DEG,
+        arm_pose: None,
     };
     // the shipped solver settings (tolerance, inexact Newton), shortened schedule
     let opts = DrapeOptions {

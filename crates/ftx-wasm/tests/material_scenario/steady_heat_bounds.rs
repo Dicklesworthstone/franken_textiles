@@ -9,6 +9,7 @@ fn production_radiation_ranges_reach_studies_with_frozen_replay_and_source_refus
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut request = request();
     request.variants.truncate(2);
@@ -175,6 +176,7 @@ fn production_surface_and_coverage_ranges_admit_signed_decisions_and_frozen_repl
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut request = request();
     request.variants.truncate(2);

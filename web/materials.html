@@ -471,8 +471,14 @@ material binding is needed. Comparisons use the model's measurement pose; drape 
 Predictions remain MODEL_FIT. Differences, missing sections and a successful check do not establish readiness or physical fit.</p>
 <label><input id="selfContact" type="checkbox" checked> Request 2 mm cloth clearance (joint outfits require pair evidence)</label>
 <label>Drape arm angle (degrees) <input id="bodyArmDeg" type="number" min="0" max="180" step="any" value="35"></label>
+<label><input id="drapeIndependentArms" type="checkbox"> Use independent initial arm angles</label>
+<div id="drapeArmPoseFields" hidden>
+<label>Wearer's left arm (degrees) <input id="drapeArmLeft" type="number" min="0" max="180" step="any" value="35" disabled></label>
+<label>Wearer's right arm (degrees) <input id="drapeArmRight" type="number" min="0" max="180" step="any" value="35" disabled></label>
+</div>
 <p class="note">Applies to tape-fitted or accepted shapes. The default is 35°. Body checks and tape fitting retain their measurement pose;
-studies below use their separately selected body source.</p>
+studies below use their separately selected body source. Independent angles replace the common angle, measured from vertical
+on the wearer's left and right. Select the preview or accepted body source below to use these initial angles in a study.</p>
 <label>Leg posture <select id="drapeLegs"><option value="standing">Standing</option><option value="seated">Seated</option><option value="squat">Squat</option></select></label>
 <label>Leg fraction (0–1) <input id="drapeLegFraction" type="number" min="0" max="1" step="0.05" value="1"></label>
 <label>Skinning <select id="drapeSkinning"><option value="lbs">LBS (Anny default)</option><option value="dqs">DQS (dual-quaternion)</option></select></label>

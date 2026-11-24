@@ -335,6 +335,22 @@ whole-motion choice, and saved named cases retain it. Successful results record 
 `carry_radius_m`; motion-dependent comparisons reject missing, altered or injected policy
 metadata while preserving independently available initial-drape and manufacturing readings.
 
+An initial `ftx-scenario-body/1` request may also supply a complete optional pair:
+
+```json
+"arm_abduction_deg": 35.0,
+"arm_pose": {"left_abduction_deg": 30.0, "right_abduction_deg": 70.0}
+```
+
+The pair overrides the common angle. Both values must be finite and in 0..=180 degrees;
+null, a missing side or an invalid value refuses. Distinct angles select each physical
+limb's placement frame, including generated sleeve pairs. Omission and equal pairs keep
+the symmetric placement convention. Body geometry, reports and scenario identity retain
+the requested pose, while the fitted shape and reference tape readings remain fixed.
+The first motion segment interpolates from these actual initial angles. In both workbenches,
+the independent initial-arm controls retain this pair in previews, transfers and saved cases.
+Accepted photo-fit reports supply shape only; their capture poses are not reused as garment poses.
+
 For independent arm movement, supply the complete optional `arm_pose` pair at an endpoint:
 
 ```json

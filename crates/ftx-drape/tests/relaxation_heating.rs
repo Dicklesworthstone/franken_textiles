@@ -114,6 +114,7 @@ fn evaluate_unchecked(s: &Scenario, p: &Pattern) -> Value {
         collision: (&vertices, &triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let target = vertices
         .iter()

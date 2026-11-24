@@ -59,6 +59,7 @@ fn kat7_elastic_ladder() {
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: Pose::A_POSE_DEG,
+        arm_pose: None,
     };
     let waist = meas["fused"]["waist"]["value_mm"].as_f64().unwrap();
     let rungs = [0.85, 0.95, 1.0, 1.2];

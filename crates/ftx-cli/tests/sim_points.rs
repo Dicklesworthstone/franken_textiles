@@ -180,7 +180,8 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
             "settled": true,
             "gating": [],
             "advisory": ["minor shift"],
-            "arm_deg": 35.0
+            "arm_deg": 35.0,
+            "arm_pose": {"left_abduction_deg":20.0,"right_abduction_deg":80.0}
         }),
     );
     let mut garment_obj = String::new();
@@ -211,10 +212,33 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
     assert!(html.contains("data:text/javascript;base64,"));
     assert!(html.contains("Copyright © 2010-2023 three.js authors"));
     assert!(!html.contains("https://cdn.jsdelivr.net/"));
+    let (_, data) = html.split_once("\nconst D = ").unwrap();
+    let (data, _) = data.split_once(";\nconst $ = ").unwrap();
+    let view: Value = serde_json::from_str(data).unwrap();
+    assert_eq!(
+        view["report"]["arm_pose"],
+        json!({"left_abduction_deg":20.0,"right_abduction_deg":80.0})
+    );
+    assert!(html.contains("left arm ${r.arm_pose.left_abduction_deg}°"));
     println!(
         "viewer fixture: {}",
         dir.join("sim/fold_viewer.html").display()
     );
+
+    for arms in [
+        Value::Null,
+        json!({"left_abduction_deg":20.0}),
+        json!({"left_abduction_deg":20.0,"right_abduction_deg":181.0}),
+    ] {
+        save(&dir.join("sim/sim_report.json"), &json!({"arm_pose":arms}));
+        let invalid = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", "sim", "--out", "invalid-pose.html", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(invalid.status.code(), Some(3));
+        assert!(!dir.join("invalid-pose.html").exists());
+    }
 
     // A contact-protected historical cache has no panel-station marker. Its first
     // four display frames must stay on the board. The retained solver suffix is f32.

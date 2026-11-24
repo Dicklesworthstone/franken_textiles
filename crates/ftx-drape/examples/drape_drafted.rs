@@ -122,6 +122,7 @@ fn main() {
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
+        arm_pose: None,
     };
     let t0 = Instant::now();
     let mut run = drape(&pattern, &case["input"]["fit_spec"], &body, &opts, |line| {

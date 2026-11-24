@@ -255,6 +255,7 @@ fn run_jacket(pattern: &Pattern, opts: &DrapeOptions) -> DrapeRun {
             collision: (&b.vertices, &b.triangles),
             display: (&b.vertices, &b.triangles),
             arm_deg: 35.0,
+            arm_pose: None,
         },
         opts,
         |_| {},

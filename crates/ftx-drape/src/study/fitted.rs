@@ -1,6 +1,7 @@
 //! Fit one Anny body once for an entire material study, using the existing production pose pipeline.
 use std::collections::BTreeMap;
 
+use ftx_body::drape::ArmPose;
 use ftx_body::{
     Affine, AnnyModel, BodyFrames, BodyParams, DEFAULT_POSE_AUDIT_PAIR_BUDGET, HandCollider, Legs,
     NappyOccupancy, Pose, RestBody, SkinMesh, SkinningMode, TAPE_FIELDS, ThumbPose, Wearer,
@@ -32,6 +33,10 @@ pub struct BodyRequest {
     /// Straight-arm abduction from vertical, degrees in 0..=180. Not a motion trajectory.
     #[serde(default = "default_arm_angle")]
     pub arm_abduction_deg: f64,
+    /// Optional absolute left/right arm abductions, overriding the common angle above.
+    /// Omission preserves the symmetric pose and reference mirror placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm_pose: Option<ArmPose>,
     /// Selected leg posture, independent of arm abduction. Omission preserves standing.
     #[serde(default, skip_serializing_if = "Legs::is_standing")]
     pub legs: Legs,
@@ -93,12 +98,18 @@ impl BodyRequest {
                         "an explicit thumb_pose must be a valid left/right rotation object",
                     ));
                 }
+                if input.get("arm_pose").is_some_and(Value::is_null) {
+                    return Err(invalid(
+                        "an explicit arm_pose must contain valid left/right abduction angles",
+                    ));
+                }
                 serde_json::from_value::<Self>(input.clone()).map_err(|e| invalid(e.to_string()))?
             }
             None | Some("fabric-measurements/1") => {
                 if [
                     "accepted_body_fit",
                     "arm_abduction_deg",
+                    "arm_pose",
                     "legs",
                     "leg_fraction",
                     "skinning",
@@ -118,6 +129,7 @@ impl BodyRequest {
                     measurements: input.clone(),
                     accepted_body_fit: None,
                     arm_abduction_deg: default_arm_angle(),
+                    arm_pose: None,
                     legs: Legs::Standing,
                     leg_fraction: 1.0,
                     skinning: SkinningMode::LinearBlend,
@@ -152,6 +164,9 @@ impl BodyRequest {
         }
         if !(0.0..=1.0).contains(&self.leg_fraction) {
             return Err(invalid("scenario leg fraction must be finite and in 0..=1"));
+        }
+        if let Some(arms) = &self.arm_pose {
+            arms.validate()?;
         }
         if let Some(thumbs) = &self.thumb_pose {
             thumbs.validate()?;
@@ -227,6 +242,26 @@ pub struct FittedBody {
     flat_source: Value,
     /// Actual body-fitting residuals and source identity; the fit is model-derived, not measured.
     pub report: Value,
+}
+
+impl crate::scene::PartFrames for FittedBody {
+    fn frame(&self, part: &str) -> Option<crate::start::PartFrame> {
+        crate::scene::PosedFrames::new(&self.frames, self.initial_pose.arm_pose).frame(part)
+    }
+
+    fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+        crate::scene::PosedFrames::new(&self.frames, self.initial_pose.arm_pose)
+            .landmark_h(part, name)
+    }
+
+    fn section_radius(&self, part: &str, h: f64) -> f64 {
+        crate::scene::PosedFrames::new(&self.frames, self.initial_pose.arm_pose)
+            .section_radius(part, h)
+    }
+
+    fn independent_limbs(&self) -> bool {
+        crate::scene::PosedFrames::new(&self.frames, self.initial_pose.arm_pose).independent_limbs()
+    }
 }
 
 /// Flat-pattern measurement authority from one selected model shape in its source measurement pose.
@@ -326,6 +361,7 @@ impl FittedBody {
             measurements: measurements.clone(),
             accepted_body_fit: None,
             arm_abduction_deg: default_arm_angle(),
+            arm_pose: None,
             legs: Legs::Standing,
             leg_fraction: 1.0,
             skinning: SkinningMode::LinearBlend,
@@ -358,6 +394,7 @@ impl FittedBody {
             .map_or(&params, |occupied| &occupied.params);
         let mut pose = Pose::drape();
         pose.arm_abduction_deg = Some(request.arm_abduction_deg);
+        pose.arm_pose = request.arm_pose;
         pose.legs = request.legs;
         pose.leg_fraction = request.leg_fraction;
         let rest = model.rest(occupied_params)?;
@@ -405,6 +442,9 @@ impl FittedBody {
         }
         report["pose"] =
             json!({"kind":"standing_straight_arm", "arm_abduction_deg":request.arm_abduction_deg});
+        if let Some(arms) = request.arm_pose {
+            report["pose"]["arm_pose"] = json!(arms);
+        }
         if !request.legs.is_standing() {
             report["pose"]["kind"] = json!("straight_arm_with_leg_posture");
             report["pose"]["legs"] = json!(request.legs);
@@ -647,10 +687,11 @@ impl FittedBody {
     #[must_use]
     pub fn body(&self) -> DrapeBody<'_> {
         DrapeBody {
-            frames: &self.frames,
+            frames: self,
             collision: (&self.collision.vertices, &self.collision.triangles),
             display: (&self.display.vertices, &self.display.triangles),
             arm_deg: self.arm_deg,
+            arm_pose: self.initial_pose.arm_pose,
         }
     }
 }
@@ -1009,6 +1050,146 @@ mod tests {
         let again = FittedBody::prepare(&model, &hash, &req).unwrap();
         assert_eq!(b.collision.vertices, again.collision.vertices);
         assert_eq!(b.report, again.report);
+    }
+
+    #[test]
+    fn initial_independent_arms_validate_preserve_equal_pairs_and_select_actual_sides() {
+        let mut req = request();
+        assert!(
+            serde_json::to_value(&req)
+                .unwrap()
+                .get("arm_pose")
+                .is_none()
+        );
+        for invalid in [
+            Value::Null,
+            json!({"left_abduction_deg":35.}),
+            json!({"left_abduction_deg":35.,"right_abduction_deg":35.,"typo":0.}),
+            json!({"left_abduction_deg":-1.,"right_abduction_deg":35.}),
+            json!({"left_abduction_deg":35.,"right_abduction_deg":181.}),
+        ] {
+            let mut value = serde_json::to_value(&req).unwrap();
+            value["arm_pose"] = invalid;
+            assert!(BodyRequest::read(&value).is_err());
+        }
+        assert!(
+            BodyRequest::read(&json!({"schema":"fabric-measurements/1",
+            "arm_pose":{"left_abduction_deg":35.,"right_abduction_deg":35.}}))
+            .is_err()
+        );
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            req.arm_pose = Some(ArmPose {
+                left_abduction_deg: invalid,
+                right_abduction_deg: 35.,
+            });
+            assert!(req.validate().is_err());
+        }
+        req.arm_pose = None;
+        let model = model();
+        let digest = "a".repeat(64);
+        let legacy = FittedBody::prepare(&model, &digest, &req).unwrap();
+        let equal = ArmPose {
+            left_abduction_deg: req.arm_abduction_deg,
+            right_abduction_deg: req.arm_abduction_deg,
+        };
+        req.arm_pose = Some(equal);
+        let unchanged = FittedBody::prepare(&model, &digest, &req).unwrap();
+        assert_eq!(unchanged.collision.vertices, legacy.collision.vertices);
+        assert_eq!(unchanged.display.vertices, legacy.display.vertices);
+        assert!(!unchanged.body().frames.independent_limbs());
+        assert_eq!(unchanged.body().arm_pose, Some(equal));
+        assert_eq!(unchanged.report["pose"]["arm_pose"], json!(equal));
+        assert!(legacy.report["pose"].get("arm_pose").is_none());
+
+        let arms = ArmPose {
+            left_abduction_deg: 70.,
+            right_abduction_deg: 35.,
+        };
+        req.arm_pose = Some(arms);
+        let asymmetric = FittedBody::prepare(&model, &digest, &req).unwrap();
+        assert!(asymmetric.body().frames.independent_limbs());
+        assert_eq!(asymmetric.body().arm_pose, Some(arms));
+        assert_eq!(
+            asymmetric.report["shape_sha256"],
+            legacy.report["shape_sha256"]
+        );
+        assert_eq!(asymmetric.report["residuals"], legacy.report["residuals"]);
+        assert_eq!(asymmetric.collision.triangles, legacy.collision.triangles);
+        assert_ne!(asymmetric.collision.vertices, legacy.collision.vertices);
+        assert_eq!(
+            asymmetric.body().frames.frame("arm_R"),
+            legacy.body().frames.frame("arm_R")
+        );
+        assert_ne!(
+            asymmetric.body().frames.frame("arm_L"),
+            legacy.body().frames.frame("arm_L")
+        );
+        assert_eq!(
+            asymmetric
+                .flat_fit_body(&model, &digest)
+                .unwrap()
+                .identity(),
+            legacy.flat_fit_body(&model, &digest).unwrap().identity(),
+        );
+        let replayed = BodyRequest::read(&serde_json::to_value(&req).unwrap()).unwrap();
+        assert_eq!(replayed.arm_pose, Some(arms));
+        assert_eq!(
+            FittedBody::prepare(&model, &digest, &replayed)
+                .unwrap()
+                .report,
+            asymmetric.report,
+        );
+    }
+
+    #[test]
+    fn sampled_motion_starts_from_the_actual_independent_initial_arm_pose() {
+        let model = model();
+        let digest = "a".repeat(64);
+        let mut req = request();
+        let arms = ArmPose {
+            left_abduction_deg: 70.,
+            right_abduction_deg: 25.,
+        };
+        req.arm_pose = Some(arms);
+        let mut fitted = FittedBody::prepare(&model, &digest, &req).unwrap();
+        let motion: motion::Request = serde_json::from_value(json!({
+            "schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.004,"arm_abduction_deg":35.}],
+            "source_pose_sampling":{"max_step_s":0.002,"max_segments":2},
+            "max_step_s":0.002,"max_trials":8,"max_pairs":100000,
+            "max_sample_vertices":10000
+        }))
+        .unwrap();
+        let path = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(path.source_vertices().len(), 2);
+        let rest = model.rest(&fitted.params).unwrap();
+        for (actual, (left, right)) in path.source_vertices().iter().zip([(52.5, 30.), (35., 35.)])
+        {
+            let mut expected = Pose::drape();
+            expected.arm_pose = Some(ArmPose {
+                left_abduction_deg: left,
+                right_abduction_deg: right,
+            });
+            let posed = model
+                .pose(&rest, &pose_deltas(&model, &rest, &expected, 1.).unwrap())
+                .unwrap();
+            let skin = clothing_skin(&model, &posed.vertices).unwrap();
+            assert_eq!(skin.triangles, fitted.collision.triangles);
+            for (actual, expected) in actual.iter().zip(skin.vertices) {
+                assert!((*actual - expected).norm() < 1e-14);
+            }
+        }
+        // Public display/report edits cannot change the fixed source pose of later motion.
+        fitted.report["pose"]["arm_pose"] =
+            json!({"left_abduction_deg":0.,"right_abduction_deg":180.});
+        assert_eq!(fitted.body().arm_pose, Some(arms));
+        assert_eq!(
+            fitted
+                .motion_path(&model, &digest, &motion)
+                .unwrap()
+                .source_vertices(),
+            path.source_vertices(),
+        );
     }
 
     #[test]

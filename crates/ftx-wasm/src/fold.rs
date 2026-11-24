@@ -2,6 +2,7 @@
 //! `ftx drape` (tape fit, the drape pose, the trimmed collision skin, part frames, sewing then draping, the
 //! fit report), with the body model read from bytes the page was given and the fold-up viewer page as text.
 
+use ftx_body::drape::ArmPose;
 use ftx_body::{
     AnnyData, AnnyModel, BodyFrames, DEFAULT_POSE_AUDIT_PAIR_BUDGET, HandCollider, Legs, Pose,
     SkinningMode, TAPE_FIELDS, TapeFit, ThumbPose, Wearer, clothing_skin_with_hands, fit_tape,
@@ -209,6 +210,15 @@ fn hand_collider_is_wrist(hands: &HandCollider) -> bool {
     hands.is_wrist()
 }
 
+fn deserialize_arm_pose<'de, D>(deserializer: D) -> Result<Option<ArmPose>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let arms = ArmPose::deserialize(deserializer)?;
+    arms.validate().map_err(serde::de::Error::custom)?;
+    Ok(Some(arms))
+}
+
 /// Explicit garment pose and bounded continuation, shared by native and browser adapters.
 /// Defaults preserve the ordinary standing drape with no extra settling steps.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -220,6 +230,13 @@ pub struct FoldSettings {
     pub two_start: bool,
     /// Arm angle independent of the leg posture and of the tape-fit reference pose.
     pub arm_abduction_deg: f64,
+    /// Optional independent straight-arm angles, overriding the common arm angle.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_arm_pose",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub arm_pose: Option<ArmPose>,
     /// Standing, seated or squat leg rotations on the same fitted shape.
     pub legs: Legs,
     /// Fraction of the selected leg rotations, from standing (0) to the full posture (1).
@@ -301,6 +318,7 @@ impl Default for FoldSettings {
             self_contact_mm: 2.0,
             two_start: false,
             arm_abduction_deg: Pose::A_POSE_DEG,
+            arm_pose: None,
             legs: Legs::Standing,
             leg_fraction: 1.0,
             skinning: SkinningMode::LinearBlend,
@@ -432,6 +450,7 @@ fn fold_on_source(
         self_contact_mm,
         two_start,
         arm_abduction_deg,
+        arm_pose,
         legs,
         leg_fraction,
         skinning,
@@ -459,6 +478,7 @@ fn fold_on_source(
     let m = |r: ftx_core::Refusal| r.to_string();
     let mut pose = Pose::drape();
     pose.arm_abduction_deg = Some(arm_abduction_deg);
+    pose.arm_pose = arm_pose;
     pose.legs = legs;
     pose.leg_fraction = leg_fraction;
     pose.validate().map_err(m)?;
@@ -515,7 +535,7 @@ fn fold_on_source(
     } else {
         measurements.clone()
     };
-    let pose_line = |deg: f64| hand_collider.drape_pose_line(deg);
+    let pose_line = |deg: f64| hand_collider.drape_pose_line_with_arms(deg, arm_pose);
     let (params, mut description) = if let Some(source) = source {
         let (shape, mut description) = ftx_body::accepted_shape::prepare(
             model,
@@ -551,7 +571,14 @@ fn fold_on_source(
     if let Some(thumbs) = thumb_pose {
         description["thumb_pose"] = json!(thumbs);
     }
-    if source.is_none() && (arm_abduction_deg != Pose::A_POSE_DEG || !hand_collider.is_wrist()) {
+    if let Some(arms) = arm_pose {
+        description["arm_pose"] = json!(arms);
+    }
+    if source.is_none()
+        && (arm_pose.is_some()
+            || arm_abduction_deg != Pose::A_POSE_DEG
+            || !hand_collider.is_wrist())
+    {
         description["pose"] = json!(pose_line(arm_abduction_deg));
     }
     let occupancy = ftx_body::nappy_occupancy(model, &params, &data).map_err(m)?;
@@ -600,11 +627,13 @@ fn fold_on_source(
     }
     let full = skin_mesh(&posed.vertices, &model.data().faces).map_err(m)?;
     let frames = BodyFrames::new(model, &posed).map_err(m)?;
+    let posed_frames = ftx_drape::scene::PosedFrames::new(&frames, pose.arm_pose);
     let body = DrapeBody {
-        frames: &frames,
+        frames: &posed_frames,
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
+        arm_pose: pose.arm_pose,
     };
     let mut run = if let Some(policy) = comparison {
         ftx_drape::two_start::drape(&pat, fit_spec, &body, &opts, &policy, &mut progress)
@@ -778,6 +807,43 @@ mod tests {
         let mut invalid = default;
         invalid["hand_collider"] = json!("mitten");
         assert!(serde_json::from_value::<FoldSettings>(invalid).is_err());
+    }
+
+    #[test]
+    fn configured_fold_retains_independent_initial_arms_and_refuses_malformed_pairs() {
+        let default = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(default.get("arm_pose").is_none());
+        assert_eq!(
+            serde_json::from_value::<FoldSettings>(default.clone())
+                .unwrap()
+                .arm_pose,
+            None
+        );
+        for (left, right) in [(15.0, 85.0), (50.0, 50.0), (0.0, 180.0)] {
+            let arms = ArmPose {
+                left_abduction_deg: left,
+                right_abduction_deg: right,
+            };
+            let mut configured = default.clone();
+            configured["arm_pose"] = json!(arms);
+            let parsed: FoldSettings = serde_json::from_value(configured.clone()).unwrap();
+            assert_eq!(parsed.arm_pose, Some(arms));
+            assert_eq!(serde_json::to_value(parsed).unwrap(), configured);
+        }
+        for invalid in [
+            json!(null),
+            json!([]),
+            json!({}),
+            json!({"left_abduction_deg": 35}),
+            json!({"left_abduction_deg": 35, "right_abduction_deg": 35, "extra": true}),
+            json!({"left_abduction_deg": -1, "right_abduction_deg": 35}),
+            json!({"left_abduction_deg": 35, "right_abduction_deg": 181}),
+            json!({"left_abduction_deg": "35", "right_abduction_deg": 35}),
+        ] {
+            let mut configured = default.clone();
+            configured["arm_pose"] = invalid;
+            assert!(serde_json::from_value::<FoldSettings>(configured).is_err());
+        }
     }
 
     #[test]
@@ -957,6 +1023,7 @@ mod tests {
             collision: (&verts, &tris),
             display: (&verts, &tris),
             arm_deg: 35.0,
+            arm_pose: None,
         };
         let w = (0.94 * 0.06 * std::f64::consts::PI * 1000.0).round();
         let pat = Pattern::new(json!({
@@ -1173,6 +1240,7 @@ mod tests {
             collision: (&verts, &tris),
             display: (&verts, &tris),
             arm_deg: 35.0,
+            arm_pose: None,
         };
         let w = (0.98 * 0.06 * std::f64::consts::PI * 1000.0).round();
         let pat = Pattern::new(json!({

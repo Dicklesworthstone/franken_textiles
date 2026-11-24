@@ -1,5 +1,30 @@
 # Inspect a completed native fold-up
 
+## Start with independent left and right arm poses
+
+The ordinary drape, placement preview, chest-band qualification and simulated round accept a
+complete pair of straight-arm abductions measured from vertical:
+
+```sh
+ftx place pattern.json --measurements measurements.json --model /path/to/anny-model \
+  --left-arm-deg 30 --right-arm-deg 70 --out new-placement-directory --json
+ftx drape pattern.json --measurements measurements.json --model /path/to/anny-model \
+  --left-arm-deg 30 --right-arm-deg 70 --out new-drape-directory --json
+```
+
+Both flags are required together; each angle must be finite and within 0..=180 degrees.
+The pair overrides `--arm-deg`. With distinct angles, generated sleeves use each physical
+arm's posed frame instead of reflecting the right sleeve's frame. Omitted pairs and explicit
+equal pairs retain the existing symmetric placement convention. Flat pattern geometry and
+the fitted shape's reference tape readings remain unchanged. Actual body and cloth contact
+checks still decide whether a requested start can be simulated.
+
+The workshop and material workbench expose the same **independent initial arms** choice.
+Selected-body previews, transfers, saved cases and motion studies retain the complete pair.
+Simulation reports and exported or rebuilt viewers name both angles; whole-outfit reviews
+require matching actual arm poses across their component drapes. Continuing motion starts
+from these initial angles, while each endpoint still owns its explicitly requested pose.
+
 ## Adjust a sleeve's starting position without changing its cut
 
 When a sleeve's initial tube intersects a hand, the piece's `placement` record can now
@@ -21,7 +46,8 @@ an axis must be finite and nonzero. Omit either field when it is not needed.
 
 These are authored positioning controls, not dimensions inferred from the hand. They
 retain the pattern's flat vertices, cut length, seams and grain. A generated mirror pair
-uses the adjusted right frame and its reflection; a quantity-one panel with `placement.side`
+uses the adjusted right frame and its reflection for symmetric arm poses; independent initial
+arms use each physical limb's frame. A quantity-one panel with `placement.side`
 uses its independently selected physical side. The existing leg midline clamp still applies.
 
 Save the revised pattern under a new filename and inspect its actual placement:

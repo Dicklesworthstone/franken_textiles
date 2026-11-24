@@ -6287,6 +6287,22 @@ Independent small-case enumeration and capped batch cases check the reduction. S
 with copy-specific qualifications are outside this reduction; measured production throughput and
 physical process qualification remain separate requirements.
 
+### 25.229 Start ordinary garment workflows from independent arm poses
+
+Ordinary native drape, placement, qualification and simulated rounds, portable folds and
+model-backed material scenarios expose the existing independent straight-arm kinematics.
+An explicit complete left/right abduction pair overrides the common initial angle. Unequal
+angles select each physical limb's placement frame for generated sleeves, while omission and
+equal pairs preserve the reference mirror convention. Fitted shape and reference tape readings
+remain fixed, and all existing body/cloth admission checks still apply.
+
+Workbench controls retain the pair through preview, transfers and frozen named cases. Reports,
+saved viewers and outfit composition describe or compare the actual initial pose. The first
+prescribed-motion interval starts from those angles instead of reverting to the common fallback.
+Source-bound photo-fit reports supply accepted shape without reusing capture poses. This connects
+existing kinematics to normal garment workflows; it does not qualify anatomical measurements or
+physical fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

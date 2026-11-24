@@ -191,6 +191,7 @@ fn bound_material_drives_crease_drape_and_heat_uses_that_same_deformed_surface()
         collision: (&vertices, &triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let options = DrapeOptions {
         spacing: 10.,
@@ -344,6 +345,7 @@ fn sewn_membrane_set_stays_piece_local_and_body_motion_keeps_accepted_history() 
         collision: (&vertices, &triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let options = DrapeOptions {
         spacing: 10.,
@@ -540,6 +542,7 @@ fn accepted_membrane_work_heats_only_qualified_sheets_and_excludes_initial_drape
         collision: (&vertices, &triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let target: Vec<_> = vertices
         .iter()

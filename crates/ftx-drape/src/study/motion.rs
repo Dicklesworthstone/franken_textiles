@@ -1597,6 +1597,7 @@ mod tests {
             collision: (&vertices, &triangles),
             display: (&vertices, &triangles),
             arm_deg: 35.,
+            arm_pose: None,
         };
         let mut run = crate::run::drape(
             &pattern,
@@ -1784,6 +1785,7 @@ mod tests {
             collision: (&vertices, &triangles),
             display: (&vertices, &triangles),
             arm_deg: 35.,
+            arm_pose: None,
         };
         let mut run = crate::run::drape(
             &pattern,

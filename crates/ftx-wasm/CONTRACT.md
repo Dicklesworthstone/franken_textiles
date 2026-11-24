@@ -1,5 +1,14 @@
 # ftx-wasm
 
+**Independent initial arm poses.** Optional `FoldSettings.arm_pose` contains finite
+`left_abduction_deg` and `right_abduction_deg` in 0..=180, overriding the common angle.
+It uses the existing body kinematics and actual per-side placement frames when unequal;
+omission and equal pairs preserve symmetric placement. Both workbenches, configured workers,
+frozen study inputs and saved transfers preserve the complete pair. Invalid or null pairs
+refuse. Accepted body-fit reports retain their shape-only role. Live-session drape diagnostics
+also retain unequal initial arms. Reports and portable viewers name the actual pair; numerical
+admission remains required and no captured-photo pose is inferred.
+
 **Prescribed ambient wind.** Fold settings, live session settings and material-scenario
 options share `damping.air_drag.air_velocity_m_s: [X,Y,Z]`, a finite uniform constant
 world-space velocity in metres/second (z up). The common solver uses relative cloth/air

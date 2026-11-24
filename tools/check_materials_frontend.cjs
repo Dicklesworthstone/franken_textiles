@@ -871,7 +871,8 @@ test('ordinary tape-fitted arm angles reach the configured material engine while
 });
 test('nondefault garment pose or settling requires a configured engine instead of falling back to a legacy fold', async () => {
   const w=await workerModule();
-  for(const options of [{legs:'seated'},{legFraction:0.25},{maxSettleSteps:2},{armDeg:0},{armDeg:50}]) {
+  for(const options of [{legs:'seated'},{legFraction:0.25},{maxSettleSteps:2},{armDeg:0},{armDeg:50},
+    {armPose:{left_abduction_deg:35,right_abduction_deg:35}}]) {
     const r=await w.send({type:'fold',bytes:new ArrayBuffer(1),pattern:'{}',measurements:'{}',fit:'{}',...options});
     assert.match(r.message,/missing configured pose and settling/);
     assert.deepEqual(w.freed,[]);
@@ -1423,6 +1424,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
+  e.drapeArmLeft.value='35';e.drapeArmRight.value='35';
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
@@ -5954,6 +5956,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
+  e.drapeArmLeft.value='35';e.drapeArmRight.value='35';
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
   e.drapeStepS.value='0.041666666666666664';e.drapeSewSteps.value='12';e.drapeDrapeSteps.value='36';e.drapeNewtonTol.value='0.001';
   e.staticTolMm.value='0.001';e.staticMaxNewton.value='300';
@@ -22091,13 +22094,15 @@ test('selected-body design saves preserve the live request and unfused measureme
   p.select('measurements',primary);p.e.measurements.handlers.change();
   p.e.studyBodySource.value='preview';p.e.studyBodySource.handlers.change();
   p.e.bodyArmDeg.value='50';p.e.drapeLegs.value='seated';p.e.drapeLegFraction.value='0.25';
+  p.e.drapeIndependentArms.checked=true;p.e.drapeArmLeft.value='15';p.e.drapeArmRight.value='85';
+  p.e.drapeIndependentArms.handlers.change();
   p.e.supplementalFiles.files=[new Blob([supplemental])];p.e.supplementalFiles.handlers.change();
   p.e.supplementalConsent.checked=true;p.e.supplementalConsent.handlers.change();
   const {bundle}=await savedStudyDownload(p);
   assert.equal(JSON.parse(bundle.request.studyRequest).schema,'ftx-design-study/1');assert.equal(bundle.request.onBody,true);
   assert.equal(bundle.request.measurementPrimary,primary);
   assert.equal(bundle.request.measurementSources,JSON.stringify([supplemental]));assert.equal(bundle.request.measurementConsent,true);
-  assert.deepEqual(bundle.request.measurementPose,{arm_abduction_deg:50,legs:'seated',leg_fraction:0.25});
+  assert.deepEqual(bundle.request.measurementPose,{arm_abduction_deg:50,arm_pose:{left_abduction_deg:15,right_abduction_deg:85},legs:'seated',leg_fraction:0.25});
   assert.deepEqual(bundle.body_model,{sha256:require('node:crypto').createHash('sha256').update(Buffer.from([1,3,5])).digest('hex'),byte_length:3});
   await p.e.study.onclick();const sent=p.current().messages.at(-1);
   assert.deepEqual(savedMessageInputs(sent),bundle.request,'Save and Run must assemble identical sources');
@@ -25210,6 +25215,116 @@ test('scenario moving transient heat renders opt-in microclimate_convection and 
   assert.deepEqual(exposedRows.map(r => [r[0], r[1]]), [
     ['2', 'Churchill-Chu vertical plate natural convection']
   ]);
+});
+
+test('initial independent arms reach configured workers and fused study bodies without default substitution', async () => {
+  const arms={left_abduction_deg:15,right_abduction_deg:85},calls=[];
+  const fold=()=>({report:()=>'{"settled":true,"gating":[]}',viewer:()=>'<html/>',free(){}});
+  const bindings={default:async()=>{},WebBody:class{constructor(){calls.push('body');}free(){}},
+    fold_up:()=>{calls.push('legacy');return fold();},
+    fold_up_configured:(_b,_p,_m,_f,settings)=>{calls.push(JSON.parse(settings));return fold();},
+    measurement_file:()=>'{"fused":true}',
+    material_scenario_study:(_b,_p,_s,_r,body)=>{calls.push(JSON.parse(body));return JSON.stringify(scenarioReport());}};
+  const w=await workerModule({bindings});
+  const base={type:'fold',bytes:new ArrayBuffer(1),pattern:'{}',measurements:'{}',fit:'{}'};
+  assert.equal((await w.send(base)).type,'result');assert.equal(calls.at(-1),'legacy');
+  for(const armPose of [arms,{left_abduction_deg:50,right_abduction_deg:50},{left_abduction_deg:0,right_abduction_deg:180}]) {
+    const result=await w.send({...base,armPose});assert.equal(result.type,'result',result.message);
+    assert.deepEqual(calls.at(-1).arm_pose,armPose);
+    assert.deepEqual(JSON.parse(result.files.find(f=>f.name==='fold-settings.json').text).arm_pose,armPose);
+  }
+  const before=calls.length;
+  const badPairs=[null,{},[],{left_abduction_deg:15},{...arms,extra:true},{...arms,left_abduction_deg:-1},
+    {...arms,right_abduction_deg:181},{...arms,left_abduction_deg:NaN},{...arms,right_abduction_deg:'85'}];
+  for(const armPose of badPairs)assert.equal((await w.send({...base,armPose})).type,'error');
+  assert.equal(calls.length,before,'Malformed arm pairs refuse before allocating the body');
+  const study={type:'scenario',bytes:new ArrayBuffer(1),pattern:'{}',studyRequest:'{}',scenarioRequest:'{}',
+    measurements:'{}',measurementPrimary:'{}',measurementSources:'["{}"]',measurementConsent:true};
+  for(const metadata of [{measurementPose:{arm_abduction_deg:35,arm_pose:arms,legs:'standing',leg_fraction:1}},
+    {measurementAcceptedFit:'{"schema":"ftx-body-fit/1"}',measurementArmDeg:35,measurementAcceptedPose:{arm_pose:arms}}]) {
+    const result=await w.send({...study,...metadata});assert.equal(result.type,'result',result.message);
+    assert.deepEqual(calls.at(-1).arm_pose,arms);assert.equal(calls.at(-1).measurements.fused,true);
+    assert.deepEqual(JSON.parse(result.files.find(f=>f.name==='body-input.json').text).arm_pose,arms);
+    for(const arm_pose of badPairs) {
+      const invalid=metadata.measurementPose?{measurementPose:{...metadata.measurementPose,arm_pose}}:
+        {...metadata,measurementAcceptedPose:{arm_pose}};
+      const count=calls.length;assert.equal((await w.send({...study,...invalid})).type,'error');assert.equal(calls.length,count);
+    }
+  }
+  const sent=[],values={...bindings,program_info:()=>'{}',calibration_dictionaries:()=>'[]',
+    run:()=>({page:()=>'{"status":"CONVERGED","zip":"round.zip"}',zip:()=>new Uint8Array([1]),
+      file:n=>new TextEncoder().encode(n==='pattern.json'?'{"pieces":[{"placement":{"part":"torso"}}]}':'{}'),free(){}})};
+  const ctx=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
+  const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const [key,value] of Object.entries(values))this.setExport(key,value);},{context:ctx});
+  await imports.link(()=>{});await imports.evaluate();
+  const mod=new vm.SourceTextModule(read('worker.js'),{context:ctx,importModuleDynamically:()=>imports});await mod.link(()=>{});await mod.evaluate();
+  const send=async data=>{await ctx.onmessage({data});return sent.at(-1);};
+  await send({type:'init',pkg:'./pkg/'});await send({type:'body',request:2,bytes:new ArrayBuffer(1)});await send({type:'run',request:3,req:{}});
+  const result=await send({type:'fold',request:4,round:3,body:2,armPose:arms});assert.equal(result.type,'folded',result.message);
+  assert.deepEqual(calls.at(-1).arm_pose,arms);
+  for(const armPose of badPairs)assert.equal((await send({type:'fold',request:5,round:3,body:2,armPose})).type,'error');
+});
+
+test('initial independent arm controls preserve handoffs and invalidate drapes and selected study bodies',async()=>{
+  const arms={left_abduction_deg:15,right_abduction_deg:85};
+  const p=await pageModule();await p.load();await p.bind();p.select('measurements');p.select('fit');p.e.body.files=[new Blob([new Uint8Array([1])])];
+  await p.e.fold.onclick();assert.equal(p.current().messages.at(-1).armPose,undefined);p.emit({settled:true});
+  p.e.drapeIndependentArms.checked=true;p.e.drapeArmLeft.value='15';p.e.drapeArmRight.value='85';p.e.drapeIndependentArms.handlers.change();
+  assert.equal(p.e.bodyArmDeg.disabled,true);assert.equal(p.e.drapeArmLeft.disabled,false);assert.equal(section(p,'fold').hidden,true);
+  await p.e.fold.onclick();assert.deepEqual(plain(p.current().messages.at(-1).armPose),arms);
+  p.emit({settled:true,body:{arm_pose:arms}});assert.deepEqual(JSON.parse(section(p,'fold').children[1].textContent).arm_pose,arms);
+  for(const bad of ['','NaN','Infinity','-1','181']) {
+    p.e.drapeArmLeft.value=bad;p.e.drapeArmLeft.handlers.input();const count=p.current().messages.length;await p.e.fold.onclick();
+    assert.equal(p.current().messages.length,count);assert.match(p.e.error.textContent,/arm angle|arm pose/);
+  }
+  p.e.drapeArmLeft.value='15';const pending=deferred();p.e.body.files=[{size:1,arrayBuffer:()=>pending.promise}];
+  const old=p.current(),reading=p.e.fold.onclick();await new Promise(resolve=>setImmediate(resolve));
+  p.e.drapeArmRight.value='90';p.e.drapeArmRight.handlers.input();pending.resolve(new ArrayBuffer(1));await reading;
+  assert.equal(old.dead,true);assert.equal(p.current().messages.length,0,'An obsolete body read cannot publish the old independent pose');
+
+  const st=await pageModule();await st.load();scenarioInputs(st);
+  st.e.drapeIndependentArms.checked=true;st.e.drapeArmLeft.value='15';st.e.drapeArmRight.value='85';
+  for(const mode of ['preview','accepted']) {
+    st.e.studyBodySource.value=mode;st.e.studyBodySource.handlers.change();
+    if(mode==='accepted'){st.e.bodyFitFile.files=[new Blob(['{"schema":"ftx-body-fit/1"}'])];st.e.bodyFitConsent.checked=true;}
+    await st.e.scenario.onclick();assert.deepEqual(JSON.parse(st.current().messages.at(-1).measurements).arm_pose,arms);
+    st.emit(scenarioReport());st.e.drapeArmLeft.handlers.input();assert.equal(section(st,'Fresh drape and heat alternatives').hidden,true);
+  }
+  st.e.studyBodySource.value='request';st.e.studyBodySource.handlers.change();st.select('scenarioBody','{}');await st.e.scenario.onclick();
+  const independent=st.current();st.e.drapeIndependentArms.handlers.change();assert.equal(independent.dead,false,'A separate body request owns its own initial pose');
+
+  const files={pattern:new Blob(['{"pieces":[{"id":"front"}]}']),measurements:new Blob(['{}']),fit:new Blob(['{}'])};
+  const settings={self_contact_mm:2,two_start:false,arm_abduction_deg:35,legs:'standing',leg_fraction:1,max_settle_steps:0,arm_pose:arms};
+  const token='d'.repeat(32),hq=await pageModule({roundToken:token});
+  await hq.windowEvents.message({origin:'https://unit.invalid',source:hq.opener,data:{type:'ftx-round-sources',token,files,
+    bodySource:{model:new Blob([new Uint8Array([1])])},drapeSettings:settings}});
+  assert.equal(hq.e.drapeIndependentArms.checked,true);assert.equal(hq.e.drapeArmLeft.value,'15');assert.equal(hq.e.drapeArmRight.value,'85');
+  const revToken='e'.repeat(32),rev=draftingPage({materialToken:revToken});
+  rev.worker.onmessage({data:{type:'ready',info:{zouave_bolero:{title:'Bolero',style:{}}},sheetDictionaries:[],dxf:'built in',version:'wasm'}});
+  await rev.windowEvents.message({origin:'https://unit.invalid',source:rev.opener,data:{type:'ftx-material-pattern',token:revToken,
+    pattern:new Blob(['{"pieces":[]}']),source_sha256:'4'.repeat(64),evaluatedInputs:{fit:files.fit,measurements:files.measurements,
+      model:new Blob([new Uint8Array([1])]),drapeSettings:settings}}});
+  assert.equal(rev.e.drapeIndependentArms.checked,true);assert.equal(rev.e.drapeArmLeft.value,'15');assert.equal(rev.e.drapeArmRight.value,'85');
+  rev.worker.onmessage({data:{type:'bodyReady',request:rev.messages.findLast(m=>m.type==='body').request}});
+  await rev.e.go.handlers.click();rev.worker.onmessage({data:{type:'result',request:rev.messages.findLast(m=>m.type==='run').request,
+    res:{title:'Bolero',status:'CONVERGED',basis:{},zip:'r.zip'},blobs:{},foldable:true,bodyCheckable:true,
+    roundSources:{pattern:'{}',measurements:'{}',fit:'{}'}}});
+  await rev.e.foldGo.handlers.click();const fold=rev.messages.findLast(m=>m.type==='fold');assert.deepEqual(plain(fold.armPose),arms);
+  const report={settled:true,gating:[],arm_pose:arms,body:{arm_pose:arms}};
+  rev.worker.onmessage({data:{type:'folded',request:fold.request,report,reportText:JSON.stringify(report),viewer:'<html/>'}});
+  assert.match(rev.e.foldSummary.innerHTML,/left 15.*right 85/);
+  rev.e.drapeIndependentArms.checked=false;await rev.e.drapeIndependentArms.handlers.change();
+  assert.equal(rev.e.bodyArmDeg.disabled,false);assert.equal(rev.e.foldSummary.textContent,'');
+  await rev.e.foldGo.handlers.click();assert.equal(rev.messages.findLast(m=>m.type==='fold').armPose,undefined);
+  const badToken='f'.repeat(32),bad=await pageModule({roundToken:badToken});
+  await bad.windowEvents.message({origin:'https://unit.invalid',source:bad.opener,data:{type:'ftx-round-sources',token:badToken,files,
+    drapeSettings:{...settings,arm_pose:null}}});
+  assert.match(bad.e.roundImportText.textContent,/Independent arm pose/);
+  const badRevToken='1'.repeat(32),badRev=draftingPage({materialToken:badRevToken});
+  await badRev.windowEvents.message({origin:'https://unit.invalid',source:badRev.opener,data:{type:'ftx-material-pattern',token:badRevToken,
+    pattern:new Blob(['{"pieces":[]}']),source_sha256:'4'.repeat(64),evaluatedInputs:{fit:files.fit,measurements:files.measurements,
+      model:new Blob([new Uint8Array([1])]),drapeSettings:{...settings,arm_pose:{left_abduction_deg:15}}}}});
+  assert.match(badRev.e.traceImportText.textContent,/Independent arm pose/);
 });
 
 test('opt-in thumb_pose wires fail-closed across both workbenches, workers, study body modes, and bidirectional handoffs', async () => {

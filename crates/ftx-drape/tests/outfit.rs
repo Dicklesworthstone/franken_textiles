@@ -90,6 +90,7 @@ fn body(b: &Body) -> DrapeBody<'_> {
         collision: (&b.vertices, &b.triangles),
         display: (&b.vertices, &b.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     }
 }
 
@@ -1395,6 +1396,7 @@ fn a_display_crossing_recovers_the_latest_clear_relaxation_checkpoint() {
         collision: (&skin.vertices, &skin.triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut audit = ReplayContact::new(&vertices, &triangles).unwrap();
     audit
@@ -1509,6 +1511,7 @@ fn an_initial_display_crossing_refuses_before_sewing_and_returns_the_exact_start
         collision: (&skin.vertices, &skin.triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
 
     let mut progress = Vec::new();
@@ -1611,6 +1614,7 @@ fn a_later_display_crossing_still_returns_the_recorded_frame() {
         collision: (&skin.vertices, &skin.triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut progress = Vec::new();
     let mut refused = None;

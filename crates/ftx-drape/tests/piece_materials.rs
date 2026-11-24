@@ -222,6 +222,7 @@ fn run(p: &Pattern, opts: DrapeOptions) -> DrapeRun {
             collision: (&b.vertices, &b.triangles),
             display: (&b.vertices, &b.triangles),
             arm_deg: 35.,
+            arm_pose: None,
         },
         &opts,
         |_| {},
@@ -770,6 +771,7 @@ fn atomic_material_and_pair_replacement_reaches_sewn_drape_and_scenario() {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let result = ftx_drape::study::Session::new(&scenario, &body)
         .unwrap()
@@ -792,6 +794,7 @@ fn material_substitution_never_reuses_stale_or_unadmitted_pair_friction() {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     for (mode, expected) in [
         (0, "unassigned or stale"),

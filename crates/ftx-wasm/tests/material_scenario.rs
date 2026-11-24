@@ -95,6 +95,7 @@ fn qualified_centerline_bridges_change_the_real_coverage_frontier_without_changi
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut request = request();
     request.variants.truncate(2);
@@ -257,6 +258,7 @@ fn named_matrix_cases_match_standalone_consumers_and_replay_frozen_sources() {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut request = request();
     request.comparison = Some(serde_json::from_value(matrix_heat_policy("minimize")).unwrap());
@@ -360,6 +362,7 @@ fn named_matrix_refuses_excessive_work_and_invalid_later_policies_before_any_sol
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let request = serde_json::to_string(&request()).unwrap();
     for fault in [
@@ -434,6 +437,7 @@ fn named_matrix_missing_required_consumer_excludes_joint_frontier_without_erasin
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut request = request();
     request.comparison = Some(serde_json::from_value(matrix_heat_policy("minimize")).unwrap());
@@ -470,6 +474,7 @@ fn named_matrix_retains_body_setup_refusals_and_valid_overrides_of_an_unused_fal
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: f64::NAN,
+        arm_pose: None,
     };
     let mut request = request();
     let mut unsupported = matrix_heat_policy("minimize");
@@ -517,6 +522,7 @@ fn file_free_study_matches_real_consumers_and_keeps_manufacturing_after_drape_re
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let p = Pattern::from_json(PATTERN).unwrap();
     let r = request();
@@ -590,6 +596,7 @@ fn prescribed_wind_reaches_actual_scenario_draping_and_frozen_replay() {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let mut request = request();
     request.variants.truncate(1);
@@ -670,6 +677,7 @@ fn draped_vapor_objectives_use_real_sewn_geometry_and_independent_material_evide
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern: Value = serde_json::from_str(PATTERN).unwrap();
     let mut fast = pattern["fabric"]["material"].clone();
@@ -830,6 +838,7 @@ fn finite_water_optimization_admits_real_motion_and_replays_both_quadratures() {
         collision: (&cylinder.vertices, &cylinder.triangles),
         display: (&cylinder.vertices, &cylinder.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let original: Value = serde_json::from_str(PATTERN).unwrap();
     let missing = original["fabric"]["material"].clone();
@@ -1090,6 +1099,7 @@ fn real_moving_wet_film_comparison_respects_water_limited_ties_and_material_depl
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern = Pattern::from_json(PATTERN).unwrap();
     let mut fast = pattern.raw()["fabric"]["material"].clone();
@@ -1286,6 +1296,7 @@ fn material_substitution_recomputes_draped_vapor_without_dry_thermal_readiness()
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut pattern: Value = serde_json::from_str(PATTERN).unwrap();
     pattern["fabric"]["material"]["record"]["properties"]
@@ -1378,6 +1389,7 @@ fn aggregate_budget_refusals_do_not_create_free_successful_cells() {
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
     scenario["max_vertex_frames"] = json!(1);
@@ -1421,6 +1433,7 @@ fn computed_scenario_objectives_use_actual_heat_and_strain_without_weakening_adm
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut r = request();
     r.comparison = Some(
@@ -1546,6 +1559,7 @@ fn material_strain_signed_constraints_select_actual_designs_and_replay_frozen_so
         collision: (&cylinder.vertices, &cylinder.triangles),
         display: (&cylinder.vertices, &cylinder.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut pattern: Value = serde_json::from_str(PATTERN).unwrap();
     // Raw mechanical strain must remain usable without dry-thermal characterization.
@@ -1695,6 +1709,7 @@ fn material_strain_motion_scopes_raw_samples_and_refuses_partial_decisions_indep
         collision: (&cylinder.vertices, &cylinder.triangles),
         display: (&cylinder.vertices, &cylinder.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut pattern: Value = serde_json::from_str(PATTERN).unwrap();
     let mut upper = pattern["pieces"][0].clone();
@@ -1908,6 +1923,7 @@ fn joint_outfit_boundary_uses_real_contact_and_ordered_layer_heat_with_frozen_re
         collision: (&form.vertices, &form.triangles),
         display: (&form.vertices, &form.triangles),
         arm_deg: 35.0,
+        arm_pose: None,
     };
     let mut outfit: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/materials/synthetic-joint-outfit.json"

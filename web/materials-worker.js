@@ -14,6 +14,14 @@ const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-2
 });
 self.ftxProgress = text => postMessage({ type: "progress", request: active, text });
 const json = text => JSON.parse(text);
+function checkedArmPose(value) {
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+  if (!keys || keys.length !== 2 || !Object.hasOwn(value, "left_abduction_deg") || !Object.hasOwn(value, "right_abduction_deg") ||
+      [value.left_abduction_deg, value.right_abduction_deg].some(angle => !Number.isFinite(angle) || angle < 0 || angle > 180)) {
+    throw Error("Independent arm pose needs only finite left_abduction_deg and right_abduction_deg from 0 to 180 degrees.");
+  }
+  return { left_abduction_deg: value.left_abduction_deg, right_abduction_deg: value.right_abduction_deg };
+}
 function checkedThumbPose(value) {
   const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
   if (!keys || keys.length !== 2 || !Object.hasOwn(value, "left_rotation_vector_rad") || !Object.hasOwn(value, "right_rotation_vector_rad")) {
@@ -158,7 +166,7 @@ self.onmessage = async ({ data: msg }) => {
       if (typeof ftx.measurement_file !== "function") throw Error("Rebuild web/pkg: missing shared measurement fusion.");
       const pose = msg.measurementPose;
       if (pose !== undefined && (!pose || typeof pose !== "object" || Array.isArray(pose) ||
-          Object.keys(pose).some(key => !["arm_abduction_deg", "legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"].includes(key)) ||
+          Object.keys(pose).some(key => !["arm_abduction_deg", "arm_pose", "legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"].includes(key)) ||
           !["arm_abduction_deg", "legs", "leg_fraction"].every(key => Object.hasOwn(pose, key)) ||
           !Number.isFinite(pose.arm_abduction_deg) || pose.arm_abduction_deg < 0 || pose.arm_abduction_deg > 180 ||
           !["standing", "seated", "squat"].includes(pose.legs) || !Number.isFinite(pose.leg_fraction) ||
@@ -169,6 +177,7 @@ self.onmessage = async ({ data: msg }) => {
         throw Error("Supplemental tape-fit preview pose must contain valid arm, leg, skinning, hand-collider and thumb-pose settings without an accepted-fit source.");
       }
       if (pose !== undefined && Object.hasOwn(pose, "thumb_pose")) checkedThumbPose(pose.thumb_pose);
+      if (pose !== undefined && Object.hasOwn(pose, "arm_pose")) checkedArmPose(pose.arm_pose);
       if (msg.measurementAcceptedFit !== undefined &&
           (!Number.isFinite(msg.measurementArmDeg) || msg.measurementArmDeg < 0 || msg.measurementArmDeg > 180)) {
         throw Error("Supplemental accepted-fit replay requires a finite arm angle from 0 to 180 degrees.");
@@ -176,7 +185,7 @@ self.onmessage = async ({ data: msg }) => {
       const acceptedPose = msg.measurementAcceptedPose;
       if (acceptedPose !== undefined) {
         const keys = acceptedPose && typeof acceptedPose === "object" && !Array.isArray(acceptedPose) ? Object.keys(acceptedPose) : null;
-        if (!keys || !keys.length || keys.some(key => !["legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"].includes(key)) ||
+        if (!keys || !keys.length || keys.some(key => !["arm_pose", "legs", "leg_fraction", "skinning", "hand_collider", "thumb_pose"].includes(key)) ||
             msg.measurementAcceptedFit === undefined || pose !== undefined ||
             (Object.hasOwn(acceptedPose, "legs") && !["standing", "seated", "squat"].includes(acceptedPose.legs)) ||
             (Object.hasOwn(acceptedPose, "leg_fraction") && (!Number.isFinite(acceptedPose.leg_fraction) || acceptedPose.leg_fraction < 0 || acceptedPose.leg_fraction > 1)) ||
@@ -185,6 +194,7 @@ self.onmessage = async ({ data: msg }) => {
           throw Error("Supplemental accepted-fit pose requires an accepted body-fit source and valid leg, skinning, hand-collider and thumb-pose settings.");
         }
         if (Object.hasOwn(acceptedPose, "thumb_pose")) checkedThumbPose(acceptedPose.thumb_pose);
+        if (Object.hasOwn(acceptedPose, "arm_pose")) checkedArmPose(acceptedPose.arm_pose);
       }
       const primary = msg.measurementPrimary ?? msg.measurements;
       json(primary); // Validate without reserializing full-width input numbers.
@@ -541,7 +551,8 @@ self.onmessage = async ({ data: msg }) => {
           leg_fraction: msg.legFraction ?? 1, max_settle_steps: msg.maxSettleSteps ?? 0,
           ...(skinning !== "lbs" ? { skinning } : {}),
           ...(handCollider !== "wrist" ? { hand_collider: handCollider } : {}),
-          ...(msg.thumbPose !== undefined ? { thumb_pose: checkedThumbPose(msg.thumbPose) } : {}) };
+          ...(msg.thumbPose !== undefined ? { thumb_pose: checkedThumbPose(msg.thumbPose) } : {}),
+          ...(msg.armPose !== undefined ? { arm_pose: checkedArmPose(msg.armPose) } : {}) };
         if (!Number.isFinite(settings.arm_abduction_deg) || settings.arm_abduction_deg < 0 || settings.arm_abduction_deg > 180) {
           throw Error("Supply a finite drape arm angle from 0 to 180 degrees.");
         }
@@ -843,7 +854,7 @@ self.onmessage = async ({ data: msg }) => {
         }
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
           settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
-          handCollider !== "wrist" || settings.thumb_pose !== undefined ||
+          handCollider !== "wrist" || settings.thumb_pose !== undefined || settings.arm_pose !== undefined ||
           settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
           settings.newton_strategy !== undefined || settings.integrator !== undefined ||
           settings.step_s !== undefined || settings.sew_steps !== undefined ||

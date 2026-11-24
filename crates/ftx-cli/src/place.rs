@@ -1043,6 +1043,7 @@ pub(super) struct Staging<'a> {
     pub skinning: SkinningMode,
     /// Which hand collider `collision` was built with; reported when it is not the reference's.
     pub hands: HandCollider,
+    pub arm_pose: Option<ftx_body::drape::ArmPose>,
     pub thumbs: Option<ThumbPose>,
     pub thumb_audit: Option<&'a Result<SurfaceAudit, Refusal>>,
 }
@@ -1074,6 +1075,7 @@ fn stages(
         display: full,
         skinning,
         hands,
+        arm_pose,
         thumbs,
         thumb_audit,
     } = *staging;
@@ -1227,6 +1229,9 @@ fn stages(
     if let Some(thumbs) = thumbs {
         report["body"]["thumb_pose"] = json!(thumbs);
     }
+    if let Some(arms) = arm_pose {
+        report["body"]["arm_pose"] = json!(arms);
+    }
     if let Some(audit) = thumb_audit {
         report["authored_hand_surface"] = match audit {
             Ok(audit) => json!({"admitted": true, "pairs_tested": audit.pairs_tested}),
@@ -1269,6 +1274,8 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "start-repulsion-period",
             "start-repulsion-max-checks",
             "arm-deg",
+            "left-arm-deg",
+            "right-arm-deg",
             "thumb-pose",
             "legs",
             "leg-fraction",
@@ -1308,6 +1315,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let full = skin_mesh(&posed.vertices, &model.data().faces)?;
     let thumb_audit = super::audit_authored_hands(&model, &posed, &skin, hands, thumbs);
     let frames = BodyFrames::new(&model, &posed)?;
+    let posed_frames = ftx_drape::scene::PosedFrames::new(&frames, pose.arm_pose);
     let (report, _) = stages(
         &Staging {
             pattern: &source,
@@ -1316,11 +1324,12 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             mesh: material.options.mesh,
             start_self_repulsion: material.options.start_self_repulsion,
             elastic_ea: material.options.elastic_ea,
-            frames: &frames,
+            frames: &posed_frames,
             collision: (&skin.vertices, &skin.triangles),
             display: (&full.vertices, &full.triangles),
             skinning,
             hands,
+            arm_pose: pose.arm_pose,
             thumbs,
             thumb_audit: thumb_audit.as_ref(),
         },
@@ -2214,6 +2223,7 @@ mod tests {
             display: (&vertices, &triangles),
             skinning: ftx_body::SkinningMode::LinearBlend,
             hands: ftx_body::HandCollider::Palm,
+            arm_pose: None,
             thumbs: None,
             thumb_audit: None,
         };
@@ -2656,6 +2666,7 @@ mod tests {
             display: (&body_verts, &body_tris),
             skinning: SkinningMode::LinearBlend,
             hands: HandCollider::Wrist,
+            arm_pose: None,
             thumbs: None,
             thumb_audit: None,
         };

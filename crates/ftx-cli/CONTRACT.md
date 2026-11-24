@@ -60,6 +60,11 @@ linear blend skinning (`lbs`, omitted from default JSON), and fixed sewing/gravi
 Opt-in `--skinning dqs` switches posing to deterministic Dual-Quaternion Skinning (also accepted by
 `ftx body`, `ftx qualify`, and `ftx place`), recording `"skinning": "dqs"` in the report when non-default.
 Leg posture is independent of `--arm-deg`; fitting and nappy calibration retain their reference pose.
+`ftx drape`, simulated rounds, `ftx place` and `ftx qualify` accept the complete optional
+`--left-arm-deg DEG --right-arm-deg DEG` pair, each finite in 0..=180 and overriding the common
+angle. Unequal angles use each physical limb's frame for generated sleeve placement; omission and
+equal pairs retain reference mirroring. Reports, rebuilt viewers and outfit composition retain or
+compare the actual pair. These controls do not change fitted shape or bypass contact admission.
 `ftx place`, `ftx drape`, `ftx round --sim|--stills` and `ftx qualify` also accept `--thumb-pose JSON`,
 for example `'{"left_rotation_vector_rad":[0,0,0],"right_rotation_vector_rad":[0,0,0]}'`.
 Each vector is expressed in that thumb root's source-local axes, with magnitude at most π radians.

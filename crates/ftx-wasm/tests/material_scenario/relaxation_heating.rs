@@ -71,6 +71,7 @@ fn distinct_material_heat_fractions_share_one_maxwell_law_in_comparison() {
         collision: (&cylinder.vertices, &cylinder.triangles),
         display: (&cylinder.vertices, &cylinder.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let pattern = garment();
     let scenario = scenario();

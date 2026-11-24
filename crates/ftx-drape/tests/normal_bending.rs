@@ -374,6 +374,7 @@ fn source_selected_kinematics_survive_sewing_per_piece_ownership_and_motion() {
         collision: (&vertices, &triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let opts = DrapeOptions {
         spacing: 10.,

@@ -177,6 +177,7 @@ fn rollback_with_source_sampling(
         collision: (&vertices, &triangles),
         display: (&vertices, &triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let mut run = crate::run::drape(
         &pattern,

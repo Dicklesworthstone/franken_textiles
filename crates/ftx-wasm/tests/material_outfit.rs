@@ -109,6 +109,7 @@ fn outfit_import_preserves_exact_sources_and_material_swaps_reach_the_same_joint
         collision: (&skin.vertices, &skin.triangles),
         display: (&skin.vertices, &skin.triangles),
         arm_deg: 35.,
+        arm_pose: None,
     };
     let joint = native.drape(&json!({}), &body, &options, |_| {}).unwrap();
     let replay = drape(
