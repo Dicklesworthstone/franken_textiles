@@ -5843,7 +5843,7 @@ const REALISM_SUFFIXES = [
   "SelfStickSlip", "SelfStickSlipMus", "SelfStickSlipMuk", "SelfStickSlipV",
   "AdaptiveMesh", "MeshMinMm", "MeshCvt",
   "Construction", "HemWidthMm", "HemMassMult", "HemBendMult", "SeamWidthMm", "SeamMassMult", "SeamBendMult",
-  "StartRepulsion", "RepulsionMm", "RepulsionStiffness", "RepulsionPeriod",
+  "StartRepulsion", "RepulsionMm", "RepulsionStiffness", "RepulsionPeriod", "RepulsionMaxChecks",
 ];
 const REALISM_NUM_SUFFIXES = [
   "RayleighMembraneS", "RayleighBendingS",
@@ -5851,7 +5851,7 @@ const REALISM_NUM_SUFFIXES = [
   "SelfStickSlipMus", "SelfStickSlipMuk", "SelfStickSlipV",
   "MeshMinMm", "MeshCvt",
   "HemWidthMm", "HemMassMult", "HemBendMult", "SeamWidthMm", "SeamMassMult", "SeamBendMult",
-  "RepulsionMm", "RepulsionStiffness", "RepulsionPeriod",
+  "RepulsionMm", "RepulsionStiffness", "RepulsionPeriod", "RepulsionMaxChecks",
 ];
 function checkedRealismOptions(settings, maxSpacing = 12) {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) return {};

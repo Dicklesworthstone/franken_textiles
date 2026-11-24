@@ -25575,6 +25575,35 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   assert.equal(gs.current().messages.length, beforeCustomChecksScen + 2, gs.e.error.textContent);
   const defChecksScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
   assert.equal(Object.hasOwn(defChecksScen.options.start_self_repulsion, 'max_candidate_checks'), false);
+
+  // Editing RepulsionMaxChecks must invalidate stale guided-scenario and fold results on both input and change.
+  gs.emit(scenarioReport());
+  const gsOut = section(gs, 'Fresh drape and heat alternatives');
+  assert.equal(gsOut.hidden, false);
+  gs.e.guidedScenarioRepulsionMaxChecks.value = '1000000';
+  gs.e.guidedScenarioRepulsionMaxChecks.handlers.input();
+  assert.equal(gsOut.hidden, true);
+  await gs.e.scenario.onclick();
+  gs.emit(scenarioReport());
+  assert.equal(gsOut.hidden, false);
+  gs.e.guidedScenarioRepulsionMaxChecks.value = '2000000';
+  gs.e.guidedScenarioRepulsionMaxChecks.handlers.change();
+  assert.equal(gsOut.hidden, true);
+
+  p.e.drapeRepulsionMaxChecks.value = '750000';
+  await p.e.fold.onclick();
+  assert.equal(p.current().messages.at(-1).startSelfRepulsion.max_candidate_checks, 750000);
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(fSec.hidden, false);
+  p.e.drapeRepulsionMaxChecks.value = '800000';
+  p.e.drapeRepulsionMaxChecks.handlers.input();
+  assert.equal(fSec.hidden, true, 'input on drapeRepulsionMaxChecks must invalidate prior fold');
+  await p.e.fold.onclick();
+  p.emit({ settled: true, body: { legs: 'standing', leg_fraction: 1 } }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.equal(fSec.hidden, false);
+  p.e.drapeRepulsionMaxChecks.value = '900000';
+  p.e.drapeRepulsionMaxChecks.handlers.change();
+  assert.equal(fSec.hidden, true, 'change on drapeRepulsionMaxChecks must invalidate prior fold');
 });
 
 test('guided regional objectives author exact regions, freeze named-case snapshots, deduplicate columns, and render regional adaptive readings', async () => {
