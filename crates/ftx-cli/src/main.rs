@@ -210,6 +210,10 @@ struct Args {
 }
 
 fn parse(argv: &[String]) -> Result<Args, String> {
+    let command = argv
+        .iter()
+        .find(|a| a.as_str() != "--json")
+        .map(String::as_str);
     let (mut positional, mut options, mut values, mut json) =
         (Vec::new(), BTreeMap::new(), Vec::new(), false);
     let mut it = argv.iter();
@@ -219,7 +223,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         } else if let Some(name) = a.strip_prefix("--") {
             // The reference uses --sim both as a round switch and a repeated outfit path;
             // --seams is a switch here, but takes a value in alter cap-ease.
-            if argv.first().is_some_and(|s| s == "outfit") && name == "sim" {
+            if command == Some("outfit") && name == "sim" {
                 let value = it.next().ok_or("--sim needs a directory")?;
                 if value.starts_with("--") {
                     return Err("--sim needs a directory".into());
@@ -229,7 +233,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 continue;
             }
             if name == "allow-estimates"
-                || (name == "check-contact" && argv.first().is_some_and(|s| s == "viewer"))
+                || (name == "check-contact" && command == Some("viewer"))
                 || name == "static-equilibrium"
                 || name == "time-subdivision"
                 || name == "air-drag"
@@ -240,7 +244,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 || export::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
                 || trace::BOOLEAN_OPTIONS.contains(&name)
-                || (name == "seams" && argv.first().is_some_and(|s| s == "outfit"))
+                || (name == "seams" && command == Some("outfit"))
             {
                 if options
                     .insert(name.to_string(), "true".to_string())
@@ -1817,7 +1821,9 @@ fn main() -> ExitCode {
         Ok(a) => a,
         Err(e) => {
             return emit(
-                argv.first().map_or("ftx", String::as_str),
+                argv.iter()
+                    .find(|a| a.as_str() != "--json")
+                    .map_or("ftx", String::as_str),
                 argv.iter().any(|a| a == "--json"),
                 Err(bad_input(e).repair(USAGE)),
             );
@@ -2628,6 +2634,36 @@ mod tests {
         assert_eq!(a.options["sew"], "3");
         assert!(a.json);
         assert!(parse(&["drape".to_string(), "--out".to_string()]).is_err());
+
+        // Leading --json must not disable command-scoped parsing for outfit/viewer flags.
+        let outfit = parse(
+            &[
+                "--json",
+                "outfit",
+                "--measurements",
+                "m.json",
+                "--sim",
+                "d1",
+                "--sim",
+                "d2",
+                "--seams",
+                "--out",
+                "o",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert!(outfit.json);
+        assert_eq!(outfit.positional, ["outfit"]);
+        assert_eq!(outfit.values, ["d1", "d2"]);
+        assert_eq!(outfit.options["seams"], "true");
+        assert_eq!(outfit.options["out"], "o");
+
+        let viewer =
+            parse(&["--json", "viewer", "simdir", "--check-contact"].map(String::from)).unwrap();
+        assert!(viewer.json);
+        assert_eq!(viewer.positional, ["viewer", "simdir"]);
+        assert_eq!(viewer.options["check-contact"], "true");
     }
 
     #[test]
