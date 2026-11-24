@@ -3928,6 +3928,33 @@ fn parallel_feed_preserves_each_cell_ceiling_and_unused_cell_zero_work() {
             assert!(cell.finish_milliseconds.is_none());
         }
     }
+    // Both consolidated jobs consume 15661 ms of feed. The fastest overall job splits the
+    // copies, but uses 15662 ms. Among the two feed minima, use the cell that opens first.
+    for late in [0, 1] {
+        let mut staggered = options.clone();
+        staggered["production"]["parallel"]["cells"][late]["available_at_milliseconds"] =
+            json!(1000);
+        let program =
+            SewProgram::build(&pattern, &serde_json::from_value(staggered).unwrap()).unwrap();
+        let chosen = program
+            .plan
+            .production
+            .as_ref()
+            .unwrap()
+            .parallel
+            .as_ref()
+            .unwrap();
+        assert_eq!(chosen.selected.scheduled_feed_milliseconds, 15661);
+        assert_eq!(
+            chosen.selected.makespan_milliseconds,
+            parallel.selected.makespan_milliseconds
+        );
+        assert!(chosen.selected.cells[late].copies.is_empty());
+        assert_eq!(chosen.selected.cells[1 - late].copies, [0, 1]);
+        assert!(program.stitches.iter().all(
+            |step| step.cell.as_deref() == Some(chosen.selected.cells[1 - late].cell.as_str())
+        ));
+    }
     options["production"]["parallel"]["feed_time_search"]["completion_deadline_milliseconds"] =
         json!(12000);
     let split = build(&pattern, options).unwrap();

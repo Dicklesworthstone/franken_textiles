@@ -69,10 +69,11 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   air velocity `air_velocity_m_s`, supporting both `ImplicitEuler` and `GeneralizedAlpha`) and
   stiffness-proportional Green-strain-rate / dihedral-rate Rayleigh damping (`DampingOptions`).
   Stationary air (`air_velocity_m_s = [0, 0, 0]`) bypasses subtraction and omits the JSON key so
-  stationary-air arithmetic, receipts, and qualification digests remain bit-identical. Nonzero
-  prescribed wind refuses `Solver::static_solve` fail-closed (conservative static minimization
-  omits non-conservative steady aerodynamic follower loading) while retaining the dynamic drape;
-  drag coefficients remain uncalibrated reference defaults and prescribed wind does not claim
+  stationary-air arithmetic, receipts, and qualification digests remain bit-identical. An active
+  wind load refuses both the conservative static solve and its adjoint, including material and
+  reaction gradients. Still air, zero density, and zero drag coefficients exert no steady load.
+  Rayleigh damping also vanishes at equilibrium and permits the same static sensitivities.
+  Drag coefficients remain uncalibrated reference defaults and prescribed wind does not claim
   measured airflow or real garment fit. Internal damping also follows characterized panel curvature:
   normal-projected patches use signed raw curvature increments; vector-Hessian patches use a
   differentiated corotating source-triangle frame. Both preserve the source tensor and reference

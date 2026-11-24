@@ -627,9 +627,10 @@ Two complete count-allocation dynamic programs reuse the original cell/count sch
 admits only retained schedules that actually finish within all limits and selects the least feed.
 The other uses valid finish lower bounds to relax feasibility while keeping the same exact feed
 costs. Both are reserved within the original aggregate scheduling budget, alongside the retained
-makespan programs and schedule replays. When the fastest retained complete allocation already
-achieves the minimum feed, it is preserved: an equal-feed tie cannot unnecessarily delay completion
-or discard its makespan proof. Otherwise the feed search retains its first deterministic minimum.
+makespan programs and schedule replays. Among allocations with the same minimum feed, the
+planner selects the earliest complete finish. If the original fastest allocation also attains
+that feed minimum, it keeps its original assignment. Remaining ties use the existing deterministic
+cell/count order. Feed proof and the independent makespan proof retain their separate meanings.
 
 Plan `/35`, production `/23` and parallel `/8` retain the chosen physical cell schedules plus
 `parallel.feed_time_search`. Its `selected_feed_milliseconds`,

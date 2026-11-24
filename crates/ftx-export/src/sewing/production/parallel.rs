@@ -964,18 +964,21 @@ fn allocate(
     lower: bool,
     feed: Option<&FeedTimeSearch>,
 ) -> (Option<(u64, Vec<usize>)>, usize) {
-    let mut costs = vec![u64::MAX; copies + 1];
-    costs[0] = 0;
+    // For each prefix and garment count, a lower additive feed wins under every suffix.
+    // At equal feed, an earlier makespan can never make the final maximum later. Makespan-only
+    // allocation uses a zero feed component and keeps its original iteration tie order.
+    let mut costs = vec![None; copies + 1];
+    costs[0] = Some((0_u64, 0_u64));
     let mut parents = vec![vec![0; copies + 1]; trials.len()];
     let mut work = 0;
     for (cell, row) in trials.iter().enumerate() {
-        let mut next = vec![u64::MAX; copies + 1];
+        let mut next = vec![None; copies + 1];
         for total in 0..=copies {
             for count in 0..=total {
                 work += 1;
-                if costs[total - count] == u64::MAX {
+                let Some((previous_feed, previous_finish)) = costs[total - count] else {
                     continue;
-                }
+                };
                 let finish = if count == 0 {
                     Some(0)
                 } else if row[count - 1].calendar_infeasibility_proven {
@@ -998,39 +1001,34 @@ fn allocate(
                 {
                     continue;
                 }
-                let candidate = if feed.is_some() {
-                    // Feed is fixed by this exact cell/count recipe, independent of serial order.
-                    // Only temporal feasibility is relaxed when computing the lower bound.
-                    costs[total - count]
-                        .checked_add(if count == 0 {
-                            0
-                        } else {
-                            row[count - 1].feed_milliseconds
-                        })
-                        .filter(|&value| value <= MAX_EXACT_MILLISECONDS)
+                let cell_feed = if feed.is_some() && count > 0 {
+                    row[count - 1].feed_milliseconds
                 } else {
-                    Some(costs[total - count].max(finish))
+                    0
                 };
-                if let Some(candidate) = candidate
-                    && candidate < next[total]
-                {
-                    next[total] = candidate;
+                if cell_feed > MAX_EXACT_MILLISECONDS - previous_feed {
+                    continue;
+                }
+                let candidate = (previous_feed + cell_feed, previous_finish.max(finish));
+                if next[total].is_none_or(|old| candidate < old) {
+                    next[total] = Some(candidate);
                     parents[cell][total] = count;
                 }
             }
         }
         costs = next;
     }
-    if costs[copies] == u64::MAX {
+    let Some((total_feed, finish)) = costs[copies] else {
         return (None, work);
-    }
+    };
     let mut allocation = vec![0; trials.len()];
     let mut total = copies;
     for cell in (0..trials.len()).rev() {
         allocation[cell] = parents[cell][total];
         total -= allocation[cell];
     }
-    (Some((costs[copies], allocation)), work)
+    let objective = if feed.is_some() { total_feed } else { finish };
+    (Some((objective, allocation)), work)
 }
 
 fn unresolved_cell_counts(cells: &[&Cell], trials: &[Vec<Trial>], deadline: Option<u64>) -> usize {
