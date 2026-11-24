@@ -1077,9 +1077,11 @@ fn record_state_with_step(
 
 /// Solve a single memoryless static cylinder equilibrium directly from explicit orthotropic parameters.
 /// `parameters` are `[warp_n_m, weft_n_m, poisson_warp_weft, shear_n_m]`; `bending_nm` is scalar hinge rigidity.
+/// Self-contact requires the source-qualified thickness and friction accepted by [`evaluate`].
 ///
 /// # Errors
-/// Invalid geometry/parameters, axial compression without bending rigidity, or failed equilibrium.
+/// Invalid geometry/parameters, requested self-contact, axial compression without bending rigidity,
+/// or failed equilibrium.
 pub fn solve_static(
     fixture: &Fixture,
     parameters: [f64; 4],
@@ -1091,6 +1093,11 @@ pub fn solve_static(
 ) -> Result<State, Refusal> {
     fixture.validate()?;
     controls.validate()?;
+    if fixture.self_contact {
+        return Err(invalid(
+            "solve_static cannot admit self-contact without sourced thickness and friction; use cylinder::evaluate with a qualified material selection",
+        ));
+    }
     if !bending_nm.is_finite() || bending_nm < 0.0 {
         return Err(out_of_range("bending_nm must be finite and nonnegative"));
     }
@@ -1574,6 +1581,46 @@ mod tests {
             record: Some(record),
             ..Selection::default()
         }
+    }
+
+    #[test]
+    fn static_helper_refuses_unqualified_self_contact() {
+        let fixture = Fixture {
+            self_contact: true,
+            ..fabric101_fixture([0.0, 1.0], 12, 4)
+        };
+        let controls = Controls::default();
+        let refusal = solve_static(
+            &fixture,
+            [1200.0, 800.0, 0.25, 300.0],
+            1e-4,
+            None,
+            0.002,
+            0.0,
+            &controls,
+        )
+        .expect_err("the explicit self-contact request must not become a contact-free solve");
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains("sourced thickness and friction"));
+
+        // The ordinary source-bearing route can honor the same fixture, with no inferred
+        // contact parameters or changes to the requested physics.
+        let request = Request {
+            schema: REQUEST_SCHEMA.into(),
+            material: synthetic_sheet_selection(1e-4, true),
+            fixture,
+            loading: vec![Waypoint {
+                time_s: 0.0,
+                axial_displacement_m: 0.002,
+                rotation_deg: 0.0,
+                clamp_slip_m: 0.0,
+            }],
+            nominal_protocol: None,
+            controls,
+        };
+        let report = evaluate(&request).expect("sourced self-contact remains supported");
+        assert!(report.input.fixture.self_contact);
+        assert_eq!(report.states.len(), 1);
     }
 
     #[test]
