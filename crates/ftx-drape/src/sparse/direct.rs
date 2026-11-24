@@ -7,8 +7,10 @@
 //! 2.9×, solve 1.3× faster on a 10,800-DOF cloth system; every result bit-identical, positive definite
 //! or shifted indefinite with 2×2 and delayed pivots); and a backward solve that sums each column's
 //! panel rows first, by four partial sums ([`dot4`]), instead of one serial chain from the diagonal
-//! (solve 2.1× faster again; different rounding, the same on every target). The original module
-//! documentation follows.
+//! (solve 2.1× faster again; different rounding, the same on every target); and, with the crate's
+//! `parallel` feature, independent assembly subtrees factored as tasks and a large front's panel
+//! columns updated at once (each front's arithmetic unchanged, so bit-identical to the serial pass,
+//! refusals and statistics included). The original module documentation follows.
 //!
 //! Sparse symmetric direct factorization: supernodal multifrontal LDLᵀ with
 //! AMD fill-reducing ordering, restricted (within-supernode) 1×1/2×2
@@ -48,7 +50,9 @@
 //! certification treats as authority (refusal-not-clamp, workspace law).
 //!
 //! Determinism: every stage is sequential with index-ordered tie-breaking —
-//! repeat factorization of the same matrix is bitwise identical (tested).
+//! repeat factorization of the same matrix is bitwise identical (tested). The
+//! `parallel` feature only changes which thread computes a front, never its
+//! operations or their order.
 
 use super::Csr;
 
@@ -605,6 +609,7 @@ impl SymbolicLdlt {
             }
         }
         let zero_tol = opts.zero_pivot_rel * max_abs.max(f64::MIN_POSITIVE);
+        let fronts = self.factor_fronts(a, opts, zero_tol)?;
 
         let mut stats = FactorStats {
             n,
@@ -629,14 +634,249 @@ impl SymbolicLdlt {
             negative: 0,
         };
         let mut snodes_num: Vec<SnodeNum> = Vec::with_capacity(self.snodes.len());
-        let mut updates: Vec<Option<Update>> = vec![None; self.snodes.len()];
+        // The live frontal and update storage of one pass in supernode order, whatever order the
+        // fronts were factored in: each front is allocated while its children's updates are alive.
+        let mut update_bytes = vec![0usize; self.snodes.len()];
         let mut live_update_bytes = 0usize;
+        for (sid, (num, work)) in fronts.into_iter().enumerate() {
+            stats.max_front_dim = stats.max_front_dim.max(work.m);
+            stats.peak_front_bytes = stats
+                .peak_front_bytes
+                .max(work.m * work.m * 8 + live_update_bytes);
+            for &ch in &self.snodes[sid].children {
+                live_update_bytes -= update_bytes[ch];
+            }
+            inertia.positive += work.positive;
+            inertia.negative += work.negative;
+            stats.pivots_1x1 += work.pivots_1x1;
+            stats.pivots_2x2 += work.pivots_2x2;
+            stats.pivots_delayed += work.delayed;
+            stats.flops += work.flops;
+            nnz_l_actual += work.nnz_l;
+            if work.update_len > 0 {
+                update_bytes[sid] = work.update_len * 8;
+                live_update_bytes += update_bytes[sid];
+                stats.peak_front_bytes = stats.peak_front_bytes.max(live_update_bytes);
+            }
+            snodes_num.push(num);
+        }
 
+        stats.nnz_l = nnz_l_actual;
+        stats.fill_ratio = if a.nnz() == 0 {
+            1.0
+        } else {
+            stats.nnz_l as f64 / a.nnz() as f64
+        };
+        #[cfg(feature = "parallel")]
+        let tasks = self
+            .subtree_tasks()
+            .into_iter()
+            .map(|(first, last)| SolveTask {
+                sids: (first, last),
+                vars: (
+                    self.snodes[first].col_start,
+                    self.snodes[last].col_start + self.snodes[last].width,
+                ),
+            })
+            .collect();
+        #[cfg(not(feature = "parallel"))]
+        let tasks = Vec::new();
+        Ok(LdltFactor {
+            n,
+            perm: self.perm.clone(),
+            snodes: snodes_num,
+            inertia,
+            stats,
+            tasks,
+        })
+    }
+
+    /// Every supernode's numeric front, in supernode order. Each front depends only on the matrix
+    /// and its children's updates, added in child order, so it is the same whichever thread factors
+    /// it and whenever: with the `parallel` feature, independent subtrees run as tasks (see
+    /// [`SymbolicLdlt::subtree_tasks`]) and the supernodes above them follow in order. A refusal is
+    /// the one a single pass in supernode order meets first.
+    fn factor_fronts(
+        &self,
+        a: &Csr,
+        opts: &LdltOptions,
+        zero_tol: f64,
+    ) -> Result<Vec<(SnodeNum, FrontWork)>, LdltError> {
+        let ns = self.snodes.len();
+        let mut updates: Vec<Option<Update>> = vec![None; ns];
+        let mut out: Vec<Option<(SnodeNum, FrontWork)>> = (0..ns).map(|_| None).collect();
+        #[cfg(feature = "parallel")]
+        let (failed, done) = self.factor_subtrees(a, opts, zero_tol, &mut updates, &mut out);
+        #[cfg(not(feature = "parallel"))]
+        let (failed, done): (Option<(usize, LdltError)>, Vec<bool>) = (None, Vec::new());
         // Scratch var→local-position map, stamped and reset per supernode so
         // the factorization stays O(front work), not O(n · supernodes).
-        let mut pos = vec![usize::MAX; n];
+        let mut pos = vec![usize::MAX; self.n];
+        for sid in (0..ns).filter(|&sid| !done.get(sid).copied().unwrap_or(false)) {
+            // A task failed below this supernode: a serial pass would have stopped there.
+            if failed.as_ref().is_some_and(|(first, _)| *first < sid) {
+                break;
+            }
+            let children = self.snodes[sid]
+                .children
+                .iter()
+                .map(|&ch| updates[ch].take().expect("child update consumed twice"))
+                .collect();
+            let (num, update, work) =
+                self.factor_front(sid, a, opts, zero_tol, &mut pos, children)?;
+            updates[sid] = update;
+            out[sid] = Some((num, work));
+        }
+        if let Some((_, error)) = failed {
+            return Err(error);
+        }
+        Ok(out
+            .into_iter()
+            .map(|front| front.expect("every supernode is factored"))
+            .collect())
+    }
 
-        for (sid, sym) in self.snodes.iter().enumerate() {
+    /// Factors the [`SymbolicLdlt::subtree_tasks`] on rayon's pool, storing their fronts in `out` and
+    /// the updates they pass up in `updates`. Returns the first (lowest-numbered) refusing supernode
+    /// with its refusal, and which supernodes were factored.
+    #[cfg(feature = "parallel")]
+    #[allow(clippy::type_complexity)]
+    fn factor_subtrees(
+        &self,
+        a: &Csr,
+        opts: &LdltOptions,
+        zero_tol: f64,
+        updates: &mut [Option<Update>],
+        out: &mut [Option<(SnodeNum, FrontWork)>],
+    ) -> (Option<(usize, LdltError)>, Vec<bool>) {
+        let tasks = self.subtree_tasks();
+        let mut done = vec![false; self.snodes.len()];
+        let mut failed: Option<(usize, LdltError)> = None;
+        if tasks.is_empty() {
+            return (failed, done);
+        }
+        let results = crate::par::map_tasks(tasks.len(), |t| {
+            let (start, end) = tasks[t];
+            let mut pos = vec![usize::MAX; self.n];
+            let mut local: Vec<Option<Update>> = vec![None; end + 1 - start];
+            let mut fronts = Vec::with_capacity(end + 1 - start);
+            for sid in start..=end {
+                let children = self.snodes[sid]
+                    .children
+                    .iter()
+                    .map(|&ch| {
+                        local[ch - start]
+                            .take()
+                            .expect("child update consumed twice")
+                    })
+                    .collect();
+                let (num, update, work) = self
+                    .factor_front(sid, a, opts, zero_tol, &mut pos, children)
+                    .map_err(|e| (sid, e))?;
+                local[sid - start] = update;
+                fronts.push((num, work));
+            }
+            // What is left is what the roots pass up to supernodes outside the task.
+            let passed: Vec<(usize, Update)> = local
+                .into_iter()
+                .enumerate()
+                .filter_map(|(k, update)| update.map(|u| (start + k, u)))
+                .collect();
+            Ok((fronts, passed))
+        });
+        for (&(start, end), result) in tasks.iter().zip(results) {
+            done[start..=end].fill(true);
+            match result {
+                Ok((fronts, passed)) => {
+                    for (k, front) in fronts.into_iter().enumerate() {
+                        out[start + k] = Some(front);
+                    }
+                    for (sid, update) in passed {
+                        updates[sid] = Some(update);
+                    }
+                }
+                Err((sid, error)) => {
+                    if failed.as_ref().is_none_or(|(first, _)| sid < *first) {
+                        failed = Some((sid, error));
+                    }
+                }
+            }
+        }
+        (failed, done)
+    }
+
+    /// Consecutive supernode ranges `(first, last)` that are unions of whole subtrees of the assembly
+    /// tree, each about a quarter of the factorization's work per thread or less, in order; every
+    /// supernode outside them is an ancestor of one. Empty on a single thread. Work is each front's
+    /// elimination count `Σ (m − k)²` from the symbolic structure (delays not foreseen).
+    #[cfg(feature = "parallel")]
+    fn subtree_tasks(&self) -> Vec<(usize, usize)> {
+        let threads = rayon::current_num_threads();
+        let ns = self.snodes.len();
+        if threads < 2 || ns < 2 {
+            return Vec::new();
+        }
+        let mut first: Vec<usize> = (0..ns).collect();
+        let mut subtree = vec![0.0f64; ns];
+        for (sid, s) in self.snodes.iter().enumerate() {
+            let (w, m) = (s.width as f64, (s.width + s.panel.len()) as f64);
+            subtree[sid] += w * m * m - m * w * (w - 1.0) + (w - 1.0) * w * (2.0 * w - 1.0) / 6.0;
+            if s.parent != NONE {
+                subtree[s.parent] += subtree[sid];
+                first[s.parent] = first[s.parent].min(first[sid]);
+            }
+        }
+        let roots: Vec<usize> = (0..ns).filter(|&s| self.snodes[s].parent == NONE).collect();
+        let total: f64 = roots.iter().map(|&r| subtree[r]).sum();
+        let target = total / (4 * threads) as f64;
+        let mut whole = Vec::new();
+        let mut stack = roots;
+        while let Some(s) = stack.pop() {
+            if subtree[s] <= target {
+                whole.push(s);
+            } else {
+                stack.extend(&self.snodes[s].children);
+            }
+        }
+        whole.sort_unstable();
+        // Adjacent subtrees with nothing between them merge while the task stays within the target.
+        let mut tasks: Vec<(usize, usize, f64)> = Vec::new();
+        for root in whole {
+            match tasks.last_mut() {
+                Some((_, end, work))
+                    if *end + 1 == first[root] && *work + subtree[root] <= target =>
+                {
+                    *end = root;
+                    *work += subtree[root];
+                }
+                _ => tasks.push((first[root], root, subtree[root])),
+            }
+        }
+        if tasks.len() < 2 {
+            return Vec::new();
+        }
+        tasks
+            .into_iter()
+            .map(|(start, end, _)| (start, end))
+            .collect()
+    }
+
+    /// One supernode's front: assembly of its original entries and its children's updates (in
+    /// `children`, child order), restricted-pivot elimination, the deferred panel update, L, and the
+    /// update it passes to its parent.
+    #[allow(clippy::too_many_lines)] // one coherent numeric pipeline; splitting obscures the data flow
+    fn factor_front(
+        &self,
+        sid: usize,
+        a: &Csr,
+        opts: &LdltOptions,
+        zero_tol: f64,
+        pos: &mut [usize],
+        children: Vec<Update>,
+    ) -> Result<(SnodeNum, Option<Update>, FrontWork), LdltError> {
+        let sym = &self.snodes[sid];
+        let mut work = FrontWork::default();
+        {
             let w = sym.width;
             // DELAYED PIVOTS: fully-summed columns of this front are the
             // supernode's own block columns PLUS any columns a descendant
@@ -647,17 +887,15 @@ impl SymbolicLdlt {
             // structure was contained in the child front, which the assembly
             // tree embeds in this one.
             let mut delayed: Vec<usize> = Vec::new();
-            for &ch in &sym.children {
-                if let Some(up) = updates[ch].as_ref() {
-                    delayed.extend(up.vars.iter().copied().filter(|&v| v < sym.col_start));
-                }
+            for up in &children {
+                delayed.extend(up.vars.iter().copied().filter(|&v| v < sym.col_start));
             }
             delayed.sort_unstable();
             let mut fs: Vec<usize> = delayed;
             fs.extend(sym.col_start..sym.col_start + w);
             let wf = fs.len();
             let m = wf + sym.panel.len();
-            stats.max_front_dim = stats.max_front_dim.max(m);
+            work.m = m;
             // Local layout: fully-summed columns first, then panel rows.
             let mut front_local: Vec<usize> = fs;
             front_local.extend(sym.panel.iter().copied());
@@ -665,8 +903,6 @@ impl SymbolicLdlt {
                 pos[v] = idx;
             }
             let mut f = vec![0.0f64; m * m];
-            let front_bytes = m * m * 8;
-            stats.peak_front_bytes = stats.peak_front_bytes.max(front_bytes + live_update_bytes);
 
             // Scatter original entries of the OWN block columns (values read
             // from the row of the eliminated column; the input contract is a
@@ -694,9 +930,7 @@ impl SymbolicLdlt {
             }
             // Extend-add the children's Schur updates (delayed rows/columns
             // included — their labels are in this front by construction).
-            for &ch in &sym.children {
-                let up = updates[ch].take().expect("child update consumed twice");
-                live_update_bytes -= up.data.len() * 8;
+            for up in children {
                 let map: Vec<usize> = up
                     .vars
                     .iter()
@@ -745,11 +979,11 @@ impl SymbolicLdlt {
                         }
                         let d = f[k + k * m];
                         if d > 0.0 {
-                            inertia.positive += 1;
+                            work.positive += 1;
                         } else {
-                            inertia.negative += 1;
+                            work.negative += 1;
                         }
-                        stats.pivots_1x1 += 1;
+                        work.pivots_1x1 += 1;
                         dblocks.push(DBlock::Single(d));
                         for i in k + 1..m {
                             f[i + k * m] /= d;
@@ -765,7 +999,7 @@ impl SymbolicLdlt {
                             }
                         }
                         deferred.push(Deferred::One { col: k, d });
-                        stats.flops += ((m - k) as u64) * ((m - k) as u64);
+                        work.flops += ((m - k) as u64) * ((m - k) as u64);
                         k += 1;
                     }
                     PivotChoice::Two(pq, qq) => {
@@ -784,14 +1018,14 @@ impl SymbolicLdlt {
                         let e22 = f[(k + 1) + (k + 1) * m];
                         let det = e11 * e22 - e21 * e21;
                         if det < 0.0 {
-                            inertia.positive += 1;
-                            inertia.negative += 1;
+                            work.positive += 1;
+                            work.negative += 1;
                         } else if e11 + e22 > 0.0 {
-                            inertia.positive += 2;
+                            work.positive += 2;
                         } else {
-                            inertia.negative += 2;
+                            work.negative += 2;
                         }
-                        stats.pivots_2x2 += 1;
+                        work.pivots_2x2 += 1;
                         dblocks.push(DBlock::Pair(e11, e21, e22));
                         let inv11 = e22 / det;
                         let inv21 = -e21 / det;
@@ -820,7 +1054,7 @@ impl SymbolicLdlt {
                             a: acol[wf - (k + 2)..].to_vec(),
                             b: bcol[wf - (k + 2)..].to_vec(),
                         });
-                        stats.flops += 2 * ((m - k) as u64) * ((m - k) as u64);
+                        work.flops += 2 * ((m - k) as u64) * ((m - k) as u64);
                         // The intra-pair coupling lives in D, not L: the
                         // 2×2 block is eliminated jointly, so L's strict
                         // lower entry inside the pair is exactly zero.
@@ -849,8 +1083,7 @@ impl SymbolicLdlt {
                 }
             }
             let k_elim = k;
-            let delayed_here = wf - k_elim;
-            stats.pivots_delayed += delayed_here;
+            work.delayed = wf - k_elim;
 
             // The panel block's Schur updates, deferred from the pivots above. Nothing read the
             // block during the elimination (the pivot search and the swaps stay in the fully-summed
@@ -858,11 +1091,14 @@ impl SymbolicLdlt {
             // operands, so the result is bit-identical to updating it pivot by pivot with its mirror,
             // without the strided upper-triangle writes and one column at a time. Only its lower
             // triangle is kept; the update below reads that.
-            // (Pivot columns lie left of every panel column, so splitting the front at column `jc`
-            // gives disjoint slices the compiler vectorizes; the arithmetic is unchanged.)
-            for jc in wf..m {
-                let (left, right) = f.split_at_mut(jc * m);
-                let dst = &mut right[jc..m];
+            // (Pivot columns lie left of every panel column, so splitting the front after the pivot
+            // columns gives disjoint slices the compiler vectorizes; the arithmetic is unchanged.)
+            // Each panel column reads only the pivot columns, so the columns are independent: with
+            // the `parallel` feature a large front updates runs of them at once, the same arithmetic
+            // per entry.
+            let (left, right) = f.split_at_mut(wf * m);
+            let left = &*left;
+            let update_column = |jc: usize, dst: &mut [f64]| {
                 for p in &deferred {
                     match p {
                         Deferred::One { col, d } => {
@@ -884,7 +1120,20 @@ impl SymbolicLdlt {
                         }
                     }
                 }
-            }
+            };
+            let panel = m - wf;
+            // About 2^16 multiply-adds per task; a small front stays one task (serial).
+            let columns = if panel * panel * k_elim >= PANEL_PARALLEL_WORK {
+                (PANEL_TASK_WORK / (panel * k_elim).max(1)).clamp(1, panel)
+            } else {
+                panel.max(1)
+            };
+            crate::par::for_each_chunk_mut(right, m * columns, |c, run| {
+                for (idx, column) in run.chunks_mut(m).enumerate() {
+                    let jc = wf + c * columns + idx;
+                    update_column(jc, &mut column[jc..m]);
+                }
+            });
 
             // Harvest L: unit-diagonal dense trapezoid, col-major m×k_elim.
             let mut l = vec![0.0f64; m * k_elim];
@@ -903,7 +1152,7 @@ impl SymbolicLdlt {
                     }
                     l[i + c * m] = val;
                 }
-                nnz_l_actual += m - c;
+                work.nnz_l += m - c;
             }
             // Remaining rows: delayed columns (if any) then panel.
             let remaining = m - k_elim;
@@ -914,7 +1163,7 @@ impl SymbolicLdlt {
                 sym.parent != NONE || remaining == 0,
                 "root left residual rows"
             );
-            if sym.parent != NONE && remaining > 0 {
+            let update = if sym.parent != NONE && remaining > 0 {
                 let mut data = vec![0.0f64; remaining * remaining];
                 for cj in 0..remaining {
                     for ri in 0..remaining {
@@ -923,35 +1172,45 @@ impl SymbolicLdlt {
                         data[ri + cj * remaining] = f[r + c * m];
                     }
                 }
-                live_update_bytes += data.len() * 8;
-                stats.peak_front_bytes = stats.peak_front_bytes.max(live_update_bytes);
-                updates[sid] = Some(Update {
+                work.update_len = data.len();
+                Some(Update {
                     vars: local2var[k_elim..].to_vec(),
                     data,
-                });
-            }
-            snodes_num.push(SnodeNum {
-                block_vars: local2var[..k_elim].to_vec(),
-                panel_vars: local2var[k_elim..].to_vec(),
-                l,
-                d: dblocks,
-            });
+                })
+            } else {
+                None
+            };
+            Ok((
+                SnodeNum {
+                    block_vars: local2var[..k_elim].to_vec(),
+                    panel_vars: local2var[k_elim..].to_vec(),
+                    l,
+                    d: dblocks,
+                },
+                update,
+                work,
+            ))
         }
-
-        stats.nnz_l = nnz_l_actual;
-        stats.fill_ratio = if a.nnz() == 0 {
-            1.0
-        } else {
-            stats.nnz_l as f64 / a.nnz() as f64
-        };
-        Ok(LdltFactor {
-            n,
-            perm: self.perm.clone(),
-            snodes: snodes_num,
-            inertia,
-            stats,
-        })
     }
+}
+
+/// Below this many panel multiply-adds (`panel² · pivots`) a front's panel update is one task.
+const PANEL_PARALLEL_WORK: usize = 1 << 18;
+/// Multiply-adds per task of a large front's panel update.
+const PANEL_TASK_WORK: usize = 1 << 16;
+
+/// One front's share of [`FactorStats`] and [`Inertia`], and the size of the update it passes up.
+#[derive(Debug, Clone, Copy, Default)]
+struct FrontWork {
+    m: usize,
+    flops: u64,
+    pivots_1x1: usize,
+    pivots_2x2: usize,
+    delayed: usize,
+    positive: usize,
+    negative: usize,
+    nnz_l: usize,
+    update_len: usize,
 }
 
 fn pattern_of(a: &Csr) -> (Vec<usize>, Vec<usize>) {
@@ -1267,6 +1526,8 @@ pub struct LdltFactor {
     snodes: Vec<SnodeNum>,
     inertia: Inertia,
     stats: FactorStats,
+    /// Subtrees the solves run on separate threads (`parallel` feature; empty otherwise).
+    tasks: Vec<SolveTask>,
 }
 
 impl LdltFactor {
@@ -1294,25 +1555,12 @@ impl LdltFactor {
         }
         // Forward: L z = P b. (One gather buffer for every supernode; slice loops, same arithmetic.)
         let mut v: Vec<f64> = Vec::new();
-        for s in &self.snodes {
-            let w = s.block_vars.len();
-            let m = w + s.panel_vars.len();
-            v.clear();
-            v.extend(s.block_vars.iter().map(|&i| y[i]));
-            v.extend(s.panel_vars.iter().map(|&i| y[i]));
-            for k in 0..w {
-                let vk = v[k];
-                let col = &s.l[k * m + k + 1..(k + 1) * m];
-                for (vi, &l) in v[k + 1..].iter_mut().zip(col) {
-                    *vi -= l * vk;
-                }
+        if self.tasks.is_empty() {
+            for s in &self.snodes {
+                forward_step(s, &mut y, &mut v);
             }
-            for (k, &i) in s.block_vars.iter().enumerate() {
-                y[i] = v[k];
-            }
-            for (k, &i) in s.panel_vars.iter().enumerate() {
-                y[i] = v[w + k];
-            }
+        } else {
+            self.forward_in_tasks(&mut y, &mut v);
         }
         // Diagonal: D w = z.
         for s in &self.snodes {
@@ -1335,25 +1583,12 @@ impl LdltFactor {
             }
         }
         // Backward: Lᵀ x = w.
-        for s in self.snodes.iter().rev() {
-            let w = s.block_vars.len();
-            let m = w + s.panel_vars.len();
-            v.clear();
-            v.extend(s.block_vars.iter().map(|&i| y[i]));
-            v.extend(s.panel_vars.iter().map(|&i| y[i]));
-            // Each column's panel rows first (they do not depend on this block's solve, and four
-            // partial sums keep the multiply-adds from forming one serial chain), then its block rows.
-            for k in (0..w).rev() {
-                let col = &s.l[k * m..(k + 1) * m];
-                let mut acc = v[k] - dot4(&col[w..], &v[w..]);
-                for (&l, &vi) in col[k + 1..w].iter().zip(&v[k + 1..w]) {
-                    acc -= l * vi;
-                }
-                v[k] = acc;
+        if self.tasks.is_empty() {
+            for s in self.snodes.iter().rev() {
+                backward_step(s, &mut y, &mut v);
             }
-            for (k, &i) in s.block_vars.iter().enumerate() {
-                y[i] = v[k];
-            }
+        } else {
+            self.backward_in_tasks(&mut y, &mut v);
         }
         // Un-permute.
         let mut x = vec![0.0f64; self.n];
@@ -1361,6 +1596,204 @@ impl LdltFactor {
             x[o] = y[k];
         }
         x
+    }
+
+    /// The tasks' own variables as disjoint pieces of `y`, in task order.
+    fn task_pieces<'y>(&self, y: &'y mut [f64]) -> Vec<(&SolveTask, &'y mut [f64])> {
+        let mut pieces = Vec::with_capacity(self.tasks.len());
+        let mut rest = y;
+        let mut at = 0;
+        for task in &self.tasks {
+            let (_, tail) = std::mem::take(&mut rest).split_at_mut(task.vars.0 - at);
+            let (own, tail) = tail.split_at_mut(task.vars.1 - task.vars.0);
+            pieces.push((task, own));
+            rest = tail;
+            at = task.vars.1;
+        }
+        pieces
+    }
+
+    /// The forward substitution with each task's subtree on its own thread. A subtree's variables
+    /// are updated only by its own supernodes, so each task finishes its own; the products it would
+    /// subtract from variables above it are recorded in order instead, and subtracted in supernode
+    /// order between the remaining supernodes: every variable receives the serial pass's
+    /// subtractions in the serial order.
+    fn forward_in_tasks(&self, y: &mut [f64], v: &mut Vec<f64>) {
+        let records = crate::par::map_owned(self.task_pieces(y), |_, (task, own)| {
+            let (mut v, mut outside, mut out) = (Vec::new(), Vec::new(), Vec::new());
+            for s in &self.snodes[task.sids.0..=task.sids.1] {
+                forward_step_within(s, own, task.vars.0, &mut v, &mut outside, &mut out);
+            }
+            out
+        });
+        let (mut sid, mut t) = (0, 0);
+        while sid < self.snodes.len() {
+            if self.tasks.get(t).is_some_and(|task| task.sids.0 == sid) {
+                for &(i, product) in &records[t] {
+                    y[i] -= product;
+                }
+                sid = self.tasks[t].sids.1 + 1;
+                t += 1;
+            } else {
+                forward_step(&self.snodes[sid], y, v);
+                sid += 1;
+            }
+        }
+    }
+
+    /// The backward substitution: the supernodes outside the tasks first, last to first (each reads
+    /// only its ancestors, none of them in a task), then each task's subtree on its own thread,
+    /// reading the variables above it from a copy of the finished ones.
+    fn backward_in_tasks(&self, y: &mut [f64], v: &mut Vec<f64>) {
+        let (mut sid, mut t) = (self.snodes.len(), self.tasks.len());
+        while sid > 0 {
+            if t > 0 && self.tasks[t - 1].sids.1 + 1 == sid {
+                sid = self.tasks[t - 1].sids.0;
+                t -= 1;
+            } else {
+                sid -= 1;
+                backward_step(&self.snodes[sid], y, v);
+            }
+        }
+        let finished = y.to_vec();
+        crate::par::map_owned(self.task_pieces(y), |_, (task, own)| {
+            let mut v = Vec::new();
+            for s in self.snodes[task.sids.0..=task.sids.1].iter().rev() {
+                backward_step_within(s, own, task.vars.0, &finished, &mut v);
+            }
+        });
+    }
+}
+
+/// A subtree task of the solves: supernodes `sids.0..=sids.1` and the variables (elimination-order
+/// ids) `vars.0..vars.1` their symbolic columns span, which only they and their ancestors touch.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "parallel"), allow(dead_code))] // only the `parallel` feature makes tasks
+struct SolveTask {
+    sids: (usize, usize),
+    vars: (usize, usize),
+}
+
+/// One supernode of the forward substitution on the whole of `y`.
+fn forward_step(s: &SnodeNum, y: &mut [f64], v: &mut Vec<f64>) {
+    let w = s.block_vars.len();
+    let m = w + s.panel_vars.len();
+    v.clear();
+    v.extend(s.block_vars.iter().map(|&i| y[i]));
+    v.extend(s.panel_vars.iter().map(|&i| y[i]));
+    for k in 0..w {
+        let vk = v[k];
+        let col = &s.l[k * m + k + 1..(k + 1) * m];
+        for (vi, &l) in v[k + 1..].iter_mut().zip(col) {
+            *vi -= l * vk;
+        }
+    }
+    for (k, &i) in s.block_vars.iter().enumerate() {
+        y[i] = v[k];
+    }
+    for (k, &i) in s.panel_vars.iter().enumerate() {
+        y[i] = v[w + k];
+    }
+}
+
+/// [`forward_step`] on a task's own variables `own` (ids from `r0`): a panel variable outside them
+/// gets no value here; each product the serial step would subtract from it is pushed to `out`, in
+/// the serial step's order. (`outside` is scratch.)
+fn forward_step_within(
+    s: &SnodeNum,
+    own: &mut [f64],
+    r0: usize,
+    v: &mut Vec<f64>,
+    outside: &mut Vec<usize>,
+    out: &mut Vec<(usize, f64)>,
+) {
+    let w = s.block_vars.len();
+    let m = w + s.panel_vars.len();
+    let end = r0 + own.len();
+    let inside = |i: usize| (r0..end).contains(&i);
+    outside.clear();
+    outside.extend((0..s.panel_vars.len()).filter(|&p| !inside(s.panel_vars[p])));
+    v.clear();
+    v.extend(s.block_vars.iter().map(|&i| own[i - r0]));
+    v.extend(
+        s.panel_vars
+            .iter()
+            .map(|&i| if inside(i) { own[i - r0] } else { 0.0 }),
+    );
+    for k in 0..w {
+        let vk = v[k];
+        let col = &s.l[k * m + k + 1..(k + 1) * m];
+        for (vi, &l) in v[k + 1..].iter_mut().zip(col) {
+            *vi -= l * vk;
+        }
+        for &p in outside.iter() {
+            out.push((s.panel_vars[p], s.l[k * m + w + p] * vk));
+        }
+    }
+    for (k, &i) in s.block_vars.iter().enumerate() {
+        own[i - r0] = v[k];
+    }
+    for (k, &i) in s.panel_vars.iter().enumerate() {
+        if inside(i) {
+            own[i - r0] = v[w + k];
+        }
+    }
+}
+
+/// One supernode of the backward substitution on the whole of `y`.
+fn backward_step(s: &SnodeNum, y: &mut [f64], v: &mut Vec<f64>) {
+    let w = s.block_vars.len();
+    let m = w + s.panel_vars.len();
+    v.clear();
+    v.extend(s.block_vars.iter().map(|&i| y[i]));
+    v.extend(s.panel_vars.iter().map(|&i| y[i]));
+    // Each column's panel rows first (they do not depend on this block's solve, and four
+    // partial sums keep the multiply-adds from forming one serial chain), then its block rows.
+    for k in (0..w).rev() {
+        let col = &s.l[k * m..(k + 1) * m];
+        let mut acc = v[k] - dot4(&col[w..], &v[w..]);
+        for (&l, &vi) in col[k + 1..w].iter().zip(&v[k + 1..w]) {
+            acc -= l * vi;
+        }
+        v[k] = acc;
+    }
+    for (k, &i) in s.block_vars.iter().enumerate() {
+        y[i] = v[k];
+    }
+}
+
+/// [`backward_step`] on a task's own variables `own` (ids from `r0`), reading every other variable
+/// from `finished`.
+fn backward_step_within(
+    s: &SnodeNum,
+    own: &mut [f64],
+    r0: usize,
+    finished: &[f64],
+    v: &mut Vec<f64>,
+) {
+    let w = s.block_vars.len();
+    let m = w + s.panel_vars.len();
+    let end = r0 + own.len();
+    let value = |own: &[f64], i: usize| {
+        if (r0..end).contains(&i) {
+            own[i - r0]
+        } else {
+            finished[i]
+        }
+    };
+    v.clear();
+    v.extend(s.block_vars.iter().map(|&i| own[i - r0]));
+    v.extend(s.panel_vars.iter().map(|&i| value(own, i)));
+    for k in (0..w).rev() {
+        let col = &s.l[k * m..(k + 1) * m];
+        let mut acc = v[k] - dot4(&col[w..], &v[w..]);
+        for (&l, &vi) in col[k + 1..w].iter().zip(&v[k + 1..w]) {
+            acc -= l * vi;
+        }
+        v[k] = acc;
+    }
+    for (k, &i) in s.block_vars.iter().enumerate() {
+        own[i - r0] = v[k];
     }
 }
 
@@ -1814,6 +2247,69 @@ mod tests {
         );
         let x = f.solve(&[6.0]);
         assert!((x[0] + 2.0).abs() < 1e-15);
+    }
+
+    /// With the `parallel` feature, independent subtrees are factored as tasks and large panel
+    /// updates are split; on one thread the pass is serial. Every thread count gives the same bits:
+    /// L, D, inertia, statistics, solves, and the refusal a serial pass meets first.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn thread_count_changes_no_bit_of_a_factorization_or_its_refusal() {
+        let on = |threads: usize, run: &(dyn Fn() -> String + Sync)| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(run)
+        };
+        // Two singular 2×2 blocks in different subtrees: the serial pass refuses at the first.
+        let blocks = |parts: &[Csr]| {
+            let n: usize = parts.iter().map(Csr::nrows).sum();
+            let mut coo = Coo::new(n, n);
+            let mut base = 0;
+            for p in parts {
+                for r in 0..p.nrows() {
+                    let (cols, vals) = p.row(r);
+                    for (&c, &v) in cols.iter().zip(vals) {
+                        coo.push(base + r, base + c, v);
+                    }
+                }
+                base += p.nrows();
+            }
+            coo.assemble()
+        };
+        let singular = |v: f64| {
+            let mut coo = Coo::new(2, 2);
+            for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                coo.push(r, c, v);
+            }
+            coo.assemble()
+        };
+        let grid = crate::sparse::tests::laplacian_2d(20);
+        let cases = [
+            crate::sparse::tests::laplacian_2d(60),
+            shifted(&crate::sparse::tests::laplacian_2d(40), 0.37),
+            random_sym(2000, 3, 0xBEEF),
+            blocks(&[grid.clone(), singular(1.0), grid, singular(2.0)]),
+        ];
+        let mut split = 0;
+        for (case, a) in cases.iter().enumerate() {
+            let sym = SymbolicLdlt::analyze(a, DirectOrdering::Amd).unwrap();
+            let b: Vec<f64> = (0..a.nrows()).map(|i| (i % 17) as f64 - 8.0).collect();
+            let run = || match sym.factor(a, &LdltOptions::default()) {
+                Ok(f) => {
+                    let x: Vec<u64> = f.solve(&b).iter().map(|v| v.to_bits()).collect();
+                    format!("{:?} {:?} {:?} {x:?}", f.snodes, f.inertia, f.stats)
+                }
+                Err(e) => format!("refused: {e:?}"),
+            };
+            let serial = on(1, &run);
+            assert_eq!(serial, on(4, &run), "case {case}");
+            assert_eq!(serial, on(3, &run), "case {case}");
+            assert_eq!(serial.starts_with("refused"), case == 3, "case {case}");
+            split += usize::from(on(4, &|| format!("{}", sym.subtree_tasks().len())) != "0");
+        }
+        assert!(split >= 3, "subtree tasks ran in {split} cases");
     }
 
     #[test]

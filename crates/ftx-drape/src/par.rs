@@ -24,6 +24,38 @@ pub(crate) fn map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Ve
     (0..n).map(f).collect()
 }
 
+/// `[f(0), …, f(n − 1)]` for a few large, independent tasks (each its own rayon task, however few).
+#[cfg(feature = "parallel")]
+pub(crate) fn map_tasks<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
+    use rayon::prelude::*;
+    (0..n).into_par_iter().with_max_len(1).map(f).collect()
+}
+
+/// `[f(0, items[0]), …]` for a few large tasks that each own their item (such as disjoint `&mut`
+/// slices of one array), each its own rayon task with the `parallel` feature, in order without it.
+#[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+pub(crate) fn map_owned<T: Send, R: Send>(
+    items: Vec<T>,
+    f: impl Fn(usize, T) -> R + Sync + Send,
+) -> Vec<R> {
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        items
+            .into_par_iter()
+            .enumerate()
+            .with_max_len(1)
+            .map(|(i, item)| f(i, item))
+            .collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(i, item)| f(i, item))
+        .collect()
+}
+
 /// `f(0..n)` for a filter whose output for each index depends on that index alone: with the `parallel`
 /// feature and enough items, `f` runs on consecutive ranges of at most `chunk` indices at once and the
 /// pieces are joined in order, which is the same list.
