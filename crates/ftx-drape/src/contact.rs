@@ -408,14 +408,26 @@ pub struct Body {
     winding_tree: WindingOctree,
     /// Names this geometry: a new body and every refit take a fresh number, a clone keeps it. A
     /// contact's candidate list is reused only against the geometry it was built for.
-    generation: u64,
+    generation: Generation,
 }
 
-/// The source of [`Body::generation`] numbers (process-wide; only ever compared for equality).
+/// A [`Body::generation`] number. Process-wide and only ever compared for equality, so it is not part
+/// of the body's state: its `Debug` names it only (a replay that rebuilds the same body must print the
+/// same, as the rollback tests compare solvers by `Debug`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Generation(u64);
+
+impl std::fmt::Debug for Generation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Generation")
+    }
+}
+
+/// The source of [`Body::generation`] numbers.
 static BODY_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn next_body_generation() -> u64 {
-    BODY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+fn next_body_generation() -> Generation {
+    Generation(BODY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Whether two axis-aligned boxes overlap (touching counts).
@@ -1087,7 +1099,7 @@ const NEAR_MARGIN_M: f64 = 1e-9;
 /// test gives the pairs of a fresh grid query, in the same order.
 #[derive(Debug)]
 struct NearList {
-    body: u64,
+    body: Generation,
     triangles: Vec<[usize; 3]>,
     edges: Vec<[usize; 2]>,
     anchor: Vec<Vec3>,
@@ -1096,8 +1108,17 @@ struct NearList {
 }
 
 /// The latest [`NearList`]. Copies of a contact (a step's trial solver) start from the same list.
-#[derive(Debug, Default)]
+/// It is refreshed through shared references (a query on an unchanged contact may replace it) and
+/// never changes a result, so it is not part of a contact's state: its `Debug` names it only, and
+/// state comparisons by `Debug` (rollback tests) see the same contact before and after.
+#[derive(Default)]
 struct NearCache(std::sync::Mutex<Option<std::sync::Arc<NearList>>>);
+
+impl std::fmt::Debug for NearCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NearCache")
+    }
+}
 
 impl Clone for NearCache {
     fn clone(&self) -> Self {
@@ -2012,12 +2033,7 @@ impl Contact {
                 .fold(0.0, largest);
             // NaN anywhere fails the comparison and takes the fresh query below.
             if pad + moved + sweep <= list.pad - NEAR_MARGIN_M {
-                return list
-                    .pairs
-                    .iter()
-                    .copied()
-                    .filter(|&pair| self.body_pair_within(pair, x, p, pad))
-                    .collect();
+                return self.body_pairs_within(&list.pairs, x, p, pad);
             }
         }
         if p.is_some() || !pad.is_finite() || !x.iter().all(|q| q.is_finite()) {
@@ -2025,11 +2041,7 @@ impl Contact {
         }
         let reach = pad + NEAR_SKIN_M;
         let pairs = self.body_candidates(x, None, reach);
-        let out = pairs
-            .iter()
-            .copied()
-            .filter(|&pair| self.body_pair_within(pair, x, None, pad))
-            .collect();
+        let out = self.body_pairs_within(&pairs, x, None, pad);
         self.near.store(NearList {
             body: self.body.generation,
             triangles: self.cloth.triangles.clone(),
@@ -2041,24 +2053,51 @@ impl Contact {
         out
     }
 
-    /// The exact box test [`Contact::body_candidates`] applies to `pair` at `x` (swept by `p`).
-    fn body_pair_within(&self, pair: Pair, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> bool {
+    /// The pairs of `pairs`, in order, that pass the exact box test [`Contact::body_candidates`]
+    /// applies at `x` (swept by `p`). A list in that canonical order holds each cloth primitive's
+    /// pairs together, so its padded box is computed once per run of pairs (the same function of
+    /// the same points each time).
+    fn body_pairs_within(
+        &self,
+        pairs: &[Pair],
+        x: &[Vec3],
+        p: Option<&[Vec3]>,
+        pad: f64,
+    ) -> Vec<Pair> {
         let b = &self.body;
-        match pair {
-            Pair::VertexTri { cv, bt } => {
-                let (lo, hi) = padded_span(&[cv], x, p, pad);
-                overlaps(b.tri_box[bt], lo, hi)
+        let span_of = |kind: u8, index: usize| match kind {
+            0 => padded_span(&[index], x, p, pad),
+            1 => padded_span(&self.cloth.triangles[index], x, p, pad),
+            _ => padded_span(&self.cloth.edges[index], x, p, pad),
+        };
+        let mut out = Vec::new();
+        let mut current: Option<(u8, usize, (Vec3, Vec3))> = None;
+        for &pair in pairs {
+            let (kind, index) = match pair {
+                Pair::VertexTri { cv, .. } => (0, cv),
+                Pair::TriVertex { ct, .. } => (1, ct),
+                Pair::EdgeEdge { ce, .. } => (2, ce),
+                _ => continue,
+            };
+            let (lo, hi) = match current {
+                Some((k, i, span)) if k == kind && i == index => span,
+                _ => {
+                    let span = span_of(kind, index);
+                    current = Some((kind, index, span));
+                    span
+                }
+            };
+            let within = match pair {
+                Pair::VertexTri { bt, .. } => overlaps(b.tri_box[bt], lo, hi),
+                Pair::TriVertex { bv, .. } => overlaps((b.vertices[bv], b.vertices[bv]), lo, hi),
+                Pair::EdgeEdge { be, .. } => overlaps(b.edge_box[be], lo, hi),
+                _ => false,
+            };
+            if within {
+                out.push(pair);
             }
-            Pair::TriVertex { ct, bv } => {
-                let (lo, hi) = padded_span(&self.cloth.triangles[ct], x, p, pad);
-                overlaps((b.vertices[bv], b.vertices[bv]), lo, hi)
-            }
-            Pair::EdgeEdge { ce, be } => {
-                let (lo, hi) = padded_span(&self.cloth.edges[ce], x, p, pad);
-                overlaps(b.edge_box[be], lo, hi)
-            }
-            _ => false,
         }
+        out
     }
 
     fn body_candidates(&self, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> Vec<Pair> {
