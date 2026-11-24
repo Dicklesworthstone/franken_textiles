@@ -969,9 +969,11 @@ impl Search<'_> {
         let mut finish = 0;
         let mut attended = 0;
         for (cell, &count) in counts.iter().enumerate() {
-            if count == 0
-                || state.positions[cell] > count * self.local_orders[cell].operations_per_copy
-            {
+            if count == 0 {
+                continue;
+            }
+            if state.positions[cell] > count * self.local_orders[cell].operations_per_copy {
+                finish = finish.max(state.ready[cell]);
                 continue;
             }
             let (local_attended, feed) = self.local_orders[cell].remaining_bound(
