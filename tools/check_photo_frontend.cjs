@@ -4231,16 +4231,21 @@ test('body-start editor authors and releases per-frame fixed poses with explicit
   assert.equal(p.workers.length,workersBefore);
   assert.match(p.e.bodyStartsError.textContent,/reconcile all starts explicitly/);
 
-  // Boundary value refuses reconciliation and disables button.
+  // Boundary value refuses reconciliation, disables button, and midpoint preserves the start's existing coordinate.
   val0.value='3';val0.handlers.input();
   assert.equal(p.e.bodyStartsReconcile.disabled,true);
   assert.match(p.e.bodyStartsReconcileStatus.textContent,/strictly inside declared bounds/);
+  p.e.bodyStartsMidpoint.onclick();
+  assert.equal(bodyStartField(p,'bodyStart-pose-0-0').value,'0.1');
+  assert.equal(bodyStartField(p,'bodyStart-pose-1-0').value,'0');
+  bodyStartField(p,'bodyStart-pose-1-0').value='0.2';bodyStartField(p,'bodyStart-pose-1-0').handlers.input();
   await p.e.bodyStartsApply.onclick();
   assert.equal(p.workers.length,workersBefore);
   assert.match(p.e.bodyStartsError.textContent,/strictly between/);
 
   // Restore valid 0.25 and click explicit reconcile button -> updates all starts while keeping free coordinates untouched.
-  val0.value='0.25';val0.handlers.input();
+  const val0AfterMid=findById(p.e.bodyStartsFixedPoses,'bodyFixed-value-0-0');
+  val0AfterMid.value='0.25';val0AfterMid.handlers.input();
   assert.equal(p.e.bodyStartsReconcile.disabled,false);
   p.e.bodyStartsReconcile.onclick();
   assert.equal(p.e.bodyStartsReconcile.disabled,true);
@@ -4259,12 +4264,20 @@ test('body-start editor authors and releases per-frame fixed poses with explicit
   assert.deepEqual(sent.starts.map(s=>s.poses[0].values[0]),[0.25,0.25]);
   assert.deepEqual(sent.starts.map(s=>s.poses[1].values[0]),[0.2,0.25]);
 
-  // Tampered worker response with mismatched evidence is rejected fail-closed.
+  // Tampered worker responses (mismatched evidence or >4096-byte evidence) are rejected fail-closed.
   const tamperedFrames=JSON.parse(JSON.stringify(view.frames));
   tamperedFrames[0].fixed_pose={values:{root_x_m:0.25},evidence:'tampered evidence'};
   await w.emit({type:'result',request:msg.request,report:JSON.stringify({...view,
     input:'{"tampered":true}',input_sha256:'b'.repeat(64),starts:sent.starts,frames:tamperedFrames})});
   assert.match(p.e.bodyStartsError.textContent,/controls or frames/);
+  assert.equal(p.urls.size,0);
+  await p.e.bodyStartsApply.onclick();
+  w=p.current();const msgLong=w.messages[0];
+  const oversizedFrames=JSON.parse(JSON.stringify(view.frames));
+  oversizedFrames[0].fixed_pose={values:{root_x_m:0.25},evidence:'x'.repeat(4097)};
+  await w.emit({type:'result',request:msgLong.request,report:JSON.stringify({...view,
+    input:'{"oversized":true}',input_sha256:'b'.repeat(64),starts:sent.starts,frames:oversizedFrames})});
+  assert.match(p.e.bodyStartsError.textContent,/invalid fixed pose controls/);
   assert.equal(p.urls.size,0);
 
   // Genuine worker response succeeds and locks Frame 1 pose control.

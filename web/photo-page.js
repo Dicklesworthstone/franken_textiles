@@ -1059,7 +1059,8 @@ function checkedBodyStartsView(text,input,edits) {
     if(Object.hasOwn(frame,"fixed_pose")) {
       const fixed=frame.fixed_pose;
       if(!fixed || typeof fixed!=="object" || Array.isArray(fixed) || Object.keys(fixed).some(key=>!["values","evidence"].includes(key)) ||
-          typeof fixed.evidence!=="string" || !fixed.evidence.trim() || !fixed.values || typeof fixed.values!=="object" || Array.isArray(fixed.values) ||
+          typeof fixed.evidence!=="string" || !fixed.evidence.trim() || new Blob([fixed.evidence]).size>4096 ||
+          !fixed.values || typeof fixed.values!=="object" || Array.isArray(fixed.values) ||
           !Object.keys(fixed.values).length || Object.entries(fixed.values).some(([name,value])=>{
             const parameter=view.pose.find(p=>p.name===name);
             return !parameter || !Number.isFinite(value) || value<=parameter.lower || value>=parameter.upper;
@@ -2670,15 +2671,17 @@ $("bodyStartsRemove").onclick=()=>{
 };
 $("bodyStartsMidpoint").onclick=()=>{
   if(bodyStartsBusy || bodyFitBusy || bodyPointsBusy || bodyPointsPending || !bodyStartsDraft[bodyStartsSelected]) return;
-  const middle=(parameters,fixedDraft)=>parameters.map(p=>{
+  const current=bodyStartsDraft[bodyStartsSelected];
+  const middle=(parameters,fixedDraft,existing)=>parameters.map((p,index)=>{
     if(Object.hasOwn(fixedDraft?.values ?? {},p.name)) {
       const fixed=validFixedNumber(fixedDraft.values[p.name],p);
-      return fixed!==null?fixed:"";
+      return fixed!==null?fixed:(existing?.[index] ?? "");
     }
     return p.lower/2+p.upper/2;
   });
-  bodyStartsDraft[bodyStartsSelected]={shape:middle(bodyStartsView.shape),
-    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,values:middle(bodyStartsView.pose,bodyStartsFixedDraft[frame.frame_index])}))};
+  bodyStartsDraft[bodyStartsSelected]={shape:middle(bodyStartsView.shape,null,current.shape),
+    poses:bodyStartsView.frames.map(frame=>({frame_index:frame.frame_index,
+      values:middle(bodyStartsView.pose,bodyStartsFixedDraft[frame.frame_index],current.poses.find(p=>p.frame_index===frame.frame_index)?.values)}))};
   pendingBodyStarts(); renderBodyStarts();
 };
 $("bodyStartsReconcile").onclick=()=>{

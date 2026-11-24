@@ -1897,20 +1897,26 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
     zero_draft["fit"]["starts"] = json!([]);
     let zero_text = serde_json::to_string_pretty(&zero_draft).unwrap();
     let opened_zero = body_fit_starts(&model, &zero_text, "").unwrap();
+    let one_value = |name: &str, value: f64| {
+        let mut map = serde_json::Map::new();
+        map.insert(name.to_owned(), json!(value));
+        Value::Object(map)
+    };
     let pose_name = opened_zero["pose"][0]["name"].as_str().unwrap().to_owned();
     let pose_lower = opened_zero["pose"][0]["lower"].as_f64().unwrap();
     let pose_upper = opened_zero["pose"][0]["upper"].as_f64().unwrap();
     // Reversed frame 0 is fixture pose[1], whose true root_x_m is 0.2 m.
     let fixed_val = 0.2_f64;
+    let expected_fixed = json!({
+        "values": one_value(&pose_name, fixed_val),
+        "evidence": "Caller floor tape mark for frame 1"
+    });
     let mut fixed_entries: Vec<Value> = (0..frame_count)
         .map(|idx| {
             if idx == 0 {
                 json!({
                     "frame_index": idx,
-                    "fixed_pose": {
-                        "values": { &pose_name: fixed_val },
-                        "evidence": "Caller floor tape mark for frame 1"
-                    }
+                    "fixed_pose": expected_fixed,
                 })
             } else {
                 json!({"frame_index": idx, "fixed_pose": Value::Null})
@@ -1927,10 +1933,7 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
     });
     let applied_zero = body_fit_starts(&model, &zero_text, &zero_fixed_edits.to_string()).unwrap();
     assert_eq!(applied_zero["starts"], json!([]));
-    assert_eq!(
-        applied_zero["frames"][0]["fixed_pose"],
-        json!({"values": { &pose_name: fixed_val }, "evidence": "Caller floor tape mark for frame 1"})
-    );
+    assert_eq!(applied_zero["frames"][0]["fixed_pose"], expected_fixed);
     assert!(applied_zero["frames"][1].get("fixed_pose").is_none());
     let zero_edited_text = applied_zero["input"].as_str().unwrap();
     let zero_edited_val: Value = serde_json::from_str(zero_edited_text).unwrap();
@@ -1945,7 +1948,7 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
 
     // 2. Apply reconciled starts on top of the fixed pose, verify preview, fit, and frame review.
     let mut reconciled = desired_starts.clone();
-    for start in &mut reconciled {
+    for start in reconciled.as_array_mut().unwrap() {
         for pose in start["poses"].as_array_mut().unwrap() {
             if pose["frame_index"] == 0 {
                 pose["values"][0] = json!(fixed_val);
@@ -1961,10 +1964,7 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
         body_fit_starts(&model, zero_edited_text, &with_starts_edits.to_string()).unwrap();
     let fitted_input = with_starts["input"].as_str().unwrap();
     let start_preview = review_body_fit_start(&model, fitted_input, "0", "0").unwrap();
-    assert_eq!(
-        start_preview["fixed_pose"],
-        json!({"values": { &pose_name: fixed_val }, "evidence": "Caller floor tape mark for frame 1"})
-    );
+    assert_eq!(start_preview["fixed_pose"], expected_fixed);
     let fitted = fit_body(&model, fitted_input, "60", "20000").unwrap();
     assert_eq!(fitted["status"], "ACCEPTED");
     // Fixed coordinate retains zero spread by constraint, not inferred measurement precision.
@@ -1988,16 +1988,13 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
         &canonical_idx.to_string(),
     )
     .unwrap();
-    assert_eq!(
-        frame_review["fixed_pose"],
-        json!({"values": { &pose_name: fixed_val }, "evidence": "Caller floor tape mark for frame 1"})
-    );
+    assert_eq!(frame_review["fixed_pose"], expected_fixed);
 
     // 2b. A wrong caller-supplied fixed pose still passes authoring (it is a caller assumption)
     //     but is rejected by the real image checks during fitting.
     let wrong_val = 0.35_f64;
     let mut wrong_starts = desired_starts.clone();
-    for start in &mut wrong_starts {
+    for start in wrong_starts.as_array_mut().unwrap() {
         for pose in start["poses"].as_array_mut().unwrap() {
             if pose["frame_index"] == 0 {
                 pose["values"][0] = json!(wrong_val);
@@ -2010,7 +2007,7 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
                 json!({
                     "frame_index": idx,
                     "fixed_pose": {
-                        "values": { &pose_name: wrong_val },
+                        "values": one_value(&pose_name, wrong_val),
                         "evidence": "Misplaced caller mark"
                     }
                 })
@@ -2038,8 +2035,8 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
         "20000",
     )
     .unwrap();
-    assert_ne!(
-        wrong_fit["status"], "ACCEPTED",
+    assert_eq!(
+        wrong_fit["status"], "REJECTED",
         "wrong caller-supplied fixed pose must not pass image residual acceptance"
     );
 
@@ -2069,7 +2066,7 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
                 json!({
                     "frame_index": idx,
                     "fixed_pose": {
-                        "values": { &pose_name: fixed_val },
+                        "values": one_value(&pose_name, fixed_val),
                         "evidence": "Explicit mark"
                     }
                 })
@@ -2125,12 +2122,12 @@ fn portable_start_authoring_prescribes_and_releases_per_frame_fixed_poses_with_r
         }),
         ("boundary_lower", {
             let mut v = valid_fixed_req.clone();
-            v["fixed_poses"][0]["fixed_pose"]["values"] = json!({ &pose_name: pose_lower });
+            v["fixed_poses"][0]["fixed_pose"]["values"] = one_value(&pose_name, pose_lower);
             v
         }),
         ("boundary_upper", {
             let mut v = valid_fixed_req.clone();
-            v["fixed_poses"][0]["fixed_pose"]["values"] = json!({ &pose_name: pose_upper });
+            v["fixed_poses"][0]["fixed_pose"]["values"] = one_value(&pose_name, pose_upper);
             v
         }),
         ("missing_frame_entry", {
