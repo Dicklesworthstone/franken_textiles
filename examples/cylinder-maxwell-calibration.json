@@ -1,0 +1,145 @@
+{
+  "schema": "ftx-cylinder-calibration/2",
+  "material": {
+    "id": "synthetic/cylinder-maxwell-identification",
+    "name": "Synthetic Maxwell cylinder identification coupon",
+    "form": "woven",
+    "sources": {
+      "spec": {
+        "reference": "synthetic:constant-orthotropic-maxwell-coupon",
+        "accessed_on": "2026-11-24",
+        "note": "Declared numerical verification inputs and replaceable branch guesses, not measured textile properties. Axial equilibrium modulus 800 N/m, zero Poisson coupling."
+      },
+      "fit_acquisition": {
+        "reference": "synthetic:analytic-green-maxwell-ramp-hold/fit",
+        "accessed_on": "2026-11-24",
+        "note": "Independent continuum calculation: proportional Maxwell ratio 0.6 and recovery time 0.15 s, axial extension ramp 0 to 0.04 over 0.2 s, then hold. Force is circumference times stretch times equilibrium-plus-Maxwell second-Piola resultant. Not empirical observations."
+      },
+      "fit_fast_acquisition": {
+        "reference": "synthetic:analytic-green-maxwell-ramp-hold/fit-fast",
+        "accessed_on": "2026-11-24",
+        "note": "Second independent continuum FIT calculation with extension 0.05 over 0.1 s, then hold. This distinct amplitude and ramp rate broaden the actually simulated FIT strain histories and constrain recovery across loading rates. Same analytic Maxwell convolution, not a forward-solver-generated target or empirical observation."
+      },
+      "fit_torsion_acquisition": {
+        "reference": "synthetic:analytic-green-maxwell-small-torsion/fit",
+        "accessed_on": "2026-11-24",
+        "note": "Independent small-angle continuum calculation, not measured or solver-generated data: ramp axial extension to 0.01 over 0.1 s, hold, then twist to +0.05 and -0.05 degrees. With gamma=R*theta/L, torque is 2*pi*R^2*[G*(gamma+0.6*z_shear)+gamma*800*(E_axial+0.6*z_axial)], dz/dt=strain_rate-z/0.15. Axial Green-strain ramp convolution is analytic. Higher-order torsion geometry, faceting and inertia remain explicit approximation errors covered by the declared 0.001 N*m residual scale and mesh/time gates. This acquired bidirectional shear history supplies actual FIT support beyond axial loading."
+      },
+      "check_acquisition": {
+        "reference": "synthetic:analytic-green-maxwell-ramp-hold/check",
+        "accessed_on": "2026-11-24",
+        "note": "Held-out continuum calculation using the same declared law, extension 0.03 over 0.15 s and a distinct hold clock. CHECK does not select coefficients. Not empirical observations."
+      }
+    },
+    "properties": {
+      "areal_density": {"value": 0.15, "unit": "kg/m2", "evidence": "estimate", "source": "spec", "method": "Synthetic reference sheet mass"},
+      "warp_stiffness": {"value": 800.0, "unit": "N/m", "evidence": "estimate", "source": "spec", "method": "Synthetic equilibrium modulus", "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"}},
+      "weft_stiffness": {"value": 600.0, "unit": "N/m", "evidence": "estimate", "source": "spec", "method": "Synthetic equilibrium modulus", "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"}},
+      "poisson_warp_weft": {"value": 0.0, "unit": "1", "evidence": "estimate", "source": "spec", "method": "Synthetic uncoupled reference", "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"}},
+      "shear_stiffness": {"value": 200.0, "unit": "N/m", "evidence": "estimate", "source": "spec", "method": "Synthetic equilibrium modulus", "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"}}
+    },
+    "membrane_relaxation": {
+      "model": "green_maxwell/1",
+      "branches": [{
+        "id": "recovery",
+        "stiffness_ratio": {"value": 0.4, "unit": "1", "evidence": "estimate", "source": "spec", "method": "Replaceable synthetic branch guess", "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"}},
+        "relaxation_time": {"value": 0.1, "unit": "s", "evidence": "estimate", "source": "spec", "method": "Replaceable synthetic branch guess", "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"}}
+      }],
+      "initialization": "stress_free_reference",
+      "strain_range": [[-0.1, 0.1], [-0.1, 0.1], [-0.1, 0.1]],
+      "source": "spec",
+      "method": "Declared one-branch proportional Maxwell verification model, preserving equilibrium and original strain domain",
+      "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"},
+      "integration": "exact_exponential"
+    }
+  },
+  "method": "Synthetic analytic ramp/hold identification through actual cylindrical-holder dynamics. Continuum acquisition forces permit explicit finite-step, mesh and inertia differences; this example supplies no measured textile qualification.",
+  "conditions": {"specimen_id": "synthetic-cylinder-history", "conditioning": "synthetic dry reference"},
+  "fitted_on": "2026-11-24",
+  "targets": [
+    {"parameter": "maxwell_stiffness_ratio", "branch_id": "recovery", "bounds": [0.2, 1.0]},
+    {"parameter": "maxwell_relaxation_time", "branch_id": "recovery", "bounds": [0.05, 0.3]}
+  ],
+  "experiments": [
+    {
+      "id": "fit-ramp-hold",
+      "fixture": {"holder_radius_m": 0.04, "specimen_width_m": 0.26, "specimen_height_m": 0.11, "nominal_free_height_m": 0.05, "pretension_displacement_m": 0.0, "warp_axis": [0.0, 1.0], "cells": [8, 2]},
+      "loading": [
+        {"time_s": 0.0, "axial_displacement_m": 0.0, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.2, "axial_displacement_m": 0.002, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.3, "axial_displacement_m": 0.002, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.5, "axial_displacement_m": 0.002, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.8, "axial_displacement_m": 0.002, "rotation_deg": 0.0, "clamp_slip_m": 0.0}
+      ],
+      "source": "fit_acquisition", "evidence": "estimate", "partition": "fit",
+      "observations": [
+        {"id": "fit-ramp", "waypoint_index": 1, "force_n": {"value": 11.370594542117086, "scale": 0.02}},
+        {"id": "fit-hold-1", "waypoint_index": 2, "force_n": {"value": 9.989120183023312, "scale": 0.02}},
+        {"id": "fit-hold-2", "waypoint_index": 3, "force_n": {"value": 8.915694910122612, "scale": 0.02}},
+        {"id": "fit-hold-3", "waypoint_index": 4, "force_n": {"value": 8.583460373109183, "scale": 0.02}}
+      ]
+    },
+    {
+      "id": "fit-fast-ramp-hold",
+      "fixture": {"holder_radius_m": 0.04, "specimen_width_m": 0.26, "specimen_height_m": 0.11, "nominal_free_height_m": 0.05, "pretension_displacement_m": 0.0, "warp_axis": [0.0, 1.0], "cells": [8, 2]},
+      "loading": [
+        {"time_s": 0.0, "axial_displacement_m": 0.0, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.1, "axial_displacement_m": 0.0025, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.2, "axial_displacement_m": 0.0025, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.4, "axial_displacement_m": 0.0025, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.7, "axial_displacement_m": 0.0025, "rotation_deg": 0.0, "clamp_slip_m": 0.0}
+      ],
+      "source": "fit_fast_acquisition", "evidence": "estimate", "partition": "fit",
+      "observations": [
+        {"id": "fit-fast-ramp", "waypoint_index": 1, "force_n": {"value": 15.57058027340158, "scale": 0.02}},
+        {"id": "fit-fast-hold-1", "waypoint_index": 2, "force_n": {"value": 13.258856548933982, "scale": 0.02}},
+        {"id": "fit-fast-hold-2", "waypoint_index": 3, "force_n": {"value": 11.462614256434646, "scale": 0.02}},
+        {"id": "fit-fast-hold-3", "waypoint_index": 4, "force_n": {"value": 10.906661512002046, "scale": 0.02}}
+      ]
+    },
+    {
+      "id": "fit-bidirectional-torsion",
+      "fixture": {"holder_radius_m": 0.04, "specimen_width_m": 0.26, "specimen_height_m": 0.11, "nominal_free_height_m": 0.05, "pretension_displacement_m": 0.0, "warp_axis": [0.0, 1.0], "cells": [8, 2]},
+      "loading": [
+        {"time_s": 0.0, "axial_displacement_m": 0.0, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.1, "axial_displacement_m": 0.0005, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.2, "axial_displacement_m": 0.0005, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.3, "axial_displacement_m": 0.0005, "rotation_deg": 0.05, "clamp_slip_m": 0.0},
+        {"time_s": 0.4, "axial_displacement_m": 0.0005, "rotation_deg": 0.05, "clamp_slip_m": 0.0},
+        {"time_s": 0.6, "axial_displacement_m": 0.0005, "rotation_deg": -0.05, "clamp_slip_m": 0.0},
+        {"time_s": 0.7, "axial_displacement_m": 0.0005, "rotation_deg": -0.05, "clamp_slip_m": 0.0}
+      ],
+      "source": "fit_torsion_acquisition", "evidence": "estimate", "partition": "fit",
+      "observations": [
+        {"id": "fit-positive-twist", "waypoint_index": 3, "torque_nm": {"value": 0.002081326955513999, "scale": 0.001}},
+        {"id": "fit-positive-hold", "waypoint_index": 4, "torque_nm": {"value": 0.0017790509324775302, "scale": 0.001}},
+        {"id": "fit-negative-twist", "waypoint_index": 5, "torque_nm": {"value": -0.0023081003116402557, "scale": 0.001}},
+        {"id": "fit-negative-hold", "waypoint_index": 6, "torque_nm": {"value": -0.0018954802556532249, "scale": 0.001}}
+      ]
+    },
+    {
+      "id": "check-ramp-hold",
+      "fixture": {"holder_radius_m": 0.04, "specimen_width_m": 0.26, "specimen_height_m": 0.11, "nominal_free_height_m": 0.05, "pretension_displacement_m": 0.0, "warp_axis": [0.0, 1.0], "cells": [8, 2]},
+      "loading": [
+        {"time_s": 0.0, "axial_displacement_m": 0.0, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.15, "axial_displacement_m": 0.0015, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.25, "axial_displacement_m": 0.0015, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.45, "axial_displacement_m": 0.0015, "rotation_deg": 0.0, "clamp_slip_m": 0.0},
+        {"time_s": 0.7, "axial_displacement_m": 0.0015, "rotation_deg": 0.0, "clamp_slip_m": 0.0}
+      ],
+      "source": "check_acquisition", "evidence": "estimate", "partition": "check",
+      "observations": [
+        {"id": "check-ramp", "waypoint_index": 1, "force_n": {"value": 8.703494366415889, "scale": 0.02}},
+        {"id": "check-hold-1", "waypoint_index": 2, "force_n": {"value": 7.536917490304552, "scale": 0.02}},
+        {"id": "check-hold-2", "waypoint_index": 3, "force_n": {"value": 6.6304706255064945, "scale": 0.02}},
+        {"id": "check-hold-3", "waypoint_index": 4, "force_n": {"value": 6.367289318892206, "scale": 0.02}}
+      ]
+    }
+  ],
+  "admit_cylindrical_shell_model": true,
+  "allow_estimated_observations": true,
+  "replace_existing": true,
+  "allow_estimates": true,
+  "controls": {"max_step_s": 0.025, "max_steps": 128, "force_tolerance_n": 0.000001, "velocity_tolerance_m_s": 0.00000001},
+  "policy": {"max_rms_scaled": 0.2, "max_peak_scaled": 0.3, "max_mesh_scaled": 0.2, "max_time_scaled": 0.2, "min_excitation_pivot": 0.0001, "max_iterations": 40, "max_forward_solves": 32768}
+}

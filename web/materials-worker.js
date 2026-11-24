@@ -1,9 +1,9 @@
 // The only network request loads the local application bundle. User evidence is never uploaded.
 // Every operation carries explicit inputs; no old pattern/drape survives a failed replacement.
-import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-24.4";
-const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-24.4";
+import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-24.5";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-24.5";
 let failure = null, active = null;
-const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-24.4", import.meta.url) }).then(() => {
+const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-24.5", import.meta.url) }).then(() => {
   if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
       (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== EXPECTED_WASM_STAMP)) {
     throw new Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
@@ -457,7 +457,7 @@ self.onmessage = async ({ data: msg }) => {
           }
         }
         if (msg.type === "cylinderFit") {
-          if (result.calibration?.schema !== "ftx-cylinder-calibration-report/1" || typeof result.calibration.accepted !== "boolean") {
+          if (!["ftx-cylinder-calibration-report/1", "ftx-cylinder-calibration-report/2"].includes(result.calibration?.schema) || typeof result.calibration.accepted !== "boolean") {
             throw Error("Rebuild web/pkg: incomplete cylinder calibration decision.");
           }
           if (result.calibration.accepted) {

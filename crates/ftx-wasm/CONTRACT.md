@@ -722,3 +722,11 @@ exact Rust-generated replay or conditional `Selection` JSON (`cylinderFit` adopt
 fit and geometry changes also withdraw draped vapor outputs. Scenario displays retain independent
 initial and motion-endpoint vapor outcomes. Forward experiment controls do not create fitted selections, replace
 existing assignments, infer wearer evaporation or couple latent cooling into dry heat.
+
+`material_calibrate_cylinder` also accepts `ftx-cylinder-calibration/2` for the shared source-qualified
+Maxwell inverse solver. The `/2` report retains exact branch identities, complete history predictions,
+FIT-only support and the required doubled-time-step comparison. The workbench accepts both report
+versions, displays branch targets and temporal acceptance, and retains exact Rust-generated source,
+report and frozen-selection bytes. Failed calibration cannot be assigned, and request changes
+invalidate prior results. Native and portable adapters share the same calibration and subsequent
+frozen-material forward replay; synthetic recovery does not qualify measured material behavior.

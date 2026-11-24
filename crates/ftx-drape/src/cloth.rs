@@ -3112,8 +3112,9 @@ impl Solver {
 
     /// Implicit-Euler (or configured [`TimeIntegrator`]) step from the accepted physical state
     /// `self.x` (`x_n`), optionally seeding free DOFs of the Newton minimizer at `guess` without
-    /// altering `x_n` in the inertia predictor or post-step velocity. Falls back to `step` when
-    /// contact or finite-angle bending is active.
+    /// altering `x_n` in the inertia predictor or post-step velocity. Material histories remain
+    /// frozen until the endpoint converges. Falls back to `step` when contact or finite-angle
+    /// bending is active.
     pub(crate) fn step_with_guess(
         &mut self,
         h: f64,
@@ -3139,10 +3140,74 @@ impl Solver {
                     "Generalized-alpha integration is not admitted for backward-Euler material-history fields; use TimeIntegrator::ImplicitEuler",
                 ));
             }
-            return self.relaxing_step(h, None, None);
+            return self.relaxing_step(h, None, guess);
         }
         let mut trial = self.clone();
         let report = trial.step_inner_with_guess(h, None, guess)?;
+        if trial.v.iter().any(|v| !v.is_finite()) || trial.a.iter().any(|a| !a.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "the cloth velocity or acceleration became non-finite",
+            ));
+        }
+        *self = trial;
+        Ok(report)
+    }
+
+    /// Warm-start a contact-free prescribed-holder step after the caller updates fixed positions.
+    /// `accepted_positions` is the complete pose captured immediately before that boundary update;
+    /// every free component must still equal it. Validate that physical source pose, rather than
+    /// mistaking the mixed old-free/new-fixed coordinates for an accepted material state. Inertia
+    /// and velocities retain their ordinary arithmetic, and the new guess needs full admission.
+    pub(crate) fn step_with_prescribed_boundary_guess(
+        &mut self,
+        h: f64,
+        accepted_positions: &[Vec3],
+        guess: &[Vec3],
+    ) -> Result<SolveReport, Refusal> {
+        if accepted_positions.len() != self.x.len() || guess.len() != self.x.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "prescribed-boundary source and guess must match the vertex count",
+            ));
+        }
+        if self.contact.is_some()
+            || self.integrator != TimeIntegrator::ImplicitEuler
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+            || self.model.bending_model == BendingModel::DiscreteShells
+            || self.damping.rayleigh_bending_s > 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "prescribed-boundary warm starts require contact-free implicit Euler without plasticity, finite-angle bending or bending-rate damping",
+            ));
+        }
+        for (i, (accepted, current)) in accepted_positions.iter().zip(&self.x).enumerate() {
+            if !accepted.is_finite() || !current.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "prescribed-boundary source and fixed positions must be finite",
+                ));
+            }
+            if (0..3)
+                .any(|axis| self.free[3 * i + axis].is_some() && accepted[axis] != current[axis])
+            {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "a prescribed boundary update may change only fixed position components",
+                ));
+            }
+        }
+        self.check_liquid_mass()?;
+        self.model.check_attached_mass()?;
+        self.check_constitutive_models()?;
+        if self.relaxation.is_some() {
+            return self.relaxing_step_from_source(h, None, Some(guess), Some(accepted_positions));
+        }
+        let mut trial = self.clone();
+        let report =
+            trial.step_inner_from_source(h, None, Some(guess), Some(accepted_positions))?;
         if trial.v.iter().any(|v| !v.is_finite()) || trial.a.iter().any(|a| !a.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
@@ -3238,10 +3303,21 @@ impl Solver {
         body_start: Option<&[Vec3]>,
         guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
+        self.step_inner_from_source(h, body_start, guess, None)
+    }
+
+    fn step_inner_from_source(
+        &mut self,
+        h: f64,
+        body_start: Option<&[Vec3]>,
+        guess: Option<&[Vec3]>,
+        accepted_positions: Option<&[Vec3]>,
+    ) -> Result<SolveReport, Refusal> {
         self.check_integrator_history()?;
-        self.model.check_membrane_domains(&self.x)?;
-        self.model.check_panel_bending_domains(&self.x)?;
-        self.model.check_dihedral_domains(&self.x)?;
+        let source = accepted_positions.unwrap_or(&self.x);
+        self.model.check_membrane_domains(source)?;
+        self.model.check_panel_bending_domains(source)?;
+        self.model.check_dihedral_domains(source)?;
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,

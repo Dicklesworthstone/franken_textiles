@@ -87,6 +87,170 @@ fn directory() -> std::path::PathBuf {
 }
 
 #[test]
+fn history_cylinder_calibration_recovers_relaxation_and_replays_through_both_commands() {
+    let source = include_str!("../../../examples/cylinder-maxwell-calibration.json");
+    let original: Value = serde_json::from_str(source).unwrap();
+    let input: ftx_drape::cylinder::fit::Input = serde_json::from_value(original.clone()).unwrap();
+    let portable: Value =
+        serde_json::from_str(&ftx_wasm::materials::calibrate_cylinder(source, true).unwrap())
+            .unwrap();
+    let report = &portable["calibration"];
+    assert_eq!(report["schema"], "ftx-cylinder-calibration-report/2");
+    assert_eq!(report["accepted"], true, "{}", report["reasons"]);
+    assert_eq!(report["domain_replay_verified"], true);
+    assert_eq!(report["temporal_refinement"]["subdivision_factor"], 2);
+    assert_eq!(report["temporal_refinement"]["accepted"], true);
+    assert_eq!(portable["simulation_ready"], false);
+    assert_eq!(portable["fit_claim"], false);
+    assert_eq!(portable["empirical_validation_claim"], false);
+
+    let frozen = portable["selection_json"].as_str().unwrap();
+    let selection: ftx_pattern::material_catalog::Selection = serde_json::from_str(frozen).unwrap();
+    let material = selection.record.as_ref().unwrap();
+    let branch = &material.membrane_relaxation.as_ref().unwrap().branches[0];
+    // The literal acquisition forces come from an independent continuum Maxwell ramp/hold
+    // calculation. Allow only the declared discretization/inertia difference in this 3D solve.
+    assert!(
+        (branch.stiffness_ratio.value - 0.6).abs() < 0.006,
+        "{}",
+        report["parameters"]
+    );
+    assert!(
+        (branch.relaxation_time.value - 0.15).abs() < 0.0015,
+        "{}",
+        report["parameters"]
+    );
+    assert_eq!(
+        serde_json::to_value(&material.properties).unwrap(),
+        serde_json::to_value(&input.material.properties).unwrap()
+    );
+    assert_eq!(
+        branch.stiffness_ratio.evidence,
+        ftx_pattern::materials::Evidence::Estimate
+    );
+    assert_eq!(
+        branch.relaxation_time.evidence,
+        ftx_pattern::materials::Evidence::Estimate
+    );
+    assert!(branch.stiffness_ratio.bounds.is_none());
+    assert!(branch.relaxation_time.bounds.is_none());
+    assert_eq!(branch.id, "recovery");
+
+    let dir = directory();
+    let path = dir.join("history-calibration.json");
+    fs::write(&path, source).unwrap();
+    for main in [false, true] {
+        let mut command = Command::new(if main {
+            env!("CARGO_BIN_EXE_ftx")
+        } else {
+            env!("CARGO_BIN_EXE_ftx-materials")
+        });
+        if main {
+            command.args(["--json", "materials"]);
+        }
+        let output = command
+            .arg("calibrate-cylinder")
+            .arg(&path)
+            .arg("--allow-estimates")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let native = if main { &native["result"] } else { &native };
+        assert_eq!(&native["calibration"], report);
+        assert_eq!(native["selection_json"], frozen);
+    }
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
+
+    // Frozen predictions replay on the reported doubled mesh with the entire timed history.
+    let check = input
+        .experiments
+        .iter()
+        .find(|e| e.partition == ftx_pattern::material_calibration::Partition::Check)
+        .unwrap();
+    let mut fixture = check.fixture.clone();
+    fixture.cells = fixture.cells.map(|n| n * 2);
+    let frozen_law = ftx_pattern::textile_import::catalog()
+        .unwrap()
+        .resolve(&selection)
+        .unwrap()
+        .membrane_relaxation()
+        .unwrap()
+        .unwrap();
+    let replay_request = ftx_drape::cylinder::Request {
+        schema: ftx_drape::cylinder::REQUEST_SCHEMA.into(),
+        material: selection,
+        fixture,
+        loading: check.loading.clone(),
+        nominal_protocol: None,
+        controls: input.controls,
+    };
+    let replay = ftx_drape::cylinder::evaluate(&replay_request).unwrap();
+    for prediction in report["predictions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["experiment"] == check.id)
+    {
+        let row = check
+            .observations
+            .iter()
+            .find(|row| prediction["observation"] == row.id)
+            .unwrap();
+        let state = replay
+            .states
+            .iter()
+            .find(|state| state.time_s == check.loading[row.waypoint_index].time_s)
+            .unwrap();
+        let mut predicted = prediction["state"].clone();
+        let mut replayed = serde_json::to_value(state).unwrap();
+        let predicted_elements = predicted["relaxation"]["elements"].as_array_mut().unwrap();
+        let replayed_elements = replayed["relaxation"]["elements"].as_array_mut().unwrap();
+        assert_eq!(predicted_elements.len(), replayed_elements.len());
+        for (candidate, frozen) in predicted_elements.iter_mut().zip(replayed_elements) {
+            // Publication changes quantity provenance, hence the law identity, while preserving
+            // all physical coefficients and accepted memory. Verify the new identity separately.
+            assert_ne!(candidate["law_sha256"], frozen["law_sha256"]);
+            assert_eq!(frozen["law_sha256"], frozen_law.fingerprint());
+            candidate.as_object_mut().unwrap().remove("law_sha256");
+            frozen.as_object_mut().unwrap().remove("law_sha256");
+        }
+        assert_eq!(
+            sha256_hex(&serde_json::to_vec(&predicted).unwrap()),
+            sha256_hex(&serde_json::to_vec(&replayed).unwrap()),
+            "physical prediction and full history replay differ at {}",
+            state.time_s
+        );
+    }
+
+    // CHECK can reject the already selected coefficients, never improve or replace them.
+    let mut corrupted = original;
+    let held_out = corrupted["experiments"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["partition"] == "check")
+        .unwrap();
+    let value = held_out["observations"][1]["force_n"]["value"]
+        .as_f64()
+        .unwrap();
+    held_out["observations"][1]["force_n"]["value"] = json!(value + 0.5);
+    let rejected: Value = serde_json::from_str(
+        &ftx_wasm::materials::calibrate_cylinder(&corrupted.to_string(), true).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rejected["calibration"]["accepted"], false);
+    assert_eq!(rejected["calibration"]["parameters"], report["parameters"]);
+    assert!(rejected["selection"].is_null());
+    assert!(rejected["selection_json"].is_null());
+}
+
+#[test]
 fn both_native_entry_points_preserve_source_conditions_and_exact_frozen_forward_replay() {
     let input = request();
     let typed: Request = serde_json::from_value(input.clone()).unwrap();

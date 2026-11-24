@@ -24937,6 +24937,70 @@ test('strip history, cylinder experiment and fold summaries surface opt-in exact
   assert.match(idx.e.foldSummary.innerHTML, /Maxwell relaxation integration: exact_exponential\./);
 });
 
+test('Maxwell cylinder identification retains exact sources and branch identity with independent temporal acceptance', async () => {
+  const branch='slow <literal> café',temporal={subdivision_factor:2,max_step_s:0.025,refined_max_step_s:0.0125,peak_scaled:0.03,accepted:true};
+  const report=(version,accepted=true,admission=false)=>{
+    const r=calibrationReport('nonlinear',admission),quality=r.calibration.fit;
+    r.calibration={schema:`ftx-cylinder-calibration-report/${version}`,accepted,input_sha256:'c'.repeat(64),
+      input:{policy:{max_forward_solves:500,max_mesh_scaled:0.25,...(version===2?{max_time_scaled:0.1}: {})}},
+      parameters:version===2?[1000,0.4,0.25]:[1000],
+      parameter_descriptors:[{key:'warp_stiffness',unit:'N/m',bounds:[100,2000]},
+        ...(version===2?[{key:'maxwell_stiffness_ratio',branch_id:branch,unit:'1',bounds:[0.1,0.8]},
+          {key:'maxwell_relaxation_time',branch_id:branch,unit:'s',bounds:[0.05,1]}]:[])],
+      fitted_green_strain_range:[[0,0.02],[0,0.01],[-0.01,0.01]],
+      fit:quality,check:quality,starts:[{converged:true}],excitation_pivot:0.4,forward_solves:36,
+      mesh_change_peak_scaled:0.02,domain_replay_verified:accepted,predictions:[],
+      reasons:accepted?[]:['Temporal refinement exceeds the declared limit.'],
+      ...(version===2?{temporal_refinement:{...temporal,accepted,peak_scaled:accepted?0.03:0.2}}:{})};
+    r.simulation_ready=accepted&&admission;
+    if(!accepted)Object.assign(r,{selection:null,selection_json:null,material:null});
+    return r;
+  };
+  const source=' {\r\n"schema":"ftx-cylinder-calibration/2","allow_estimates":true,"source":{"seed":18446744073709551615,"origin":-0.0},'+
+    '"targets":[{"parameter":"maxwell_stiffness_ratio","branch_id":"slow <literal> café","bounds":[0.1,0.8]}],'+
+    '"policy":{"max_time_scaled":1.000e-1}}\r\n';
+  for(const version of [1,2])for(const accepted of [false,true])for(const admission of [false,true]) {
+    const input=source.replace('/2',`/${version}`).replace('"allow_estimates":true',`"allow_estimates":${admission}`),
+      r=report(version,accepted,admission),raw=' '+JSON.stringify(r)+'\n',calls=[];
+    const w=await workerModule({bindings:{default:async()=>{},material_calibrate_cylinder:(...args)=>{calls.push(args);return raw;}}});
+    const result=await w.send({type:'cylinderFit',stripRequest:input});assert.equal(result.type,'result',result.message);
+    assert.deepEqual(calls,[[input,admission]]);assert.equal(result.files.find(f=>f.name==='cylinder-calibration-input.json').text,input);
+    assert.equal(result.files.find(f=>f.name==='cylinder-calibration-report.json').text,raw);
+    assert.equal(result.files.some(f=>f.name==='cylinder-calibrated-selection.json'),accepted);
+    if(accepted)assert.equal(result.files.find(f=>f.name==='cylinder-calibrated-selection.json').text,r.selection_json);
+  }
+  for(const r of [{...report(2,false),selection_json:calibrationSelection(true)},
+    {...report(2),selection_json:null},report(3)]) {
+    const w=await workerModule({bindings:{default:async()=>{},material_calibrate_cylinder:()=>JSON.stringify(r)}});
+    assert.equal((await w.send({type:'cylinderFit',stripRequest:source})).type,'error');
+    assert.equal(w.sent.some(m=>m.type==='result'),false);
+  }
+  const p=await pageModule();await p.load();p.select('cylinderFitRequest',source);p.e.cylinderFitRequest.handlers.change();
+  await p.e.cylinderFit.onclick();assert.equal(p.current().messages.at(-1).stripRequest,source);
+  const r=report(2,true,true),raw=JSON.stringify(r);
+  p.emit(r,[{name:'cylinder-calibration-report.json',text:raw,mime:'application/json'},
+    {name:'cylinder-calibrated-selection.json',text:r.selection_json,mime:'application/json'}]);
+  const s=section(p,'Cylindrical-holder identification'),table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Identified canonical shell and Maxwell branch parameters');
+  assert.deepEqual(plain(table.children[2].children.map(n=>n.textContent)),['warp_stiffness','Not applicable','N/m','100','1000','2000']);
+  assert.deepEqual(plain(table.children[3].children.map(n=>n.textContent)),['maxwell_stiffness_ratio',branch,'1','0.1','0.4','0.8']);
+  assert.deepEqual(plain(table.children[4].children.map(n=>n.textContent)),['maxwell_relaxation_time',branch,'s','0.05','0.25','1']);
+  assert.match(visibleText(s),/Doubled temporal subdivisions at the fixed candidate/);
+  assert.match(visibleText(s),/two substeps for every original step/);assert.match(visibleText(s),/step upper bounds/);
+  assert.deepEqual(JSON.parse(s.children[1].textContent).temporal_refinement,temporal);
+  assert.equal(p.e.selection.value,r.selection_json);assert.equal(p.e.assign.disabled,false);
+  const download=descendants(s).find(n=>n.download==='cylinder-calibration-report.json');assert.equal(await p.blobs.get(download.href).text(),raw);
+  p.e.target.value='front';p.e.assign.onclick();await p.e.bind.onclick();assert.ok(p.current().messages.at(-1).changes.includes(r.selection_json));p.emit({pattern_json:'{}',pieces:[]});
+  p.e.cylinderFitRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.e.assign.disabled,true);
+  await p.e.cylinderFit.onclick();p.emit(report(2,false));
+  assert.match(visibleText(s),/Temporal refinement exceeds the declared limit/);assert.equal(p.e.assign.disabled,true);assert.equal(p.e.selection.value,'');
+  assert.equal(JSON.parse(s.children[1].textContent).temporal_refinement.accepted,false);
+  await p.e.cylinderFit.onclick();p.emit(report(1));
+  assert.doesNotMatch(visibleText(s),/Doubled temporal subdivisions/);
+  assert.equal(Object.hasOwn(JSON.parse(s.children[1].textContent),'temporal_refinement'),false);
+  const legacy=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Identified canonical shell parameters');
+  assert.deepEqual(plain(legacy.children[2].children.map(n=>n.textContent)),['warp_stiffness','N/m','100','1000','2000']);
+});
+
 test('cylinder calibration surfaces opt-in adjoint sensitivity and thermal views surface microclimate_convection without altering defaults', async () => {
   const p = await pageModule();
 

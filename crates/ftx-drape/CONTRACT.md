@@ -1519,6 +1519,23 @@ mesh stability `<= max_mesh_scaled`, independent held-out `CHECK` residuals with
 promoted to unloaded contact `thickness`; `fit_claim` and `empirical_validation_claim` remain `false`, and
 empirical calibration against external raw Fabric-101 curve archives and physical coupons remains open under `ftx-tm2.1`.
 
+Opt-in `ftx-cylinder-calibration/2` retains this optimizer and adds exact-branch
+`maxwell_stiffness_ratio` and `maxwell_relaxation_time` targets, with one to five total scalar/branch
+coordinates. A source-qualified Maxwell law, matching specimen/conditioning, explicit replacement
+permission and pristine timed start are required; orthotropic branches admit recovery-time fitting
+without replacing their tensors. Every waypoint and hold advances the production history kernel.
+Non-contact Maxwell cylinders may seed Newton with an affine holder-motion guess; the prior physical
+state, inertia and accepted memory remain unchanged until convergence, with transactional refusal.
+Finite-difference sensitivity and positive `max_time_scaled` are mandatory. On the doubled spatial
+mesh, each original interval's step count is doubled, including short intervals, under the existing
+step, vertex-state and forward-solve caps. The report records this temporal comparison separately
+from residual and mesh gates. FIT-only support constrains the replaced estimate quantities and
+intersects independently fitted equilibrium support; CHECK cannot widen it. Full frozen-law replay
+precedes publication. `history_calibration`, `history_warm_guess`, material-domain unit tests and
+the native/portable `strip_experiment_workflow` exercise analytic ramp/hold recovery, exact physical
+memory replay, rollback and held-out rejection. `/1` remains the existing elastic contract; plastic
+identification and empirical Fabric-101 qualification remain outside this extension.
+
 **Material-frame strain consumer** (`study::strain`, `ftx-ds2`). Optional scenario `material_strain`
 requests raw `[E11, E22, 2E12]` on explicitly selected retained instances or the whole retained garment.
 The ordinary production membrane gradients and welded triangle ownership define material axes;

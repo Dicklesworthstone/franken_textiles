@@ -222,10 +222,12 @@ fn build_static_calibration_input() -> (Input, Request) {
             TargetParameter {
                 parameter: TargetKind::WarpStiffness,
                 bounds: [500.0, 1400.0],
+                branch_id: None,
             },
             TargetParameter {
                 parameter: TargetKind::BendingRigidity,
                 bounds: [1.0e-3, 5.0e-3],
+                branch_id: None,
             },
         ],
         experiments: vec![
@@ -242,6 +244,7 @@ fn build_static_calibration_input() -> (Input, Request) {
             max_rms_scaled: 0.35,
             max_peak_scaled: 0.6,
             max_mesh_scaled: 0.6,
+            max_time_scaled: None,
             min_excitation_pivot: 1e-4,
             max_iterations: 40,
             max_forward_solves: 2048,
