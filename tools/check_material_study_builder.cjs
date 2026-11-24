@@ -896,6 +896,78 @@ test('guided fractional-Zener lowering builds exact requests with optional repla
   ]) assert.throws(()=>build(bad));
 });
 
+test('motion wind schedules retain authored intervals through sampling and independently frozen cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const ordinary=motionState(),legacy=motion(ordinary);
+  const input={...ordinary,keyframes:[...ordinary.keyframes,{time_s:0.5,arm_abduction_deg:45}],
+    source_pose_sampling:{max_step_s:0.05,max_segments:10},
+    air_velocity_schedule_m_s:[[1.25,-0.5,0],[-2,0,0.75]]};
+  const before=JSON.stringify(input),authored=motion(input);
+  assert.deepEqual(JSON.parse(authored),{schema:'ftx-drape-motion/1',...input});
+  assert.equal(JSON.stringify(input),before,'Authoring must not expand or mutate the original intervals');
+  const air={rho_air_kg_m3:1.225,c_normal:1.2,c_tangent:0.05,eps_v_m_s:0.001,air_velocity_m_s:[0,0,0.1]};
+  const scenario={...scenarioState(),options:{...scenarioState().options,damping:{air_drag:air}},
+    maxVertexFrames:32000000,maxMotionTrials:128};
+  const first=single({...scenario,motion:input});
+  input.air_velocity_schedule_m_s[0][0]=3;
+  const second=single({...scenario,motion:input});
+  const frozen=matrix({maxEvaluations:2,cases:[{key:'breeze',scenario:first},{key:'gust',scenario:second}]});
+  assert.ok(frozen.includes(first));assert.ok(frozen.includes(second));
+  assert.deepEqual(JSON.parse(frozen).cases.map(item=>item.scenario.motion.air_velocity_schedule_m_s[0][0]),[1.25,3]);
+  assert.deepEqual(JSON.parse(first).options.damping.air_drag,air,'Initial drape wind is a separate boundary');
+  assert.equal(JSON.parse(first).motion.keyframes.length,2,'Source sampling must not rewrite wind intervals');
+  assert.equal(motion(ordinary),legacy);
+  assert.equal(Object.hasOwn(JSON.parse(legacy),'air_velocity_schedule_m_s'),false);
+  assert.equal(JSON.parse(motion({...ordinary,air_velocity_schedule_m_s:null})).air_velocity_schedule_m_s,null);
+});
+
+test('motion wind refuses incomplete or nonfinite interval vectors in authored and original routes', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const air={rho_air_kg_m3:1.225,c_normal:1.2,c_tangent:0.05,eps_v_m_s:0.001};
+  const scenario={...scenarioState(),options:{...scenarioState().options,damping:{air_drag:air}},maxMotionTrials:128};
+  for(const schedule of [undefined,false,1,'1,0,0',{},[],Array(1),[[0,0,0],[0,0,0]],
+    [null],[{}],[[]],[[0,0]],[[0,0,0,0]],[Array(3)],[[0,'1',0]],[[0,null,0]],
+    ...[NaN,Infinity,-Infinity,1e200,1e103].map(value=>[[value,0,0]])]) {
+    const input={...motionState(),air_velocity_schedule_m_s:schedule};
+    assert.throws(()=>motion(input),/motion wind/i);
+    assert.throws(()=>single({...scenario,motion:input}),/motion wind/i);
+    if(schedule!==undefined)assert.throws(()=>single({...scenario,motion:JSON.stringify({schema:'ftx-drape-motion/1',...input})}),/motion wind/i);
+  }
+  const misplaced={...motionState(),keyframes:[{...motionState().keyframes[0],air_velocity_m_s:[1,0,0]}]};
+  assert.throws(()=>motion(misplaced),/unsupported/i,'Wind is an explicit original-interval schedule');
+});
+
+test('motion wind requires existing scenario drag and checks its actual coefficient scale before freezing', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const input={...motionState(),air_velocity_schedule_m_s:[[2,0,0]]};
+  const authored=motion(input);
+  for(const selected of [input,authored]) {
+    for(const damping of [undefined,{}, {air_drag:null}, {rayleigh_membrane_s:0.1}]) {
+      const options={...scenarioState().options,...(damping===undefined?{}:{damping})};
+      assert.throws(()=>single({...scenarioState(),options,motion:selected,maxMotionTrials:128}),/wind schedule requires.*air_drag/i);
+    }
+    const air={rho_air_kg_m3:1e308,c_normal:1,c_tangent:0,eps_v_m_s:0.001};
+    assert.throws(()=>single({...scenarioState(),options:{...scenarioState().options,damping:{air_drag:air}},
+      motion:selected,maxMotionTrials:128}),/wind overflows/i);
+  }
+  const disabled={...motionState(),air_velocity_schedule_m_s:null};
+  assert.equal(JSON.parse(single({...scenarioState(),motion:disabled,maxMotionTrials:128})).motion.air_velocity_schedule_m_s,null);
+});
+
+test('original motion wind source tokens survive scenario and named-case replay exactly', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const original=' {\r\n"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.25,"arm_abduction_deg":30.0}],'+
+    '"max_step_s":0.125,"max_trials":128,"max_pairs":100000,"air_velocity_schedule_m_s":[[-0.0,1.25e0,-3e-1]],'+
+    '"transient_surface":{"source_value":18446744073709551615}}\r\n';
+  const air={rho_air_kg_m3:1.225,c_normal:1.2,c_tangent:0.05,eps_v_m_s:0.001};
+  const raw=single({...scenarioState(),options:{...scenarioState().options,damping:{air_drag:air}},
+    motion:original,maxMotionTrials:128});
+  assert.ok(raw.includes(original));assert.match(raw,/18446744073709551615/);
+  assert.match(raw,/\[-0\.0,1\.25e0,-3e-1\]/);
+  const saved=matrix({maxEvaluations:1,cases:[{key:'wind source',scenario:raw}]});
+  assert.ok(saved.includes(raw));assert.ok(saved.includes(original));
+});
+
 test('guided motion preserves ordered absolute endpoints and original scenario sources', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:build}=await modulePromise;
   const request={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:25,leg_pose:{posture:'seated',fraction:0.5}},
