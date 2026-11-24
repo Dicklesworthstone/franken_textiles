@@ -1842,6 +1842,10 @@ function motionSamples(parent, key, motion) {
         const sample = samples[index];
         stamp.textContent = `${hasInitial && index === 0 ? "Initial state" :
           `Accepted step ${index + 1 - Number(hasInitial)} of ${accepted.length}`} · t = ${metric(sample.time_s)} s`;
+        if (Array.isArray(motion.air_velocity_schedule_m_s) || Object.hasOwn(sample, "air_velocity_m_s")) {
+          const wind = Array.isArray(sample.air_velocity_m_s) ? sample.air_velocity_m_s : [];
+          stamp.textContent += ` · world wind [${[0, 1, 2].map(axis => metric(wind[axis])).join(", ")}] m/s`;
+        }
         for (const [axis, ctx] of contexts.entries()) {
           ctx.clearRect(0, 0, 420, 420);
           for (const [i, track] of tracks.entries()) {
@@ -2068,10 +2072,18 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     const translated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_translation_m));
     const rotated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_rotation_rad));
     const independentArms = result.keyframes.some(endpoint => endpoint.arm_pose != null);
+    const wind = Array.isArray(result.air_velocity_schedule_m_s) || result.keyframes.some(endpoint => Object.hasOwn(endpoint, "air_velocity_m_s"));
+    if (wind) {
+      const info = document.createElement("p");
+      info.textContent = `${row.key}: world wind is prescribed per motion interval (+Z up). ` +
+        "The initial sample retains its original drape wind. Reported wind drives mechanical drag; thermal convection retains its separate inputs.";
+      parent.append(info);
+    }
     const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)",
       ...(independentArms ? ["Left arm angle (degrees)", "Right arm angle (degrees)"] : ["Arm angle (degrees)"]), "Leg posture", "Leg fraction",
       ...(translated ? ["Root X (m)", "Root Y (m)", "Root Z (m)"] : []),
       ...(rotated ? ["Root rotation X (rad)", "Root rotation Y (rad)", "Root rotation Z (rad)"] : []),
+      ...(wind ? ["World wind X (m/s)", "World wind Y (m/s)", "World wind Z (m/s)"] : []),
       "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
     for (const endpoint of result.keyframes) {
       cells(endpoints, [metric(endpoint.time_s),
@@ -2079,7 +2091,9 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
           endpoint.arm_pose?.right_abduction_deg ?? endpoint.arm_abduction_deg].map(value => metric(value)) : [metric(endpoint.arm_abduction_deg)]),
         endpoint.leg_pose?.posture || "standing", endpoint.leg_pose ? metric(endpoint.leg_pose.fraction) : "—",
         ...(translated ? (endpoint.root_translation_m ?? [0, 0, 0]).map(value => metric(value)) : []),
-        ...(rotated ? (endpoint.root_rotation_rad ?? [0, 0, 0]).map(value => metric(value)) : []), state(endpoint.surface),
+        ...(rotated ? (endpoint.root_rotation_rad ?? [0, 0, 0]).map(value => metric(value)) : []),
+        ...(wind ? [0, 1, 2].map(axis => metric(Array.isArray(endpoint.air_velocity_m_s) ? endpoint.air_velocity_m_s[axis] : null)) : []),
+        state(endpoint.surface),
         metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
       steadyHeatBounds(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
       steadyExteriorDetails(parent, `${row.key}: endpoint ${metric(endpoint.time_s)} s independent sheets`, available(endpoint.surface));
@@ -2126,7 +2140,9 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
       retained_vertex_samples: result.retained_vertex_samples, pairs_tested: result.pairs_tested,
       membrane_history: result.membrane_history, bending_history: result.bending_history,
       membrane_plasticity_history: result.membrane_plasticity_history,
+      ...(Array.isArray(result.air_velocity_schedule_m_s) ? { air_velocity_schedule_m_s: result.air_velocity_schedule_m_s } : {}),
       endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
+        ...(Object.hasOwn(e, "air_velocity_m_s") ? { air_velocity_m_s: e.air_velocity_m_s } : {}),
         body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal,
         vapor_refusal: e.vapor_surface?.refusal, vapor_coverage_refusal: e.vapor_coverage?.refusal })),
       scope: result.scope, thermal_basis: result.thermal_basis, vapor_basis: result.vapor_basis });

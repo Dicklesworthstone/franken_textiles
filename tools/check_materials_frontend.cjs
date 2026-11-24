@@ -12653,6 +12653,55 @@ test('motion inspector selects exact adaptive states at one physical scale, incl
   }
 });
 
+test('motion inspection shows reported interval winds and the distinct initial boundary without inventing missing values', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const schedule = [[2.5, -1.25, 0.5], [0, 0, 0]], initialWind = [-0.25, 1, 0];
+  const request = JSON.stringify({motion:{air_velocity_schedule_m_s:schedule}});
+  p.select('scenarioRequest', request); await p.e.scenario.onclick();
+  for (const axis of ['X', 'Y', 'Z']) p.e['guidedMotionWind' + axis].value = '99';
+  const sample = (time_s, wind) => ({time_s, air_velocity_m_s:wind,
+    body_positions_m:[[0,1,0],[1,1,0],[0,1,1]], positions_m:[[0,0,0],[1,0,0],[0,0,1]]});
+  const motion = {duration_s:0.004, trials:3, air_velocity_schedule_m_s:schedule,
+    triangles:[[0,1,2]], body_triangles:[[0,1,2]], initial_sample:sample(0, initialWind),
+    samples:[sample(0.001,schedule[0]),sample(0.002,schedule[0]),sample(0.004,schedule[1])],
+    keyframes:[0.002,0.004].map((time_s,index)=>({time_s,arm_abduction_deg:35,
+      air_velocity_m_s:schedule[index],surface:omitted(),coverage:omitted()}))};
+  const report = scenarioReport(); report.scenario.scenario = JSON.parse(request);
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion = outcome(motion);
+  const raw = JSON.stringify(report); p.emit(report, [{name:'material-scenario-study.json',text:raw},{name:'scenario-request.json',text:request}]);
+  const result = section(p, 'Fresh drape and heat alternatives');
+  const endpoints = () => descendants(result).find(node=>node.tag==='table'&&node.children[0].textContent.startsWith('A: endpoint steady'));
+  assert.deepEqual(endpoints().children[1].children.slice(4,7).map(node=>node.textContent),
+    ['World wind X (m/s)','World wind Y (m/s)','World wind Z (m/s)']);
+  assert.deepEqual(endpoints().children.slice(2).map(row=>row.children.slice(4,7).map(node=>node.textContent)),
+    [['2.5','-1.25','0.5'],['0','0','0']]);
+  const openInspector = () => {
+    const view = descendants(result).find(node=>node.tag==='details'&&node.children[0].textContent.includes('inspect retained motion samples'));
+    view.open = true; view.handlers.toggle();
+    return {slider:descendants(view).find(node=>node.tag==='input'),stamp:descendants(view).find(node=>node.tag==='output')};
+  };
+  let {slider,stamp} = openInspector();
+  assert.equal(stamp.textContent, 'Initial state · t = 0 s · world wind [-0.25, 1, 0] m/s');
+  for (const [index,time,expected] of [[1,'0.001','2.5, -1.25, 0.5'],[2,'0.002','2.5, -1.25, 0.5'],[3,'0.004','0, 0, 0']]) {
+    slider.value = String(index); slider.handlers.input();
+    assert.equal(stamp.textContent, `Accepted step ${index} of 3 · t = ${time} s · world wind [${expected}] m/s`);
+  }
+  const detail = descendants(result).find(node=>node.tag==='details'&&node.children[0].textContent.startsWith('A: motion identities'));
+  detail.open = true; detail.handlers.toggle(); assert.match(visibleText(detail), /air_velocity_schedule_m_s/);
+  assert.match(visibleText(result), /thermal convection retains its separate inputs/);
+  const download = name => descendants(result).find(node=>node.download===name);
+  assert.equal(await p.blobs.get(download('scenario-request.json').href).text(), request);
+  assert.equal(await p.blobs.get(download('material-scenario-study.json').href).text(), raw);
+  // A display never reconstructs absent native receipts from a requested schedule or editor draft.
+  delete motion.keyframes[0].air_velocity_m_s; delete motion.initial_sample.air_velocity_m_s; delete motion.samples[0].air_velocity_m_s;
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.deepEqual(endpoints().children[2].children.slice(4,7).map(node=>node.textContent), ['Unknown','Unknown','Unknown']);
+  ({slider,stamp} = openInspector()); assert.match(stamp.textContent, /world wind \[Unknown, Unknown, Unknown\]/);
+  slider.value = '1'; slider.handlers.input(); assert.match(stamp.textContent, /world wind \[Unknown, Unknown, Unknown\]/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(result.hidden, true);
+  assert.equal(descendants(result).some(node=>node.tag==='canvas'), false);
+});
+
 test('invalid retained display geometry or timestamps cannot erase independent scenario outcomes', async () => {
   for (const badTime of [false, true]) {
     const p = await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
