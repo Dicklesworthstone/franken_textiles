@@ -1433,7 +1433,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.drapeMeshMinMm.value='6';e.drapeMeshCvt.value='6';
   e.drapeHemWidthMm.value='20';e.drapeHemMassMult.value='2.5';e.drapeHemBendMult.value='5';
   e.drapeSeamWidthMm.value='10';e.drapeSeamMassMult.value='2';e.drapeSeamBendMult.value='3';
-  e.drapeRepulsionMm.value='4';e.drapeRepulsionStiffness.value='0.5';e.drapeRepulsionPeriod.value='5';
+  e.drapeRepulsionMm.value='4';e.drapeRepulsionStiffness.value='0.5';e.drapeRepulsionPeriod.value='5';e.drapeRepulsionMaxChecks.value='32000000';
   e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
   e.guidedScenarioNewtonStrategy.value='projected';e.guidedScenarioIntegrator.value='implicit_euler';e.guidedScenarioRhoInf.value='0';
   e.guidedScenarioStaticTolMm.value='0.001';e.guidedScenarioStaticMaxNewton.value='300';
@@ -1444,7 +1444,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.guidedScenarioMeshMinMm.value='6';e.guidedScenarioMeshCvt.value='6';
   e.guidedScenarioHemWidthMm.value='20';e.guidedScenarioHemMassMult.value='2.5';e.guidedScenarioHemBendMult.value='5';
   e.guidedScenarioSeamWidthMm.value='10';e.guidedScenarioSeamMassMult.value='2';e.guidedScenarioSeamBendMult.value='3';
-  e.guidedScenarioRepulsionMm.value='4';e.guidedScenarioRepulsionStiffness.value='0.5';e.guidedScenarioRepulsionPeriod.value='5';
+  e.guidedScenarioRepulsionMm.value='4';e.guidedScenarioRepulsionStiffness.value='0.5';e.guidedScenarioRepulsionPeriod.value='5';e.guidedScenarioRepulsionMaxChecks.value='32000000';
   e.viscoMode.value='file';e.viscoE0.value='200';e.viscoEInf.value='500';e.viscoAlpha.value='0.35';e.viscoTauS.value='1';
   e.viscoFLoHz.value='0.01';e.viscoFHiHz.value='100';e.viscoNTerms.value='14';e.viscoRelTol.value='0.02';
   e.viscoReplayDt.value='0.05';e.viscoReplayStrains.value='0.02, 0.04, 0.04, 0.0';
@@ -5764,7 +5764,7 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
   e.drapeMeshMinMm.value='6';e.drapeMeshCvt.value='6';
   e.drapeHemWidthMm.value='20';e.drapeHemMassMult.value='2.5';e.drapeHemBendMult.value='5';
   e.drapeSeamWidthMm.value='10';e.drapeSeamMassMult.value='2';e.drapeSeamBendMult.value='3';
-  e.drapeRepulsionMm.value='4';e.drapeRepulsionStiffness.value='0.5';e.drapeRepulsionPeriod.value='5';
+  e.drapeRepulsionMm.value='4';e.drapeRepulsionStiffness.value='0.5';e.drapeRepulsionPeriod.value='5';e.drapeRepulsionMaxChecks.value='32000000';
   for(const el of Object.values(e)) {
     el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
       const a=previous?.(...args),b=fn(...args);return Promise.all([a,b]);};};
@@ -25478,7 +25478,7 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   const cvtScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
   assert.deepEqual(cvtScen.options.mesh, { cvt_iterations: 4 });
 
-  // 7. start_self_repulsion.max_candidate_checks (60b5fec2): both workers omit default 32M, forward valid custom values, refuse invalid; both workbenches accept explicit default 32M and refuse custom values on handoff.
+  // 7. start_self_repulsion.max_candidate_checks: both workers and both workbenches omit default 32M, accept/forward valid custom values (1..=128M), and refuse out-of-range values fail-closed.
   assert.equal((await mw.send({ ...baseFold, request: 20, bytes: new Uint8Array([1]).buffer,
     startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 32000000 } })).type, 'result');
   assert.equal(Object.hasOwn(mCalls.at(-1).settings.start_self_repulsion, 'max_candidate_checks'), false);
@@ -25519,16 +25519,29 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
     startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 128000001 } })).type, 'error');
 
   const customChecksToken = '7'.repeat(32);
-  const customChecksRej = await pageModule({ roundToken: customChecksToken });
-  await customChecksRej.windowEvents.message({
-    origin: 'https://unit.invalid', source: customChecksRej.opener,
+  const customChecksOk = await pageModule({ roundToken: customChecksToken });
+  await customChecksOk.windowEvents.message({
+    origin: 'https://unit.invalid', source: customChecksOk.opener,
     data: {
       type: 'ftx-round-sources', token: customChecksToken, files: roundFiles,
       drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
         start_self_repulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 500000 } },
     },
   });
-  assert.match(customChecksRej.e.roundImportText.textContent, /refused/i);
+  assert.equal(customChecksOk.e.drapeStartRepulsion.checked, true);
+  assert.equal(customChecksOk.e.drapeRepulsionMaxChecks.value, '500000');
+
+  const badChecksToken = '9'.repeat(32);
+  const badChecksRej = await pageModule({ roundToken: badChecksToken });
+  await badChecksRej.windowEvents.message({
+    origin: 'https://unit.invalid', source: badChecksRej.opener,
+    data: {
+      type: 'ftx-round-sources', token: badChecksToken, files: roundFiles,
+      drapeSettings: { self_contact_mm: 2, two_start: false, arm_abduction_deg: 35, legs: 'standing', leg_fraction: 1, max_settle_steps: 0,
+        start_self_repulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 0 } },
+    },
+  });
+  assert.match(badChecksRej.e.roundImportText.textContent, /refused/i);
 
   const defChecksToken = '8'.repeat(32);
   const defChecksOk = await pageModule({ roundToken: defChecksToken });
@@ -25541,6 +25554,27 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
     },
   });
   assert.equal(defChecksOk.e.drapeStartRepulsion.checked, true);
+  assert.equal(defChecksOk.e.drapeRepulsionMaxChecks.value, '32000000');
+
+  // Guided scenario controls forward custom max_candidate_checks and omit default 32M.
+  gs.emit(scenarioReport());
+  const beforeCustomChecksScen = gs.current().messages.length;
+  gs.e.guidedScenarioStartRepulsion.checked = true;
+  gs.e.guidedScenarioRepulsionMaxChecks.value = '500000';
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeCustomChecksScen + 1, gs.e.error.textContent);
+  const customChecksScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
+  assert.equal(customChecksScen.options.start_self_repulsion.max_candidate_checks, 500000);
+  gs.emit(scenarioReport());
+  gs.e.guidedScenarioRepulsionMaxChecks.value = '0';
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeCustomChecksScen + 1);
+  assert.match(gs.e.error.textContent, /max_candidate_checks/);
+  gs.e.guidedScenarioRepulsionMaxChecks.value = '32000000';
+  await gs.e.scenario.onclick();
+  assert.equal(gs.current().messages.length, beforeCustomChecksScen + 2, gs.e.error.textContent);
+  const defChecksScen = JSON.parse(gs.current().messages.at(-1).scenarioRequest);
+  assert.equal(Object.hasOwn(defChecksScen.options.start_self_repulsion, 'max_candidate_checks'), false);
 });
 
 test('guided regional objectives author exact regions, freeze named-case snapshots, deduplicate columns, and render regional adaptive readings', async () => {

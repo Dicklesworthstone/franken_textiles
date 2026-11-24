@@ -301,7 +301,7 @@ function controls() {
     ["drapeSelfStickSlip", ["drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV"]],
     ["drapeAdaptiveMesh", ["drapeMeshMinMm", "drapeMeshCvt"]],
     ["drapeConstruction", ["drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult"]],
-    ["drapeStartRepulsion", ["drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]],
+    ["drapeStartRepulsion", ["drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod", "drapeRepulsionMaxChecks"]],
   ]) {
     for (const id of ids) $(id).disabled = !$(toggle).checked;
   }
@@ -360,7 +360,7 @@ function controls() {
     ["guidedScenarioSelfStickSlip", ["guidedScenarioSelfStickSlipMus", "guidedScenarioSelfStickSlipMuk", "guidedScenarioSelfStickSlipV"]],
     ["guidedScenarioAdaptiveMesh", ["guidedScenarioMeshMinMm", "guidedScenarioMeshCvt"]],
     ["guidedScenarioConstruction", ["guidedScenarioHemWidthMm", "guidedScenarioHemMassMult", "guidedScenarioHemBendMult", "guidedScenarioSeamWidthMm", "guidedScenarioSeamMassMult", "guidedScenarioSeamBendMult"]],
-    ["guidedScenarioStartRepulsion", ["guidedScenarioRepulsionMm", "guidedScenarioRepulsionStiffness", "guidedScenarioRepulsionPeriod"]],
+    ["guidedScenarioStartRepulsion", ["guidedScenarioRepulsionMm", "guidedScenarioRepulsionStiffness", "guidedScenarioRepulsionPeriod", "guidedScenarioRepulsionMaxChecks"]],
   ]) {
     for (const id of ids) $(id).disabled = !guidedScenarioMode() || !$(toggle).checked;
   }
@@ -5980,10 +5980,14 @@ function checkedRealismOptions(settings, maxSpacing = 12) {
         !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
       throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
     }
-    if (Object.hasOwn(r, "max_candidate_checks") && r.max_candidate_checks !== 32000000) {
-      throw Error("Start self-repulsion custom max_candidate_checks is not supported by the workbench controls.");
+    const outRep = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+    if (Object.hasOwn(r, "max_candidate_checks")) {
+      if (!Number.isSafeInteger(r.max_candidate_checks) || r.max_candidate_checks < 1 || r.max_candidate_checks > 128000000) {
+        throw Error("Start self-repulsion max_candidate_checks must be an integer in 1–128000000.");
+      }
+      if (r.max_candidate_checks !== 32000000) outRep.max_candidate_checks = r.max_candidate_checks;
     }
-    out.start_self_repulsion = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+    out.start_self_repulsion = outRep;
   }
   return out;
 }
@@ -6048,6 +6052,7 @@ function readRealismControls(prefix, maxSpacing = 12) {
       min_separation_m: reqRealismNum(prefix + "RepulsionMm", "start self-repulsion clearance (mm)") * 1e-3,
       stiffness: reqRealismNum(prefix + "RepulsionStiffness", "start self-repulsion stiffness"),
       period: reqRealismNum(prefix + "RepulsionPeriod", "start self-repulsion period"),
+      max_candidate_checks: reqRealismNum(prefix + "RepulsionMaxChecks", "start self-repulsion max candidate checks"),
     };
   }
   return checkedRealismOptions(raw, maxSpacing);
@@ -6082,6 +6087,7 @@ function setRealismOptions(settings) {
   $("drapeRepulsionMm").value = String(r.start_self_repulsion ? r.start_self_repulsion.min_separation_m * 1e3 : 4);
   $("drapeRepulsionStiffness").value = String(r.start_self_repulsion?.stiffness ?? 0.5);
   $("drapeRepulsionPeriod").value = String(r.start_self_repulsion?.period ?? 5);
+  $("drapeRepulsionMaxChecks").value = String(r.start_self_repulsion?.max_candidate_checks ?? 32000000);
 }
 function checkedThumbPose(value) {
   if (value === undefined) return undefined;
@@ -7434,7 +7440,7 @@ function showGuidedScenarioDrafts() {
       (value.options.self_stick_slip ? `self stick-slip (μs=${value.options.self_stick_slip.mu_s}, μk=${value.options.self_stick_slip.mu_k}); ` : "") +
       (value.options.mesh ? `adaptive mesh; ` : "") +
       (value.options.construction ? "hem/seam construction; " : "") +
-      (value.options.start_self_repulsion ? `start self-repulsion (${value.options.start_self_repulsion.min_separation_m * 1e3} mm); ` : "") +
+      (value.options.start_self_repulsion ? `start self-repulsion (${value.options.start_self_repulsion.min_separation_m * 1e3} mm${value.options.start_self_repulsion.max_candidate_checks !== undefined ? `, max ${value.options.start_self_repulsion.max_candidate_checks} checks` : ""}); ` : "") +
       `${value.max_vertex_frames} vertex-frames; ${value.surface ? "retained sheet heat" : "no sheet heat"}; ` +
       (value.motion ? `${value.motion.keyframes.length} motion endpoints, ${value.max_motion_trials} motion attempts; ` : "static pose; ") +
       (value.motion?.source_pose_sampling ? `source body poses at most ${value.motion.source_pose_sampling.max_step_s} s apart, ` +

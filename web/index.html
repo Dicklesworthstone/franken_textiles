@@ -304,7 +304,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         <p class="row"><label><input type="checkbox" id="drapeStartRepulsion"> Self-repelling start relaxation</label>
           <label>Separation (mm) <input id="drapeRepulsionMm" type="number" min="0.5" max="100" step="0.5" value="4" disabled></label>
           <label>Stiffness <input id="drapeRepulsionStiffness" type="number" min="0.05" max="1" step="0.05" value="0.5" disabled></label>
-          <label>Period <input id="drapeRepulsionPeriod" type="number" min="1" max="25" step="1" value="5" disabled></label></p>
+          <label>Period <input id="drapeRepulsionPeriod" type="number" min="1" max="25" step="1" value="5" disabled></label>
+          <label>Max checks <input id="drapeRepulsionMaxChecks" type="number" min="1" max="128000000" step="1000000" value="32000000" disabled></label></p>
         <p class="mut">Every option above is opt-in and omitted from settings when left at its legacy default. Air drag, uncalibrated stick-slip friction, and hem/seam multipliers are structural approximations, not measured textile constants or physical-fit claims; characterized material records refuse uncalibrated stick-slip or construction overrides.</p>
       </details>
       <p class="mut">Static equilibrium runs a separate frictionless conservative solve from the finished dynamic state without altering dynamic frames, flags, or simulated time. History-dependent materials refuse the static comparison while retaining the dynamic drape.</p>
@@ -644,7 +645,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     for (const id of ["drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV"]) $(id).disabled = !$("drapeSelfStickSlip").checked;
     for (const id of ["drapeMeshMinMm", "drapeMeshCvt"]) $(id).disabled = !$("drapeAdaptiveMesh").checked;
     for (const id of ["drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult"]) $(id).disabled = !$("drapeConstruction").checked;
-    for (const id of ["drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]) $(id).disabled = !$("drapeStartRepulsion").checked;
+    for (const id of ["drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod", "drapeRepulsionMaxChecks"]) $(id).disabled = !$("drapeStartRepulsion").checked;
     const available = !dead && !folding && !bodyChecking && bodyLoaded && bodyFitReady
       && (bodyFitText === null || $("bodyFitConsent").checked);
     $("foldGo").disabled = !available || !foldable;
@@ -1016,10 +1017,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
           !Number.isSafeInteger(r.period) || r.period < 1 || r.period > 25) {
         throw Error("Start self-repulsion requires min_separation_m in (0, 0.1] m, stiffness in (0, 1], and period in 1–25.");
       }
-      if (Object.hasOwn(r, "max_candidate_checks") && r.max_candidate_checks !== 32000000) {
-        throw Error("Start self-repulsion custom max_candidate_checks is not supported by the workbench controls.");
+      const outRep = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+      if (Object.hasOwn(r, "max_candidate_checks")) {
+        if (!Number.isSafeInteger(r.max_candidate_checks) || r.max_candidate_checks < 1 || r.max_candidate_checks > 128000000) {
+          throw Error("Start self-repulsion max_candidate_checks must be an integer in 1–128000000.");
+        }
+        if (r.max_candidate_checks !== 32000000) outRep.max_candidate_checks = r.max_candidate_checks;
       }
-      out.start_self_repulsion = { min_separation_m: r.min_separation_m, stiffness: r.stiffness, period: r.period };
+      out.start_self_repulsion = outRep;
     }
     return out;
   }
@@ -1085,6 +1090,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         min_separation_m: reqRealismNum("drapeRepulsionMm", "start self-repulsion clearance (mm)") * 1e-3,
         stiffness: reqRealismNum("drapeRepulsionStiffness", "start self-repulsion stiffness"),
         period: reqRealismNum("drapeRepulsionPeriod", "start self-repulsion period"),
+        max_candidate_checks: reqRealismNum("drapeRepulsionMaxChecks", "start self-repulsion max candidate checks"),
       };
     }
     return checkedRealismOptions(raw);
@@ -1119,6 +1125,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("drapeRepulsionMm").value = String(r.start_self_repulsion ? r.start_self_repulsion.min_separation_m * 1e3 : 4);
     $("drapeRepulsionStiffness").value = String(r.start_self_repulsion?.stiffness ?? 0.5);
     $("drapeRepulsionPeriod").value = String(r.start_self_repulsion?.period ?? 5);
+    $("drapeRepulsionMaxChecks").value = String(r.start_self_repulsion?.max_candidate_checks ?? 32000000);
     foldButton();
   }
   let foldUrls = [];
@@ -1520,7 +1527,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       }
       if (r.numerical?.start_self_repulsion) {
         const sr = r.numerical.start_self_repulsion;
-        $("foldSummary").innerHTML += `<br>Self-repelling start relaxation: ${esc((sr.min_separation_m * 1e3).toFixed(1))} mm clearance`;
+        const maxChecks = sr.max_candidate_checks !== undefined && sr.max_candidate_checks !== 32000000
+          ? `, max ${esc(sr.max_candidate_checks)} checks` : "";
+        $("foldSummary").innerHTML += `<br>Self-repelling start relaxation: ${esc((sr.min_separation_m * 1e3).toFixed(1))} mm clearance${maxChecks}`;
       }
       if (r.numerical?.authored_crease_hinges > 0) {
         $("foldSummary").innerHTML += `<br>Authored creases: ${esc(r.numerical.authored_crease_hinges)} hinge(s)`;
@@ -1624,7 +1633,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("clearSupplemental").addEventListener("click", () => { clearPhotoImport(); $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
   $("twoStart").addEventListener("change",()=>{cancelMaterialImport();invalidateFold();});
-  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton", "drapeBendingModel", "drapeCompressionModel", "drapeAirDrag", "drapeRayleighMembraneS", "drapeRayleighBendingS", "drapeAdaptiveBarrier", "drapeStickSlip", "drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV", "drapeSelfStickSlip", "drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV", "drapeAdaptiveMesh", "drapeMeshMinMm", "drapeMeshCvt", "drapeConstruction", "drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult", "drapeStartRepulsion", "drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod"]) {
+  for (const id of ["drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticEquilibrium", "staticTolMm", "staticMaxNewton", "drapeBendingModel", "drapeCompressionModel", "drapeAirDrag", "drapeRayleighMembraneS", "drapeRayleighBendingS", "drapeAdaptiveBarrier", "drapeStickSlip", "drapeStickSlipMus", "drapeStickSlipMuk", "drapeStickSlipV", "drapeSelfStickSlip", "drapeSelfStickSlipMus", "drapeSelfStickSlipMuk", "drapeSelfStickSlipV", "drapeAdaptiveMesh", "drapeMeshMinMm", "drapeMeshCvt", "drapeConstruction", "drapeHemWidthMm", "drapeHemMassMult", "drapeHemBendMult", "drapeSeamWidthMm", "drapeSeamMassMult", "drapeSeamBendMult", "drapeStartRepulsion", "drapeRepulsionMm", "drapeRepulsionStiffness", "drapeRepulsionPeriod", "drapeRepulsionMaxChecks"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event,()=>{cancelMaterialImport();invalidateFold();});
   }
   $("applyRealismPreset").addEventListener("click", () => {
