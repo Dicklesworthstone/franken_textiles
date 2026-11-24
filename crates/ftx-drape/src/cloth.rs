@@ -3414,7 +3414,7 @@ impl Solver {
     }
 
     /// Minimises `Ψ − Σ mᵢ g·xᵢ` from the current positions (equilibrium under gravity) and zeroes the
-    /// velocities.
+    /// velocities. Prescribed ambient wind refuses because this static potential omits air loads.
     ///
     /// # Errors
     /// As [`Solver::step`].

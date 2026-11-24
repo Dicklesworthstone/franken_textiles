@@ -76,6 +76,16 @@ duration, including both starts when requested. Invalid settings refuse before f
 laws that require a declared duration refuse automatic settling through the shared solver guard.
 The fixed chest-band qualification schedule remains unchanged.
 
+**Prescribed ambient wind.** `ftx drape`, `ftx round --sim|--stills` and `ftx qualify`
+accept `--air-drag --air-velocity VX,VY,VZ`. The three finite components prescribe a
+uniform constant air velocity in world metres/second (z up); the drag law uses cloth
+velocity relative to this boundary. Omission or `0,0,0` preserves still-air behavior
+and its JSON. The exact nonzero vector is retained in numerical reports and the
+physics qualification identity. Malformed vectors and velocity without `--air-drag`
+refuse before reading inputs or reserving output. The optional conservative static
+comparison refuses active nonzero wind while retaining the dynamic result. The
+reference drag coefficients remain uncalibrated, with no airflow or garment-fit claim.
+
 `--static-equilibrium` optionally requests a separate frictionless conservative comparison after
 the ordinary dynamic run, also forwarded by `round --sim|--stills`. `--static-tol-mm` (default
 0.001) is a distance tolerance; `--static-max-newton` (default 300) is bounded to 1..=1000.

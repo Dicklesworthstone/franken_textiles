@@ -268,7 +268,8 @@ pub struct FoldSettings {
         skip_serializing_if = "ftx_drape::CompressionModel::is_default"
     )]
     pub compression_model: ftx_drape::CompressionModel,
-    /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping (omitted when disabled).
+    /// Opt-in aerodynamic drag with an explicit uniform world-space air velocity, and
+    /// SE(3)-invariant Rayleigh internal damping (omitted when disabled).
     #[serde(default, skip_serializing_if = "ftx_drape::DampingOptions::is_default")]
     pub damping: ftx_drape::DampingOptions,
     /// Opt-in Li et al. (2020) adaptive IPC barrier stiffness scaling (omitted when legacy fixed `kappa`).
@@ -1029,6 +1030,35 @@ mod tests {
                 .iter()
                 .any(|f| f.as_str() == Some(&tight_flag))
         );
+    }
+
+    #[test]
+    fn portable_fold_wind_refuses_malformed_vectors_and_nonfinite_native_settings() {
+        let settings: FoldSettings = serde_json::from_value(json!({"damping": {
+            "air_drag": {"air_velocity_m_s": [-2.5, 0.25, 1.5]}
+        }}))
+        .unwrap();
+        let options = DrapeOptions {
+            damping: settings.damping,
+            ..DrapeOptions::default()
+        };
+        validate_browser_schedule(&options, None).unwrap();
+
+        for vector in [
+            json!(null),
+            json!([1, 2]),
+            json!([1, 2, 3, 4]),
+            json!([1, null, 3]),
+            json!(["1", 2, 3]),
+            json!({"x": 1, "y": 2, "z": 3}),
+        ] {
+            let input = json!({"damping": {"air_drag": {"air_velocity_m_s": vector}}});
+            assert!(serde_json::from_value::<FoldSettings>(input.clone()).is_err());
+            assert!(serde_json::from_value::<crate::session::SessionSettings>(input).is_err());
+        }
+        let mut invalid = options;
+        invalid.damping.air_drag.as_mut().unwrap().air_velocity_m_s[1] = f64::INFINITY;
+        assert!(validate_browser_schedule(&invalid, None).is_err());
     }
 
     #[test]

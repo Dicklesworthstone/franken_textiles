@@ -224,6 +224,79 @@ fn kat_air_drag_terminal_velocity_separates_chiffon_from_denim() {
 }
 
 #[test]
+fn kat_prescribed_wind_moves_resting_cloth_and_preserves_comoving_motion() {
+    let (rest, tris) = grid(0.10, 0.10, 2, 2, Vec2::ZERO);
+    let x0: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+    let fixed = vec![[false; 3]; rest.len()];
+    let areal = 0.08;
+    let make_solver = |wind: Vec3, velocity: Vec3, integrator| {
+        let model = ClothModel::new(rest.clone(), &tris, cotton(), 1e-5, areal).unwrap();
+        let mut solver = Solver::new(model, x0.clone(), &fixed, Vec3::ZERO);
+        solver.integrator = integrator;
+        solver.damping.air_drag = Some(AirDrag {
+            air_velocity_m_s: [wind.x, wind.y, wind.z],
+            ..AirDrag::standard()
+        });
+        solver.v.fill(velocity);
+        solver.tol = 1e-11;
+        solver
+    };
+
+    for integrator in [
+        TimeIntegrator::ImplicitEuler,
+        TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 },
+    ] {
+        let mut still = make_solver(Vec3::ZERO, Vec3::ZERO, integrator);
+        assert!(still.step(0.01).unwrap().converged);
+        assert!(still.v.iter().all(|v| v.norm() < 1e-10));
+
+        let wind = Vec3::new(0.0, 0.0, 1.5);
+        let mut driven = make_solver(wind, Vec3::ZERO, integrator);
+        let drag = driven.damping.air_drag.unwrap();
+        // The initially flat free sheet has uniform acceleration F/A divided by areal mass.
+        // This also catches a Generalized-alpha initializer that silently assumes still air.
+        let initial_acceleration = 0.5 * drag.rho_air_kg_m3 * drag.c_normal / areal
+            * wind.z
+            * (wind.z * wind.z + drag.eps_v_m_s * drag.eps_v_m_s).sqrt();
+        let h = 1e-5;
+        assert!(driven.step(h).unwrap().converged);
+        for v in &driven.v {
+            assert!(
+                (v.z / h - initial_acceleration).abs() < 0.002 * initial_acceleration,
+                "{integrator:?}: first-step acceleration {} vs {initial_acceleration}",
+                v.z / h
+            );
+        }
+        for _ in 0..12 {
+            assert!(driven.step(0.01).unwrap().converged);
+        }
+        assert!(driven.v.iter().all(|v| v.z > 0.5 && v.z < wind.z));
+        assert!(driven.x.iter().all(|p| p.z > 0.02));
+
+        let common = Vec3::new(0.5, -0.25, 1.5);
+        let mut comoving = make_solver(common, common, integrator);
+        for _ in 0..12 {
+            assert!(comoving.step(0.01).unwrap().converged);
+        }
+        for ((p, v), start) in comoving.x.iter().zip(&comoving.v).zip(&x0) {
+            assert!((*v - common).norm() < 1e-8, "{integrator:?}: {v:?}");
+            assert!((*p - *start - common * 0.12).norm() < 1e-8);
+        }
+
+        // An optional static comparison cannot drop the wind load and report gravity equilibrium.
+        // Refusal preserves the independently accepted dynamic trajectory and velocities.
+        let before = driven.clone();
+        assert_eq!(
+            driven.static_solve().unwrap_err().code,
+            ftx_core::RefusalCode::OutOfRange
+        );
+        assert_eq!(driven.x, before.x);
+        assert_eq!(driven.v, before.v);
+        assert_eq!(driven.acceleration(), before.acceleration());
+    }
+}
+
+#[test]
 fn kat_air_drag_edge_on_falls_faster_than_face_on() {
     // A vertical sheet falling edge-on (velocity parallel to plane, C_t = 0.05) must accelerate
     // and fall dramatically faster than an identical horizontal sheet falling face-on (C_n = 1.2).

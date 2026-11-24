@@ -6208,6 +6208,20 @@ regressions cover the previously missed two-operation schedule, finite fixtures,
 work caps and distinct timing proofs. This advances `ftx-pb2.2` through `ftx-pb2.calendar-search`;
 physical factory timing, seam quality and hardware authorization still require independent evidence.
 
+### 25.224 Apply prescribed ambient wind through the existing garment dynamics
+
+The opt-in anisotropic air-drag law accepts a finite uniform world-space air velocity. Cloth
+resistance, its variational derivatives and the consistent initial acceleration share the same
+relative velocity under both supported time integrators. Omitted or zero air velocity keeps the
+existing still-air behavior. A static gravity comparison refuses nonzero wind instead of dropping
+its load; the dynamic trajectory remains independently available.
+
+The same boundary belongs to ordinary drape/round commands, portable fold and live-session
+settings, material scenarios and frozen workbench transfers. Browser controls author world XYZ
+components in metres per second. This advances `ftx-aero-wind` using the existing solver and
+option authority. Uniform prescribed wind does not provide a spatial airflow model, qualified
+fabric drag, thermal convection or empirical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -3065,6 +3065,10 @@ mod tests {
             vec!["--air-drag", "--air-velocity", "1e120,0,0"],
             vec!["--air-drag", "--air-cn", "-0.1"],
             vec!["--air-drag", "--air-rho", "NaN"],
+            vec!["--air-drag", "--air-velocity", ""],
+            vec!["--air-drag", "--air-velocity", "1,,3"],
+            vec!["--air-drag", "--air-velocity", "1,2,3,"],
+            vec!["--air-drag", "--air-velocity", "1,2,1e400"],
             vec!["--rayleigh-membrane-s", "-0.001"],
             vec!["--rayleigh-bending-s", "NaN"],
             vec!["--stick-slip-mus", "0.5"],
@@ -3136,6 +3140,77 @@ mod tests {
                 round_err.message
             );
         }
+    }
+
+    #[test]
+    fn ambient_wind_cli_is_preserved_for_drape_round_and_qualification() {
+        for command in ["drape", "round", "qualify"] {
+            let args = parse(
+                &[command, "--air-drag", "--air-velocity", "-2.5, 0.25,1.5"].map(String::from),
+            )
+            .unwrap();
+            let options = drape_options(&args).unwrap();
+            let drag = options.damping.air_drag.unwrap();
+            assert_eq!(drag.air_velocity_m_s, [-2.5, 0.25, 1.5]);
+            let encoded = serde_json::to_value(options.damping).unwrap();
+            assert_eq!(
+                encoded["air_drag"]["air_velocity_m_s"],
+                json!([-2.5, 0.25, 1.5])
+            );
+        }
+
+        let still =
+            drape_options(&parse(&["drape", "--air-drag"].map(String::from)).unwrap()).unwrap();
+        let zero = drape_options(
+            &parse(&["drape", "--air-drag", "--air-velocity", "0,0,0"].map(String::from)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(still.damping, zero.damping);
+        assert!(
+            serde_json::to_value(zero.damping).unwrap()["air_drag"]
+                .get("air_velocity_m_s")
+                .is_none()
+        );
+
+        for argv in [
+            vec![
+                "drape",
+                "absent-pattern.json",
+                "--air-drag",
+                "--air-velocity",
+                "-2.5,0.25,1.5",
+            ],
+            vec![
+                "round",
+                "absent-ws",
+                "--pattern",
+                "absent-pattern.json",
+                "--sim",
+                "--air-drag",
+                "--air-velocity",
+                "-2.5,0.25,1.5",
+            ],
+        ] {
+            let args = parse(&argv.iter().map(|s| (*s).into()).collect::<Vec<_>>()).unwrap();
+            let error = if argv[0] == "drape" {
+                cmd_drape(&args).unwrap_err()
+            } else {
+                round::cmd_round(&args).unwrap_err()
+            };
+            assert_eq!(error.code, RefusalCode::Io, "{error}");
+        }
+        let no_sim = parse(
+            &[
+                "round",
+                "absent-ws",
+                "--air-drag",
+                "--air-velocity",
+                "1,0,0",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_ne!(round::cmd_round(&no_sim).unwrap_err().code, RefusalCode::Io);
     }
 
     #[test]

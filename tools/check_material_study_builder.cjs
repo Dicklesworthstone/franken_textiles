@@ -5123,6 +5123,31 @@ test("guided direct textile-water composition survives authored motion named cas
   build({water:f.water,supply:f.supply},2);assert.equal(named,frozen);
 });
 
+test('prescribed wind preserves motion and frozen named cases without changing thermal sources', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const base=scenarioState();
+  const drag={rho_air_kg_m3:1.1,c_normal:0.8,c_tangent:0.03,eps_v_m_s:0.002};
+  const request=air=>single({...base,options:{...base.options,damping:{air_drag:air}}});
+  assert.deepEqual(JSON.parse(request(drag)).options.damping.air_drag,drag);
+  assert.deepEqual(JSON.parse(request({...drag,air_velocity_m_s:[0,0,0]})).options.damping.air_drag.air_velocity_m_s,[0,0,0]);
+  const wind=[1.75,-0.6,0.25], motion=JSON.stringify(motionPolicy());
+  const source=single({...base,options:{...base.options,damping:{air_drag:{...drag,air_velocity_m_s:wind}}},
+    motion,maxMotionTrials:1024});
+  const frozen=' \r\n'+source.replace('"air_velocity_m_s":[1.75,-0.6,0.25]','"air_velocity_m_s":[1.750,-6e-1,0.250]')+'\r\n';
+  const named=matrix({maxEvaluations:2,cases:[{key:'crosswind',scenario:frozen}]});
+  assert.ok(named.includes(frozen),'named cases retain original numeric tokens and source bytes');
+  const parsed=JSON.parse(named).cases[0].scenario;
+  assert.deepEqual(parsed.options.damping.air_drag,{...drag,air_velocity_m_s:wind});
+  assert.deepEqual(parsed.motion,JSON.parse(motion));
+  assert.equal(Object.hasOwn(parsed,'surface_conditions'),false,'wind must not infer heat inputs');
+  wind[0]=99;
+  assert.equal(JSON.parse(named).cases[0].scenario.options.damping.air_drag.air_velocity_m_s[0],1.75);
+  for(const velocity of [null,undefined,{},[],[1,2],[1,2,3,4],['1',0,0],[NaN,0,0],[0,Infinity,0],new Array(3)]) {
+    assert.throws(()=>request({...drag,air_velocity_m_s:velocity}),/air_velocity_m_s/);
+  }
+  assert.throws(()=>request({...drag,air_velocity_m_s:[1,0,0],air_velocity:[1,0,0]}),/unsupported/i);
+});
+
 test("guided scenario options accept opt-in FTX-27 physics/meshing realism, omit defaults, and refuse invalid inputs fail-closed", async function() {
   const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
   const base=scenarioState();

@@ -25310,6 +25310,62 @@ test('guided finite-donor and ambient-exchange criteria preserve five nonnegativ
   }
 });
 
+test('prescribed wind controls refuse incomplete values and reject stale pattern fold results', async () => {
+  const pw=draftingPage();await pw.body();await pw.e.go.handlers.click();pw.result();
+  for(const axis of ['X','Y','Z'])assert.equal(pw.e['drapeAirWind'+axis].disabled,true);
+  pw.e.drapeAirDrag.checked=true;await pw.e.drapeAirDrag.handlers.change();
+  for(const axis of ['X','Y','Z'])assert.equal(pw.e['drapeAirWind'+axis].disabled,false);
+  await pw.e.foldGo.handlers.click();
+  assert.equal(Object.hasOwn(pw.last('fold').damping.air_drag,'air_velocity_m_s'),false);
+  const report={settled:true,gating:[],flags:[],body:{fit:{tape:{}}}};
+  const first={type:'folded',request:pw.last('fold').request,report,reportText:JSON.stringify(report),viewer:'<html/>'};
+  pw.emit(first);
+  pw.e.drapeAirWindX.value='2.5';await pw.e.drapeAirWindX.handlers.input();
+  assert.equal(pw.e.foldSummary.textContent,'');
+  pw.emit(first);assert.equal(pw.e.foldSummary.textContent,'','stale wind result stays withdrawn');
+  await pw.e.foldGo.handlers.click();
+  assert.deepEqual(plain(pw.last('fold').damping.air_drag.air_velocity_m_s),[2.5,0,0]);
+  pw.emit({...first,request:pw.last('fold').request});
+  pw.e.drapeAirWindY.value='';await pw.e.drapeAirWindY.handlers.change();
+  const previous=pw.last('fold');await pw.e.foldGo.handlers.click();
+  assert.equal(pw.last('fold'),previous);assert.match(pw.e.errorText.textContent,/ambient wind Y/);
+  pw.e.drapeAirDrag.checked=false;await pw.e.drapeAirDrag.handlers.change();
+  for(const axis of ['X','Y','Z'])assert.equal(pw.e['drapeAirWind'+axis].disabled,true);
+  await pw.e.foldGo.handlers.click();assert.equal(pw.last('fold').damping,undefined,'disabled wind drafts do not alter the run');
+});
+
+test('guided prescribed wind freezes independent moving cases and retains original heat evidence', async () => {
+  const {p,sources}=await guidedScenarioSetup(true);
+  assert.equal(p.e.guidedScenarioAirWindX.disabled,true);
+  p.e.guidedScenarioAirDrag.checked=true;p.e.guidedScenarioAirDrag.handlers.change();
+  assert.equal(p.e.guidedScenarioAirWindX.disabled,false);
+  await p.e.scenario.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).scenarioRequest).options.damping.air_drag,'air_velocity_m_s'),false);
+  p.emit(scenarioReport());const output=section(p,'Fresh drape and heat alternatives');
+  p.e.guidedScenarioAirWindX.value='';p.e.guidedScenarioAirWindX.handlers.input();
+  assert.equal(output.hidden,true);
+  const before=p.current().messages.length;await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/ambient wind X/);
+  p.e.guidedScenarioAirWindX.value='3';p.e.guidedScenarioAirWindY.value='-2';p.e.guidedScenarioAirWindZ.value='0.25';
+  p.e.guidedScenarioAirWindX.handlers.change();
+  guidedMotionSourceControls(p,'file');p.select('guidedMotionFile',guidedMotionOriginal);p.e.guidedMotionFile.handlers.change();
+  await p.e.scenario.onclick();const moving=p.current().messages.at(-1).scenarioRequest;
+  assert.deepEqual(JSON.parse(moving).options.damping.air_drag.air_velocity_m_s,[3,-2,0.25]);
+  assert.ok(moving.includes(guidedMotionOriginal));assert.ok(moving.includes(sources.heatConditions));
+  p.emit(scenarioReport());assert.equal(output.hidden,false);
+  p.e.guidedScenarioAirWindY.value='-1';p.e.guidedScenarioAirWindY.handlers.change();
+  assert.equal(output.hidden,true);
+  guidedNamedCases(p);await saveGuidedCase(p,'crosswind');
+  p.e.guidedScenarioAirWindX.value='-4';p.e.guidedScenarioAirWindX.handlers.input();
+  await saveGuidedCase(p,'return wind');
+  p.e.guidedScenarioAirWindX.value='99';p.e.guidedScenarioAirWindX.handlers.input();
+  await p.e.scenario.onclick();const saved=p.current().messages.at(-1).scenarioRequest;
+  const cases=JSON.parse(saved).cases;
+  assert.deepEqual(cases.map(c=>c.scenario.options.damping.air_drag.air_velocity_m_s),[[3,-1,0.25],[-4,-1,0.25]]);
+  assert.equal(saved.split(guidedMotionOriginal).length,3,'each saved case retains the original motion source');
+  assert.equal(saved.split(sources.heatConditions).length,3,'mechanical wind never rewrites thermal evidence');
+});
+
 test('opt-in FTX-27 physics realism options wire fail-closed across Material Workbench, Guided Scenarios, both workers, and bidirectional handoffs', async () => {
   const realismPayload = {
     bending_model: 'discrete_shells',
@@ -25646,6 +25702,33 @@ test('opt-in FTX-27 physics realism options wire fail-closed across Material Wor
   assert.equal(dwCalls.at(-1).settings.start_self_repulsion.max_candidate_checks, 500000);
   assert.equal((await dwSend({ type: 'fold', request: 6, round: 3, body: 2,
     startSelfRepulsion: { ...realismPayload.start_self_repulsion, max_candidate_checks: 128000001 } })).type, 'error');
+
+  // Wind is a world-space vector, independent of the drag coefficients. Worker APIs retain
+  // generic caller coefficients even though ordinary UI controls use their preset.
+  let windRequest = 100;
+  for (const [send, calls, resultType] of [
+    [damping => mw.send({ ...baseFold, request: ++windRequest, bytes: new Uint8Array([1]).buffer, damping }), mCalls, 'result'],
+    [damping => dwSend({ type: 'fold', request: ++windRequest, round: 3, body: 2, damping }), dwCalls, 'folded'],
+  ]) {
+    const customDrag = { rho_air_kg_m3: 1.1, c_normal: 0.8, c_tangent: 0.03, eps_v_m_s: 0.002, air_velocity_m_s: [2.4, -1.1, 0.25] };
+    assert.equal((await send({ air_drag: customDrag })).type, resultType);
+    assert.deepEqual(plain(calls.at(-1).settings.damping.air_drag), customDrag);
+    const still = { ...customDrag }; delete still.air_velocity_m_s;
+    assert.equal((await send({ air_drag: still })).type, resultType);
+    assert.deepEqual(plain(calls.at(-1).settings.damping.air_drag), still, 'omitted wind retains stationary-air payload');
+    assert.equal((await send({ air_drag: { ...still, air_velocity_m_s: [0, 0, 0] } })).type, resultType);
+    assert.equal(Object.hasOwn(calls.at(-1).settings.damping.air_drag, 'air_velocity_m_s'), false);
+    for (const velocity of [null, undefined, {}, [], [1, 2], [1, 2, 3, 4], ['1', 0, 0], [NaN, 0, 0], [0, Infinity, 0], new Array(3)]) {
+      const before = calls.length;
+      const refused = await send({ air_drag: { ...still, air_velocity_m_s: velocity } });
+      assert.equal(refused.type, 'error');
+      assert.match(refused.message, /air_velocity_m_s/);
+      assert.equal(calls.length, before, 'malformed wind must refuse before calling the engine');
+    }
+    const before = calls.length;
+    assert.equal((await send({ air_drag: { ...customDrag, air_velocity: [1, 0, 0] } })).type, 'error');
+    assert.equal(calls.length, before, 'unknown air-drag fields cannot be dropped');
+  }
 
   const customChecksToken = '7'.repeat(32);
   const customChecksOk = await pageModule({ roundToken: customChecksToken });

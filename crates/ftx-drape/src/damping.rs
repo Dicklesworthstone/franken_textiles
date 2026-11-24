@@ -9,6 +9,7 @@
 //!   (`psd = true`) and shares the exact sparsity pattern of [`crate::elements::MembraneElement`]
 //!   (zero new matrix nonzeros). Supports both backward Euler (`v = (x − x₀)/h`) and
 //!   Chung–Hulbert Generalized-α midpoint velocity (`v_{n+1−α_f}`).
+//!   Wind can supply mechanical energy; only motion relative to the air is resisted.
 //! - **Rayleigh internal damping** ([`DampingOptions::rayleigh_membrane_s`],
 //!   [`DampingOptions::rayleigh_bending_s`]): stiffness-proportional Kelvin–Voigt strain-rate and
 //!   dihedral curvature-rate potentials. Because Green strain `E(x)` and dihedral angle `θ(x)` are
@@ -127,8 +128,15 @@ impl AirDrag {
         Refusal::finite("normal air drag coefficient", self.c_normal)?;
         Refusal::finite("tangential air drag coefficient", self.c_tangent)?;
         Refusal::finite("air drag velocity regularization", self.eps_v_m_s)?;
-        for (axis, component) in ["x", "y", "z"].into_iter().zip(self.air_velocity_m_s) {
-            Refusal::finite(&format!("ambient air velocity {axis}"), component)?;
+        for (label, value) in [
+            "ambient air velocity x (m/s)",
+            "ambient air velocity y (m/s)",
+            "ambient air velocity z (m/s)",
+        ]
+        .into_iter()
+        .zip(self.air_velocity_m_s)
+        {
+            Refusal::finite(label, value)?;
         }
         if self.rho_air_kg_m3 < 0.0 || self.c_normal < 0.0 || self.c_tangent < 0.0 {
             return Err(Refusal::new(
@@ -161,9 +169,9 @@ impl AirDrag {
         Ok(())
     }
 
-    /// Instantaneous resistive force (`-F_drag(v_cloth - v_air)`, i.e. gradient contribution to
-    /// `M a + ∇Ψ − F_drag = M g`) distributed equally across the three vertices of a triangle with
-    /// area `area` and unit normal `normal`.
+    /// Instantaneous triangle resistance (`-F_drag`, the contribution to `M a + ∇Ψ − F_drag = M g`)
+    /// at the supplied world-space cloth centroid velocity, relative to [`Self::air_velocity_m_s`].
+    /// The caller distributes this total equally across the triangle's three vertices.
     #[must_use]
     pub fn triangle_resistance_force(
         &self,
@@ -807,6 +815,18 @@ mod tests {
 
     #[test]
     fn air_drag_and_rayleigh_derivatives_match_finite_differences() {
+        check_air_drag_and_rayleigh_derivatives(AirDrag::standard());
+    }
+
+    #[test]
+    fn moving_air_derivatives_match_both_integrators() {
+        check_air_drag_and_rayleigh_derivatives(AirDrag {
+            air_velocity_m_s: [1.25, -0.5, 2.0],
+            ..AirDrag::standard()
+        });
+    }
+
+    fn check_air_drag_and_rayleigh_derivatives(drag: AirDrag) {
         let rest = vec![
             Vec2::new(0.0, 0.0),
             Vec2::new(0.02, 0.0),
@@ -829,7 +849,7 @@ mod tests {
         ];
         let h = 1.0 / 24.0;
         let opts = DampingOptions {
-            air_drag: Some(AirDrag::standard()),
+            air_drag: Some(drag),
             rayleigh_membrane_s: 2e-3,
             rayleigh_bending_s: 5e-3,
         };
@@ -933,6 +953,136 @@ mod tests {
                 )
             },
             |p| step_ga.air_drag_local(0, model.membranes[0].v, p).unwrap(),
+        );
+    }
+
+    #[test]
+    fn prescribed_wind_loads_stationary_cloth_and_vanishes_in_comoving_air() {
+        let drag = AirDrag {
+            air_velocity_m_s: [3.0, 4.0, 2.0],
+            ..AirDrag::standard()
+        };
+        let area = 2.0;
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let force = drag.triangle_resistance_force(area, normal, Vec3::ZERO);
+        let pref = 0.5 * drag.rho_air_kg_m3 * area;
+        let eps2 = drag.eps_v_m_s * drag.eps_v_m_s;
+        let tangent = pref * drag.c_tangent * (25.0 + eps2).sqrt();
+        let normal_force = pref * drag.c_normal * (4.0 + eps2).sqrt();
+        let expected = Vec3::new(-3.0 * tangent, -4.0 * tangent, -2.0 * normal_force);
+        assert!((force - expected).norm() < 1e-13);
+        assert_eq!(
+            force,
+            drag.triangle_resistance_force(area, normal * -1.0, Vec3::ZERO)
+        );
+
+        let local = air_drag_local(drag, area, normal, Vec3::ZERO, 60.0);
+        let total = Vec3::new(local.grad[0], local.grad[1], local.grad[2]) * 3.0;
+        assert!((total - force).norm() < 1e-13);
+        assert!(local.energy > 0.0);
+        let wind = Vec3::new(3.0, 4.0, 2.0);
+        assert_eq!(
+            drag.triangle_resistance_force(area, normal, wind),
+            Vec3::ZERO
+        );
+        assert_eq!(air_drag_energy(drag, area, normal, wind, 60.0), 0.0);
+        assert_eq!(
+            air_drag_local(drag, area, normal, wind, 60.0).grad,
+            [0.0; 9]
+        );
+    }
+
+    #[test]
+    fn moving_air_force_energy_and_hessian_are_galilean_invariant() {
+        let still_air = AirDrag::standard();
+        let boost = Vec3::new(0.5, -0.25, 1.0);
+        let moving_air = AirDrag {
+            air_velocity_m_s: [boost.x, boost.y, boost.z],
+            ..still_air
+        };
+        let velocity = Vec3::new(-0.75, 0.5, -1.25);
+        let normal = Vec3::new(2.0, -1.0, 3.0).normalized();
+        let area = 0.125;
+        let c_v = 24.0;
+        assert_eq!(
+            still_air.triangle_resistance_force(area, normal, velocity),
+            moving_air.triangle_resistance_force(area, normal, velocity + boost)
+        );
+        assert_eq!(
+            air_drag_energy(still_air, area, normal, velocity, c_v),
+            air_drag_energy(moving_air, area, normal, velocity + boost, c_v)
+        );
+        let reference = air_drag_local(still_air, area, normal, velocity, c_v);
+        let shifted = air_drag_local(moving_air, area, normal, velocity + boost, c_v);
+        assert_eq!(reference.energy, shifted.energy);
+        assert_eq!(reference.grad, shifted.grad);
+        assert_eq!(reference.hess, shifted.hess);
+        assert!(shifted.psd);
+
+        // Explicit signed zero must follow exactly the original still-air arithmetic.
+        let zero = AirDrag {
+            air_velocity_m_s: [-0.0, 0.0, -0.0],
+            ..still_air
+        };
+        assert_eq!(
+            air_drag_local(zero, area, normal, velocity, c_v).hess,
+            reference.hess
+        );
+        let signed_zero = Vec3::new(-0.0, 0.0, -0.0);
+        let preserved = zero.relative_velocity(signed_zero);
+        assert_eq!(preserved.x.to_bits(), signed_zero.x.to_bits());
+        assert_eq!(preserved.z.to_bits(), signed_zero.z.to_bits());
+    }
+
+    #[test]
+    fn air_velocity_serialization_preserves_defaults_and_refuses_bad_vectors() {
+        let old = serde_json::json!({
+            "rho_air_kg_m3": 1.225,
+            "c_normal": 1.2,
+            "c_tangent": 0.05,
+            "eps_v_m_s": 0.001
+        });
+        assert_eq!(serde_json::to_value(AirDrag::standard()).unwrap(), old);
+        assert_eq!(
+            serde_json::from_value::<AirDrag>(old).unwrap(),
+            AirDrag::standard()
+        );
+        let wind = AirDrag {
+            air_velocity_m_s: [1.0, -2.0, 0.5],
+            ..AirDrag::standard()
+        };
+        let encoded = serde_json::to_value(wind).unwrap();
+        assert_eq!(
+            encoded["air_velocity_m_s"],
+            serde_json::json!([1.0, -2.0, 0.5])
+        );
+        assert_eq!(serde_json::from_value::<AirDrag>(encoded).unwrap(), wind);
+        for bad in [
+            serde_json::json!([]),
+            serde_json::json!([1.0, 2.0]),
+            serde_json::json!([1.0, 2.0, 3.0, 4.0]),
+            serde_json::json!([1.0, "2", 3.0]),
+            serde_json::Value::Null,
+        ] {
+            assert!(
+                serde_json::from_value::<AirDrag>(serde_json::json!({
+                    "air_velocity_m_s": bad
+                }))
+                .is_err()
+            );
+        }
+        for axis in 0..3 {
+            for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut invalid = wind;
+                invalid.air_velocity_m_s[axis] = value;
+                assert_eq!(invalid.validate().unwrap_err().code, RefusalCode::NonFinite);
+            }
+        }
+        assert!(
+            serde_json::from_value::<AirDrag>(serde_json::json!({
+                "air_velocty_m_s": [1.0, 2.0, 3.0]
+            }))
+            .is_err()
         );
     }
 
