@@ -122,19 +122,17 @@ export default function PoseRoom() {
               the form, closes the seams and lets the jacket hang under gravity, with contact and friction
               against the form. The replay is its own record of that, frame by frame.</li>
             <li><b>A small move carries the jacket; a larger one sews it again.</b> Dragging moves the form. If you
-              let go within 5° of the pose the jacket was sewn in, the solver moves the arm there under the sewn
-              jacket in short steps: each starts with the cloth near the form moved along with it and is
-              accepted only after the solver&rsquo;s collision checks, and the replay shows those steps.
-              Further than that, a new drape starts in the nearest of the arm&rsquo;s sampled poses, which is
-              the quicker of the two for a large change; if you move again before it finishes, that drape is
-              dropped. In our tests (Chrome on an 8-core desktop, six solver threads) a fresh sew took about
-              14 s and a 5° move about 5 to 6 s, except the first move after a sew, about 15 s: the collision
-              check turns back several of its steps after they are solved, and they are solved again shorter.
-              A 10° move took about a minute on one thread.</li>
+              let go within 10° of where the jacket is now (the spacing of the arm&rsquo;s sampled poses), the
+              solver moves the arm there under the jacket in short steps: each starts with the cloth near the
+              form moved along with it and is accepted only after the solver&rsquo;s collision checks, and the
+              replay shows those steps. Further than that, a new drape starts in the nearest of the arm&rsquo;s
+              sampled poses, which is the quicker of the two for a large change; if you move again before it
+              finishes, that drape is dropped. In our tests (Chrome on an 8-core desktop, six solver threads) a
+              fresh sew took about 12 s, a 5° move about 5 to 6 s and a 10° move about 10 s.</li>
             <li><b>It runs on your device.</b> The solver is compiled to WebAssembly and works in background
               threads of this tab. Where the browser allows the threads to share memory, the per-element and
-              per-contact work runs on several at once, with the same result to the bit; elsewhere it runs on
-              one. How long a pose takes depends on your computer.</li>
+              per-contact work and the sparse factorization run on several at once, with the same result to
+              the bit; elsewhere it runs on one. How long a pose takes depends on your computer.</li>
           </ol>
           <p className="pose-fine">The form is a synthetic child with a 52 cm chest, made from published tape
             measurements and cut below the waist like a tailor&rsquo;s form. Below 35° the form&rsquo;s own

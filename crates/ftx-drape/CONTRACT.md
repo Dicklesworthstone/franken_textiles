@@ -791,11 +791,15 @@ multiply then an add, `ftx drape` takes 14.7 CPU-seconds for the bolero (was 62)
 
 **Threads.** The optional `parallel` feature (rayon; off by default, so no pool unless asked) evaluates
 independent work in parallel through `par.rs`: element locals and their PSD projections, per-element
-energies, per-pair barrier terms, the reused candidate list's box test and the thickness ramp's gaps.
-Every result lands in an index-ordered vector and every reduction (the Hessian scatter, energy sums, the
-first penetrating pair, the first smallest gap) runs serially in the old order, so the output is bit for
-bit the serial build's at any thread count. The serial parts bound the gain: in the posing room's browser
-sew (ftx-wasm `threads`) 17.1 s became 13.4 s on 4 threads.
+energies, per-pair barrier terms, the reused candidate list's box test, the thickness ramp's gaps, the
+Hessian's membrane and hinge entries (gathered slot by slot in scatter order), and the sparse LDLT (whole
+assembly subtrees as tasks, a large front's panel columns, and the triangular solves of subtrees with at
+least 2^16 entries of L, whose forward products to ancestors are applied in supernode order). Every
+result lands in an index-ordered vector or a disjoint slice and every reduction (energy sums, the first
+penetrating pair, the first smallest gap, a refusal) is the serial pass's, in its order, so the output is
+bit for bit the serial build's at any thread count. The serial parts bound the gain: in the posing room's
+browser sew (ftx-wasm `threads`, 8-core EPYC) 17.3 s became 12.1 s on 6 threads; the small LDLT solves
+(the PCG preconditioner, hundreds per substep) and the line search stay serial.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
