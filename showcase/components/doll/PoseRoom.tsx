@@ -127,10 +127,14 @@ export default function PoseRoom() {
               accepted only after the solver&rsquo;s collision checks, and the replay shows those steps.
               Further than that, a new drape starts in the nearest of the arm&rsquo;s sampled poses, which is
               the quicker of the two for a large change; if you move again before it finishes, that drape is
-              dropped. In our tests (Node, one desktop machine) a 5° move took about 6 s, a fresh sew about
-              20 s and a 10° move about a minute.</li>
-            <li><b>It runs on your device.</b> The solver is compiled to WebAssembly and works in a background
-              thread of this tab. How long a pose takes depends on your computer.</li>
+              dropped. In our tests (Chrome on an 8-core desktop, six solver threads) a fresh sew took about
+              14 s and a 5° move about 5 to 6 s, except the first move after a sew, about 15 s: the collision
+              check turns back several of its steps after they are solved, and they are solved again shorter.
+              A 10° move took about a minute on one thread.</li>
+            <li><b>It runs on your device.</b> The solver is compiled to WebAssembly and works in background
+              threads of this tab. Where the browser allows the threads to share memory, the per-element and
+              per-contact work runs on several at once, with the same result to the bit; elsewhere it runs on
+              one. How long a pose takes depends on your computer.</li>
           </ol>
           <p className="pose-fine">The form is a synthetic child with a 52 cm chest, made from published tape
             measurements and cut below the waist like a tailor&rsquo;s form. Below 35° the form&rsquo;s own
