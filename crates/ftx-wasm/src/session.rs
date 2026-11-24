@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use ftx_core::Vec3;
-use ftx_drape::motion::{MotionOptions, advance_body};
+use ftx_drape::motion::{MotionOptions, advance_body, advance_body_carried};
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
 use ftx_drape::scene::{PartFrames, Scene};
 use ftx_drape::stepping::SubdivisionOptions;
@@ -500,6 +500,10 @@ pub struct SessionSettings {
     pub bending_model: BendingModel,
     /// Membrane compression-softening formulation.
     pub compression_model: CompressionModel,
+    /// Compressive stiffness as a fraction of the tensile (`ftx drape --compression`; 1 is the
+    /// reference's cloth, as stiff in compression as in tension). A numerical model choice, not a
+    /// measured fabric property.
+    pub compression: f64,
     /// Opt-in aerodynamic drag and SE(3)-invariant Rayleigh internal damping.
     pub damping: DampingOptions,
     /// Opt-in Li et al. (2020) adaptive IPC barrier stiffness scaling.
@@ -516,6 +520,10 @@ pub struct SessionSettings {
     pub start_self_repulsion: Option<SelfRepulsionOptions>,
     /// Longest body-motion substep of a move (s).
     pub motion_step_s: f64,
+    /// Carry radius of an arm move (mm, [`ftx_drape::motion::advance_body_carried`]): each
+    /// substep's solve starts with the cloth within this distance moved along with the body. Zero
+    /// starts from the cloth at rest ([`advance_body`]).
+    pub motion_carry_mm: f64,
 }
 
 impl Default for SessionSettings {
@@ -532,6 +540,7 @@ impl Default for SessionSettings {
             integrator: drape.integrator,
             bending_model: drape.bending_model,
             compression_model: drape.compression_model,
+            compression: drape.compression,
             damping: drape.damping,
             adaptive_barrier: drape.adaptive_barrier,
             stick_slip: drape.stick_slip,
@@ -540,6 +549,7 @@ impl Default for SessionSettings {
             construction: drape.construction,
             start_self_repulsion: drape.start_self_repulsion,
             motion_step_s: MotionOptions::default().max_step_s,
+            motion_carry_mm: 0.0,
         }
     }
 }
@@ -552,6 +562,11 @@ pub struct Session {
     replay: Vec<f32>,
     summary: Value,
     motion: MotionOptions,
+    /// Carry radius of an arm move (m); `None` for no carry.
+    carry_m: Option<f64>,
+    /// The last accepted move's work: trials (including rejected ones), accepted substeps and each
+    /// substep's Newton iterations; null before the first move.
+    last_move: Value,
 }
 
 fn flat(points: &[Vec3]) -> impl Iterator<Item = f32> + '_ {
@@ -603,6 +618,7 @@ impl Session {
             integrator,
             bending_model,
             compression_model,
+            compression,
             damping,
             adaptive_barrier,
             stick_slip,
@@ -611,9 +627,13 @@ impl Session {
             construction,
             start_self_repulsion,
             motion_step_s,
+            motion_carry_mm,
         } = settings;
         if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
             return Err("self-contact thickness must be finite and nonnegative".into());
+        }
+        if !motion_carry_mm.is_finite() || !(0.0..=100.0).contains(&motion_carry_mm) {
+            return Err("the motion carry radius must lie between 0 and 100 mm".into());
         }
         if !motion_step_s.is_finite() || !(1e-4..=0.1).contains(&motion_step_s) {
             return Err("the motion step must lie between 0.0001 and 0.1 s".into());
@@ -649,6 +669,7 @@ impl Session {
             integrator,
             bending_model,
             compression_model,
+            compression,
             damping,
             adaptive_barrier,
             stick_slip,
@@ -730,6 +751,8 @@ impl Session {
                 max_step_s: motion_step_s,
                 ..MotionOptions::default()
             },
+            carry_m: (motion_carry_mm > 0.0).then_some(motion_carry_mm * 1e-3),
+            last_move: Value::Null,
         })
     }
 
@@ -799,6 +822,13 @@ impl Session {
         self.arms
     }
 
+    /// The last accepted move's work (`trials`, `substeps`, `newton_iterations` per substep); null
+    /// before the first.
+    #[must_use]
+    pub fn last_move(&self) -> &Value {
+        &self.last_move
+    }
+
     /// Moves the arms to these angles over `seconds` of cloth time and returns every substep the solver
     /// accepted: for each, its time since the move began (s) and then the cloth's mesh-vertex xyz (m).
     /// Angles are clamped to the body's sampled range. The same angles as now let the cloth settle.
@@ -823,9 +853,23 @@ impl Session {
         let (low, high) = self.body.arm_range();
         let (left, right) = (left_deg.clamp(low, high), right_deg.clamp(low, high));
         let target = self.body.collision_at(left, right);
-        let report = advance_body(&mut self.scene.solver, &target, seconds, self.motion)
-            .map_err(|refusal| refusal.to_string())?;
+        let report = match self.carry_m {
+            Some(radius) => advance_body_carried(
+                &mut self.scene.solver,
+                &target,
+                seconds,
+                self.motion,
+                radius,
+            ),
+            None => advance_body(&mut self.scene.solver, &target, seconds, self.motion),
+        }
+        .map_err(|refusal| refusal.to_string())?;
         self.arms = [left, right];
+        self.last_move = json!({
+            "trials": report.trials,
+            "substeps": report.samples.len(),
+            "newton_iterations": report.samples.iter().map(|s| s.solve.iterations).collect::<Vec<_>>(),
+        });
         let mut samples =
             Vec::with_capacity(report.samples.len() * (1 + 3 * self.scene.weld.len()));
         for sample in &report.samples {
@@ -1100,12 +1144,40 @@ mod tests {
     }
 
     #[test]
+    fn a_carried_move_reaches_the_same_pose_in_fewer_checked_substeps() {
+        let move_samples = |carry_m: Option<f64>| {
+            let mut session = session(0.015);
+            session.carry_m = carry_m;
+            let count = session.summary()["cloth_vertices"].as_u64().unwrap() as usize;
+            let samples = session.advance(45.0, 35.0, 0.25).unwrap();
+            let inradius = 0.03 * det::cos(std::f64::consts::PI / RING as f64);
+            assert!(
+                session
+                    .cloth()
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .all(|p| (f64::from(p[0]) - 0.015).hypot(f64::from(p[1])) > inradius),
+                "the cloth stays outside the moved cylinder (carry {carry_m:?})"
+            );
+            assert_eq!(session.arms(), [45.0, 35.0]);
+            samples.len() / (1 + count * 3)
+        };
+        let (plain, carried) = (move_samples(None), move_samples(Some(0.02)));
+        assert!(
+            carried < plain,
+            "carrying the band took {carried} substeps, at rest {plain}"
+        );
+    }
+
+    #[test]
     fn session_settings_accepts_opt_in_realism_options_while_preserving_defaults() {
         let def: SessionSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(def.newton_strategy, NewtonStrategy::ProjectedNewton);
         assert_eq!(def.integrator, TimeIntegrator::ImplicitEuler);
         assert_eq!(def.bending_model, BendingModel::Quadratic);
         assert_eq!(def.compression_model, CompressionModel::AxisAligned);
+        assert_eq!(def.compression, DrapeOptions::default().compression);
         assert!(def.damping.is_default());
         assert!(def.adaptive_barrier.is_none());
         assert!(def.stick_slip.is_none());
@@ -1123,6 +1195,7 @@ mod tests {
             "integrator": { "kind": "generalized_alpha", "rho_inf": 0.25 },
             "bending_model": "discrete_shells",
             "compression_model": "principal",
+            "compression": 0.05,
             "damping": {
                 "air_drag": { "rho_air_kg_m3": 1.225, "c_normal": 1.2, "c_tangent": 0.05, "eps_v_m_s": 1e-3, "air_velocity_m_s": [0.5, -1.5, 0.25] },
                 "rayleigh_membrane_s": 1e-4,

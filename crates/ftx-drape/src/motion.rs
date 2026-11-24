@@ -8,6 +8,8 @@
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
 use crate::collider::audit_surface;
+use crate::distance::point_triangle_closest;
+use crate::nearest::NearestTree;
 use crate::{SolveReport, Solver};
 
 /// Work and temporal-resolution policy. These are numerical limits, not fitted fabric data.
@@ -193,6 +195,41 @@ pub fn advance_body_with_work(
     advance_body_impl(solver, target, duration_s, options, capture)
 }
 
+/// [`advance_body`] where each substep's Newton solve starts with the cloth carried along by the
+/// body: every cloth vertex within `carry_radius_m` of the body moves with the body point nearest
+/// it at the request's start (its barycentric share of the nearest triangle's displacement), fading
+/// linearly to no motion between half the radius and the radius. The substep is admitted by the
+/// same continuous collision bound, on the joint chord of the carried cloth and the moving body,
+/// instead of the body sweeping into cloth that stands still; that is what lets a limb move more
+/// than the current cloth gap per substep. Positions, velocities and every post-solve check are
+/// the solver's own, exactly as in [`advance_body`]: the carry is only where Newton starts.
+///
+/// # Errors
+/// As [`advance_body`], and a radius that is not finite and positive.
+pub fn advance_body_carried(
+    solver: &mut Solver,
+    target: &[Vec3],
+    duration_s: f64,
+    options: MotionOptions,
+    carry_radius_m: f64,
+) -> Result<MotionReport, Refusal> {
+    if !carry_radius_m.is_finite() || carry_radius_m <= 0.0 {
+        return Err(invalid(
+            "the cloth carry radius must be finite and positive",
+        ));
+    }
+    advance_body_inner(
+        solver,
+        target,
+        duration_s,
+        options,
+        DissipationCapture::default(),
+        Some(carry_radius_m),
+        &mut (),
+        |_, _, _| Ok(()),
+    )
+}
+
 fn advance_body_impl(
     solver: &mut Solver,
     target: &[Vec3],
@@ -211,6 +248,38 @@ fn advance_body_impl(
     )
 }
 
+/// Where each cloth vertex goes over the whole request if it moves with the body point nearest it
+/// at the start (see [`advance_body_carried`]); zero beyond `radius`.
+fn carry_field(
+    cloth: &[Vec3],
+    body_start: &[Vec3],
+    body_end: &[Vec3],
+    triangles: &[[usize; 3]],
+    radius: f64,
+) -> Result<Vec<Vec3>, Refusal> {
+    let tree = NearestTree::new(body_start.to_vec(), triangles.to_vec())?;
+    Ok(cloth
+        .iter()
+        .map(|&p| {
+            let near = tree.nearest(p);
+            let weight = ((radius - near.distance) / (0.5 * radius)).clamp(0.0, 1.0);
+            if !(weight.is_finite() && weight > 0.0) {
+                return Vec3::ZERO;
+            }
+            let [a, b, c] = triangles[near.triangle];
+            let (w, _) = point_triangle_closest(p, body_start[a], body_start[b], body_start[c]);
+            let moved = (body_end[a] - body_start[a]) * w[0]
+                + (body_end[b] - body_start[b]) * w[1]
+                + (body_end[c] - body_start[c]) * w[2];
+            if moved.is_finite() {
+                moved * weight
+            } else {
+                Vec3::ZERO
+            }
+        })
+        .collect())
+}
+
 // A coupled consumer runs only after the geometric/contact checks have accepted a trial. Its
 // private state and the solver commit together at the end of the entire segment. The consumer
 // may update mass, velocity and history through a source-qualified endpoint transfer. It must not
@@ -221,6 +290,22 @@ pub(crate) fn advance_body_coupled<S: Clone>(
     duration_s: f64,
     options: MotionOptions,
     capture: DissipationCapture,
+    state: &mut S,
+    accept: impl FnMut(&mut Solver, &MotionSample, &mut S) -> Result<(), Refusal>,
+) -> Result<MotionReport, Refusal> {
+    advance_body_inner(
+        solver, target, duration_s, options, capture, None, state, accept,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_body_inner<S: Clone>(
+    solver: &mut Solver,
+    target: &[Vec3],
+    duration_s: f64,
+    options: MotionOptions,
+    capture: DissipationCapture,
+    carry_radius_m: Option<f64>,
     state: &mut S,
     mut accept: impl FnMut(&mut Solver, &MotionSample, &mut S) -> Result<(), Refusal>,
 ) -> Result<MotionReport, Refusal> {
@@ -282,6 +367,16 @@ pub(crate) fn advance_body_coupled<S: Clone>(
     }
     let start_body = original.body.vertices.clone();
     let triangles = original.body.triangles.clone();
+    let carry = match carry_radius_m {
+        Some(radius) => Some(carry_field(
+            &solver.x,
+            &start_body,
+            target,
+            &triangles,
+            radius,
+        )?),
+        None => None,
+    };
     let plastic_count = if capture.plastic {
         solver
             .membrane_plastic_dissipation_j()?
@@ -378,7 +473,24 @@ pub(crate) fn advance_body_coupled<S: Clone>(
             step = h * (0.8 * body_safe.fraction).min(0.5);
             continue;
         }
-        let safe = c.motion_bound(&work.x, &work.x, &end, options.max_pairs)?;
+        // With a carry, Newton starts from the cloth moved along with the body over this substep and
+        // the bound covers that joint chord; otherwise the body sweeps toward cloth at rest.
+        let guess = carry.as_ref().map(|field| {
+            let share = (end_time - time) / duration_s;
+            let moved: Vec<Vec3> = work
+                .x
+                .iter()
+                .zip(field)
+                .map(|(p, d)| *p + *d * share)
+                .collect();
+            work.keep_fixed(&moved)
+        });
+        let safe = c.motion_bound(
+            &work.x,
+            guess.as_deref().unwrap_or(&work.x),
+            &end,
+            options.max_pairs,
+        )?;
         report.pairs_tested += safe.pairs_tested as u64;
         if safe.fraction < 1.0 {
             step = h * (0.8 * safe.fraction).min(0.5);
@@ -392,7 +504,10 @@ pub(crate) fn advance_body_coupled<S: Clone>(
             .expect("checked collider is retained")
             .body
             .refit_vertices(end)?;
-        let solved = trial.step_at_body(h, Some(&previous_body));
+        let solved = match &guess {
+            Some(guess) => trial.step_at_body_with_guess(h, Some(&previous_body), guess),
+            None => trial.step_at_body(h, Some(&previous_body)),
+        };
         let solve = match solved {
             Ok(r)
                 if r.converged

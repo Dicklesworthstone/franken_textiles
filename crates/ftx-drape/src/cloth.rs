@@ -2814,6 +2814,73 @@ impl Solver {
         Ok(report)
     }
 
+    /// [`Solver::step_at_body`] whose Newton solve starts from `guess` (fixed components keep their
+    /// positions) instead of the accepted positions; the inertia predictor, velocities and friction
+    /// lag still come from the accepted state. The caller must have admitted `guess` against the
+    /// body at the step's end (a barrier-infeasible start refuses like any other). Material-history
+    /// fields and Generalized-alpha take the plain step, without the guess.
+    ///
+    /// # Errors
+    /// As [`Solver::step_at_body`], and a guess whose length is not the vertex count.
+    pub(crate) fn step_at_body_with_guess(
+        &mut self,
+        h: f64,
+        body_start: Option<&[Vec3]>,
+        guess: &[Vec3],
+    ) -> Result<SolveReport, Refusal> {
+        if guess.len() != self.x.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "step warm-start length must match vertex count",
+            ));
+        }
+        if self.integrator != TimeIntegrator::ImplicitEuler
+            || self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
+            return self.step_at_body(h, body_start);
+        }
+        self.check_liquid_mass()?;
+        self.model.check_attached_mass()?;
+        self.check_constitutive_models()?;
+        let mut trial = self.clone();
+        let report = trial.step_inner_with_guess(h, body_start, Some(guess))?;
+        if trial.v.iter().any(|v| !v.is_finite()) || trial.a.iter().any(|a| !a.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "the cloth velocity or acceleration became non-finite",
+            ));
+        }
+        *self = trial;
+        Ok(report)
+    }
+
+    /// `guess` with every fixed component put back at the current position: the positions a
+    /// guessed step actually starts from.
+    pub(crate) fn keep_fixed(&self, guess: &[Vec3]) -> Vec<Vec3> {
+        guess
+            .iter()
+            .zip(&self.x)
+            .enumerate()
+            .map(|(i, (g, x))| {
+                Vec3::new(
+                    if self.free[3 * i].is_some() { g.x } else { x.x },
+                    if self.free[3 * i + 1].is_some() {
+                        g.y
+                    } else {
+                        x.y
+                    },
+                    if self.free[3 * i + 2].is_some() {
+                        g.z
+                    } else {
+                        x.z
+                    },
+                )
+            })
+            .collect()
+    }
+
     /// Implicit-Euler (or configured [`TimeIntegrator`]) step from the accepted physical state
     /// `self.x` (`x_n`), optionally seeding free DOFs of the Newton minimizer at `guess` without
     /// altering `x_n` in the inertia predictor or post-step velocity. Falls back to `step` when
@@ -2915,7 +2982,11 @@ impl Solver {
             } else {
                 c.update_lag(&x0, &x0, h);
             }
-        } else if let Some(g) = guess {
+        }
+        // A guess only seeds the minimizer (the friction lag and the inertia predictor above use
+        // x₀). With contact it arrives only from `step_at_body_with_guess`, whose caller has
+        // admitted it against the body (`step_with_guess` drops it whenever contact is present).
+        if let Some(g) = guess {
             if g.len() != self.x.len() {
                 return Err(Refusal::new(
                     RefusalCode::InvalidDocument,

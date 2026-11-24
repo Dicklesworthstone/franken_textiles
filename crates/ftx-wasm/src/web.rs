@@ -1105,4 +1105,11 @@ impl WebDrapeSession {
             .advance(left_deg, right_deg, seconds)
             .map_err(|e| JsError::new(&e))
     }
+
+    /// The last accepted move's work as JSON: `trials` (rejected ones included), `substeps` and each
+    /// substep's `newton_iterations`; `null` before the first move.
+    #[must_use]
+    pub fn last_move(&self) -> String {
+        self.inner.last_move().to_string()
+    }
 }
