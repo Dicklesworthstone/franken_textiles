@@ -175,6 +175,89 @@ impl DampingOptions {
         }
         Ok(())
     }
+
+    /// Instantaneous SE(3)-invariant Rayleigh internal resistive forces `F_rayleigh(x0, v0)`
+    /// (`+∂Ψ_rate/∂v` contribution to `M a0 + ∇Ψ(x0) + F_drag(x0, v0) + F_rayleigh(x0, v0) = M g`)
+    /// for consistent initial acceleration in [`crate::integrator::TimeIntegrator::GeneralizedAlpha`].
+    ///
+    /// Because `ψ_rate(x) = ½ (β/h) Δq(x)ᵀ K Δq(x)` has `Δq(x0) = 0`, its exact Hessian at `x0` is
+    /// purely Gauss–Newton `h ∇²ψ_rate(x0) = β J(x0)ᵀ K J(x0)`, so `H(x0) v0 = β J(x0)ᵀ K q̇(x0, v0)`
+    /// matches the continuum Kelvin–Voigt resistive force across membranes, scalar hinges, and
+    /// source-panel patches while remaining identically zero on rigid velocities and resting starts.
+    pub(crate) fn initial_rayleigh_resistance(
+        &self,
+        model: &ClothModel,
+        x0: &[Vec3],
+        v0: &[Vec3],
+    ) -> Result<Vec<Vec3>, Refusal> {
+        let mut f = vec![Vec3::ZERO; x0.len()];
+        if (self.rayleigh_membrane_s <= 0.0 && self.rayleigh_bending_s <= 0.0)
+            || v0.iter().all(|v| *v == Vec3::ZERO)
+        {
+            return Ok(f);
+        }
+        let mul_add = |out: &mut [Vec3], verts: &[usize], hess: &[f64]| {
+            let n = 3 * verts.len();
+            for a in 0..verts.len() {
+                let va = verts[a];
+                for ka in 0..3 {
+                    let row = (3 * a + ka) * n;
+                    let mut sum = 0.0;
+                    for b in 0..verts.len() {
+                        let vb = verts[b];
+                        sum += hess[row + 3 * b] * v0[vb].x
+                            + hess[row + 3 * b + 1] * v0[vb].y
+                            + hess[row + 3 * b + 2] * v0[vb].z;
+                    }
+                    match ka {
+                        0 => out[va].x += sum,
+                        1 => out[va].y += sum,
+                        _ => out[va].z += sum,
+                    }
+                }
+            }
+        };
+        if self.rayleigh_membrane_s > 0.0 {
+            for (i, e) in model.membranes.iter().enumerate() {
+                let e0 = e.strain(x0);
+                let q = model.material(i).q;
+                let local = e.strain_rate_local(x0, e0, &q, self.rayleigh_membrane_s);
+                mul_add(&mut f, &e.v, &local.hess);
+            }
+        }
+        if self.rayleigh_bending_s > 0.0 {
+            for (i, hinge) in model.hinges.iter().enumerate() {
+                let b = model.hinge_rigidity(i);
+                if b <= 0.0 {
+                    continue;
+                }
+                let theta0 = hinge.dihedral_angle(x0);
+                if !theta0.is_finite() {
+                    return Err(Refusal::new(
+                        RefusalCode::DegenerateGeometry,
+                        format!(
+                            "hinge {i} is degenerate at step start; Rayleigh bending damping requires non-degenerate adjacent triangles"
+                        ),
+                    ));
+                }
+                let coeff = self.rayleigh_bending_s * b * hinge.dihedral_weight();
+                let local = hinge.dihedral_quadratic_local(x0, theta0, coeff);
+                mul_add(&mut f, &hinge.v, &local.hess);
+            }
+            for patch in model.panel_bending_patches() {
+                let state0 = patch.rate_state(x0)?;
+                let local = patch.rate_local(x0, state0, self.rayleigh_bending_s);
+                mul_add(&mut f, &patch.v, &local.hess);
+            }
+        }
+        if f.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "initial Rayleigh damping resistance force is non-finite",
+            ));
+        }
+        Ok(f)
+    }
 }
 
 /// Affine map from end-of-step vertex position `x[v]` to the integrator's evaluated velocity
@@ -390,6 +473,14 @@ impl<'a> DampingStep<'a> {
                 return Err(Refusal::new(
                     RefusalCode::OutOfRange,
                     "Rayleigh bending damping hinge is degenerate or lies on the exact ±pi rate branch",
+                ));
+            }
+        }
+        for (i, patch) in model.panel_bending_patches().iter().enumerate() {
+            if let Err(err) = patch.rate_state(x) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("Rayleigh bending damping panel {i}: {}", err.message),
                 ));
             }
         }
@@ -1021,6 +1112,25 @@ mod tests {
                     .all(|patch| patch.tensor() == law)
             );
             assert_eq!(step.energy(&model, &x0), 0.0);
+            // A trial that collapses a panel source triangle must refuse OutOfRange so line
+            // search and trust-region solvers backtrack rather than aborting with NonFinite.
+            let mut collapsed = trial.clone();
+            let [v0, v1, v2] = triangles[0];
+            collapsed[v2] = (collapsed[v0] + collapsed[v1]) * 0.5;
+            assert_eq!(
+                step.check_bending_rate_domains(&model, &collapsed)
+                    .unwrap_err()
+                    .code,
+                RefusalCode::OutOfRange,
+                "normal={normal}: collapsed panel source triangle must refuse OutOfRange"
+            );
+            assert!(step.energy(&model, &collapsed).is_nan());
+            assert!(
+                step.rayleigh_panel_local(&model, 0, &collapsed)
+                    .unwrap()
+                    .energy
+                    .is_nan()
+            );
         }
     }
 
@@ -1148,5 +1258,190 @@ mod tests {
         // Rigid translation leaves face normals unchanged -> bound is exactly 1.0.
         let shift = [Vec3::new(0.5, -0.3, 0.2); 4];
         assert_eq!(step.bending_step_bound(&model, &near_cut, &shift), 1.0);
+    }
+
+    #[test]
+    fn initial_rayleigh_resistance_matches_small_step_limit_and_vanishes_on_rigid_motion() {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.02),
+            Vec2::new(-0.02, 0.01),
+            Vec2::new(0.02, 0.01),
+        ];
+        let tris = [[0, 1, 2], [1, 0, 3]];
+        let model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(450.0, 320.0, 0.2, 90.0, 1.0),
+            4e-4,
+            0.2,
+        )
+        .unwrap();
+        let x0 = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.02, 0.0),
+            Vec3::new(-0.02, 0.01, 0.002),
+            Vec3::new(0.019, 0.011, 0.005),
+        ];
+        let opts = DampingOptions {
+            air_drag: None,
+            rayleigh_membrane_s: 0.004,
+            rayleigh_bending_s: 0.007,
+        };
+        // Rigid translation + angular velocity ω × x must produce exact zero Rayleigh resistance.
+        let omega = Vec3::new(1.7, -2.3, 3.1);
+        let v_rigid: Vec<Vec3> = x0
+            .iter()
+            .map(|&p| Vec3::new(0.5, -0.3, 0.8) + omega.cross(p))
+            .collect();
+        let f_rigid = opts
+            .initial_rayleigh_resistance(&model, &x0, &v_rigid)
+            .unwrap();
+        for f in &f_rigid {
+            assert!(
+                f.norm() < 1e-12,
+                "rigid velocity must yield zero Rayleigh resistance, got {f:?}"
+            );
+        }
+
+        // Deforming velocity: compare against small-step gradient of DampingStep at x0 + eps * v0.
+        let v0 = vec![
+            Vec3::new(0.02, -0.01, 0.03),
+            Vec3::new(-0.01, 0.04, -0.02),
+            Vec3::new(0.05, 0.02, 0.07),
+            Vec3::new(-0.03, 0.01, 0.12),
+        ];
+        let analytic = opts.initial_rayleigh_resistance(&model, &x0, &v0).unwrap();
+        let eps = 1e-7;
+        let x1: Vec<Vec3> = x0.iter().zip(&v0).map(|(&p, &v)| p + v * eps).collect();
+        let step = DampingStep::build(
+            &model,
+            opts,
+            &x0,
+            eps,
+            VelocityMap::ImplicitEuler {
+                x0: &x0,
+                inv_h: 1.0 / eps,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let mut fd = vec![Vec3::ZERO; x0.len()];
+        for (i, e) in model.membranes.iter().enumerate() {
+            let l = step.rayleigh_membrane_local(&model, i, &x1).unwrap();
+            for (a, &vi) in e.v.iter().enumerate() {
+                fd[vi] += Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
+            }
+        }
+        for (i, h) in model.hinges.iter().enumerate() {
+            let l = step.rayleigh_bending_local(&model, i, &x1).unwrap();
+            for (a, &vi) in h.v.iter().enumerate() {
+                fd[vi] += Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
+            }
+        }
+        for (a, b) in analytic.iter().zip(&fd) {
+            let scale = a.norm().max(b.norm()).max(1e-9);
+            assert!(
+                (*a - *b).norm() < 1e-5 * scale,
+                "initial Rayleigh resistance mismatch: analytic={a:?} vs small-step={b:?}"
+            );
+        }
+
+        // Source-panel bending patches (both corotated and normal-projected) must also vanish
+        // under rigid velocity and match the small-step panel rate gradient to finite-difference precision.
+        use ftx_pattern::material_bending::BendingTensor;
+        let (grid_rest, grid_tris) = crate::cloth::grid(0.12, 0.08, 4, 3, Vec2::ZERO);
+        let grid_x0: Vec<Vec3> = grid_rest
+            .iter()
+            .map(|p| Vec3::new(p.x, p.y, 0.35 * p.x * p.x - 0.15 * p.x * p.y))
+            .collect();
+        let grid_v_rigid: Vec<Vec3> = grid_x0
+            .iter()
+            .map(|&p| Vec3::new(-0.4, 0.7, 0.2) + omega.cross(p))
+            .collect();
+        let grid_v_def: Vec<Vec3> = grid_rest
+            .iter()
+            .map(|p| {
+                Vec3::new(
+                    0.12 * p.y,
+                    -0.08 * p.x,
+                    0.5 * p.x * p.x + 0.3 * p.y * p.y - 0.2 * p.x * p.y,
+                )
+            })
+            .collect();
+        let grid_x1: Vec<Vec3> = grid_x0
+            .iter()
+            .zip(&grid_v_def)
+            .map(|(&p, &v)| p + v * eps)
+            .collect();
+        let panel_opts = DampingOptions {
+            air_drag: None,
+            rayleigh_membrane_s: 0.0,
+            rayleigh_bending_s: 0.015,
+        };
+        for normal in [false, true] {
+            let mut pmodel = ClothModel::new(
+                grid_rest.clone(),
+                &grid_tris,
+                Membrane::orthotropic(500.0, 300.0, 0.2, 60.0, 1.0),
+                1e-5,
+                0.15,
+            )
+            .unwrap();
+            let mut law = BendingTensor::new(0.002, 0.005, 0.0004, 0.003).unwrap();
+            if normal {
+                law = law.normal_projected();
+            }
+            pmodel
+                .set_panel_bending(
+                    &grid_rest,
+                    &grid_tris,
+                    &(0..grid_rest.len()).collect::<Vec<_>>(),
+                    &vec![Some(law); grid_tris.len()],
+                )
+                .unwrap();
+            let pf_rigid = panel_opts
+                .initial_rayleigh_resistance(&pmodel, &grid_x0, &grid_v_rigid)
+                .unwrap();
+            for f in &pf_rigid {
+                assert!(
+                    f.norm() < 1e-11,
+                    "normal={normal}: panel initial Rayleigh resistance must vanish on rigid velocity, got {f:?}"
+                );
+            }
+            let pf_analytic = panel_opts
+                .initial_rayleigh_resistance(&pmodel, &grid_x0, &grid_v_def)
+                .unwrap();
+            assert!(
+                pf_analytic.iter().any(|f| f.norm() > 1e-5),
+                "normal={normal}: panel initial Rayleigh resistance must be non-trivial"
+            );
+            let pstep = DampingStep::build(
+                &pmodel,
+                panel_opts,
+                &grid_x0,
+                eps,
+                VelocityMap::ImplicitEuler {
+                    x0: &grid_x0,
+                    inv_h: 1.0 / eps,
+                },
+            )
+            .unwrap()
+            .unwrap();
+            let mut pf_fd = vec![Vec3::ZERO; grid_x0.len()];
+            for (i, patch) in pmodel.panel_bending_patches().iter().enumerate() {
+                let l = pstep.rayleigh_panel_local(&pmodel, i, &grid_x1).unwrap();
+                for (a, &vi) in patch.v.iter().enumerate() {
+                    pf_fd[vi] += Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
+                }
+            }
+            for (a, b) in pf_analytic.iter().zip(&pf_fd) {
+                let scale = a.norm().max(b.norm()).max(1e-9);
+                assert!(
+                    (*a - *b).norm() < 1e-4 * scale,
+                    "normal={normal}: panel initial Rayleigh mismatch: analytic={a:?} vs small-step={b:?}"
+                );
+            }
+        }
     }
 }

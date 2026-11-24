@@ -315,7 +315,7 @@ impl ClothModel {
         Ok(())
     }
 
-    fn check_dihedral_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
+    pub(crate) fn check_dihedral_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
         if self.bending_model == BendingModel::DiscreteShells {
             for (i, hinge) in self.hinges.iter().enumerate() {
                 hinge.check_dihedral_domain(x).map_err(|mut refusal| {
@@ -2840,8 +2840,9 @@ impl Solver {
         let a0 = if self.accel_initialized {
             self.a.clone()
         } else {
-            // Consistent initial acceleration M a₀ = M g − ∇Ψ(x₀) + F_drag(x₀, v₀) on free DOFs so
-            // Generalized-α preserves full 2nd-order accuracy from step 1 without mutating state before accept.
+            // Consistent initial acceleration M a₀ = M g − ∇Ψ(x₀) − F_drag(x₀, v₀) − F_rayleigh(x₀, v₀)
+            // on free DOFs so Generalized-α starts without an O(1) acceleration discontinuity from step 1
+            // without mutating state before accept.
             let (mut g0, _) = self.assemble_ctx(&x0, StepContext::Static, false, false);
             if let Some(drag) = self.damping.air_drag {
                 for e in &self.model.membranes {
@@ -2860,6 +2861,16 @@ impl Solver {
                                 g0[f] += f_res[k];
                             }
                         }
+                    }
+                }
+            }
+            let f_rayleigh = self
+                .damping
+                .initial_rayleigh_resistance(&self.model, &x0, &v0)?;
+            for (vi, fr) in f_rayleigh.iter().enumerate() {
+                for k in 0..3 {
+                    if let Some(f) = self.free[3 * vi + k] {
+                        g0[f] += fr[k];
                     }
                 }
             }
@@ -4810,6 +4821,81 @@ mod strategy_and_integrator_tests {
             rx_solver.check_constitutive_models().unwrap();
             rx_solver.step(0.01).unwrap();
         }
+    }
+
+    #[test]
+    fn generalized_alpha_initial_acceleration_matches_rayleigh_damping_limit() {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.02),
+            Vec2::new(-0.02, 0.01),
+            Vec2::new(0.02, 0.01),
+        ];
+        let tris = [[0, 1, 2], [1, 0, 3]];
+        let mut model = ClothModel::new(
+            rest,
+            &tris,
+            Membrane::orthotropic(400.0, 300.0, 0.2, 80.0, 1.0),
+            5e-4,
+            0.2,
+        )
+        .unwrap();
+        model.bending_model = BendingModel::DiscreteShells;
+        let x0 = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.02, 0.0),
+            Vec3::new(-0.02, 0.01, 0.0),
+            Vec3::new(0.019, 0.011, 0.004),
+        ];
+        // Nonzero initial velocity with both in-plane stretch and out-of-plane hinge folding.
+        let v0 = vec![
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::new(0.25, -0.1, 0.4),
+        ];
+        let fixed = [[true; 3], [true; 3], [true; 3], [false; 3]];
+        let damping = DampingOptions {
+            air_drag: None,
+            rayleigh_membrane_s: 0.005,
+            rayleigh_bending_s: 0.008,
+        };
+        let make = || {
+            let mut s = Solver::new(
+                model.clone(),
+                x0.clone(),
+                &fixed,
+                Vec3::new(0.0, 0.0, -9.81),
+            );
+            s.v = v0.clone();
+            s.tol = 1e-13;
+            s.integrator = TimeIntegrator::GeneralizedAlpha { rho_inf: 0.9 };
+            s.damping = damping;
+            s
+        };
+        let mut s_small = make();
+        let (g_static, _) = s_small.assemble_static_exact();
+        let f_rayleigh = damping
+            .initial_rayleigh_resistance(&s_small.model, &x0, &v0)
+            .unwrap();
+        assert!(
+            f_rayleigh[3].norm() > 1e-3,
+            "Rayleigh initial resistance must be non-trivial"
+        );
+        let a_true = Vec3::new(
+            -(g_static[0] + f_rayleigh[3].x) / s_small.model.mass[3],
+            -(g_static[1] + f_rayleigh[3].y) / s_small.model.mass[3],
+            -(g_static[2] + f_rayleigh[3].z) / s_small.model.mass[3],
+        );
+        // Without Rayleigh resistance in a0, rho_inf=0.9 injects an O(1) jump into a1 as h -> 0.
+        // With consistent a0, a1 converges cleanly to a_true as h shrinks.
+        s_small.step(1e-6).unwrap();
+        let err_small = (s_small.acceleration()[3] - a_true).norm() / a_true.norm();
+        assert!(
+            err_small < 2e-3,
+            "consistent Generalized-alpha a1 must match continuum limit as h->0: rel_err={err_small}, a1={:?}, a_true={a_true:?}",
+            s_small.acceleration()[3]
+        );
     }
 }
 

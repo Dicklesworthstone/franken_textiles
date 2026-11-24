@@ -279,6 +279,7 @@ impl Solver {
         self.check_constitutive_models()?;
         self.model.check_membrane_domains(&self.x)?;
         self.model.check_panel_bending_domains(&self.x)?;
+        self.model.check_dihedral_domains(&self.x)?;
         let rhs = self.pack_free(dj_dx);
         let nfree = rhs.len();
         if nfree == 0 || rhs.iter().all(|&v| v == 0.0) {
@@ -887,6 +888,17 @@ mod tests {
                 .unwrap_err()
                 .code,
             ftx_core::RefusalCode::InvalidDocument
+        );
+
+        // DiscreteShells equilibrium_adjoint must refuse a degenerate / exact-±π dihedral hinge
+        // cleanly with OutOfRange rather than feeding NaN into exact tangent factorization.
+        let mut ds = frictionless.clone();
+        ds.model.bending_model = crate::elements::BendingModel::DiscreteShells;
+        let h0 = ds.model.hinges[0];
+        ds.x[h0.v[3]] = (ds.x[h0.v[0]] + ds.x[h0.v[1]]) * 0.5;
+        assert_eq!(
+            ds.equilibrium_adjoint(&dl_dx).unwrap_err().code,
+            ftx_core::RefusalCode::OutOfRange
         );
 
         // Mismatched compression table length must refuse cleanly rather than panic.
