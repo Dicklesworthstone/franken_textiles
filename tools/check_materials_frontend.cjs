@@ -4385,6 +4385,55 @@ test('heterogeneous cell thread orders retain cost and time proofs independently
   for(const url of downloads)assert.equal(p.live.has(url),false);
 });
 
+test('shared operator complete thread orders retain scoped cost proof and exact downloads', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); scenarioInputs(p); p.select('sewOptions');
+  const allocation={makespan_milliseconds:26000,feed_seconds:20,scheduled_feed_milliseconds:20000,
+    setup_milliseconds:3000,handling_milliseconds:3000,cells:[]};
+  const operator={operator:'one qualified worker',baseline_replaced:false,search_nodes:40,
+    selected:{busy_milliseconds:6000,transfer_milliseconds:0,waiting_milliseconds:0,steps:[]},
+    serial_order_scope:'retained_serial_incumbents/1',search_complete:true,budget_exhausted:false};
+  const parallel={schema:'ftx-sewing-parallel/11',baseline:allocation,selected:allocation,
+    cell_plans:[{cell:'a',plan:{options:{machine:{id:'qualified-cell'}},seams:[]}}],shared_operator:operator,
+    lower_bound_makespan_milliseconds:10000,search_nodes:50,optimality_proven:false,budget_exhausted:false};
+  const plan={schema:'ftx-sewing-plan/38',seams:[],hardware_execution_authorized:false,
+    options:{production:{parallel:{objective:'minimize_thread_observed_order_cost',cells:[],shared_operator:{}}}},
+    production:{schema:'ftx-sewing-production/26',production_copies:3,feed_seconds:20,stitch_intervals:0,
+      ordering:{optimality_proven:true},parallel}};
+  const downloads=[];
+  for(const proof of [true,false,null])for(const op of ['sew','study','scenario']) {
+    parallel.thread_order_search={currency:'USD',search_scope:'shared_operator_retained_serial_incumbents/1',
+      selected_order_cost:proof===null?null:10,completion_deadline_milliseconds:26000,
+      search_nodes:10,search_complete:proof===true,order_evaluations:3,unresolved_assignments:proof===null?1:0,
+      unresolved_cell_counts:0,baseline_replaced:false,assignment_budget_exhausted:proof===false,
+      order_budget_exhausted:proof===null,optimality_proven:false,
+      ...(proof===null?{}:{retained_order_optimality_proven:proof})};
+    operator.search_complete=proof===true;operator.budget_exhausted=proof===false;
+    const row=studyRow('shared-cost');row.sewing=outcome(plan);
+    const study=studyReport([row]);
+    const report=op==='sew'?{schema:'ftx-sewing-program/5',plan,stitches:[]}:
+      op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const raw=` ${JSON.stringify(report)}\n`;
+    await p.e[op].onclick();p.emit(report,[{name:'shared-cost.json',text:raw,mime:'application/json'}]);
+    const s=section(p,op==='sew'?'sew':op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const orders=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent.endsWith('complete thread-order allocation'));
+    assert.ok(orders,`${op}/${proof}: ${visibleText(s)}`);
+    assert.deepEqual(plain(orders.children[2].children.map(n=>n.textContent)),
+      ['USD',proof===null?'Unknown':'10','26000',String(proof===true),'false','10','3',proof===null?'1':'0','0',
+        String(proof===false),String(proof===null),proof===null?'Unknown':String(proof)]);
+    assert.match(visibleText(s),/Retained-order cost minimum proved/);
+    assert.match(visibleText(s),/actual shared-operator timeline, including final unloading/);
+    assert.match(visibleText(s),/other serial orders remain outside that proof/);
+    assert.match(visibleText(s),/minimum parallel completion time is not proved/);
+    assert.doesNotMatch(visibleText(s),/Minimum parallel completion time proved/);
+    const download=descendants(s).find(n=>n.download==='shared-cost.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);downloads.push(download.href);
+  }
+  p.e.sewOptions.handlers.change();p.e.studyRequest.handlers.change();
+  for(const name of ['sew','Fixed-pattern manufacturing alternatives','Fresh drape and heat alternatives'])
+    assert.equal(section(p,name).hidden,true);
+  for(const url of downloads)assert.equal(p.live.has(url),false);
+});
+
 test('partial sewing spans display both source sides without an ordering policy or new geometry', async () => {
   const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
   await p.e.sew.onclick();
@@ -26440,3 +26489,50 @@ test('scenario matrix cross-case comparison keeps union and named-region reading
   assert.doesNotMatch(readingsCell, /max_warp_green_strain: 0\.31 1; reported range unknown/);
   assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
 });
+
+test('compiled WASM shared-operator thread orders replay native purchasing and deadline decisions',
+  {skip:process.env.FTX_REAL_WASM!=='1'||!process.env.FTX_PARALLEL_SHARED_COST_REPLAY},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=name=>fs.readFileSync(path.join(process.env.FTX_PARALLEL_SHARED_COST_REPLAY,name),'utf8');
+    const pattern=input('pattern.json'),options=input('options.json'),worker=await workerModule({bindings:ftx});
+    const sewing=await worker.send({type:'sew',request:290,pattern,options});
+    assert.equal(sewing.type,'result',sewing.message);
+    // Native captures serialize parsed Rust values; object key order can differ from typed outputs.
+    assert.deepEqual(JSON.parse(sewing.files.find(file=>file.name==='sewing-program.json').text),JSON.parse(input('program.json')));
+    const parallel=sewing.result.plan.production.parallel,order=parallel.thread_order_search;
+    assert.equal(sewing.result.plan.schema,'ftx-sewing-plan/38');
+    assert.equal(sewing.result.plan.production.schema,'ftx-sewing-production/26');
+    assert.equal(parallel.schema,'ftx-sewing-parallel/11');
+    assert.equal(order.selected_order_cost,10);
+    assert.equal(order.search_scope,'shared_operator_retained_serial_incumbents/1');
+    assert.equal(order.retained_order_optimality_proven,true);
+    assert.equal(order.optimality_proven,false);
+    assert.equal(parallel.optimality_proven,false);
+    assert.equal(sewing.result.stitches.length,200);
+
+    const request=input('selection.json');
+    const selected=await worker.send({type:'sew',request:291,pattern,options:request,selectRecipes:true});
+    assert.equal(selected.type,'result',selected.message);
+    assert.deepEqual(JSON.parse(selected.files.find(file=>file.name==='sewing-selection.json').text),JSON.parse(input('selection-report.json')));
+    assert.equal(selected.files.find(file=>file.name==='sewing-selection-request.json').text,request);
+    const report=selected.result.selection.report;
+    assert.equal(report.selected_thread_order_cost,14);
+    assert.equal(report.optimality_proven,false);
+    assert.deepEqual(selected.result.program.plan,report.selected_plan);
+    assert.equal(selected.result.program.plan.production.parallel.selected.makespan_milliseconds,
+      JSON.parse(request).completion_deadline_milliseconds);
+    assert.equal(selected.files.find(file=>file.name==='selected-sewing-options.json').text,
+      selected.result.selection.selected_options_json);
+
+    const studyRequest=input('study.json');
+    const study=await worker.send({type:'study',request:292,pattern,studyRequest});
+    assert.equal(study.type,'result',study.message);
+    assert.deepEqual(JSON.parse(study.files.find(file=>file.name==='material-study.json').text),JSON.parse(input('study-report.json')));
+    assert.equal(study.files.find(file=>file.name==='study-request.json').text,studyRequest);
+    assert.deepEqual(study.result.comparison.frontier,['shared-cost']);
+    assert.equal(study.result.alternatives[0].metrics.thread_observed_order_cost,14);
+    assert.equal(study.result.alternatives[0].sewing.result.production.parallel.thread_order_search.optimality_proven,false);
+    assert.equal(study.result.alternatives[0].sewing_selection.result.optimality_proven,false);
+  });
