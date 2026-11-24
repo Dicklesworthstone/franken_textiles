@@ -306,3 +306,120 @@ fn regional_contact_loads_select_intact_flat_panels_and_replay_the_same_sewn_mot
         assert_eq!(partial[key], partial["regions"]["left"][key], "{key}");
     }
 }
+
+#[test]
+fn contact_loads_follow_adaptive_barrier_kappa_during_motion() {
+    let form = form();
+    let body = body(&form);
+    let p = pattern();
+    let mut s = motion_scenario();
+    // Wide barrier and aggressive adaptive growth force kappa to escalate during motion so
+    // stale t=0 kappa evaluation diverges visibly from the actual solver equilibrium forces.
+    s.options.contact.dhat = 0.02;
+    s.options.adaptive_barrier = Some(ftx_drape::AdaptiveBarrierPolicy {
+        target_gap_fraction: 0.9,
+        min_gap_fraction: 0.85,
+        growth_factor: 4.0,
+        membrane_floor_scale: 1e-6,
+        kappa_min: 1e-3,
+        kappa_max: 1e6,
+    });
+    s.contact_loads = Some(request());
+    // Push the cylinder slightly along +x to tighten the contact gap and force kappa growth.
+    let endpoints: Vec<Vec<Vec3>> = [0.002, 0.004]
+        .into_iter()
+        .map(|dx| {
+            body.collision
+                .0
+                .iter()
+                .map(|v| *v + Vec3::new(dx, 0.0, 0.0))
+                .collect()
+        })
+        .collect();
+    let motion_path = ftx_drape::study::motion::Path::new(
+        s.motion.as_ref().unwrap(),
+        body.collision,
+        endpoints.clone(),
+    )
+    .unwrap();
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(motion_path)).unwrap();
+    let result = session.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(
+        result["motion"]["status"], "available",
+        "{}",
+        result["motion"]
+    );
+    let outcome = &result["motion"]["result"]["contact_loads"];
+    assert_eq!(outcome["status"], "available", "{outcome}");
+    let history = &outcome["result"];
+    let frames = history["frames"].as_array().unwrap();
+    assert!(frames.len() >= 2, "expected initial + motion frames");
+
+    // Replay the exact initial drape + motion solver independently to observe per-substep kappa.
+    let mut run = drape(&p, &s.fit_spec, &body, &s.options, |_| {}).unwrap();
+    let initial_contact = run.scene.solver.contact.as_ref().unwrap().clone();
+    let initial_kappa = initial_contact.params.kappa;
+    let req = s.motion.as_ref().unwrap();
+    let motion_opts = ftx_drape::motion::MotionOptions {
+        max_step_s: req.max_step_s,
+        max_trials: req.max_trials,
+        max_pairs: req.max_pairs,
+        max_sample_vertices: req.max_sample_vertices,
+    };
+    let mut all_samples = Vec::new();
+    let mut prev_t = 0.0;
+    for (idx, frame) in req.keyframes.iter().enumerate() {
+        let rep = ftx_drape::motion::advance_body(
+            &mut run.scene.solver,
+            &endpoints[idx],
+            frame.time_s - prev_t,
+            motion_opts,
+        )
+        .unwrap();
+        all_samples.extend(rep.samples);
+        prev_t = frame.time_s;
+    }
+    assert_eq!(frames.len(), all_samples.len() + 1);
+    let selected: Vec<usize> =
+        serde_json::from_value(history["source"]["selected_vertices"].clone()).unwrap();
+    let mut escalated = false;
+    for (frame, sample) in frames.iter().skip(1).zip(&all_samples) {
+        let bk = sample
+            .body_kappa_n_m
+            .expect("adaptive barrier motion sample must record body_kappa_n_m");
+        assert!(sample.self_kappa_n_m.is_none());
+        if bk > initial_kappa {
+            escalated = true;
+        }
+        let mut expected_contact = initial_contact.clone();
+        expected_contact.params.kappa = bk;
+        expected_contact.body = Body::new(
+            sample.body.clone(),
+            form.triangles.clone(),
+            expected_contact.params.dhat,
+        )
+        .unwrap();
+        let expected_map = expected_contact.reaction_map(&sample.cloth).unwrap();
+        let expected_all: Vec<Vec3> =
+            serde_json::from_value(expected_map["body_force_on_cloth_n"].clone()).unwrap();
+        let expected_sel: Vec<_> = selected.iter().map(|&v| expected_all[v]).collect();
+        assert_eq!(
+            frame["active_policy_sha256"],
+            expected_map["active_policy_sha256"]
+        );
+        assert_eq!(
+            frame["body_force_on_selected_vertices_n"],
+            json!(expected_sel)
+        );
+    }
+    assert!(
+        escalated,
+        "test must exercise real adaptive-barrier kappa escalation during motion (initial {initial_kappa})"
+    );
+    // The initial frame's policy hash must differ from the escalated frame's policy hash.
+    assert_ne!(
+        frames[0]["active_policy_sha256"],
+        frames.last().unwrap()["active_policy_sha256"]
+    );
+}

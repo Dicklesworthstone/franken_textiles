@@ -475,7 +475,7 @@ impl History {
             frames: vec![],
             pairs: 0,
         };
-        history.advance(&scene.solver.x, &contact.body.vertices, 0.)?;
+        history.advance(&scene.solver.x, &contact.body.vertices, 0., None)?;
         Ok(history)
     }
 
@@ -488,6 +488,7 @@ impl History {
         positions: &[Vec3],
         body: &[Vec3],
         time_s: f64,
+        kappas: Option<(f64, Option<f64>)>,
     ) -> Result<(), Refusal> {
         let vertices_per_frame = self.vertex_count + self.contact.body.vertices.len();
         if vertices_per_frame.saturating_mul(self.frames.len() + 1)
@@ -512,8 +513,20 @@ impl History {
             ));
         }
         // Retain source-bound surface fields, seam envelopes and self-contact creases. Only the
-        // kinematic collider moves; rebuilding Contact from global defaults would lose materials.
+        // kinematic collider and any adapted barrier stiffness move; rebuilding Contact from global
+        // defaults would lose materials.
         let mut contact = self.contact.clone();
+        if let Some((body_kappa, self_kappa)) = kappas {
+            if !body_kappa.is_finite()
+                || body_kappa <= 0.0
+                || self_kappa.is_some_and(|k| !k.is_finite() || k <= 0.0)
+            {
+                return Err(invalid(
+                    "contact loads require finite positive adapted barrier stiffness",
+                ));
+            }
+            contact.restore_kappas(body_kappa, self_kappa);
+        }
         if contact.body.vertices != body {
             contact.body = Body::new(
                 body.to_vec(),

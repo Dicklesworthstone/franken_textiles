@@ -59,6 +59,12 @@ pub struct MotionSample {
     /// Cumulative accepted irreversible source-panel bending work in retained triangle order.
     /// Inactive triangles are zero; initial drape work is included for explicit baseline removal.
     pub bending_plastic_dissipation_j: Option<Vec<f64>>,
+    /// Active body barrier stiffness `kappa` (N/m) that equilibrated this accepted substep when
+    /// adaptive barrier scaling is enabled (`None` when adaptive barrier scaling is disabled).
+    pub body_kappa_n_m: Option<f64>,
+    /// Active cloth–cloth barrier stiffness `kappa` (N/m) that equilibrated this accepted substep
+    /// when both self-contact and adaptive barrier scaling are enabled.
+    pub self_kappa_n_m: Option<f64>,
 }
 
 /// Independently requested physical-work samples. Each retained scalar counts against the existing
@@ -435,6 +441,14 @@ pub(crate) fn advance_body_coupled<S: Clone>(
             continue;
         }
         time = end_time;
+        let (body_kappa_n_m, self_kappa_n_m) = if new_c.adaptive_barrier().is_some() {
+            (
+                Some(new_c.params.kappa),
+                new_c.self_contact_params().map(|p| p.kappa),
+            )
+        } else {
+            (None, None)
+        };
         let sample = MotionSample {
             time_s: time,
             cloth: trial.x.clone(),
@@ -455,6 +469,8 @@ pub(crate) fn advance_body_coupled<S: Clone>(
             } else {
                 None
             },
+            body_kappa_n_m,
+            self_kappa_n_m,
         };
         let pre_v =
             (trial.integrator != crate::TimeIntegrator::ImplicitEuler).then(|| trial.v.clone());

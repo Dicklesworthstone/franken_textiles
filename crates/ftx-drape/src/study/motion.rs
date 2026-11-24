@@ -628,7 +628,14 @@ fn evaluate_path(
                 material_strain = Some(Err(refusal));
             }
             if let Some(Ok(history)) = &mut contact_loads
-                && let Err(refusal) = history.advance(&sample.cloth, &sample.body, time)
+                && let Err(refusal) = history.advance(
+                    &sample.cloth,
+                    &sample.body,
+                    time,
+                    sample
+                        .body_kappa_n_m
+                        .map(|body_kappa| (body_kappa, sample.self_kappa_n_m)),
+                )
             {
                 contact_loads = Some(Err(refusal));
             }
