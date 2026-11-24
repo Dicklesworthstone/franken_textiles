@@ -2223,12 +2223,9 @@ fn heterogeneous_cells_replay_actual_stitches_and_combined_thread_orders_through
     );
 }
 
-#[test]
-fn parallel_thread_cost_replays_complete_native_orders_deadlines_and_material_studies() {
+fn parallel_thread_cost_options(mut options: Value) -> Value {
     use ftx_export::sewing::production::workholding::qualification_sha256;
 
-    let directory = workspace();
-    let mut options: Value = serde_json::from_str(HETEROGENEOUS).unwrap();
     let slow = &mut options["production"]["parallel"]["cells"][0];
     for qualification in slow["configuration"]["qualifications"]
         .as_array_mut()
@@ -2265,6 +2262,16 @@ fn parallel_thread_cost_replays_complete_native_orders_deadlines_and_material_st
     options["production"]["parallel"]["objective"] = json!("minimize_thread_observed_order_cost");
     options["production"]["parallel"]["thread_order_search"] = json!({
         "max_search_nodes":1000,"max_order_evaluations":16});
+    if options["production"]["parallel"]["shared_operator"].is_object() {
+        refresh_shared_cell_locks(&mut options);
+    }
+    options
+}
+
+#[test]
+fn parallel_thread_cost_replays_complete_native_orders_deadlines_and_material_studies() {
+    let directory = workspace();
+    let options = parallel_thread_cost_options(serde_json::from_str(HETEROGENEOUS).unwrap());
     let program =
         portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options.to_string()).unwrap());
     let parallel = &program["plan"]["production"]["parallel"];
@@ -2351,6 +2358,144 @@ fn parallel_thread_cost_replays_complete_native_orders_deadlines_and_material_st
     }
     eprintln!(
         "parallel thread-cost production replay: {}",
+        directory.display()
+    );
+}
+
+#[test]
+fn shared_operator_thread_cost_replays_orders_deadlines_and_material_studies() {
+    let directory = workspace();
+    let options = parallel_thread_cost_options(shared_operator_options(false));
+    let options_text = options.to_string();
+    let program = portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, &options_text).unwrap());
+    let plan = &program["plan"];
+    let parallel = &plan["production"]["parallel"];
+    let order = &parallel["thread_order_search"];
+    assert_eq!(plan["schema"], "ftx-sewing-plan/38");
+    assert_eq!(plan["production"]["schema"], "ftx-sewing-production/26");
+    assert_eq!(parallel["schema"], "ftx-sewing-parallel/11");
+    assert_eq!(order["selected_order_cost"], 10.0);
+    assert_eq!(
+        order["search_scope"],
+        "shared_operator_retained_serial_incumbents/1"
+    );
+    assert_eq!(order["retained_order_optimality_proven"], true);
+    assert_eq!(order["optimality_proven"], false);
+    assert_eq!(parallel["optimality_proven"], false);
+    assert_eq!(
+        plan["consumables"]["purchasing"]["least_observed_independent_order_total"],
+        10.0
+    );
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 200);
+
+    let mut fastest_options = options.clone();
+    fastest_options["production"]["parallel"]["objective"] = json!("minimize_makespan");
+    fastest_options["production"]["parallel"]
+        .as_object_mut()
+        .unwrap()
+        .remove("thread_order_search");
+    let fastest =
+        portable(ftx_wasm::manufacturing::sew_plan(PATTERN, &fastest_options.to_string()).unwrap());
+    let deadline = fastest["production"]["parallel"]["selected"]["makespan_milliseconds"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        parallel["selected"]["makespan_milliseconds"]
+            .as_u64()
+            .unwrap()
+            > deadline
+    );
+    assert_eq!(
+        fastest["consumables"]["purchasing"]["least_observed_independent_order_total"],
+        14.0
+    );
+    let pass = &options["passes"][0];
+    let selection = json!({"schema":"ftx-sewing-selection/3","options":options,
+        "objective":"minimize_thread_observed_order_cost","max_plan_evaluations":2,
+        "completion_deadline_milliseconds":deadline,
+        "alternatives":[{"operation":"join","recipes":[{"id":"same-qualified-recipe",
+            "needle":pass["needle"],"thread":pass["thread"],"max_stitch_mm":pass["max_stitch_mm"],
+            "stitches_per_minute":pass["stitches_per_minute"]}]}]});
+    let selected = portable(ftx_wasm::sew_select(PATTERN, &selection.to_string()).unwrap());
+    assert_eq!(selected["report"]["selected_thread_order_cost"], 14.0);
+    assert_eq!(selected["report"]["optimality_proven"], false);
+    let selected_options = selected["selected_options_json"].as_str().unwrap();
+    let replay =
+        portable(ftx_wasm::manufacturing::sew_stitches(PATTERN, selected_options).unwrap());
+    assert_eq!(replay["plan"], selected["report"]["selected_plan"]);
+    assert_eq!(
+        replay["plan"]["production"]["parallel"]["selected"]["makespan_milliseconds"],
+        deadline
+    );
+    assert_eq!(
+        replay["plan"]["production"]["parallel"]["thread_order_search"]["completion_deadline_milliseconds"],
+        deadline
+    );
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"shared-cost","changes":{"schema":"ftx-material-bindings/1",
+            "default":pattern["fabric"]["material"]}}],"sewing_selection":selection,
+        "comparison":{"basis":"nominal","required_consumers":["sewing","sewing_purchasing"],
+            "objectives":[{"metric":"thread_observed_order_cost","direction":"minimize"},
+                {"metric":"sewing_parallel_makespan_seconds","direction":"minimize"}]}});
+    let studied = portable(ftx_wasm::materials::study(PATTERN, &study.to_string()).unwrap());
+    assert_eq!(studied["comparison"]["frontier"], json!(["shared-cost"]));
+    assert_eq!(
+        studied["alternatives"][0]["metrics"]["thread_observed_order_cost"],
+        14.0
+    );
+    assert_eq!(
+        studied["alternatives"][0]["metrics"]["sewing_parallel_makespan_seconds"],
+        deadline as f64 / 1000.0
+    );
+    let row = &studied["alternatives"][0];
+    let rebound = portable(
+        ftx_wasm::manufacturing::sew_plan(
+            row["binding"]["result"]["pattern_json"].as_str().unwrap(),
+            selected_options,
+        )
+        .unwrap(),
+    );
+    assert_eq!(row["sewing"]["result"], rebound);
+    for (name, text) in [
+        ("pattern.json", PATTERN.to_owned()),
+        ("options.json", options_text),
+        ("program.json", program.to_string()),
+        ("selection.json", selection.to_string()),
+        ("selection-report.json", selected.to_string()),
+        ("study.json", study.to_string()),
+        ("study-report.json", studied.to_string()),
+    ] {
+        fs::write(directory.join(name), text).unwrap();
+    }
+    for main in [false, true] {
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-stitches",
+                "pattern.json",
+                "options.json"
+            ),
+            program
+        );
+        assert_eq!(
+            run(
+                main,
+                &directory,
+                "sew-select",
+                "pattern.json",
+                "selection.json"
+            ),
+            selected
+        );
+        assert_eq!(
+            run(main, &directory, "study", "pattern.json", "study.json"),
+            studied
+        );
+    }
+    eprintln!(
+        "shared-operator thread-cost replay: {}",
         directory.display()
     );
 }
