@@ -390,8 +390,15 @@ fn kat_air_drag_ambient_wind_galilean_invariance() {
         };
 
         for step in 1..=steps {
-            still.step(h).unwrap();
-            boosted.step(h).unwrap();
+            still
+                .step(h)
+                .unwrap_or_else(|e| panic!("still {integrator:?} step {step} failed: {e:?}"));
+            boosted.step(h).unwrap_or_else(|e| {
+                panic!(
+                    "boosted {integrator:?} step {step} x[0]={:?} v[0]={:?} failed: {e:?}",
+                    boosted.x[0], boosted.v[0]
+                )
+            });
             let shift = boost * (step as f64 * h);
             for i in 0..still.x.len() {
                 let x_err = (boosted.x[i] - (still.x[i] + shift)).norm();

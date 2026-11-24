@@ -562,20 +562,28 @@ pub struct SolveReport {
 // Hager–Zhang, SIAM J. Optim. 16 (2005), §4, (4.1) and T2. This is an approximate
 // line-search test, not convergence. Limit its use to a full step with an unresolved predicted
 // decrease, finite strictly improving free gradient, and a roundoff-scale energy discrepancy.
+// `energy_scale` includes any world-coordinate inertia cancellation scale
+// `Σ c_m m ‖x − x̃‖ max(‖x‖, ‖x̃‖)` so translated dynamic frames do not stall on f64 quantization.
 // https://people.clas.ufl.edu/hager/files/cg_descent.pdf
 fn roundoff_step(
-    energy: f64,
-    trial_energy: f64,
+    energy: (f64, f64, f64),
     alpha: f64,
-    slope: f64,
-    trial_slope: f64,
-    residual: f64,
-    trial_residual: f64,
+    slope: (f64, f64),
+    residual: (f64, f64),
 ) -> bool {
-    let uncertainty = 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs());
+    let (energy, trial_energy, extra_scale) = energy;
+    let (slope, trial_slope) = slope;
+    let (residual, trial_residual) = residual;
+    let scale = energy
+        .abs()
+        .max(trial_energy.abs())
+        .max(extra_scale.max(0.0));
+    let uncertainty = 16.0 * f64::EPSILON * scale;
     [
         energy,
         trial_energy,
+        extra_scale,
+        uncertainty,
         slope,
         trial_slope,
         residual,
@@ -1597,6 +1605,39 @@ impl Solver {
         }
     }
 
+    /// Energy scale for [`roundoff_step`]: the larger of the endpoint energies and, on dynamic
+    /// steps, the first-order world-coordinate quantization scale `Σ c_m m ‖x − x̃‖ max(‖x‖, ‖x̃‖)`
+    /// of the inertial term `½ c_m m ‖x − x̃‖²` (which dominates when a moving or translated garment
+    /// sits far from the origin relative to `‖x − x̃‖`).
+    fn energy_roundoff_scale(
+        &self,
+        x: &[Vec3],
+        trial: &[Vec3],
+        ctx: StepContext<'_>,
+        energy: f64,
+        trial_energy: f64,
+    ) -> f64 {
+        let mut scale = energy.abs().max(trial_energy.abs());
+        if let Some((xt, cm)) = match ctx {
+            StepContext::ImplicitEuler { xt, h, .. } => Some((xt, 1.0 / (h * h))),
+            StepContext::GeneralizedAlpha { xt, h, params, .. } => Some((xt, params.mass_coeff(h))),
+            StepContext::Static => None,
+        } {
+            let mut inertia_coord = 0.0_f64;
+            for (i, &m) in self.model.mass.iter().enumerate() {
+                if m > 0.0 {
+                    let delta = (x[i] - xt[i]).norm().max((trial[i] - xt[i]).norm());
+                    let coord = x[i].norm().max(trial[i].norm()).max(xt[i].norm());
+                    inertia_coord += cm * m * delta * coord;
+                }
+            }
+            if inertia_coord.is_finite() {
+                scale = scale.max(inertia_coord);
+            }
+        }
+        scale
+    }
+
     fn potential_legacy(
         &self,
         x: &[Vec3],
@@ -2420,25 +2461,26 @@ impl Solver {
                     Err(e) => return Err(e),
                 };
                 let armijo = e <= energy + 1e-4 * alpha * slope;
-                let precision_step = !armijo
-                    && alpha == 1.0
-                    && -slope <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
-                    && (e - energy).abs() <= 16.0 * f64::EPSILON * energy.abs().max(e.abs())
-                    && {
-                        let (trial_gradient, _) = self.assemble_ctx(&trial, ctx, false, false);
-                        let trial_slope = trial_gradient.iter().zip(&p).map(|(a, b)| a * b).sum();
-                        let trial_residual = max_abs_or_nan(&trial_gradient);
-                        trial_gradient.iter().all(|v| v.is_finite())
-                            && roundoff_step(
-                                energy,
-                                e,
-                                alpha,
-                                slope,
-                                trial_slope,
-                                rep.residual,
-                                trial_residual,
-                            )
-                    };
+                let precision_step = !armijo && alpha == 1.0 && {
+                    let energy_scale = self.energy_roundoff_scale(&self.x, &trial, ctx, energy, e);
+                    let uncertainty = 16.0 * f64::EPSILON * energy_scale;
+                    uncertainty.is_finite()
+                        && -slope <= uncertainty
+                        && (e - energy).abs() <= uncertainty
+                        && {
+                            let (trial_gradient, _) = self.assemble_ctx(&trial, ctx, false, false);
+                            let trial_slope =
+                                trial_gradient.iter().zip(&p).map(|(a, b)| a * b).sum();
+                            let trial_residual = max_abs_or_nan(&trial_gradient);
+                            trial_gradient.iter().all(|v| v.is_finite())
+                                && roundoff_step(
+                                    (energy, e, energy_scale),
+                                    alpha,
+                                    (slope, trial_slope),
+                                    (rep.residual, trial_residual),
+                                )
+                        }
+                };
                 if armijo || precision_step {
                     unchanged = trial.iter().zip(&self.x).all(|(a, b)| {
                         a.x.to_bits() == b.x.to_bits()
@@ -2714,15 +2756,25 @@ impl Solver {
             let precision_step = !(rho > 1e-4 && model_decrease > 0.0)
                 && step_alpha == 1.0
                 && !out.hit_boundary
-                && -slope <= 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs())
-                && (trial_energy - energy).abs()
-                    <= 16.0 * f64::EPSILON * energy.abs().max(trial_energy.abs())
                 && {
-                    let (tg, _) = self.assemble_ctx(&trial, ctx, false, false);
-                    let tslope = tg.iter().zip(&p).map(|(a, b)| a * b).sum();
-                    let tres = max_abs_or_nan(&tg);
-                    tg.iter().all(|v| v.is_finite())
-                        && roundoff_step(energy, trial_energy, 1.0, slope, tslope, res_inf, tres)
+                    let energy_scale =
+                        self.energy_roundoff_scale(&self.x, &trial, ctx, energy, trial_energy);
+                    let uncertainty = 16.0 * f64::EPSILON * energy_scale;
+                    uncertainty.is_finite()
+                        && -slope <= uncertainty
+                        && (trial_energy - energy).abs() <= uncertainty
+                        && {
+                            let (tg, _) = self.assemble_ctx(&trial, ctx, false, false);
+                            let tslope = tg.iter().zip(&p).map(|(a, b)| a * b).sum();
+                            let tres = max_abs_or_nan(&tg);
+                            tg.iter().all(|v| v.is_finite())
+                                && roundoff_step(
+                                    (energy, trial_energy, energy_scale),
+                                    1.0,
+                                    (slope, tslope),
+                                    (res_inf, tres),
+                                )
+                        }
                 };
             let accepted = (rho > 1e-4 && model_decrease > 0.0) || precision_step;
             if !accepted {
@@ -4050,7 +4102,31 @@ mod line_search_tests {
         let perturbed = energy + f64::EPSILON;
         let (slope, residual) = (-2e-16, 2e-8);
         assert!(roundoff_step(
-            energy, perturbed, 1.0, slope, 0.0, residual, 0.0
+            (energy, perturbed, 0.0),
+            1.0,
+            (slope, 0.0),
+            (residual, 0.0),
+        ));
+        // A translated dynamic step can have small net energy (~1e-5 J) while its inertial term
+        // ½ c_m m ‖x − x̃‖² loses O(ε · c_m m ‖x − x̃‖ · ‖x‖) precision (~1e-18 J). Admitting that
+        // scale still requires exact curvature and strict gradient progress, and rejects larger rises.
+        assert!(roundoff_step(
+            (1.22e-5, 1.22e-5 + 5e-19, 3.4e-3),
+            1.0,
+            (-3.6e-22, 0.0),
+            (3.5e-11, 3.5e-14),
+        ));
+        assert!(!roundoff_step(
+            (1.22e-5, 1.22e-5 + 1e-15, 3.4e-3),
+            1.0,
+            (-3.6e-22, 0.0),
+            (3.5e-11, 3.5e-14),
+        ));
+        assert!(!roundoff_step(
+            (1.22e-5, 1.22e-5 + 5e-19, f64::INFINITY),
+            1.0,
+            (-3.6e-22, 0.0),
+            (3.5e-11, 3.5e-14),
         ));
         // Equal energies alone cannot authorize no progress, an overshoot, a CCD-limited step,
         // a resolvable energy rise/decrement, or non-finite derivatives.
@@ -4063,7 +4139,12 @@ mod line_search_tests {
             (energy, 1.0, slope, 0.0, residual),
             (energy, 1.0, slope, f64::NAN, 0.0),
         ] {
-            assert!(!roundoff_step(energy, e, alpha, s0, s1, residual, r1));
+            assert!(!roundoff_step(
+                (energy, e, 0.0),
+                alpha,
+                (s0, s1),
+                (residual, r1),
+            ));
         }
     }
 }

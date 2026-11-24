@@ -410,8 +410,10 @@ verdicts below predate this stricter acceptance boundary and require fresh produ
 
 At unresolved floating-point energy differences, a failed Armijo trial may use approximate Wolfe
 slopes only for a full, domain- and CCD-admitted step. Both the predicted decrement and absolute
-energy discrepancy must be at most `16 * EPSILON * max(abs(old_energy), abs(new_energy))`, an explicit
-numerical error estimate. Finite free-gradient infinity norm must strictly decrease. This admits
+energy discrepancy must be at most `16 * EPSILON * max(abs(old_energy), abs(new_energy), inertia_coord_scale)`
+(where dynamic steps include `sum_i c_m m_i max(||x_i - xt_i||, ||trial_i - xt_i||) max(||x_i||, ||trial_i||, ||xt_i||)`
+to bound world-coordinate quantization of `0.5 c_m m ||x - xt||^2`), an explicit numerical error
+estimate. Finite free-gradient infinity norm must strictly decrease. This admits
 another Newton iterate, never early convergence or a looser correction tolerance; timed strips
 retain their separate force gate. `SolveReport.roundoff_steps` counts these steps through lag rounds,
 and actual energy values remain visible. Scalar rejection tests, nominal-density 4%/8% cyclic strip
