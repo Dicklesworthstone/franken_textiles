@@ -4537,13 +4537,18 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
                 invalid("motion comparison requires ordered, retained endpoint samples")
             })?;
         let sample = &samples[index];
-        if endpoint["time_s"] != frame["time_s"]
-            || endpoint["time_s"] != sample["time_s"]
-            || endpoint["arm_abduction_deg"] != frame["arm_abduction_deg"]
-            || endpoint["arm_pose"] != frame["arm_pose"]
-            || endpoint["leg_pose"] != frame["leg_pose"]
-            || endpoint["root_translation_m"] != frame["root_translation_m"]
-            || endpoint["root_rotation_rad"] != frame["root_rotation_rad"]
+        if finite(&endpoint["time_s"]).is_none()
+            || finite(&endpoint["time_s"]) != finite(&frame["time_s"])
+            || finite(&endpoint["time_s"]) != finite(&sample["time_s"])
+            || finite(&endpoint["arm_abduction_deg"]).is_none()
+            || finite(&endpoint["arm_abduction_deg"]) != finite(&frame["arm_abduction_deg"])
+            || !same_opt_arm_pose(&endpoint["arm_pose"], &frame["arm_pose"])
+            || !same_opt_leg_pose(&endpoint["leg_pose"], &frame["leg_pose"])
+            || !same_opt_vec3(
+                &endpoint["root_translation_m"],
+                &frame["root_translation_m"],
+            )
+            || !same_opt_vec3(&endpoint["root_rotation_rad"], &frame["root_rotation_rad"])
             || !sample["positions_m"].is_array()
             || !sample["body_positions_m"].is_array()
             || endpoint["positions_sha256"].as_str() != Some(hash(&sample["positions_m"])?.as_str())
@@ -4567,12 +4572,53 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
     Ok(motion)
 }
 
+fn same_opt_vec3(a: &Value, b: &Value) -> bool {
+    if a.is_null() && b.is_null() {
+        return true;
+    }
+    let parse = |value: &Value| -> Option<[f64; 3]> {
+        let values = value.as_array().filter(|v| v.len() == 3)?;
+        Some([
+            finite(&values[0])?,
+            finite(&values[1])?,
+            finite(&values[2])?,
+        ])
+    };
+    matches!((parse(a), parse(b)), (Some(va), Some(vb)) if va == vb)
+}
+
+fn same_opt_arm_pose(a: &Value, b: &Value) -> bool {
+    if a.is_null() && b.is_null() {
+        return true;
+    }
+    let parse = |value: &Value| -> Option<[f64; 2]> {
+        let obj = value.as_object().filter(|o| o.len() == 2)?;
+        Some([
+            finite(obj.get("left_abduction_deg")?)?,
+            finite(obj.get("right_abduction_deg")?)?,
+        ])
+    };
+    matches!((parse(a), parse(b)), (Some(pa), Some(pb)) if pa == pb)
+}
+
+fn same_opt_leg_pose(a: &Value, b: &Value) -> bool {
+    if a.is_null() && b.is_null() {
+        return true;
+    }
+    let parse = |value: &Value| -> Option<(&str, f64)> {
+        let obj = value.as_object().filter(|o| o.len() == 2)?;
+        Some((obj.get("posture")?.as_str()?, finite(obj.get("fraction")?)?))
+    };
+    matches!((parse(a), parse(b)), (Some(pa), Some(pb)) if pa == pb)
+}
+
 fn admit_carry_radius(request: &Value, motion: &Value) -> Result<(), Refusal> {
     match (request.get("carry_radius_m"), motion.get("carry_radius_m")) {
         (None, None) => Ok(()),
         (Some(declared), Some(retained))
-            if declared == retained
-                && finite(declared).is_some_and(|radius| radius > 0. && radius <= 0.1) =>
+            if finite(declared).is_some_and(|radius| {
+                radius > 0. && radius <= 0.1 && finite(retained) == Some(radius)
+            }) =>
         {
             Ok(())
         }

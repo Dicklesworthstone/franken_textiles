@@ -812,6 +812,64 @@ fn root_rotations_must_match_every_requested_endpoint_before_motion_comparison()
 }
 
 #[test]
+fn motion_endpoints_match_integer_json_numbers_and_reject_extra_pose_fields() {
+    let request = motion_request();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut descriptor = motion_descriptor();
+    descriptor["scenario"]["motion"]["keyframes"][1]["time_s"] = json!(1);
+    descriptor["scenario"]["motion"]["keyframes"][0]["arm_abduction_deg"] = json!(45);
+    descriptor["scenario"]["motion"]["keyframes"][1]["arm_abduction_deg"] = json!(55);
+    descriptor["scenario"]["motion"]["keyframes"][0]["arm_pose"] =
+        json!({"left_abduction_deg": 35, "right_abduction_deg": 90});
+    descriptor["scenario"]["motion"]["keyframes"][0]["leg_pose"] =
+        json!({"posture": "seated", "fraction": 1});
+    descriptor["scenario"]["motion"]["keyframes"][0]["root_translation_m"] = json!([0, 0, 0]);
+    descriptor["scenario"]["motion"]["keyframes"][0]["root_rotation_rad"] = json!([0, 0, 1]);
+
+    for fault in ["none", "extra_arm_field", "extra_leg_field", "arm_mismatch"] {
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                let mut result = synthetic_motion(pattern, 5.0);
+                let kf = &mut result["motion"]["result"]["keyframes"];
+                kf[1]["time_s"] = json!(1.0);
+                kf[0]["arm_abduction_deg"] = json!(45.0);
+                kf[1]["arm_abduction_deg"] = json!(55.0);
+                kf[0]["arm_pose"] =
+                    json!({"left_abduction_deg": 35.0, "right_abduction_deg": 90.0});
+                kf[0]["leg_pose"] = json!({"posture": "seated", "fraction": 1.0});
+                kf[0]["root_translation_m"] = json!([0.0, 0.0, 0.0]);
+                kf[0]["root_rotation_rad"] = json!([0.0, 0.0, 1.0]);
+                if key == "a" {
+                    match fault {
+                        "extra_arm_field" => {
+                            kf[0]["arm_pose"]["extra"] = json!(1);
+                        }
+                        "extra_leg_field" => {
+                            kf[0]["leg_pose"]["extra"] = json!(true);
+                        }
+                        "arm_mismatch" => {
+                            kf[0]["arm_pose"]["right_abduction_deg"] = json!(85.0);
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a", "b"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}"
+        );
+    }
+}
+
+#[test]
 fn source_pose_sampling_must_match_the_policy_and_retained_mechanical_sequence() {
     let mut request = motion_request();
     request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
