@@ -1112,17 +1112,26 @@ mod tests {
                     .all(|patch| patch.tensor() == law)
             );
             assert_eq!(step.energy(&model, &x0), 0.0);
-            // A trial that collapses a panel source triangle must refuse OutOfRange so line
+            // A trial that collapses a panel's rate frame must refuse OutOfRange so line
             // search and trust-region solvers backtrack rather than aborting with NonFinite.
+            // Vector-Hessian rate_frame uses the 3-vertex source triangle; normal-projected
+            // normal_frame reconstructs the centroid tangent plane from all 6 patch vertices.
             let mut collapsed = trial.clone();
             let [v0, v1, v2] = triangles[0];
-            collapsed[v2] = (collapsed[v0] + collapsed[v1]) * 0.5;
+            if normal {
+                let anchor = collapsed[v0];
+                for &v in &model.panel_bending_patches()[0].v {
+                    collapsed[v] = anchor;
+                }
+            } else {
+                collapsed[v2] = (collapsed[v0] + collapsed[v1]) * 0.5;
+            }
             assert_eq!(
                 step.check_bending_rate_domains(&model, &collapsed)
                     .unwrap_err()
                     .code,
                 RefusalCode::OutOfRange,
-                "normal={normal}: collapsed panel source triangle must refuse OutOfRange"
+                "normal={normal}: collapsed panel rate frame must refuse OutOfRange"
             );
             assert!(step.energy(&model, &collapsed).is_nan());
             assert!(
