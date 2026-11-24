@@ -1585,12 +1585,12 @@ fn extract_piece_creases(
                 Some(Vec2::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
             };
             let (a, b) = (pt(from)?, pt(to)?);
-            let len = norm2(b - a);
+            let len = det::hypot(b.x - a.x, b.y - a.y);
             (a.is_finite() && b.is_finite() && len.is_finite() && len > 0.0).then_some((a, b))
         });
     let reflect_across = |p: Vec2, a: Vec2, b: Vec2| -> Vec2 {
         let ab = b - a;
-        let len = norm2(ab);
+        let len = det::hypot(ab.x, ab.y);
         let d = Vec2::new(ab.x / len, ab.y / len);
         let w = p - a;
         let k = 2.0 * (w.x * d.x + w.y * d.y);
@@ -1642,11 +1642,19 @@ fn extract_piece_creases(
         if mark.get("closed").is_some_and(truthy) {
             let mut ring: Vec<Vec2> = Vec::with_capacity(drafted_poly.len());
             for pt in drafted_poly {
-                if ring.last().is_none_or(|&prev| norm2(pt - prev) > 1e-6) {
+                if ring
+                    .last()
+                    .is_none_or(|&prev| det::hypot(pt.x - prev.x, pt.y - prev.y) > 1e-6)
+                {
                     ring.push(pt);
                 }
             }
-            if ring.len() > 1 && norm2(ring[0] - *ring.last().unwrap()) <= 1e-6 {
+            if ring.len() > 1
+                && det::hypot(
+                    ring[0].x - ring.last().unwrap().x,
+                    ring[0].y - ring.last().unwrap().y,
+                ) <= 1e-6
+            {
                 ring.pop();
             }
             if ring.len() < 3 {
@@ -1660,9 +1668,10 @@ fn extract_piece_creases(
         }
         let mut copies = vec![drafted_poly.clone()];
         if let Some((fa, fb)) = fold_axis {
-            let off_fold = drafted_poly
-                .iter()
-                .any(|&p| norm2(reflect_across(p, fa, fb) - p) > 1e-3);
+            let off_fold = drafted_poly.iter().any(|&p| {
+                let r = reflect_across(p, fa, fb);
+                det::hypot(r.x - p.x, r.y - p.y) > 1e-3
+            });
             if off_fold {
                 copies.push(
                     drafted_poly
@@ -1690,7 +1699,7 @@ fn extract_piece_creases(
             }
             let mut sampled = Vec::new();
             for seg in poly.windows(2) {
-                let len = norm2(seg[1] - seg[0]);
+                let len = det::hypot(seg[1].x - seg[0].x, seg[1].y - seg[0].y);
                 if len <= 1e-6 {
                     continue;
                 }
