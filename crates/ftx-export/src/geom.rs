@@ -1835,13 +1835,15 @@ mod tests {
             None,
         )
         .unwrap();
-        let svg_text = std::str::from_utf8(&exported.files["SEAMCREASE_master_mm.svg"]).unwrap();
+        let files: std::collections::BTreeMap<String, Vec<u8>> =
+            exported.files.into_iter().collect();
+        let svg_text = std::str::from_utf8(&files["SEAMCREASE_master_mm.svg"]).unwrap();
         assert!(svg_text.contains("SEAM CREASE +45 deg (valley)"));
         assert!(svg_text.contains("SEAM CREASE -60.5 deg (mountain)"));
-        let astm_text = std::str::from_utf8(&exported.files["SEAMCREASE_ASTM_METRIC.dxf"]).unwrap();
+        let astm_text = std::str::from_utf8(&files["SEAMCREASE_ASTM_METRIC.dxf"]).unwrap();
         assert!(astm_text.contains("SEAM CREASE +45 deg (valley)"));
         assert!(astm_text.contains("SEAM CREASE -60.5 deg (mountain)"));
-        let checks = crate::check_files(&exported.files, "mem", Some(&pat));
+        let checks = crate::check_files(&files, "mem", Some(&pat));
         assert!(
             checks.iter().all(|c| c.ok),
             "export acceptance checks failed on seam-creased pattern: {:?}",
