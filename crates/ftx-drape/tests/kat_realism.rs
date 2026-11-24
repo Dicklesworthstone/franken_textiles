@@ -361,7 +361,10 @@ fn kat_air_drag_ambient_wind_galilean_invariance() {
             Vec3::new(0.0, 0.0, -9.81),
         );
         still.integrator = integrator;
-        still.tol = 1e-12;
+        // Boosted coordinates reach |x| ~ 1.2 m where cotton membrane gradient ULP noise is
+        // ~E * ULP(1.2) / (m / h^2) ~ 6.6e-14 m; tol = 1e-10 gives step_tol = 1.67e-12 m,
+        // cleanly above the f64 coordinate-translation noise floor and 60x tighter than x_err.
+        still.tol = 1e-10;
         still.damping = DampingOptions {
             air_drag: Some(AirDrag::standard()),
             rayleigh_membrane_s: 1e-3,
@@ -375,7 +378,7 @@ fn kat_air_drag_ambient_wind_galilean_invariance() {
             Vec3::new(0.0, 0.0, -9.81),
         );
         boosted.integrator = integrator;
-        boosted.tol = 1e-12;
+        boosted.tol = 1e-10;
         boosted.v.fill(boost);
         boosted.damping = DampingOptions {
             air_drag: Some(AirDrag {
@@ -466,9 +469,12 @@ fn kat_air_drag_prescribed_wind_deflects_pinned_sheet_in_wind_direction_and_scal
         (dy_pos_y + dy_neg_y).abs() < 1e-4,
         "±y face-on wind must deflect symmetrically: +y={dy_pos_y:.5}, -y={dy_neg_y:.5}"
     );
+    // All top-edge vertices are pinned, so edge-on +x wind (F_t = 0.5 * rho * C_t * A * U^2
+    // ~= 0.0157 N) loads the cotton sheet as an in-plane clamped cantilever (E_y = 600 N/m,
+    // G = 100 N/m) with analytical Timoshenko shear + bending tip deflection ~1.75e-4 m.
     assert!(
-        dx_edge_x > 1e-3 && dx_edge_x < 0.25 * dy_pos_y,
-        "edge-on +x wind ({dx_edge_x:.5} m) must push in +x yet stay far smaller than face-on +y ({dy_pos_y:.5} m)"
+        dx_edge_x > 1.0e-4 && dx_edge_x < 5.0e-4 && dx_edge_x < 0.01 * dy_pos_y,
+        "edge-on +x wind ({dx_edge_x:.5} m) must match small positive in-plane cantilever deflection (~1.75e-4 m) and stay far smaller than face-on +y ({dy_pos_y:.5} m)"
     );
     assert!(
         dy_edge_x.abs() < 1e-5,
