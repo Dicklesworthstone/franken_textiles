@@ -594,6 +594,64 @@ test('coordinate camera calibration preserves the exact noise request and reject
   assert.deepEqual(w.calls,[{kind:'coordinates',input,noise}]);assert.deepEqual(JSON.parse(result.report),report);assert.equal(w.instances.length,0);
 });
 
+async function guidedCamera(model='pinhole_zero_skew') {
+  const p=await photoPage();p.selectCamera();
+  p.e.cameraAuthor.checked=true;
+  p.e.cameraInput.files=[];
+  p.e.cameraImages.files=Array.from({length:5},(_,i)=>file('synthetic',`view-${i}.png`));
+  p.e.cameraAuthor.handlers.change();
+  const values={cameraAuthorLens:'lens λ',cameraAuthorStream:'tripod stream',cameraAuthorWidth:'1600',
+    cameraAuthorHeight:'1200',cameraAuthorRotation:'90',cameraAuthorModel:model,cameraAuthorEvidence:'Known camera pipeline',
+    cameraAuthorReference:'Rigid flat board scale checked',cameraAuthorCorners:'0, 6, 28, 34',cameraAuthorRadius:'0.83'};
+  for(const [id,value] of Object.entries(values))p.e[id].value=value;
+  for(const [i,group] of p.e.cameraAuthorViews.children.entries()) {
+    group.children[1].children[0].value=(18446744073709551611n+BigInt(i)).toString();
+    group.children[2].children[0].value=i===0?'held_out':'fit';
+  }
+  return p;
+}
+
+test('guided camera calibration authors replayable pinhole and Brown views with exact identities and independent CHECK roles',async()=>{
+  for(const model of ['pinhole_zero_skew','brown5_zero_skew']){
+    const p=await guidedCamera(model);
+    assert.equal(p.e.cameraRun.disabled,false);assert.equal(p.e.cameraInputControl.hidden,true);
+    const report=cameraReport(),frame={stream:'tripod stream',timestamp_us:JSON.rawJSON('18446744073709551615')};
+    report.input.views=[{frame}];report.checks[0].frame=frame;
+    const w=await p.calibrate(report),m=w.messages[0];
+    const manifest=JSON.parse(m.input,(key,value,ctx)=>key==='timestamp_us'?ctx.source:value);
+    assert.equal(m.op,'calibrate-images');assert.equal(manifest.schema,'ftx-camera-calibration-images/1');
+    assert.equal(manifest.lens_id,'lens λ');assert.deepEqual(manifest.image_size_px,[1600,1200]);
+    assert.deepEqual(manifest.views.map(v=>v.image),Array.from(m.images,v=>v.id));
+    assert.equal(manifest.views[0].partition,'held_out');assert.equal(manifest.views.at(-1).frame.timestamp_us,'18446744073709551615');
+    assert.ok(manifest.views.every(v=>v.frame.stream==='tripod stream'));
+    assert.deepEqual(manifest.held_out_corner_ids,[0,6,28,34]);
+    if(model==='brown5_zero_skew'){
+      assert.deepEqual(manifest.distortion_fit,{model_evidence:'Known camera pipeline',max_radius:0.83});assert.equal(manifest.pinhole_evidence,undefined);
+    } else {assert.equal(manifest.pinhole_evidence,'Known camera pipeline');assert.equal(manifest.distortion_fit,undefined);}
+    const saved=p.e.cameraDownloads.children.find(a=>a.download==='camera-image-manifest.json');
+    assert.equal(await p.urls.get(saved.href).text(),m.input);
+    const coordinateFile=p.e.cameraDownloads.children.find(a=>a.download==='camera-detected-coordinates.json');
+    assert.match(await p.urls.get(coordinateFile.href).text(),/"timestamp_us": 18446744073709551615/);
+    assert.match(p.e.cameraChecks.children[0].children[0].textContent,/18446744073709551615/);
+    p.e.cameraAuthorViews.children[1].children[2].children[0].handlers.change();
+    assert.equal(p.e.cameraResult.hidden,true);assert.equal(p.e.cameraDownloads.children.length,0);
+  }
+});
+
+test('guided camera calibration refuses guessed identities, incomplete partitions and stale selections before worker acquisition',async()=>{
+  const p=await guidedCamera(),first=p.e.cameraAuthorViews.children[0],last=p.e.cameraAuthorViews.children.at(-1);
+  const ts=last.children[1].children[0],valid=ts.value;
+  for(const invalid of ['',first.children[1].children[0].value,'18446744073709551616','1.5']){
+    ts.value=invalid;await p.e.cameraRun.onclick();
+    assert.equal(p.workers.length,0);assert.match(p.e.cameraError.textContent,/timestamp/);
+  }
+  ts.value=valid;
+  first.children[2].children[0].value='fit';await p.e.cameraRun.onclick();assert.match(p.e.cameraError.textContent,/independent CHECK/);
+  p.e.cameraImages.files[0]=file('replacement','view-0.png');await p.e.cameraRun.onclick();
+  assert.match(p.e.cameraError.textContent,/declare their views again/);assert.equal(p.workers.length,0);
+  p.e.cameraImages.handlers.change();assert.equal(p.e.cameraAuthorViews.children[0].children[1].children[0].value,'');
+});
+
 test('browser calibration keeps exact source and noise downloads and can immediately calibrate the current photo',async()=>{
   const p=await photoPage();p.select(false);p.selectCamera();
   let imageReads=0;for(const f of p.e.cameraImages.files)f.arrayBuffer=async()=>{imageReads++;throw Error('page must not decode images');};

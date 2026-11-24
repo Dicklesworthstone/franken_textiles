@@ -15,6 +15,7 @@ $("returnMaterials").hidden = !materialsTarget;
 $("sectionMaterials").hidden = !materialsTarget;
 let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
 const cameraUrls = [];
+let cameraViewInputs = [];
 let triangulationWorker = null, triangulationTicket = 0, triangulationBusy = false;
 const triangulationUrls = [];
 let bodyFitWorker = null, bodyFitTicket = 0, bodyFitBusy = false;
@@ -209,9 +210,13 @@ function controls() {
   $("removePair").disabled=!namedPair; $("cancelPoint").disabled=pending.length===0;
   $("cancel").disabled=!busy;
   const images=$("cameraMode").value==="images";
+  const authored=images && $("cameraAuthor").checked;
   $("cameraImageControls").hidden=!images;
+  $("cameraInputControl").hidden=authored;
+  $("cameraAuthorFields").hidden=!authored;
+  $("cameraAuthorRadiusControl").hidden=$("cameraAuthorModel").value!=="brown5_zero_skew";
   $("cameraInputLabel").textContent=images?"Image manifest":"Reference-coordinate input";
-  $("cameraRun").disabled=busy || cameraBusy || sectionBusy || !$("cameraInput").files.length ||
+  $("cameraRun").disabled=busy || cameraBusy || sectionBusy || (!authored && !$("cameraInput").files.length) ||
     (images && (!$("cameraSheet").files.length || (!$("cameraImages").files.length && !$("cameraDirectory").files.length)));
   $("cameraCancel").disabled=!cameraBusy;
   $("cameraClearNoise").disabled=!$("cameraNoise").files.length;
@@ -2348,7 +2353,15 @@ function withdrawCamera() {
   controls();
 }
 function publishCamera(text, sources) {
-  const report=JSON.parse(text);
+  let exactFrames=true;
+  const report=JSON.parse(text,(key,value,context)=>{
+    if(key==="timestamp_us" && typeof value==="number" && !Number.isSafeInteger(value)) {
+      if(typeof JSON.rawJSON==="function" && /^\d+$/.test(context?.source ?? "")) return JSON.rawJSON(context.source);
+      exactFrames=false;
+      return "see original report";
+    }
+    return value;
+  });
   if(report.schema!=="ftx-camera-calibration/1" || !Array.isArray(report.flags) || !Array.isArray(report.checks)) {
     throw Error("The calibration engine did not return an ordinary retained camera report.");
   }
@@ -2363,7 +2376,8 @@ function publishCamera(text, sources) {
   for(const check of report.checks) {
     const corners=check.corners || [], fit=corners.filter(c=>c.partition==="fit").length;
     const residuals=corners.map(c=>c.error_px).filter(Number.isFinite), row=document.createElement("tr");
-    for(const value of [`${check.frame?.stream} @ ${check.frame?.timestamp_us} μs`,check.partition,
+    const timestamp=check.frame?.timestamp_us;
+    for(const value of [`${check.frame?.stream} @ ${timestamp?.rawJSON ?? timestamp} μs`,check.partition,
       `${fit} / ${corners.length-fit}`,residuals.length?Math.max(...residuals):"unavailable",check.failure || "—"]) {
       const cell=document.createElement("td"); cell.textContent=String(value); row.append(cell);
     }
@@ -2373,37 +2387,101 @@ function publishCamera(text, sources) {
   link($("cameraDownloads"),sources.input,sources.mode==="images"?"camera-image-manifest.json":"camera-coordinate-input.json","application/json",cameraUrls);
   if(sources.mode==="images") {
     link($("cameraDownloads"),sources.sheet,"camera-sheet.json","application/json",cameraUrls);
-    link($("cameraDownloads"),JSON.stringify(report.input,null,2),"camera-detected-coordinates.json","application/json",cameraUrls);
+    if(exactFrames) link($("cameraDownloads"),JSON.stringify(report.input,null,2),"camera-detected-coordinates.json","application/json",cameraUrls);
   }
   if(sources.noise) link($("cameraDownloads"),sources.noise,"camera-corner-noise.json","application/json",cameraUrls);
   $("cameraStatus").textContent=accepted?"Calibration accepted. Review every FIT/CHECK result, then use it for the measurement photo.":
     "Calibration or its requested uncertainty was not accepted. Diagnostics are available; no measurement calibration was activated.";
 }
+function calibrationImages() {
+  const direct=Array.from($("cameraImages").files), directory=Array.from($("cameraDirectory").files);
+  if(direct.length && directory.length) throw Error("Choose calibration photos or their directory.");
+  const selected=directory.length?directory.filter(file=>/\.(png|jpe?g)$/i.test(file.name)):direct;
+  if(!selected.length || selected.length>32) throw Error("Choose 1–32 declared calibration photos; no image was read.");
+  return selected.map(file=>{
+    if(file.size>64*1024*1024) throw Error(`Calibration image ${file.name} exceeds 64 MiB; no image was read.`);
+    const id=directory.length?file.webkitRelativePath.slice(file.webkitRelativePath.indexOf("/")+1):file.name;
+    if(!id) throw Error("A selected image has no relative filename.");
+    return {id,file};
+  });
+}
+function calibrationChanged() {
+  withdrawCamera();
+  $("cameraStatus").textContent="Acquisition changed; calibrate from the current declarations and images.";
+}
+function renderCalibrationViews() {
+  cameraViewInputs=[];
+  const container=$("cameraAuthorViews");
+  container.replaceChildren();
+  if(!$("cameraAuthor").checked || $("cameraMode").value!=="images") return;
+  let images;
+  try { images=calibrationImages(); }
+  catch(error) {container.textContent=error.message;return;}
+  for(const image of images) {
+    const group=document.createElement("fieldset"),legend=document.createElement("legend");
+    legend.textContent=image.id;group.append(legend);
+    const time=document.createElement("input"),role=document.createElement("select");
+    time.type="text";time.inputMode="numeric";time.maxLength=20;
+    role.append(captureOption("","Choose role"),captureOption("fit","FIT — camera fitting"),captureOption("held_out","CHECK — independent view"));
+    role.value="";
+    for(const [input,label,event] of [[time,"Decoded timestamp (μs)","input"],[role,"View role","change"]]) {
+      const wrapper=document.createElement("label");wrapper.textContent=label+" ";wrapper.append(input);group.append(wrapper);
+      input.addEventListener(event,calibrationChanged);
+    }
+    container.append(group);cameraViewInputs.push({...image,time,role});
+  }
+}
+function authoredCameraManifest(images) {
+  const stream=captureText("cameraAuthorStream","the unchanged capture stream ID",256);
+  const image_model=$("cameraAuthorModel").value;
+  if(!["pinhole_zero_skew","brown5_zero_skew"].includes(image_model)) throw Error("Choose the image model used by these photographs.");
+  const evidence=captureText("cameraAuthorEvidence","the lens model evidence");
+  const model=image_model==="pinhole_zero_skew"?{pinhole_evidence:evidence}:{distortion_fit:{
+    model_evidence:evidence,max_radius:captureNumber($("cameraAuthorRadius").value,"undistorted radius",0,10)}};
+  if(model.distortion_fit?.max_radius===0) throw Error("The undistorted radius must be positive.");
+  const image_size_px=["cameraAuthorWidth","cameraAuthorHeight"].map(id=>captureNumber($(id).value,"stored image dimension",16,1000000));
+  if(!image_size_px.every(Number.isInteger)) throw Error("Enter stored image dimensions in whole pixels.");
+  const rotation_cw_deg=captureNumber($("cameraAuthorRotation").value,"already-applied rotation");
+  if(![0,90,180,270].includes(rotation_cw_deg)) throw Error("Choose a recorded image rotation.");
+  const ids=captureText("cameraAuthorCorners","the held-out corner IDs").split(",").map(s=>s.trim());
+  if(ids.some(s=>!/^\d+$/.test(s) || !Number.isSafeInteger(Number(s)))) throw Error("Enter nonnegative whole corner IDs separated by commas.");
+  const held_out_corner_ids=ids.map(Number);
+  if(ids.length<4 || new Set(held_out_corner_ids).size!==ids.length) throw Error("Predeclare at least four distinct CHECK corner IDs.");
+  if(images.length!==cameraViewInputs.length) throw Error("Select the calibration photographs again to declare their views.");
+  const seen=new Set(),paths=new Set();
+  const views=images.map(({file,id},i)=>{
+    const row=cameraViewInputs[i],t=row.time.value.trim(),partition=row.role.value;
+    if(row.file!==file || row.id!==id || paths.has(id)) throw Error("Choose distinct calibration image paths and declare their views again.");
+    paths.add(id);
+    if(!/^(0|[1-9]\d{0,19})$/.test(t) || BigInt(t)>18446744073709551615n || seen.has(t)) {
+      throw Error("Each view needs a distinct unsigned 64-bit decoded timestamp in microseconds.");
+    }
+    seen.add(t);
+    if(!["fit","held_out"].includes(partition)) throw Error("Assign FIT or CHECK explicitly for "+id+".");
+    const timestamp_us=Number.isSafeInteger(Number(t))?Number(t):JSON.rawJSON?.(t);
+    if(timestamp_us===undefined) throw Error("This browser cannot encode this full-width timestamp exactly. Import the original manifest.");
+    return {image:id,frame:{stream,timestamp_us},partition};
+  });
+  const fits=views.filter(view=>view.partition==="fit").length, minimum=model.distortion_fit?4:3;
+  if(fits<minimum || fits===views.length) throw Error(`Assign at least ${minimum} FIT photographs and one independent CHECK photograph.`);
+  return JSON.stringify({schema:"ftx-camera-calibration-images/1",image_model,lens_id:captureText("cameraAuthorLens","the lens and settings ID",256),
+    ...model,reference_evidence:captureText("cameraAuthorReference","the board flatness and scale evidence"),
+    image_size_px,rotation_cw_deg,held_out_corner_ids,views},null,2);
+}
 async function runCamera() {
   if(busy || cameraBusy) return;
   const mode=$("cameraMode").value, inputFile=$("cameraInput").files[0], noiseFile=$("cameraNoise").files[0];
   const sheetFile=mode==="images"?$("cameraSheet").files[0]:null;
-  const direct=Array.from($("cameraImages").files), directory=Array.from($("cameraDirectory").files);
+  const authored=mode==="images" && $("cameraAuthor").checked;
   withdrawCamera(); const id=cameraTicket;
   try {
-    if(!inputFile || (mode==="images" && !sheetFile)) throw Error("Choose the original calibration input and, for images, its sheet description.");
-    if(inputFile.size>16*1024*1024 || noiseFile?.size>16*1024*1024 || sheetFile?.size>256*1024) {
+    if((!authored && !inputFile) || (mode==="images" && !sheetFile)) throw Error("Choose the original calibration input and, for images, its sheet description.");
+    if((!authored && inputFile.size>16*1024*1024) || noiseFile?.size>16*1024*1024 || sheetFile?.size>256*1024) {
       throw Error("Calibration input/noise must be at most 16 MiB and sheet JSON at most 256 KiB. No source was read.");
     }
-    let images=[];
-    if(mode==="images") {
-      if(direct.length && directory.length) throw Error("Select calibration photos or their directory, not both. Clear the other selection first.");
-      const selected=directory.length?directory.filter(f=>/\.(png|jpe?g)$/i.test(f.name)):direct;
-      if(selected.length<1 || selected.length>32) throw Error("Choose 1–32 declared calibration photos; no image was read.");
-      images=selected.map(file=>{
-        if(file.size>64*1024*1024) throw Error(`Calibration image ${file.name} exceeds 64 MiB; no image was read.`);
-        const name=directory.length?file.webkitRelativePath.slice(file.webkitRelativePath.indexOf("/")+1):file.name;
-        if(!name) throw Error("A selected image has no relative filename.");
-        return {id:name,file};
-      });
-    }
+    const images=mode==="images"?calibrationImages():[];
     cameraBusy=true; controls(); $("cameraStatus").textContent="Reading the local calibration declarations…";
-    const [input,sheet,noise]=await Promise.all([readJsonFile(inputFile),readJsonFile(sheetFile),readJsonFile(noiseFile)]);
+    const [input,sheet,noise]=await Promise.all([authored?authoredCameraManifest(images):readJsonFile(inputFile),readJsonFile(sheetFile),readJsonFile(noiseFile)]);
     if(id!==cameraTicket) return;
     const sources={mode,input,sheet,noise}, current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); cameraWorker=current;
     current.onmessage=({data:m})=>{
@@ -2872,13 +2950,17 @@ for(const id of ["sectionCombined","sectionLevel","sectionMode","sectionConsent"
 for(const id of ["sectionClothing","sectionK","sectionKSigma","sectionRatio","sectionRatioSigma","sectionTape","sectionTapeSigma"]) {
   $(id).addEventListener("input",()=>{withdrawSection(); $("sectionStatus").textContent="Section assumptions changed; calculate again.";});
 }
-for(const id of ["cameraMode","cameraInput","cameraSheet","cameraImages","cameraDirectory","cameraNoise"]) {
+for(const id of ["cameraMode","cameraAuthor","cameraInput","cameraSheet","cameraImages","cameraDirectory","cameraNoise"]) {
   $(id).addEventListener("change",()=>{
     if(id==="cameraImages" && $(id).files.length) $("cameraDirectory").value="";
     if(id==="cameraDirectory" && $(id).files.length) $("cameraImages").value="";
-    withdrawCamera(); $("cameraStatus").textContent="Acquisition changed; calibrate from the current declarations and images.";
+    if(["cameraMode","cameraAuthor","cameraImages","cameraDirectory"].includes(id)) renderCalibrationViews();
+    calibrationChanged();
   });
 }
+for(const id of ["cameraAuthorLens","cameraAuthorStream","cameraAuthorWidth","cameraAuthorHeight","cameraAuthorRadius",
+  "cameraAuthorEvidence","cameraAuthorReference","cameraAuthorCorners"]) $(id).addEventListener("input",calibrationChanged);
+for(const id of ["cameraAuthorModel","cameraAuthorRotation"]) $(id).addEventListener("change",calibrationChanged);
 for(const id of ["distance","depth","click","level","bootstrap","points"]) $(id).addEventListener("input",()=>{
   if(id==="points") {pointSource=null; pending=[]; $("clickStatus").textContent="";}
   withdraw(); draw(); status("Inputs changed; measure again.");

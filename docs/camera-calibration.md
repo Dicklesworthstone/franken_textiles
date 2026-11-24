@@ -258,6 +258,14 @@ as the native command, plus local files whose names match every manifest `views[
 For nested names, select their directory; paths are resolved relative to that selected root.
 The page checks the complete selection before the worker reads images. Files remain on the device.
 
+To create the image manifest in the workbench, select **Declare calibration views here** and
+choose the photographs or their directory. Enter the common capture stream, lens settings,
+stored image dimensions, applied rotation, board evidence, and held-out corner IDs. Select the
+pinhole or Brown model with its evidence. Brown also requires the undistorted radius to check.
+Assign each photograph its original decoded timestamp and FIT or CHECK role before calibration.
+Replacing the selected photos clears those assignments. The result includes the exact generated
+manifest for replay with the same sheet and images through the native command.
+
 Both modes accept an optional separate corner-noise document. This is the same conditional Brown
 covariance request described above; it cannot silently replace inline noise or make algebraic
 pinhole uncertainty available. Original text is retained, so whitespace and ordering remain bound
