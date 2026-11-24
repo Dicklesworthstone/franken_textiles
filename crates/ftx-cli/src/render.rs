@@ -170,11 +170,8 @@ pub(super) fn resolution(value: Option<&str>) -> Result<(usize, usize), Refusal>
 }
 
 /// Compute the complete still set before the caller writes any output.
-pub(super) fn images(
-    dir: &Path,
-    width: usize,
-    height: usize,
-) -> Result<Vec<(String, Vec<u8>)>, Refusal> {
+#[cfg(test)]
+fn images(dir: &Path, width: usize, height: usize) -> Result<Vec<(String, Vec<u8>)>, Refusal> {
     shaded(dir, width, height, Shading::Standard)
 }
 

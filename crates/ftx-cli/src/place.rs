@@ -21,6 +21,7 @@ use ftx_body::{
 use ftx_core::intersection::{indexed_triangle_pair, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_drape::collider::SurfaceAudit;
+use ftx_drape::render::Shading;
 use ftx_drape::scene::{
     PartFrames, casings_at_cut_length, elastic_casings, placements, wrapped_positions,
 };
@@ -587,7 +588,7 @@ fn write_stage(
     x: &[Vec3],
     pieces: &[[f64; 3]],
     second: &[[f64; 3]],
-    (width, height): (usize, usize),
+    ((width, height), shading): ((usize, usize), Shading),
 ) -> Result<Vec<String>, Refusal> {
     std::fs::create_dir(dir).map_err(|e| workspace::io_error(dir, e))?;
     workspace::write_new(&dir.join("body.obj"), body)?;
@@ -600,7 +601,7 @@ fn write_stage(
         super::obj(x, &mesh.faces, Some(second)).as_bytes(),
     )?;
     let mut written = Vec::new();
-    for (name, png) in render::images(dir, width, height)? {
+    for (name, png) in render::shaded(dir, width, height, shading)? {
         let path = dir.join(&name);
         workspace::write_new(&path, &png)?;
         written.push(path.display().to_string());
@@ -724,7 +725,7 @@ pub(super) fn refused_stills(
         &state.positions,
         &pieces,
         &strain,
-        size,
+        (size, Shading::Standard),
     ) {
         Ok(_) => {
             write_refused_map(
@@ -1002,7 +1003,7 @@ pub(super) fn start_stills(
 ) -> Refusal {
     let dir = out.join("refused");
     if std::fs::create_dir(&dir).is_ok()
-        && let Ok((placement, mesh)) = stages(staging, size, &dir)
+        && let Ok((placement, mesh)) = stages(staging, size, Shading::Standard, &dir)
     {
         write_refused_map(
             &mut refusal,
@@ -1058,6 +1059,7 @@ fn body_surface_report(surface: (&[Vec3], &[[usize; 3]])) -> Value {
 fn stages(
     staging: &Staging,
     size: (usize, usize),
+    shading: Shading,
     out: &Path,
 ) -> Result<(Value, GarmentMesh), Refusal> {
     let Staging {
@@ -1163,7 +1165,7 @@ fn stages(
         &wrapped,
         &piece_colours(&mesh, &slots, &wrap_depth, &vec![false; mesh.verts2d.len()]),
         &travel_colours(&mesh, &wrapped),
-        size,
+        (size, shading),
     )?;
     let start_stills = write_stage(
         &out.join("start"),
@@ -1172,7 +1174,7 @@ fn stages(
         &start.relaxed,
         &piece_colours(&mesh, &slots, &start_depth, &crossing),
         &strain_colours,
-        size,
+        (size, shading),
     )?;
 
     let p95 = start.block_p95.last().copied().unwrap_or(f64::NAN);
@@ -1240,6 +1242,9 @@ fn stages(
     if let Some(repulsion) = start_self_repulsion {
         report["start_self_repulsion"] = json!(repulsion);
     }
+    if shading != Shading::Standard {
+        report["shading"] = json!(shading.name());
+    }
     workspace::write_json(&out.join("placement.json"), &report)?;
     Ok((report, mesh))
 }
@@ -1269,6 +1274,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "skinning",
             "hands",
             "res",
+            "shading",
         ],
     )?;
     let opts = super::drape_options(args)?;
@@ -1276,6 +1282,8 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let thumbs = super::parse_thumb_pose(args)?;
     let skinning = super::parse_skinning(args)?;
     let hands = super::parse_hands(args)?;
+    let size = render::resolution(args.options.get("res").map(String::as_str))?;
+    let shading = render::shading(args.options.get("shading").map(String::as_str))?;
     let pattern_path = args
         .positional
         .get(1)
@@ -1288,7 +1296,6 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let spacing = material.options.spacing;
     let (meas, _) = super::read_json(required(args, "measurements")?)?;
     let meas = super::current_measurements(meas)?;
-    let size = render::resolution(args.options.get("res").map(String::as_str))?;
     let out = PathBuf::from(required(args, "out")?);
     super::reserve_output(&out, "place")?;
 
@@ -1317,6 +1324,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             thumb_audit: thumb_audit.as_ref(),
         },
         size,
+        shading,
         &out,
     )?;
 
@@ -1330,8 +1338,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         format!("; hand collider {}", hands.as_str())
     };
+    let shading_note = if shading == Shading::Standard {
+        String::new()
+    } else {
+        format!("; shading {}", shading.name())
+    };
     let mut text = format!(
-        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}{skinning_note}{hands_note}\n",
+        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}{skinning_note}{hands_note}{shading_note}\n",
         report["vertices"],
         report["start"]["plain_edge_strain_p95"]
             .as_f64()
@@ -2523,5 +2536,152 @@ mod tests {
             "ftx place must recognize mesh and start-self-repulsion options: {}",
             err.message
         );
+
+        let legible_args = crate::parse(
+            &[
+                "place",
+                "absent-pattern.json",
+                "--measurements",
+                "absent-meas.json",
+                "--out",
+                "absent-out",
+                "--shading",
+                "legible",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let legible_err = super::run(&legible_args).unwrap_err();
+        assert!(
+            !legible_err.message.contains("unknown option")
+                && !legible_err.message.contains("--shading"),
+            "ftx place must recognize --shading legible: {}",
+            legible_err.message
+        );
+
+        let bad_shading = crate::parse(
+            &[
+                "place",
+                "absent-pattern.json",
+                "--measurements",
+                "absent-meas.json",
+                "--out",
+                "absent-out",
+                "--shading",
+                "glossy",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let bad_shading_err = super::run(&bad_shading).unwrap_err();
+        assert_eq!(bad_shading_err.code, ftx_core::RefusalCode::InvalidDocument);
+        assert!(
+            bad_shading_err.message.contains("standard or legible"),
+            "{}",
+            bad_shading_err.message
+        );
+    }
+
+    #[test]
+    fn place_stages_render_legible_and_standard_stills_deterministically() {
+        use super::Staging;
+        use ftx_body::{HandCollider, SkinningMode};
+        use ftx_drape::{MeshOptions, render::Shading, scene::PartFrames, start::PartFrame};
+        use ftx_pattern::Pattern;
+        use serde_json::json;
+
+        struct BoxFrames;
+        impl PartFrames for BoxFrames {
+            fn frame(&self, part: &str) -> Option<PartFrame> {
+                (part == "torso").then_some(PartFrame {
+                    origin: Vec3::new(0.0, 0.0, 0.5),
+                    up: Vec3::new(0.0, 0.0, 1.0),
+                    front: Vec3::new(0.0, -1.0, 0.0),
+                    lat: Vec3::new(1.0, 0.0, 0.0),
+                })
+            }
+            fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+                Some(0.5)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                0.08
+            }
+        }
+        let pattern = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [{
+                "id": "panel",
+                "cut": {"qty": 1},
+                "vertices": {"a": [0, 0], "b": [80, 0], "c": [80, 60], "d": [0, 60]},
+                "edges": [
+                    {"id": "bottom", "from": "a", "to": "b"},
+                    {"id": "right", "from": "b", "to": "c"},
+                    {"id": "top", "from": "c", "to": "d"},
+                    {"id": "left", "from": "d", "to": "a"}
+                ],
+                "notches": [],
+                "grain": [[40, 10], [40, 50]],
+                "placement": {"part": "torso", "radius_mm": 90.0, "theta_deg": 0.0, "x0": 40.0}
+            }],
+            "seams": []
+        }));
+        let body_verts = vec![
+            Vec3::new(-0.04, 0.0, 0.0),
+            Vec3::new(0.04, 0.0, 0.0),
+            Vec3::new(0.0, 0.04, 1.0),
+        ];
+        let body_tris = vec![[0, 1, 2]];
+        let frames = BoxFrames;
+        let staging = Staging {
+            pattern: &pattern,
+            label: "panel.json",
+            spacing: 25.0,
+            mesh: MeshOptions::default(),
+            start_self_repulsion: None,
+            elastic_ea: 0.0,
+            frames: &frames,
+            collision: (&body_verts, &body_tris),
+            display: (&body_verts, &body_tris),
+            skinning: SkinningMode::LinearBlend,
+            hands: HandCollider::Wrist,
+            thumbs: None,
+            thumb_audit: None,
+        };
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-place-shading-{}-{stamp}", std::process::id()));
+        let std_dir = root.join("std");
+        let leg_dir = root.join("leg");
+        std::fs::create_dir_all(&std_dir).unwrap();
+        std::fs::create_dir_all(&leg_dir).unwrap();
+
+        let (std_rep, _) = super::stages(&staging, (32, 24), Shading::Standard, &std_dir).unwrap();
+        let (leg_rep, _) = super::stages(&staging, (32, 24), Shading::Legible, &leg_dir).unwrap();
+        assert!(std_rep.get("shading").is_none());
+        assert_eq!(leg_rep["shading"], "legible");
+        for stage in ["wrap", "start"] {
+            let std_files = std_rep["stills"][stage].as_array().unwrap();
+            let leg_files = leg_rep["stills"][stage].as_array().unwrap();
+            assert_eq!(std_files.len(), 6);
+            assert_eq!(leg_files.len(), 6);
+            assert!(
+                std_files
+                    .iter()
+                    .all(|p| !p.as_str().unwrap().ends_with("_legible.png"))
+            );
+            assert!(
+                leg_files
+                    .iter()
+                    .all(|p| p.as_str().unwrap().ends_with("_legible.png"))
+            );
+            let a = std::fs::read(std_files[0].as_str().unwrap()).unwrap();
+            let b = std::fs::read(leg_files[0].as_str().unwrap()).unwrap();
+            assert_eq!(&b[..8], b"\x89PNG\r\n\x1a\n");
+            assert_ne!(a, b);
+        }
     }
 }
