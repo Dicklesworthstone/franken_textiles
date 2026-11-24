@@ -1123,11 +1123,12 @@ impl SymbolicLdlt {
             };
             let panel = m - wf;
             // About 2^16 multiply-adds per task; a small front stays one task (serial).
-            let columns = if panel * panel * k_elim >= PANEL_PARALLEL_WORK {
-                (PANEL_TASK_WORK / (panel * k_elim).max(1)).clamp(1, panel)
-            } else {
-                panel.max(1)
-            };
+            let columns =
+                if panel.saturating_mul(panel).saturating_mul(k_elim) >= PANEL_PARALLEL_WORK {
+                    (PANEL_TASK_WORK / panel.saturating_mul(k_elim).max(1)).clamp(1, panel)
+                } else {
+                    panel.max(1)
+                };
             crate::par::for_each_chunk_mut(right, m * columns, |c, run| {
                 for (idx, column) in run.chunks_mut(m).enumerate() {
                     let jc = wf + c * columns + idx;
