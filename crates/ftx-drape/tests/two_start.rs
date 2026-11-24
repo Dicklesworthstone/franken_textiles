@@ -191,3 +191,49 @@ fn preflight_rejects_identical_paths_before_progress_or_meshing() {
     assert!(result.is_err());
     assert!(!called);
 }
+
+#[test]
+fn shared_settings_records_time_subdivision_and_elastic_hold_and_preflights_alternate_budget() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.0,
+    };
+    let subdivision = ftx_drape::stepping::SubdivisionOptions {
+        max_halvings: 4,
+        max_trials: 16,
+    };
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        sew_steps: 2,
+        drape_steps: 4,
+        elastic_hold_steps: 2,
+        step: 1e-3,
+        time_subdivision: Some(subdivision),
+        ..DrapeOptions::default()
+    };
+    // Preflight must reject a trial budget sufficient for primary (2 + 4 = 6) but too small for
+    // alternate (14 + 4 = 18) before running either solve.
+    let too_tight = TwoStartOptions {
+        alternate_sew_steps: 14,
+        ..TwoStartOptions::default()
+    };
+    let mut called = false;
+    let err = two_start::drape(&pattern(), &json!({}), &body, &opts, &too_tight, |_| {
+        called = true;
+    })
+    .unwrap_err();
+    assert_eq!(err.code, ftx_core::RefusalCode::BudgetExceeded);
+    assert!(!called);
+
+    let policy = TwoStartOptions {
+        alternate_sew_steps: 4,
+        ..TwoStartOptions::default()
+    };
+    let run = two_start::drape(&pattern(), &json!({}), &body, &opts, &policy, |_| {}).unwrap();
+    let shared = &run.report["two_start"]["shared_settings"];
+    assert_eq!(shared["time_subdivision"], json!(subdivision));
+    assert_eq!(shared["elastic_hold_steps"], json!(2));
+}

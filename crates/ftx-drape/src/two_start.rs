@@ -297,8 +297,14 @@ fn attach(
     if opts.max_settle_steps > 0 {
         comparison["shared_settings"]["max_settle_steps"] = json!(opts.max_settle_steps);
     }
+    if opts.elastic_hold_steps > 0 {
+        comparison["shared_settings"]["elastic_hold_steps"] = json!(opts.elastic_hold_steps);
+    }
     if let Some(policy) = opts.static_equilibrium {
         comparison["shared_settings"]["static_equilibrium"] = json!(policy);
+    }
+    if let Some(policy) = opts.time_subdivision {
+        comparison["shared_settings"]["time_subdivision"] = json!(policy);
     }
     if !opts.newton_strategy.is_default() {
         comparison["shared_settings"]["newton_strategy"] = json!(opts.newton_strategy);
