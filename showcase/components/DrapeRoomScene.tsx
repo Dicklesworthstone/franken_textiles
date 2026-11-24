@@ -48,6 +48,23 @@ async function readRun({run, strain, timeline, layoutIntegrity}: Props, signal: 
   const rgb = new Uint8Array(packed, offset);
   if (rgb.length !== layout.vertices*3) throw Error("Incomplete garment colors.");
   const garment = createGarmentMesh({...layout, strainRgb:rgb, summary:{edgeStrainPercent:strain}}, frames, true, forces);
+  // A tailor's form has no head, as in the films and the posing room: it ends at the narrowest section of
+  // the neck, under a turned cap. The height comes from this run's own skin (Z up, metres), searched within
+  // 80 mm of the body's axis. No arm reaches that height in any of the nine runs, even at 90 degrees.
+  let top=-Infinity;
+  for(let i=2;i<skin.length;i+=3)top=Math.max(top,skin[i]);
+  let neckZ=top-.16,narrowest=Infinity;
+  for(let z=top-.20;z<top-.11;z+=.002){
+    let half=0;
+    for(let i=0;i<skin.length;i+=3)if(Math.abs(skin[i+2]-z)<.002&&Math.abs(skin[i])<.08)half=Math.max(half,Math.abs(skin[i]));
+    if(half>0&&half<narrowest){narrowest=half;neckZ=z;}
+  }
+  const ring=new T.Box3(),point=new T.Vector3();
+  for(let i=0;i<skin.length;i+=3)if(Math.abs(skin[i+2]-neckZ)<.006)ring.expandByPoint(point.set(skin[i],skin[i+2],-skin[i+1]));
+  const neck={centre:ring.getCenter(new T.Vector3()),size:ring.getSize(new T.Vector3()),y:neckZ};
+  // Read before the turn to Y up below, which rewrites `skin` in place.
+  const head=new Uint8Array(skin.length/3);
+  for(let v=0;v<head.length;v++)head[v]=skin[v*3+2]>neckZ+.006?1:0;
   const body = new T.BufferGeometry();
   body.setIndex(new T.BufferAttribute(triangles,1));
   body.setAttribute("position",new T.BufferAttribute(skin,3));
@@ -57,13 +74,14 @@ async function readRun({run, strain, timeline, layoutIntegrity}: Props, signal: 
   const torso:number[]=[],arms:number[]=[];
   for(let i=0;i<triangles.length;i+=3){
     const a=triangles[i],b=triangles[i+1],c=triangles[i+2];
+    if(head[a]||head[b]||head[c])continue;
     const atArm=Math.abs((skin[a*3]+skin[b*3]+skin[c*3])/3)>.15;
     (atArm?arms:torso).push(a,b,c);
   }
   body.setIndex([...torso,...arms]);
   body.addGroup(0,torso.length,0);body.addGroup(torso.length,arms.length,1);
   body.computeBoundingBox();
-  return {body,garment,halfWidth:Math.max(.50,turnRadius*1.12),frames:layout.sourceFrames,dispose(){body.dispose();garment.dispose();}};
+  return {body,garment,neck,halfWidth:Math.max(.50,turnRadius*1.12),frames:layout.sourceFrames,dispose(){body.dispose();garment.dispose();}};
 }
 
 export default function DrapeRoomScene(props: Props) {
@@ -97,6 +115,10 @@ export default function DrapeRoomScene(props: Props) {
     const form=new T.Mesh(new T.BufferGeometry(),[bust,plaster]);
     const empty=form.geometry;
     form.castShadow=form.receiveShadow=true;scene.add(form);
+    // The turned cap over the cut neck, sized to each run's neck section (the posing room's cap).
+    const walnut=new T.MeshStandardMaterial({color:"#4a3a31",roughness:.5});
+    const cap=new T.Mesh(new T.CylinderGeometry(1,1.04,.017,64),walnut);
+    cap.castShadow=cap.receiveShadow=true;cap.visible=false;scene.add(cap);
     const brass=new T.MeshStandardMaterial({color:"#a08255",metalness:.5,roughness:.42});
     const lacquer=new T.MeshStandardMaterial({color:"#423b34",roughness:.52});
     const pedestal=new T.Group();scene.add(pedestal);
@@ -114,8 +136,9 @@ export default function DrapeRoomScene(props: Props) {
     let loaded="", reset=latest.current.reset;
     let w=1,h=1;
     function home(){
-      camera.zoom=1;controls.target.set(0,.177,.065);
-      camera.position.set(.55,.42,1.8);camera.updateProjectionMatrix();controls.update();
+      // Centred on the headless form, from its base (y −0.114) to the neck cap (about 0.33).
+      camera.zoom=1;controls.target.set(0,.135,.065);
+      camera.position.set(.55,.378,1.8);camera.updateProjectionMatrix();controls.update();
     }
     function render(){
       if(!loaded)return;
@@ -130,7 +153,7 @@ export default function DrapeRoomScene(props: Props) {
       const half=Math.max(.36,(current.halfWidth+opened*.23)/(w/h))+opened*.045;
       camera.top=half;camera.bottom=-half;camera.left=-half*w/h;camera.right=-camera.left;camera.updateProjectionMatrix();
       current.garment.pose(mode,t,false,w/h);
-      form.visible=pedestal.visible=ground.visible=current.garment.sampledFrame>=87;
+      form.visible=pedestal.visible=ground.visible=cap.visible=current.garment.sampledFrame>=87;
       canvas.dataset.nativeFrame=String(current.garment.sampledFrame);
       canvas.dataset.frame=String(Math.round(t*(current.frames-1)));canvas.dataset.mode=mode;
       canvas.dataset.run=loaded;render();
@@ -144,6 +167,8 @@ export default function DrapeRoomScene(props: Props) {
         if(controller.signal.aborted){result.dispose();return;}
         if(current){scene.remove(current.garment.group);current.dispose();}
         current=result;loaded=run;form.geometry=result.body;
+        cap.scale.set(result.neck.size.x/2*1.05,1,result.neck.size.z/2*1.05);
+        cap.position.set(result.neck.centre.x,result.neck.y+.0045,result.neck.centre.z);
         studio.frame(new T.Vector3(0,.2,.06),.42);
         scene.add(result.garment.group);update();
         latest.current.onReady(run);
@@ -170,6 +195,7 @@ export default function DrapeRoomScene(props: Props) {
       canvas.removeEventListener("webglcontextlost",lost);
       current?.dispose();empty.dispose();bust.dispose();plaster.dispose();ground.geometry.dispose();groundMaterial.dispose();
       pedestal.children.forEach(m=>(m as T.Mesh).geometry.dispose());brass.dispose();lacquer.dispose();studio.dispose();
+      cap.geometry.dispose();walnut.dispose();
       renderer.dispose();renderer.forceContextLoss();canvas.remove();draw.current=()=>{};change.current=()=>{};
       if(window.ftxPoseCamera===capture)delete window.ftxPoseCamera;
     };

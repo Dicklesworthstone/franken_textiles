@@ -15,14 +15,14 @@ try {
   await enableFilmResolution(page);
   page.setDefaultTimeout(120000);
   const origin=process.env.FTX_STUDIO_URL||"http://127.0.0.1:3000";
-  await page.goto(new URL("/?capture=pose-room",origin).href);
+  await page.goto(new URL("/sections/studies/?capture=pose-room",origin).href);
   await page.locator('canvas[data-run="520-35"]').waitFor();
   await page.evaluate(()=>document.fonts.ready);
   await page.addStyleTag({content:`
     .dr-stage{position:fixed!important;inset:0!important;width:960px!important;height:540px!important;z-index:12}
     .dr-room,.dr-display{overflow:visible!important;isolation:auto!important}
     .dr-mount{left:24%!important;width:76%!important}
-    .dr-stage-head,.dr-stage-foot,.dr-flat,.dr-legend,.ft-head,nextjs-portal{display:none!important}
+    .dr-stage-head,.dr-stage-foot,.dr-flat,.dr-legend,.ft-head,nextjs-portal,.view-tools,.view-hint{display:none!important}
     .film-slate{position:absolute;left:4%;top:23%;width:29%;pointer-events:none;color:#332d28}
     .film-slate small,.film-slate span{font:500 11px/1.5 var(--mono);letter-spacing:.08em;text-transform:uppercase}
     .film-slate h1{font:400 69px/.9 var(--serif);letter-spacing:-.035em;margin:17px 0 25px}.film-slate em{color:#805334}
@@ -49,7 +49,8 @@ try {
         const readings=document.querySelectorAll(".dr-readings strong");
         document.querySelector(".film-slate p").textContent=angle+"° arm pose · 52 cm chest";
         document.querySelector(".film-slate span").textContent=contact?"Peak contact force "+readings[2].textContent:"Mean chest gap "+readings[1].textContent;
-        window.ftxPoseCamera(.24+.49*Math.sin(progress*Math.PI),.17,angle===75?.39:.36,.067);
+        // Centred on the headless form (the room's own opening view).
+        window.ftxPoseCamera(.24+.49*Math.sin(progress*Math.PI),.135,angle===75?.39:.36,.067);
       },{angle,contact,progress:f/(frames-1)});
       const image=await screenshot();
       if(f===Math.round(1.6*fps))await writeFile(resolve(destination,"drape-room.jpg"),image,{flag:"wx"});
@@ -74,8 +75,9 @@ try {
     await page.locator(".dr-modes button").filter({hasText:mode==="contact"?/^Contact$/:/^Wool$/}).evaluate(button=>button.click());
     await page.locator(`canvas[data-run="520-${angle}"][data-mode="${mode}"]`).waitFor();
     await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      window.ftxPoseCamera(.32,.17);done();
+      window.ftxPoseCamera(.32,.135);done();
     }))));
-    await sharp(await stage.screenshot()).webp({quality:90}).toFile(resolve(destination,name+".webp"));
+    // The page is captured at the film's scale; a poster is shown at its CSS size only until the 3D view loads.
+    await sharp(await stage.screenshot()).resize({width}).webp({quality:90}).toFile(resolve(destination,name+".webp"));
   }
 } finally {await browser.close();}
