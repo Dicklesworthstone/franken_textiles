@@ -1028,6 +1028,7 @@ pub(crate) fn build_scene_resolved_with_options(
                 let replacement = earlier_relaxed_start(
                     &scene.mesh,
                     &scene.start,
+                    rejected,
                     &tree,
                     options.start_self_repulsion,
                     &mut rebuild,
@@ -1050,7 +1051,8 @@ pub(crate) fn build_scene_resolved_with_options(
                         Err(refusal)
                             if matches!(
                                 refusal.code,
-                                RefusalCode::IntersectingStart | RefusalCode::IntersectingTrajectory
+                                RefusalCode::IntersectingStart
+                                    | RefusalCode::IntersectingTrajectory
                             ) => {}
                         Err(refusal) => return Err(refusal),
                     }
@@ -1625,7 +1627,7 @@ fn admit_body_start(
         Err(refusal) => return Err(refusal),
     };
     let original = start.relax_iterations;
-    let recovered = earlier_relaxed_start(mesh, start, tree, repulsion, |candidate| {
+    let recovered = earlier_relaxed_start(mesh, start, original, tree, repulsion, |candidate| {
         let mut positions = vec![Vec3::ZERO; x.len()];
         for (vertex, &welded) in weld.iter().enumerate() {
             positions[welded] = candidate.relaxed[vertex];
@@ -1647,9 +1649,13 @@ fn admit_body_start(
 /// Prefer the latest admitted complete block, then the existing finer push-out checkpoints.
 /// Every receipt is measured on its actual replay; non-divisor repulsion periods can produce a
 /// different fine replay from the rejected complete-block path.
+/// Keep the original rejected horizon when body-only admission already selected an earlier start:
+/// a later fine checkpoint may clear both the body and self/display contact even when no later
+/// complete block does. Replaying still starts from the unchanged pre-sewn geometry.
 fn earlier_relaxed_start<T>(
     mesh: &GarmentMesh,
     source: &StartState,
+    rejected_iterations: usize,
     tree: &NearestTree,
     repulsion: Option<SelfRepulsionOptions>,
     mut admit: impl FnMut(&StartState) -> Result<T, Refusal>,
@@ -1665,7 +1671,7 @@ fn earlier_relaxed_start<T>(
         let mut positions = source.presewn.clone();
         let mut blocks = Vec::new();
         let mut replacement = None;
-        for iterations in (stride..source.relax_iterations).step_by(stride) {
+        for iterations in (stride..rejected_iterations).step_by(stride) {
             positions = crate::start::relax_with_repulsion(
                 mesh,
                 &positions,
@@ -3749,10 +3755,17 @@ mod grain_tests {
         source.relax_iterations = 600;
         source.block_p95 = vec![9.0; 3];
         let mut visited = Vec::new();
-        let (accepted, ()) = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
-            visited.push(candidate.relax_iterations);
-            Ok(())
-        })
+        let (accepted, ()) = earlier_relaxed_start(
+            &mesh,
+            &source,
+            source.relax_iterations,
+            &tree,
+            None,
+            |candidate| {
+                visited.push(candidate.relax_iterations);
+                Ok(())
+            },
+        )
         .unwrap()
         .unwrap();
         assert_eq!(visited, vec![200, 400]);
@@ -3767,21 +3780,29 @@ mod grain_tests {
         let (mesh, source, _, _, _, tree) = body_start_recovery_fixture();
         for code in [RefusalCode::OutOfRange, RefusalCode::BudgetExceeded] {
             let mut visited = Vec::new();
-            let refusal = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
-                visited.push(candidate.relax_iterations);
-                Err::<(), _>(Refusal::new(code, "independent admission refusal"))
-            })
+            let refusal = earlier_relaxed_start(
+                &mesh,
+                &source,
+                source.relax_iterations,
+                &tree,
+                None,
+                |candidate| {
+                    visited.push(candidate.relax_iterations);
+                    Err::<(), _>(Refusal::new(code, "independent admission refusal"))
+                },
+            )
             .unwrap_err();
             assert_eq!(refusal.code, code);
             assert_eq!(visited, vec![25]);
         }
-        let none = earlier_relaxed_start(&mesh, &source, &tree, None, |_| {
-            Err::<(), _>(Refusal::new(
-                RefusalCode::IntersectingStart,
-                "body crossing remains",
-            ))
-        })
-        .unwrap();
+        let none =
+            earlier_relaxed_start(&mesh, &source, source.relax_iterations, &tree, None, |_| {
+                Err::<(), _>(Refusal::new(
+                    RefusalCode::IntersectingStart,
+                    "body crossing remains",
+                ))
+            })
+            .unwrap();
         assert!(none.is_none());
         assert_eq!(source.relax_iterations, 200);
         assert_eq!(source.block_p95, vec![9.0]);
@@ -3793,20 +3814,27 @@ mod grain_tests {
         source.relax_iterations = 600;
         source.block_p95 = vec![9.0; 3];
         let mut visited = Vec::new();
-        let (accepted, ()) = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
-            visited.push(candidate.relax_iterations);
-            if candidate
-                .relax_iterations
-                .is_multiple_of(crate::start::RELAX_ITERS)
-            {
-                Err(Refusal::new(
-                    RefusalCode::IntersectingTrajectory,
-                    "the displayed body rejects the complete-block candidate",
-                ))
-            } else {
-                Ok(())
-            }
-        })
+        let (accepted, ()) = earlier_relaxed_start(
+            &mesh,
+            &source,
+            source.relax_iterations,
+            &tree,
+            None,
+            |candidate| {
+                visited.push(candidate.relax_iterations);
+                if candidate
+                    .relax_iterations
+                    .is_multiple_of(crate::start::RELAX_ITERS)
+                {
+                    Err(Refusal::new(
+                        RefusalCode::IntersectingTrajectory,
+                        "the displayed body rejects the complete-block candidate",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )
         .unwrap()
         .unwrap();
         assert_eq!(&visited[..2], &[200, 400]);
@@ -3815,6 +3843,150 @@ mod grain_tests {
         assert!(accepted.block_p95.iter().all(|p95| *p95 < 1e-12));
         assert_eq!(source.relax_iterations, 600);
         assert_eq!(source.block_p95, vec![9.0; 3]);
+    }
+
+    #[test]
+    fn contact_start_recovery_keeps_later_fine_starts_after_body_backtracking() {
+        use crate::animation::{FOLD_FRAMES, ReplayContact, ZIP_FRAMES};
+
+        let (_, mut source, _, _, body, tree) = body_start_recovery_fixture();
+        // A stretched strip keeps relaxing after the first complete block. The recorded final
+        // candidate is wholly inside the closed body, isolating the refused-build handoff.
+        let mut rest = Vec::new();
+        let mut faces = Vec::new();
+        for column in 0..25 {
+            rest.push(Vec2::new(10.0 + 20.0 * f64::from(column), 10.0));
+            rest.push(Vec2::new(10.0 + 20.0 * f64::from(column), 30.0));
+            if column > 0 {
+                let at = 2 * column as usize;
+                faces.push([at - 2, at, at + 1]);
+                faces.push([at - 2, at + 1, at - 1]);
+            }
+        }
+        let n = rest.len();
+        let mesh = GarmentMesh {
+            instances: vec!["strip".into()],
+            verts2d: rest,
+            faces,
+            owner: vec![0; n],
+            inst_range: vec![(0, n)],
+            pairs: Vec::new(),
+            seams: Vec::new(),
+            corner: BTreeMap::new(),
+            index: BTreeMap::new(),
+            creases: Vec::new(),
+        };
+        source.presewn = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(2.0 * p.x * MM, p.y * MM, 0.2))
+            .collect();
+        source.wrapped = source.presewn.clone();
+        source.relaxed = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * 0.0001, p.y * 0.0001, 0.01))
+            .collect();
+        source.gather_weights = vec![1.0; n];
+        source.relax_iterations = 600;
+        source.block_p95 = vec![9.0; 3];
+        let original = source.clone();
+        let weld: Vec<_> = (0..n).collect();
+        let model = ClothModel::new(
+            mesh.verts2d.iter().map(|p| *p * MM).collect(),
+            &mesh.faces,
+            Fabric::default().membrane(0.05),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let mut positions = source.relaxed.clone();
+        let (_, rejected) = admit_body_start(
+            &mesh,
+            &mut source,
+            &weld,
+            &model,
+            &mut positions,
+            &mesh.faces,
+            &body,
+            &tree,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(rejected, Some(600));
+        assert_eq!(source.relax_iterations, 400);
+
+        let late = crate::start::relax(
+            &mesh,
+            &original.presewn,
+            &original.groups,
+            &tree,
+            575,
+            crate::start::RELAX_CLEARANCE,
+            &original.gather_weights,
+        );
+        let late_surface = NearestTree::new(late.clone(), mesh.faces.clone()).unwrap();
+        let (face, middle, separation) = mesh
+            .faces
+            .iter()
+            .map(|face| {
+                let middle = (positions[face[0]] + positions[face[1]] + positions[face[2]]) / 3.0;
+                (*face, middle, late_surface.nearest(middle).distance)
+            })
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .unwrap();
+        assert!(separation > 1e-6, "distinct strip surfaces: {separation}");
+        let edge = positions[face[1]] - positions[face[0]];
+        let normal = edge.cross(positions[face[2]] - positions[face[0]]);
+        let radius = separation * 0.25;
+        let tangent = edge * (radius / edge.norm());
+        let normal = normal * (radius / normal.norm());
+        let mut skin = body.vertices.clone();
+        let mut skin_faces = body.triangles.clone();
+        let at = skin.len();
+        skin.extend([
+            middle - normal,
+            middle + normal + tangent,
+            middle + normal - tangent,
+        ]);
+        skin_faces.push([at, at + 1, at + 2]);
+        let mut display = ReplayContact::new(&skin, &skin_faces).unwrap();
+        let frame = FOLD_FRAMES + ZIP_FRAMES - 1;
+        assert!(display.check(&positions, &mesh.faces, frame).is_err());
+        display.check(&late, &mesh.faces, frame).unwrap();
+        let mut admit = |candidate: &StartState| {
+            let mut positions = candidate.relaxed.clone();
+            model.check_membrane_domains(&positions)?;
+            untangle(&mut positions, &mesh.faces, &body, &tree)?;
+            model.check_membrane_domains(&positions)?;
+            display.check(&positions, &mesh.faces, frame)
+        };
+        assert!(
+            earlier_relaxed_start(
+                &mesh,
+                &source,
+                source.relax_iterations,
+                &tree,
+                None,
+                &mut admit,
+            )
+            .unwrap()
+            .is_none(),
+            "the former body-selected horizon discards every display-clear candidate"
+        );
+        let (accepted, ()) =
+            earlier_relaxed_start(&mesh, &source, rejected.unwrap(), &tree, None, &mut admit)
+                .unwrap()
+                .expect("body backtracking must not discard later display-clear checkpoints");
+        assert_eq!(accepted.relax_iterations, 575);
+        assert_eq!(accepted.relaxed, late);
+        assert_eq!(accepted.wrapped, original.wrapped);
+        assert_eq!(accepted.presewn, original.presewn);
+        assert_eq!(accepted.groups, original.groups);
+        assert_eq!(accepted.gather_weights, original.gather_weights);
+        assert_eq!(accepted.block_p95.len(), 3);
+        assert_eq!(source.relax_iterations, 400);
     }
 
     #[test]
@@ -3829,14 +4001,21 @@ mod grain_tests {
             RefusalCode::NonFinite,
         ] {
             let mut visited = Vec::new();
-            let refusal = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
-                visited.push(candidate.relax_iterations);
-                if candidate.relax_iterations == 200 {
-                    Ok(())
-                } else {
-                    Err(Refusal::new(code, "independent source or work refusal"))
-                }
-            })
+            let refusal = earlier_relaxed_start(
+                &mesh,
+                &source,
+                source.relax_iterations,
+                &tree,
+                None,
+                |candidate| {
+                    visited.push(candidate.relax_iterations);
+                    if candidate.relax_iterations == 200 {
+                        Ok(())
+                    } else {
+                        Err(Refusal::new(code, "independent source or work refusal"))
+                    }
+                },
+            )
             .unwrap_err();
             assert_eq!(refusal.code, code);
             assert_eq!(visited, vec![200, 400]);
@@ -3890,8 +4069,13 @@ mod grain_tests {
         }
         assert_ne!(p95(&coarse), expected[0], "the two schedules must differ");
         source.block_p95 = vec![p95(&coarse); 3];
-        let (accepted, ()) =
-            earlier_relaxed_start(&mesh, &source, &tree, Some(repulsion), |candidate| {
+        let (accepted, ()) = earlier_relaxed_start(
+            &mesh,
+            &source,
+            source.relax_iterations,
+            &tree,
+            Some(repulsion),
+            |candidate| {
                 if candidate
                     .relax_iterations
                     .is_multiple_of(crate::start::RELAX_ITERS)
@@ -3903,9 +4087,10 @@ mod grain_tests {
                 } else {
                     Ok(())
                 }
-            })
-            .unwrap()
-            .unwrap();
+            },
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(accepted.relax_iterations, 575);
         assert_eq!(accepted.relaxed, fine);
         assert_eq!(accepted.block_p95, expected);

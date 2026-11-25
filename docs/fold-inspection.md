@@ -72,8 +72,11 @@ and the drape can only begin from an earlier checkpoint that clears it. A drape 
 an earlier contact-admitted relaxation checkpoint than the fully relaxed start drawn here.
 When self-contact is enabled, that checkpoint must also clear the full displayed-body audit.
 The same bounded search now runs when a finger omitted from the proxy crosses the fully relaxed
-start. The drape reports the chosen iteration count and its actual strain; if no checkpoint
-passes, the original refusal is retained.
+start. If body clearance already selected an earlier complete relaxation block, the joint search
+retains the original rejected iteration count: later fine checkpoints can still clear both the
+collision body and the displayed body. Every candidate is rebuilt and checked against the same
+material domains and contact requirements. The drape reports the chosen iteration count and its
+actual strain; if no checkpoint passes, the original refusal is retained.
 Run the revised pattern through the ordinary drape, with the same body and collider options,
 to test its actual contact and convergence.
 If the cloth crosses itself at start admission, `refused/still_*.png` shows the actual
