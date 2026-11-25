@@ -39,6 +39,9 @@ pub enum Ordering {
     /// Bounded nearest authored start; retain the complete baseline unless the candidate improves
     /// declared motion-profile time, or travel distance when the profile is omitted.
     NearestPath,
+    /// Visit nearby hole centres first, then optimize the two knife phases from the last hole.
+    /// The complete checked route must improve on the authored baseline under the same objective.
+    NearestDrillAndPath,
 }
 
 /// Opt-in conservative routing of raised moves using the already qualified planar tool/fixtures.
@@ -320,7 +323,7 @@ pub struct DrillRun {
 /// A complete marker traversal. No partially cut marker is returned when optimization runs out.
 #[derive(Clone, Debug, Serialize)]
 pub struct Traversal {
-    /// Fixed authored placement/hole order, completed before every knife path.
+    /// Complete hole phase in traversal order; each run retains its authored placement/hole ID.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub drills: Vec<DrillRun>,
     /// Every declared internal path followed by every physical exterior exactly once.
@@ -380,6 +383,58 @@ impl Traversal {
             .map(|p| p[0])
             .chain(self.return_waypoints_mm.iter().copied())
             .chain(self.return_mm.iter().map(|p| p[1]))
+    }
+
+    /// Check exact source ownership and complete physical hole inventory across preview and studies.
+    pub(crate) fn check_drill_inventory(
+        &self,
+        placements: &[CutPlacement],
+        offset: Vec2,
+        policy: &Policy,
+    ) -> Result<(), Refusal> {
+        let count: usize = placements.iter().map(|p| p.drills_mm.len()).sum();
+        if self.drills.len() != count {
+            return Err(bad(
+                "cutting program must retain every declared drill hole exactly once",
+            ));
+        }
+        let mut previous = None;
+        let mut seen = BTreeSet::new();
+        for run in &self.drills {
+            let id = (run.placement, run.drill);
+            let valid_order = if policy.ordering == Ordering::NearestDrillAndPath {
+                seen.insert(id)
+            } else {
+                previous.is_none_or(|old| old < id)
+            };
+            let placement = placements
+                .get(run.placement)
+                .ok_or_else(|| bad("unknown drill placement"))?;
+            let &(center, diameter) = placement
+                .drills_mm
+                .get(run.drill)
+                .ok_or_else(|| bad("unknown source drill hole"))?;
+            if !valid_order
+                || run.piece != placement.piece
+                || run.instance != placement.instance
+                || run.copy != placement.copy
+                || run.center_mm != center + offset
+                || !run.center_mm.is_finite()
+                || run.diameter_mm != diameter
+                || !positive(diameter)
+                || policy
+                    .machine
+                    .drilling
+                    .as_ref()
+                    .is_none_or(|tool| tool.diameter_mm != diameter)
+            {
+                return Err(bad(
+                    "drilling must retain complete unique source holes, exact copies, centres, diameters and the requested ordering policy",
+                ));
+            }
+            previous = Some(id);
+        }
+        Ok(())
     }
 
     /// Recompute all retained raised legs, including detours and the final return, in mm.
@@ -1888,36 +1943,73 @@ fn traversal(
     Ok(traversal)
 }
 
-fn nearest(paths: &[Path<'_>], start: Vec2, work: &mut geometry::Work) -> Option<Vec<usize>> {
-    let mut order = Vec::with_capacity(paths.len());
-    let mut used = vec![false; paths.len()];
-    let mut position = start;
-    for internal in [true, false] {
-        let remaining = paths
-            .iter()
-            .filter(|p| p.reference.internal_cut.is_some() == internal)
-            .count();
-        for _ in 0..remaining {
-            let mut best: Option<(usize, f64)> = None;
-            for (i, path) in paths
-                .iter()
-                .enumerate()
-                .filter(|(i, p)| !used[*i] && p.reference.internal_cut.is_some() == internal)
-            {
-                work.spend(1)?;
-                let distance = position.dist(path.start());
-                // Equal distances retain the original stable placement/feature order.
-                if best.is_none_or(|(_, old)| distance < old) {
-                    best = Some((i, distance));
-                }
-            }
-            let i = best?.0;
-            used[i] = true;
-            order.push(i);
-            position = paths[i].end();
-        }
+/// Nearest authored start within one phase. Original source index breaks ties even after removal.
+fn nearest_phase(
+    features: impl Iterator<Item = (usize, Vec2, Vec2)>,
+    position: &mut Vec2,
+    work: &mut geometry::Work,
+) -> Option<Vec<usize>> {
+    let mut remaining: Vec<_> = features.collect();
+    let mut order = Vec::with_capacity(remaining.len());
+    while !remaining.is_empty() {
+        work.spend(remaining.len())?;
+        let (best, _) = remaining.iter().enumerate().min_by(|(_, a), (_, b)| {
+            position
+                .dist(a.1)
+                .total_cmp(&position.dist(b.1))
+                .then(a.0.cmp(&b.0))
+        })?;
+        let (index, _, end) = remaining.swap_remove(best);
+        order.push(index);
+        *position = end;
     }
     Some(order)
+}
+
+fn nearest(
+    paths: &[Path<'_>],
+    drills: Vec<DrillRun>,
+    ordering: Ordering,
+    start: Vec2,
+    work: &mut geometry::Work,
+) -> Option<(Vec<DrillRun>, Vec<usize>)> {
+    let mut position = start;
+    let drills = if ordering == Ordering::NearestDrillAndPath && drills.len() > 1 {
+        let order = nearest_phase(
+            drills
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (i, d.center_mm, d.center_mm)),
+            &mut position,
+            work,
+        )?;
+        let mut previous = start;
+        order
+            .into_iter()
+            .map(|i| {
+                let mut run = drills[i].clone();
+                run.travel_mm = [previous, run.center_mm];
+                previous = run.center_mm;
+                run
+            })
+            .collect()
+    } else {
+        position = drills.last().map_or(start, |d| d.center_mm);
+        drills
+    };
+    let mut order = Vec::with_capacity(paths.len());
+    for internal in [true, false] {
+        order.extend(nearest_phase(
+            paths
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.reference.internal_cut.is_some() == internal)
+                .map(|(i, p)| (i, p.start(), p.end())),
+            &mut position,
+            work,
+        )?);
+    }
+    Some((drills, order))
 }
 
 /// Build complete source-qualified programs from the exact final roll markers.
@@ -2065,9 +2157,6 @@ fn build_markers(
             &paths,
             &mut geometry_work,
         )?;
-        let knife_start = drills
-            .last()
-            .map_or(policy.machine.start_mm, |d| d.center_mm);
         let baseline_order: Vec<_> = (0..paths.len()).collect();
         let mut baseline = traversal(
             placements,
@@ -2088,26 +2177,32 @@ fn build_markers(
             Ok(()) => None,
             Err(refusal)
                 if refusal.code == RefusalCode::BudgetExceeded
-                    || policy.ordering != Ordering::NearestPath =>
+                    || policy.ordering == Ordering::Authored =>
             {
                 return Err(refusal);
             }
             Err(refusal) => Some(refusal),
         };
-        let mut candidate = if policy.ordering == Ordering::NearestPath {
-            nearest(&paths, knife_start, &mut search_work)
-                .map(|order| {
-                    traversal(
-                        placements,
-                        &paths,
-                        &order,
-                        &policy.machine,
-                        q.feed_mm_s,
-                        &drills,
-                        drill_cycle_seconds,
-                    )
-                })
-                .transpose()?
+        let mut candidate = if policy.ordering != Ordering::Authored {
+            nearest(
+                &paths,
+                drills,
+                policy.ordering,
+                policy.machine.start_mm,
+                &mut search_work,
+            )
+            .map(|(candidate_drills, order)| {
+                traversal(
+                    placements,
+                    &paths,
+                    &order,
+                    &policy.machine,
+                    q.feed_mm_s,
+                    &candidate_drills,
+                    drill_cycle_seconds,
+                )
+            })
+            .transpose()?
         } else {
             None
         };
@@ -2213,7 +2308,11 @@ fn build_markers(
                 },
             ];
             if uses_drilling {
-                limits.push("One fixed independently qualified coaxial cold through-drill completes all explicit holes in authored placement/hole order before knife internals and exterior releases. Every hole has the exact tool diameter and lies strictly inside usable stock and its exterior, clear of other holes, cuts and removed voids. Modeled time includes each complete plunge/dwell/retract cycle, both in-place tool selections once per used marker, and every raised drill/knife/return chord; knife lift/lower time is not charged again for holes. No bit changes, spindle dynamics, backing adequacy, chip evacuation, workholding registration or physical hole quality is inferred.");
+                if policy.ordering == Ordering::NearestDrillAndPath {
+                    limits.push("One fixed independently qualified coaxial cold through-drill completes all explicit holes before knife internals and exterior releases. Nearest-drill-and-path ordering retains original hole identities, full plunge/dwell/retract cycles, both tool selections and every raised-travel leg including the requested return. The complete checked candidate competes against the authored sequence; no physical hole quality, registration or cycle time is established.");
+                } else {
+                    limits.push("One fixed independently qualified coaxial cold through-drill completes all explicit holes in authored placement/hole order before knife internals and exterior releases. Every hole has the exact tool diameter and lies strictly inside usable stock and its exterior, clear of other holes, cuts and removed voids. Modeled time includes each complete plunge/dwell/retract cycle, both in-place tool selections once per used marker, and every raised drill/knife/return chord; knife lift/lower time is not charged again for holes. No bit changes, spindle dynamics, backing adequacy, chip evacuation, workholding registration or physical hole quality is inferred.");
+                }
             }
             if policy.machine.fixture_clearance.is_some() {
                 if policy.travel_routing.is_some() {

@@ -454,14 +454,9 @@ fn summarize<'a>(
         if !policy.stock_loading.is_empty() {
             protocol["stock_loading"] = json!(policy.stock_loading);
         }
-        let expected_drills: Vec<_> = placements
-            .iter()
-            .enumerate()
-            .flat_map(|(placement, item)| {
-                (0..item.drills_mm.len()).map(move |drill| (placement, drill))
-            })
-            .collect();
-        let drilling = if expected_drills.is_empty() {
+        let route = &marker.selected;
+        route.check_drill_inventory(placements, offset.unwrap_or(Vec2::ZERO), policy)?;
+        let drilling = if route.drills.is_empty() {
             if marker.drill_qualification.is_some() {
                 return Err(invalid(
                     "a marker without holes cannot claim a drilling qualification",
@@ -501,35 +496,7 @@ fn summarize<'a>(
                     .chain(std::iter::once((i, None)))
             })
             .collect();
-        let route = &marker.selected;
-        if route.drills.len() != expected_drills.len() {
-            return Err(invalid(
-                "cutting effort must retain every declared drill hole exactly once",
-            ));
-        }
         let (drilling_seconds, tool_change_seconds) = if let Some((tool, qualified)) = drilling {
-            for (run, &(placement_index, drill_index)) in route.drills.iter().zip(&expected_drills)
-            {
-                let placement = &placements[placement_index];
-                let (center, diameter) = placement.drills_mm[drill_index];
-                let center = offset.map_or(center, |offset| center + offset);
-                if run.placement != placement_index
-                    || run.drill != drill_index
-                    || run.piece != placement.piece
-                    || run.instance != placement.instance
-                    || run.copy != placement.copy
-                    || run.center_mm != center
-                    || run.diameter_mm != diameter
-                    || run.diameter_mm != tool.diameter_mm
-                    || !center.is_finite()
-                    || !diameter.is_finite()
-                    || diameter <= 0.
-                {
-                    return Err(invalid(
-                        "drilling must retain exact physical copies, authored hole order, coordinates and diameters",
-                    ));
-                }
-            }
             (
                 finite_sum(std::iter::repeat_n(
                     qualified.cycle_seconds()?,

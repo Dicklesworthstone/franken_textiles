@@ -975,6 +975,93 @@ fn qualified_drills_finish_before_every_knife_path_with_independent_complete_cyc
 }
 
 #[test]
+fn nearest_drill_and_path_reorders_exact_source_holes_before_cutting() {
+    let mut sheet = piece("front", 40., 60.);
+    sheet["drills"] = json!([{"p":[30,10],"d":2},{"p":[6,6],"d":2},{"p":[30,50],"d":2}]);
+    let p = pattern(vec![sheet]);
+    let mut opts = qualified_options(&p);
+    qualify_drilling(&mut opts);
+    opts.program.as_mut().unwrap().ordering = Ordering::NearestPath;
+    let legacy = CutPlan::build(&p, &opts).unwrap();
+    let authored = &legacy.program.as_ref().unwrap().markers[0].selected;
+    let ids = |route: &program::Traversal| route.drills.iter().map(|d| d.drill).collect::<Vec<_>>();
+    assert_eq!(ids(authored), [0, 1, 2]);
+    opts.program.as_mut().unwrap().ordering =
+        serde_json::from_value(json!("nearest_drill_and_path")).unwrap();
+    let plan = CutPlan::build(&p, &opts).unwrap();
+    let marker = &plan.program.as_ref().unwrap().markers[0];
+    assert!(marker.improved);
+    assert_eq!(value(&marker.baseline), value(authored));
+    assert_eq!(ids(&marker.selected), [1, 0, 2]);
+    let selected = &marker.selected;
+    let points = [
+        Vec2::ZERO,
+        Vec2::new(11., 11.),
+        Vec2::new(35., 15.),
+        Vec2::new(35., 55.),
+        plan.rolls[0].placements[0].cut_mm[0],
+        Vec2::ZERO,
+    ];
+    let expected = points
+        .windows(2)
+        .map(|pair| pair[0].dist(pair[1]))
+        .sum::<f64>();
+    near(selected.checked_travel_length().unwrap(), expected);
+    near(selected.travel_seconds, expected / 100.);
+    near(selected.drilling_seconds, authored.drilling_seconds);
+    near(selected.tool_change_seconds, authored.tool_change_seconds);
+    near(selected.cutting_seconds, authored.cutting_seconds);
+    near(
+        authored.modeled_path_seconds - selected.modeled_path_seconds,
+        (authored.travel_length_mm - expected) / 100.,
+    );
+    assert_eq!(value(&plan.rolls), value(&legacy.rolls));
+    assert!(ftx_export::cutting::preview::svg(&plan, 0).is_ok());
+
+    let mut tampered = plan;
+    tampered.program.as_mut().unwrap().markers[0].selected.drills[0].drill = 0;
+    assert!(ftx_export::cutting::preview::svg(&tampered, 0).is_err());
+
+    // Incomplete hole search or incomplete knife search cannot replace the complete incumbent.
+    for limit in [1, 6] {
+        opts.program.as_mut().unwrap().work_limit = limit;
+        let plan = CutPlan::build(&p, &opts).unwrap();
+        let report = plan.program.unwrap();
+        assert!(report.budget_exhausted);
+        assert_eq!(value(&report.markers[0].selected), value(authored));
+    }
+}
+
+#[test]
+fn reordered_drill_travel_must_clear_every_qualified_fixture() {
+    let mut sheet = piece("front", 40., 60.);
+    sheet["drills"] = json!([{"p":[30,10],"d":2},{"p":[6,6],"d":2},{"p":[30,50],"d":2}]);
+    let p = pattern(vec![sheet]);
+    let mut opts = qualified_options(&p);
+    qualify_drilling(&mut opts);
+    fixture_policy(&mut opts, [[34., 34.], [36., 34.], [36., 36.], [34., 36.]]);
+    let policy = opts.program.as_mut().unwrap();
+    let fixture = policy.machine.fixture_clearance.as_mut().unwrap();
+    fixture.raised_radius_mm = 1.;
+    fixture.cutting_radius_mm = 1.;
+    policy.ordering = Ordering::NearestDrillAndPath;
+    relock(&mut opts);
+    let report = CutPlan::build(&p, &opts).unwrap().program.unwrap();
+    let marker = &report.markers[0];
+    assert!(!marker.improved);
+    assert!(marker.baseline_clearance_refusal.is_none());
+    assert!(
+        marker
+            .candidate_clearance_refusal
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("raised-travel")
+    );
+    assert_eq!(value(&marker.selected), value(&marker.baseline));
+}
+
+#[test]
 fn drill_source_geometry_and_process_failures_preserve_the_ordinary_roll_marker() {
     let mut sheet = piece("front", 40., 60.);
     sheet["drills"] = json!([{"p":[10,10],"d":2}]);

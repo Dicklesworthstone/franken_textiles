@@ -91,6 +91,10 @@ fn row<'a>(report: &'a super::super::Report, key: &str) -> &'a Alternative {
 }
 
 fn drill_fixture(route: &str) -> (Pattern, Request) {
+    ordered_drill_fixture(route, program::Ordering::NearestPath)
+}
+
+fn ordered_drill_fixture(route: &str, ordering: program::Ordering) -> (Pattern, Request) {
     let (pattern, mut request) = fixture(route);
     let mut raw = pattern.raw().clone();
     for piece in raw["pieces"].as_array_mut().unwrap() {
@@ -98,6 +102,7 @@ fn drill_fixture(route: &str) -> (Pattern, Request) {
     }
     let configure =
         |policy: &mut program::Policy| {
+            policy.ordering = ordering;
             policy.machine.drilling = Some(
                 serde_json::from_value(json!({
                     "model":"coaxial_cold_through_drill/1","tool":"synthetic-two-mm-drill",
@@ -184,6 +189,24 @@ fn qualified_drill_cycles_change_complete_roll_finite_and_mixed_job_decisions() 
                 selected.drills.last().unwrap().center_mm
             );
         }
+    }
+}
+
+#[test]
+fn nearest_hole_order_preserves_roll_finite_and_mixed_study_consumers() {
+    for (route, consumer) in [
+        ("cutting", Consumer::CuttingProgram),
+        ("finite_stock", Consumer::FiniteStockProgram),
+        ("cutting_job", Consumer::CuttingJobProgram),
+    ] {
+        let (pattern, request) =
+            ordered_drill_fixture(route, program::Ordering::NearestDrillAndPath);
+        let report = request.evaluate(&pattern).unwrap();
+        assert_eq!(report.comparison.as_ref().unwrap().frontier, ["fast"]);
+        let fast = admit(row(&report, "fast"), consumer).unwrap();
+        let slow = admit(row(&report, "slow"), consumer).unwrap();
+        assert!(near(slow.totals.seconds - fast.totals.seconds, 16.));
+        assert!(near(slow.totals.travel_m, fast.totals.travel_m));
     }
 }
 

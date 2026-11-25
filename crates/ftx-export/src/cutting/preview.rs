@@ -126,13 +126,7 @@ fn routed_preview<'a>(
         },
         |loading| loading.marker_to_machine_offset_mm,
     );
-    let mut expected_drills = placements.iter().enumerate().flat_map(|(i, placement)| {
-        placement
-            .drills_mm
-            .iter()
-            .enumerate()
-            .map(move |(j, drill)| (i, placement, j, drill))
-    });
+    route.check_drill_inventory(placements, offset, policy)?;
     if route.drills.is_empty() != marker.drill_qualification.is_none() {
         return Err(bad());
     }
@@ -151,23 +145,8 @@ fn routed_preview<'a>(
         }
     }
     for drill in &route.drills {
-        let Some((placement_index, placement, drill_index, (center, diameter))) =
-            expected_drills.next()
-        else {
-            return Err(bad());
-        };
-        let tool = report.drilling.as_ref().ok_or_else(bad)?;
         let radius = drill.diameter_mm / 2.;
-        if drill.placement != placement_index
-            || drill.drill != drill_index
-            || drill.piece != placement.piece
-            || drill.instance != placement.instance
-            || drill.copy != placement.copy
-            || drill.center_mm != *center + offset
-            || drill.diameter_mm != *diameter
-            || drill.diameter_mm != tool.diameter_mm
-            || !drill.center_mm.is_finite()
-            || !radius.is_finite()
+        if !radius.is_finite()
             || radius <= 0.
             || drill.center_mm.x - radius < 0.
             || drill.center_mm.y - radius < 0.
@@ -176,9 +155,6 @@ fn routed_preview<'a>(
         {
             return Err(bad());
         }
-    }
-    if expected_drills.next().is_some() {
-        return Err(bad());
     }
     Ok(Some(RoutedPreview {
         marker,

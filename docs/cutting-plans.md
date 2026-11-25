@@ -194,9 +194,14 @@ other holes. Touching or unresolved clearance refuses. If fixtures are declared,
 lowered and raised tool envelopes must enclose the bit; stationary drilling and every raised move
 are checked by the same conservative geometry authority as knife paths.
 
-The complete order is: **authored holes, internal knife paths, exterior knife paths, optional raised
-return**. Hole order is not optimized. The existing knife heuristic starts from the final hole and
-retains its complete baseline when no better candidate is available. Every drill travel leg uses the
+The complete order is **holes, internal knife paths, exterior knife paths, optional raised
+return**. Both `authored` and `nearest_path` preserve the original hole sequence. To optimize
+hole travel as well, set `ordering` to `"nearest_drill_and_path"`. The search chooses the nearest
+remaining hole from the actual head position and begins the knife search at the final hole. Ties
+use the original placement and hole order. Both phases draw from the same search budget. The
+complete route, including the return, must clear every fixture and improve raised distance
+(or modeled time with an acceleration profile) to displace a feasible authored baseline.
+Each selected hole retains its original placement, copy and hole index. Every drill travel leg uses the
 same declared travel speed, optional acceleration profile and checked fixture detours. Tool selection
 is counted once in each direction for a used marker with holes. A marker without holes incurs neither
 drilling nor tool-selection time.
