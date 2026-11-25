@@ -120,7 +120,10 @@ pub struct FactorStats {
     pub fill_ratio: f64,
     /// Approximate floating-point operation count of the numeric phase.
     pub flops: u64,
-    /// Peak bytes of live frontal + update-matrix storage.
+    /// Peak bytes of live frontal + update-matrix storage when the fronts are factored one at a time
+    /// in supernode order. With the `parallel` feature the same figure is reported (it is replayed in
+    /// that order, so it does not depend on the thread count), but several fronts, and each subtree
+    /// task's scatter map, are live at once, so the real peak is higher.
     pub peak_front_bytes: usize,
     /// Number of supernodes.
     pub supernodes: usize,
@@ -1877,6 +1880,59 @@ mod tests {
         coo.assemble()
     }
 
+    /// The block-diagonal matrix of `parts`, in order.
+    #[cfg(feature = "parallel")]
+    fn block_diagonal(parts: &[&Csr]) -> Csr {
+        let n: usize = parts.iter().map(|p| p.nrows()).sum();
+        let mut coo = Coo::new(n, n);
+        let mut base = 0;
+        for p in parts {
+            for r in 0..p.nrows() {
+                let (cols, vals) = p.row(r);
+                for (&c, &v) in cols.iter().zip(vals) {
+                    coo.push(base + r, base + c, v);
+                }
+            }
+            base += p.nrows();
+        }
+        coo.assemble()
+    }
+
+    /// `[[v, v], [v, v]]`: singular, refused when its second unknown is eliminated.
+    #[cfg(feature = "parallel")]
+    fn singular_pair(v: f64) -> Csr {
+        let mut coo = Coo::new(2, 2);
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            coo.push(r, c, v);
+        }
+        coo.assemble()
+    }
+
+    /// `a` with one more unknown, a copy of unknown `p` (its row, its column and its diagonal). The
+    /// copy's entries receive exactly the updates `p`'s do, so once `p` is eliminated its pivot is
+    /// exactly zero: the matrix is singular and refused at the root of the copy's subtree.
+    #[cfg(feature = "parallel")]
+    fn with_twin(a: &Csr, p: usize) -> Csr {
+        let n = a.nrows();
+        let mut coo = Coo::new(n + 1, n + 1);
+        for r in 0..n {
+            let (cols, vals) = a.row(r);
+            for (&c, &v) in cols.iter().zip(vals) {
+                coo.push(r, c, v);
+                if c == p {
+                    coo.push(r, n, v);
+                }
+                if r == p {
+                    coo.push(n, c, v);
+                }
+                if r == p && c == p {
+                    coo.push(n, n, v);
+                }
+            }
+        }
+        coo.assemble()
+    }
+
     /// Random sparse symmetric matrix with a stored diagonal.
     fn random_sym(n: usize, extra_per_row: usize, seed: u64) -> Csr {
         let mut s = seed;
@@ -2301,34 +2357,12 @@ mod tests {
                 .install(run)
         };
         // Two singular 2×2 blocks in different subtrees: the serial pass refuses at the first.
-        let blocks = |parts: &[Csr]| {
-            let n: usize = parts.iter().map(Csr::nrows).sum();
-            let mut coo = Coo::new(n, n);
-            let mut base = 0;
-            for p in parts {
-                for r in 0..p.nrows() {
-                    let (cols, vals) = p.row(r);
-                    for (&c, &v) in cols.iter().zip(vals) {
-                        coo.push(base + r, base + c, v);
-                    }
-                }
-                base += p.nrows();
-            }
-            coo.assemble()
-        };
-        let singular = |v: f64| {
-            let mut coo = Coo::new(2, 2);
-            for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-                coo.push(r, c, v);
-            }
-            coo.assemble()
-        };
         let grid = crate::sparse::tests::laplacian_2d(20);
         let cases = [
             crate::sparse::tests::laplacian_2d(60),
             shifted(&crate::sparse::tests::laplacian_2d(40), 0.37),
             random_sym(2000, 3, 0xBEEF),
-            blocks(&[grid.clone(), singular(1.0), grid, singular(2.0)]),
+            block_diagonal(&[&grid, &singular_pair(1.0), &grid, &singular_pair(2.0)]),
             // Large enough for subtree tasks in the solves too (each of at least SOLVE_TASK_ENTRIES).
             crate::sparse::tests::laplacian_2d(160),
         ];
@@ -2343,6 +2377,14 @@ mod tests {
         assert_ne!(
             solve_tasks, "0",
             "the large grid's solves run subtree tasks"
+        );
+        let large = SymbolicLdlt::analyze(&cases[4], DirectOrdering::Amd).unwrap();
+        assert!(
+            large
+                .snodes
+                .iter()
+                .any(|s| s.panel.len() * s.panel.len() * s.width >= PANEL_PARALLEL_WORK),
+            "the large grid has a front whose panel update is split"
         );
         let mut split = 0;
         for (case, a) in cases.iter().enumerate() {
@@ -2362,6 +2404,157 @@ mod tests {
             split += usize::from(on(4, &|| format!("{}", sym.subtree_tasks().len())) != "0");
         }
         assert!(split >= 3, "subtree tasks ran in {split} cases");
+    }
+
+    /// What the test above does not reach. With natural ordering each block of a block-diagonal
+    /// matrix keeps its place in the assembly tree, so a singular block is refused where it is put: a
+    /// singular pair (light) inside a subtree task, a grid with a twin unknown (heavy) at its root,
+    /// outside the tasks. Every thread count must report the refusal a serial pass meets first: the
+    /// lower of two task failures, a failure outside the tasks before a task's, and a task's before
+    /// one outside. A saddle-point system (its constraints have no diagonal) needs delayed and 2×2
+    /// pivots and is large enough for subtree tasks in its solves; it must give the same bits too.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn thread_count_keeps_the_first_refusal_and_delayed_pivots_to_the_bit() {
+        fn on<T: Send>(threads: usize, run: impl FnOnce() -> T + Send) -> T {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(run)
+        }
+        let small = crate::sparse::tests::laplacian_2d(4);
+        let grid = crate::sparse::tests::laplacian_2d(20);
+        let twin = with_twin(&grid, grid.nrows() - 1);
+        let pair = singular_pair(1.0);
+        // The blocks (a small positive definite one first, so no refusal is at supernode 0), and
+        // whether blocks 1 and 3 (both singular) are refused inside a task.
+        let cases = [
+            ([&small, &pair, &grid, &pair, &grid], [true, true]),
+            ([&small, &twin, &grid, &pair, &grid], [false, true]),
+            ([&small, &pair, &grid, &twin, &grid], [true, false]),
+        ];
+        for (case, (parts, inside)) in cases.iter().enumerate() {
+            let a = block_diagonal(parts);
+            let sym = SymbolicLdlt::analyze(&a, DirectOrdering::Natural).unwrap();
+            let starts: Vec<usize> = parts
+                .iter()
+                .scan(0, |at, p| {
+                    *at += p.nrows();
+                    Some(*at - p.nrows())
+                })
+                .collect();
+            // The supernode holding a block's last unknown: the root of its subtree.
+            let root = |block: usize| {
+                let col = sym.iperm[starts[block] + parts[block].nrows() - 1];
+                sym.snodes
+                    .iter()
+                    .position(|s| (s.col_start..s.col_start + s.width).contains(&col))
+                    .unwrap()
+            };
+            let tasks = on(4, || sym.subtree_tasks());
+            let task = |sid: usize| {
+                tasks
+                    .iter()
+                    .position(|&(first, last)| (first..=last).contains(&sid))
+            };
+            let (first, second) = (root(1), root(3));
+            assert!(
+                first > 0 && first < second,
+                "case {case}: {first}, {second}"
+            );
+            assert_eq!(
+                [task(first).is_some(), task(second).is_some()],
+                *inside,
+                "case {case}: roots {first}, {second} in {tasks:?}"
+            );
+            if *inside == [true, true] {
+                assert_ne!(task(first), task(second), "case {case}: two tasks fail");
+            }
+            let run = || {
+                let e = sym
+                    .factor(&a, &LdltOptions::default())
+                    .expect_err("a singular block is refused");
+                format!("{e:?}")
+            };
+            let serial = on(1, run);
+            let column =
+                (starts[1]..starts[2]).any(|c| serial.contains(&format!("orig_col: {c},")));
+            assert!(
+                column,
+                "case {case}: the first singular block is refused: {serial}"
+            );
+            assert_eq!(serial, on(3, run), "case {case}");
+            assert_eq!(serial, on(4, run), "case {case}");
+        }
+
+        // A saddle point on a grid of n unknowns. Constraints between neighbouring unknowns, with no
+        // diagonal, are delayed until a neighbour is eliminated. Pairs of unknowns coupled to each
+        // other with no diagonal, and only weakly (1e-3) to the grid, admit no 1×1 pivot and need a
+        // 2×2 one. Inertia (n + pairs, constraints + pairs).
+        let k = 160;
+        let h = crate::sparse::tests::laplacian_2d(k);
+        let n = h.nrows();
+        let edges = |offset: usize| -> Vec<usize> {
+            (offset..n - 1)
+                .step_by(8)
+                .filter(|i| (i + 1) % k != 0)
+                .collect()
+        };
+        let (constraints, pairs) = (edges(0), edges(4));
+        let size = n + constraints.len() + 2 * pairs.len();
+        let mut coo = Coo::new(size, size);
+        for r in 0..n {
+            let (cols, vals) = h.row(r);
+            for (&c, &v) in cols.iter().zip(vals) {
+                coo.push(r, c, v);
+            }
+        }
+        let mut couple = |r: usize, c: usize, v: f64| {
+            coo.push(r, c, v);
+            coo.push(c, r, v);
+        };
+        for (j, &i) in constraints.iter().enumerate() {
+            couple(n + j, i, 1.0);
+            couple(n + j, i + 1, -1.0);
+        }
+        let base = n + constraints.len();
+        for (j, &i) in pairs.iter().enumerate() {
+            let (p, q) = (base + 2 * j, base + 2 * j + 1);
+            couple(p, q, 1.0);
+            couple(p, i, 1e-3);
+            couple(q, i + 1, 1e-3);
+        }
+        let kkt = coo.assemble();
+        let sym = SymbolicLdlt::analyze(&kkt, DirectOrdering::Amd).unwrap();
+        let b: Vec<f64> = (0..kkt.nrows()).map(|i| (i % 13) as f64 - 6.0).collect();
+        let run = || {
+            let f = sym.factor(&kkt, &LdltOptions::default()).unwrap();
+            let x: Vec<u64> = f.solve(&b).iter().map(|v| v.to_bits()).collect();
+            let bits = format!("{:?} {:?} {:?} {x:?}", f.snodes, f.inertia, f.stats);
+            (bits, f.inertia(), f.stats, f.tasks.len())
+        };
+        let serial = on(1, run);
+        assert_eq!(
+            serial.1,
+            Inertia {
+                positive: n + pairs.len(),
+                negative: constraints.len() + pairs.len()
+            }
+        );
+        assert!(
+            serial.2.pivots_delayed > 0 && serial.2.pivots_2x2 > 0,
+            "{:?}",
+            serial.2
+        );
+        let four = on(4, run);
+        assert!(
+            four.3 >= 2,
+            "the saddle point's solves run {} tasks",
+            four.3
+        );
+        assert_eq!(serial.0, four.0);
+        assert_eq!(serial.0, on(3, run).0);
     }
 
     #[test]
