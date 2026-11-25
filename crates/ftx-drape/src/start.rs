@@ -290,6 +290,28 @@ fn norm2(d: Vec2) -> f64 {
     (d.x * d.x + d.y * d.y).sqrt()
 }
 
+/// Unit normal from a face cross product without squaring underflow/overflow or silently
+/// turning a collapsed cross product into a zero-vector impulse.
+fn unit_normal(cross: Vec3, what: &str) -> Result<Option<Vec3>, Refusal> {
+    if !cross.is_finite() {
+        return Err(Refusal::new(RefusalCode::NonFinite, what));
+    }
+    let len = norm3(cross);
+    if len > 0.0 && len.is_finite() {
+        return Ok(Some(cross / len));
+    }
+    let scale = cross.x.abs().max(cross.y.abs()).max(cross.z.abs());
+    if scale == 0.0 {
+        return Ok(None);
+    }
+    let scaled = cross / scale;
+    let scaled_len = norm3(scaled);
+    if !scaled_len.is_finite() || scaled_len == 0.0 {
+        return Err(Refusal::new(RefusalCode::NonFinite, what));
+    }
+    Ok(Some(scaled / scaled_len))
+}
+
 /// Strain `L₃/L₂ − 1` of each edge (rest lengths from the 2D mesh in mm).
 #[must_use]
 pub fn edge_strain(x: &[Vec3], rest2d: &[Vec2], edges: &[(usize, usize)]) -> Vec<f64> {
@@ -1037,6 +1059,14 @@ fn apply_self_repulsion(
             let face = topo.tris[ti];
             let triangle = face.map(|v| p[v]);
             let segment = edge.map(|v| p[v]);
+            let cross = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]);
+            let raw_signed = segment.map(|v| (v - triangle[0]).dot(cross));
+            if !cross.is_finite() || !raw_signed[0].is_finite() || !raw_signed[1].is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "non-finite self-repulsion crossing witness",
+                ));
+            }
             if ftx_core::intersection::segment_triangle(segment[0], segment[1], triangle)
                 != Some(ftx_core::intersection::IntersectionKind::Crossing)
             {
@@ -1045,10 +1075,17 @@ fn apply_self_repulsion(
             // Keep the farther endpoint on its current side and move the shallower endpoint
             // across the face. On an exact tie the ordered welded edge breaks symmetry. The
             // direction is invariant to triangle winding and independent of garment part names.
-            let normal = (triangle[1] - triangle[0])
-                .cross(triangle[2] - triangle[0])
-                .normalized();
+            let Some(normal) = unit_normal(cross, "non-finite self-repulsion crossing normal")?
+            else {
+                continue;
+            };
             let signed = segment.map(|v| (v - triangle[0]).dot(normal));
+            if !signed[0].is_finite() || !signed[1].is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "non-finite self-repulsion crossing clearance",
+                ));
+            }
             let tip = usize::from(signed[1].abs() < signed[0].abs());
             let v = edge[tip];
             let dir = if signed[1 - tip] >= 0.0 {
@@ -1281,9 +1318,13 @@ fn apply_body_repulsion(
                 continue;
             }
             let hit = edge_face_witness(segment, triangle)?;
-            let normal = (triangle[1] - triangle[0])
-                .cross(triangle[2] - triangle[0])
-                .normalized();
+            if hit.distance >= clearance {
+                continue;
+            }
+            let cross = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]);
+            let Some(normal) = unit_normal(cross, "non-finite start body triangle normal")? else {
+                continue;
+            };
             add(
                 edge,
                 &hit.edge_weights,
@@ -1309,6 +1350,16 @@ fn apply_body_repulsion(
                 continue;
             }
             let normal = body.nearest(hit.edge_point).normal;
+            let nlen = norm3(normal);
+            if !normal.is_finite() || !nlen.is_finite() {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "non-finite start body nearest normal",
+                ));
+            }
+            if nlen == 0.0 {
+                continue;
+            }
             add(
                 triangle,
                 &hit.triangle_weights,
@@ -1717,6 +1768,108 @@ mod tests {
                     .expect("both layers must pass production self-contact admission");
             }
         }
+    }
+
+    #[test]
+    fn self_repulsion_rescales_tiny_crossing_normal_and_refuses_overflowing_crossing() {
+        assert_eq!(unit_normal(Vec3::ZERO, "zero").unwrap(), None);
+        assert_eq!(
+            unit_normal(Vec3::new(0.0, 0.0, 1e-200), "tiny").unwrap(),
+            Some(Vec3::new(0.0, 0.0, 1.0))
+        );
+        assert_eq!(
+            unit_normal(Vec3::new(0.0, 0.0, 1e200), "huge").unwrap(),
+            Some(Vec3::new(0.0, 0.0, 1.0))
+        );
+        assert_eq!(
+            unit_normal(Vec3::new(0.0, 0.0, f64::INFINITY), "inf")
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+
+        let body = flat_body();
+        let mesh = GarmentMesh {
+            instances: vec!["bodice".into(), "sleeve".into()],
+            verts2d: vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(100.0, 0.0),
+                Vec2::new(0.0, 100.0),
+                Vec2::new(0.0, 0.0),
+                Vec2::new(40.0, 0.0),
+                Vec2::new(0.0, 40.0),
+            ],
+            owner: vec![0, 0, 0, 1, 1, 1],
+            faces: vec![[0, 1, 2], [3, 4, 5]],
+            inst_range: vec![(0, 3), (3, 6)],
+            pairs: vec![],
+            seams: vec![],
+            corner: Default::default(),
+            index: Default::default(),
+            creases: vec![],
+        };
+        let topology = RepulsionTopology::build(&mesh, &[]);
+        let opts = SelfRepulsionOptions::default();
+
+        // Side 1e-100 m => cross product (0, 0, 1e-200): exact segment_triangle sees a Crossing,
+        // while cross.norm() underflows to 0.0 in f64. Rescaling must still push the shallow tip
+        // in +z across the face instead of overwriting proximity repulsion with a zero impulse.
+        let z = 0.100;
+        let tiny = 1e-100;
+        let mut q = vec![
+            Vec3::new(0.0, 0.0, z),
+            Vec3::new(tiny, 0.0, z),
+            Vec3::new(0.0, tiny, z),
+            Vec3::new(0.25 * tiny, 0.25 * tiny, z - 0.002),
+            Vec3::new(0.25 * tiny, 0.25 * tiny, z + 0.010),
+            Vec3::new(0.050, 0.050, z + 0.010),
+        ];
+        let cross = (q[1] - q[0]).cross(q[2] - q[0]);
+        assert_eq!(cross.norm(), 0.0);
+        assert_eq!(
+            ftx_core::intersection::segment_triangle(q[3], q[4], [q[0], q[1], q[2]]),
+            Some(ftx_core::intersection::IntersectionKind::Crossing)
+        );
+        let tip_before = q[3].z;
+        apply_self_repulsion(
+            &mut q,
+            &mesh.verts2d,
+            &mesh.owner,
+            &topology,
+            &body,
+            RELAX_CLEARANCE,
+            opts,
+            &mut RepulsionWork::new(opts),
+        )
+        .unwrap();
+        assert!(
+            q[3].z > tip_before + 1e-4,
+            "tiny-area crossing must push shallow tip in +z, got before={tip_before} after={}",
+            q[3].z
+        );
+
+        // Huge finite coordinates must fail closed as NonFinite instead of panicking inside
+        // exact predicates.
+        let mut huge = vec![
+            Vec3::new(0.0, 0.0, 0.1),
+            Vec3::new(1e110, 0.0, 0.1),
+            Vec3::new(0.0, 1e110, 0.1),
+            Vec3::new(0.25e110, 0.25e110, 0.09),
+            Vec3::new(0.25e110, 0.25e110, 1e100),
+            Vec3::new(0.50e110, 0.25e110, 1e100),
+        ];
+        let err = apply_self_repulsion(
+            &mut huge,
+            &mesh.verts2d,
+            &mesh.owner,
+            &topology,
+            &body,
+            RELAX_CLEARANCE,
+            opts,
+            &mut RepulsionWork::new(opts),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
     }
 
     #[test]
