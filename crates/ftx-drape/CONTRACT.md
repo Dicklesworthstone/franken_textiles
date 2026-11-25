@@ -171,6 +171,10 @@ push-out checkpoints. Each candidate retains the original pre-sewn state, welds,
 material assignments and gather weights; its strain receipt is recomputed from its actual replay.
 Both pre- and post-untangle material-domain admission remain required. Non-contact refusals propagate,
 failed searches publish no candidate, and explicit caller-supplied checkpoints are never replaced.
+Body, self-contact and displayed-body recovery share this replay policy. Every complete and partial
+block's strain receipt is measured on the actual candidate, including non-divisor repulsion periods.
+Only contact refusals permit another checkpoint; source, material-domain, non-finite and work-budget
+failures stop the whole search, even if an earlier candidate passed or leg separation is attempted.
 Any selected start must still pass physical contact, self-contact and displayed-body admission before
 dynamics. The original rejected iteration count survives subsequent self-contact or leg-start repair.
 The synthetic closed-body regression verifies this formerly unreachable recovery path; it does not

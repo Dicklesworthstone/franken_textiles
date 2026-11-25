@@ -1010,95 +1010,50 @@ pub(crate) fn build_scene_resolved_with_options(
                 // Rebuilding rechecks body clearance, material domains and source-owned contact
                 // before any constitutive history is initialized. The displayed body can retain
                 // hands or feet omitted by the collider; every candidate must clear both surfaces.
-                let original = scene.start.relax_iterations;
-                let rejected = scene.start_backtracked_from.unwrap_or(original);
+                let rejected = scene
+                    .start_backtracked_from
+                    .unwrap_or(scene.start.relax_iterations);
                 let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
-                let mut replacement = None;
                 let plain: Vec<_> = crate::start::face_edges(&scene.mesh.faces)
                     .into_iter()
                     .filter(|&(a, b)| {
                         scene.start.gather_weights[a] >= 1.0 && scene.start.gather_weights[b] >= 1.0
                     })
                     .collect();
-                for stride in [
-                    crate::start::RELAX_ITERS,
-                    crate::start::RELAX_PUSH_OUT_ITERS,
-                ] {
-                    let mut positions = scene.start.presewn.clone();
-                    for iterations in (stride..original).step_by(stride) {
-                        positions = match options.start_self_repulsion {
-                            Some(repulsion) => crate::start::relax_with_repulsion(
-                                &scene.mesh,
-                                &positions,
-                                &scene.start.groups,
-                                &tree,
-                                stride,
-                                crate::start::RELAX_CLEARANCE,
-                                &scene.start.gather_weights,
-                                Some(repulsion),
-                            )?,
-                            None => crate::start::relax(
-                                &scene.mesh,
-                                &positions,
-                                &scene.start.groups,
-                                &tree,
-                                stride,
-                                crate::start::RELAX_CLEARANCE,
-                                &scene.start.gather_weights,
-                            ),
-                        };
-                        let complete_block = iterations % crate::start::RELAX_ITERS == 0;
-                        let coarse_equivalent = options.start_self_repulsion.is_none_or(|r| {
-                            crate::start::RELAX_PUSH_OUT_ITERS.is_multiple_of(r.period)
-                        });
-                        if stride == crate::start::RELAX_PUSH_OUT_ITERS
-                            && complete_block
-                            && coarse_equivalent
-                        {
-                            continue; // Bit-identical to an already refused coarse checkpoint.
-                        }
-                        let mut start = scene.start.clone();
-                        start.relaxed = positions.clone();
-                        start.relax_iterations = iterations;
-                        start
-                            .block_p95
-                            .truncate(iterations / crate::start::RELAX_ITERS);
-                        if !complete_block {
-                            let strain: Vec<_> =
-                                crate::start::edge_strain(&positions, &scene.mesh.verts2d, &plain)
-                                    .into_iter()
-                                    .map(f64::abs)
-                                    .collect();
-                            start.block_p95.push(if strain.is_empty() {
-                                0.0
-                            } else {
-                                ftx_core::np::percentile(&strain, 95.0)
-                            });
-                        }
-                        if let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
-                            && admit(&candidate).is_ok()
-                        {
-                            candidate.start_backtracked_from = Some(rejected);
-                            replacement = Some(candidate);
-                        }
-                    }
-                    if replacement.is_some() {
-                        break;
-                    }
-                }
-                if let Some(candidate) = replacement {
+                let mut rebuild = |start: &StartState| {
+                    let candidate = build(scene.mesh.clone(), Some(start.clone()))?;
+                    admit(&candidate)?;
+                    Ok(candidate)
+                };
+                let replacement = earlier_relaxed_start(
+                    &scene.mesh,
+                    &scene.start,
+                    &tree,
+                    options.start_self_repulsion,
+                    &mut rebuild,
+                )?;
+                if let Some((_, mut candidate)) = replacement {
+                    candidate.start_backtracked_from = Some(rejected);
                     scene = candidate;
                 } else if let Some((start, moved, max_mm)) = separated_leg_start(
                     &scene,
                     params.thickness + params.dhat,
                     material.options.spacing * MM,
                     &plain,
-                ) && let Ok(mut candidate) = build(scene.mesh.clone(), Some(start))
-                    && admit(&candidate).is_ok()
-                {
-                    candidate.start_backtracked_from = scene.start_backtracked_from;
-                    candidate.start_leg_separation = Some((moved, max_mm));
-                    scene = candidate;
+                ) {
+                    match rebuild(&start) {
+                        Ok(mut candidate) => {
+                            candidate.start_backtracked_from = scene.start_backtracked_from;
+                            candidate.start_leg_separation = Some((moved, max_mm));
+                            scene = candidate;
+                        }
+                        Err(refusal)
+                            if matches!(
+                                refusal.code,
+                                RefusalCode::IntersectingStart | RefusalCode::IntersectingTrajectory
+                            ) => {}
+                        Err(refusal) => return Err(refusal),
+                    }
                 }
             }
             Err(e) => return Err(e),
@@ -1734,6 +1689,12 @@ fn earlier_relaxed_start<T>(
             if complete_block {
                 blocks.push(p95);
             }
+            if stride == crate::start::RELAX_PUSH_OUT_ITERS
+                && complete_block
+                && repulsion.is_none_or(|r| stride.is_multiple_of(r.period))
+            {
+                continue; // The identical complete-block state already failed contact admission.
+            }
             let mut candidate = source.clone();
             candidate.relaxed = positions.clone();
             candidate.relax_iterations = iterations;
@@ -1743,7 +1704,11 @@ fn earlier_relaxed_start<T>(
             }
             match admit(&candidate) {
                 Ok(result) => replacement = Some((candidate, result)),
-                Err(refusal) if refusal.code == RefusalCode::IntersectingStart => {}
+                Err(refusal)
+                    if matches!(
+                        refusal.code,
+                        RefusalCode::IntersectingStart | RefusalCode::IntersectingTrajectory
+                    ) => {}
                 Err(refusal) => return Err(refusal),
             }
         }
@@ -3820,6 +3785,132 @@ mod grain_tests {
         assert!(none.is_none());
         assert_eq!(source.relax_iterations, 200);
         assert_eq!(source.block_p95, vec![9.0]);
+    }
+
+    #[test]
+    fn contact_start_recovery_continues_after_display_crossings() {
+        let (mesh, mut source, _, _, _, tree) = body_start_recovery_fixture();
+        source.relax_iterations = 600;
+        source.block_p95 = vec![9.0; 3];
+        let mut visited = Vec::new();
+        let (accepted, ()) = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
+            visited.push(candidate.relax_iterations);
+            if candidate
+                .relax_iterations
+                .is_multiple_of(crate::start::RELAX_ITERS)
+            {
+                Err(Refusal::new(
+                    RefusalCode::IntersectingTrajectory,
+                    "the displayed body rejects the complete-block candidate",
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(&visited[..2], &[200, 400]);
+        assert_eq!(accepted.relax_iterations, 575);
+        assert_eq!(accepted.block_p95.len(), 3);
+        assert!(accepted.block_p95.iter().all(|p95| *p95 < 1e-12));
+        assert_eq!(source.relax_iterations, 600);
+        assert_eq!(source.block_p95, vec![9.0; 3]);
+    }
+
+    #[test]
+    fn contact_start_recovery_never_hides_a_refusal_behind_an_incumbent() {
+        let (mesh, mut source, _, _, _, tree) = body_start_recovery_fixture();
+        source.relax_iterations = 600;
+        source.block_p95 = vec![9.0; 3];
+        for code in [
+            RefusalCode::OutOfRange,
+            RefusalCode::BudgetExceeded,
+            RefusalCode::InvalidDocument,
+            RefusalCode::NonFinite,
+        ] {
+            let mut visited = Vec::new();
+            let refusal = earlier_relaxed_start(&mesh, &source, &tree, None, |candidate| {
+                visited.push(candidate.relax_iterations);
+                if candidate.relax_iterations == 200 {
+                    Ok(())
+                } else {
+                    Err(Refusal::new(code, "independent source or work refusal"))
+                }
+            })
+            .unwrap_err();
+            assert_eq!(refusal.code, code);
+            assert_eq!(visited, vec![200, 400]);
+        }
+        assert_eq!(source.relax_iterations, 600);
+        assert_eq!(source.block_p95, vec![9.0; 3]);
+    }
+
+    #[test]
+    fn contact_start_recovery_records_actual_nondivisor_repulsion_receipts() {
+        let (mesh, mut source, _, _, _, tree) = body_start_recovery_fixture();
+        source.presewn = vec![
+            Vec3::new(0.01, 0.01, 0.07),
+            Vec3::new(0.03, 0.01, 0.07),
+            Vec3::new(0.01, 0.03, 0.07),
+        ];
+        source.relax_iterations = 600;
+        let repulsion = SelfRepulsionOptions {
+            period: 7,
+            ..SelfRepulsionOptions::default()
+        };
+        let plain = crate::start::face_edges(&mesh.faces);
+        let p95 = |positions: &[Vec3]| {
+            let strain: Vec<_> = crate::start::edge_strain(positions, &mesh.verts2d, &plain)
+                .into_iter()
+                .map(f64::abs)
+                .collect();
+            ftx_core::np::percentile(&strain, 95.0)
+        };
+        let replay = |positions: &[Vec3], count| {
+            crate::start::relax_with_repulsion(
+                &mesh,
+                positions,
+                &source.groups,
+                &tree,
+                count,
+                crate::start::RELAX_CLEARANCE,
+                &source.gather_weights,
+                Some(repulsion),
+            )
+            .unwrap()
+        };
+        let coarse = replay(&source.presewn, crate::start::RELAX_ITERS);
+        let mut fine = source.presewn.clone();
+        let mut expected = Vec::new();
+        for iterations in (25..=575).step_by(25) {
+            fine = replay(&fine, crate::start::RELAX_PUSH_OUT_ITERS);
+            if iterations % crate::start::RELAX_ITERS == 0 || iterations == 575 {
+                expected.push(p95(&fine));
+            }
+        }
+        assert_ne!(p95(&coarse), expected[0], "the two schedules must differ");
+        source.block_p95 = vec![p95(&coarse); 3];
+        let (accepted, ()) =
+            earlier_relaxed_start(&mesh, &source, &tree, Some(repulsion), |candidate| {
+                if candidate
+                    .relax_iterations
+                    .is_multiple_of(crate::start::RELAX_ITERS)
+                {
+                    Err(Refusal::new(
+                        RefusalCode::IntersectingTrajectory,
+                        "coarse display crossing",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted.relax_iterations, 575);
+        assert_eq!(accepted.relaxed, fine);
+        assert_eq!(accepted.block_p95, expected);
+        assert_eq!(accepted.groups, source.groups);
+        assert_eq!(accepted.gather_weights, source.gather_weights);
     }
 
     fn two_panel_cylinder_scene_inputs() -> (Pattern, Vec<Vec3>, Vec<[usize; 3]>) {
