@@ -1334,6 +1334,73 @@ fn add_casing_windows(
     report["elastic_observation_windows"] = json!(windows);
 }
 
+/// Record start-state repair receipts and advisory flags without clobbering an earlier repair when
+/// both checkpoint backtracking and opposing-leg separation ran on the same start.
+fn add_start_repair(
+    report: &mut serde_json::Map<String, Value>,
+    backtracked_from: Option<usize>,
+    accepted_relax_iters: usize,
+    leg_separation: Option<(usize, f64)>,
+) {
+    let backtrack_receipt = backtracked_from.map(|original| {
+        json!({
+            "basis": "earlier_contact_clear_relaxation",
+            "rejected_relax_iters": original,
+            "accepted_relax_iters": accepted_relax_iters,
+        })
+    });
+    let leg_receipt = leg_separation.map(|(moved, max_mm)| {
+        json!({
+            "basis": "opposing_leg_placement",
+            "moved_welded_vertices": moved,
+            "maximum_displacement_mm": max_mm,
+        })
+    });
+    match (backtrack_receipt, leg_receipt) {
+        (None, None) => {}
+        (Some(receipt), None) => {
+            report.insert("start_repair".into(), receipt);
+        }
+        (None, Some(receipt)) => {
+            report.insert("start_repair".into(), receipt);
+        }
+        (Some(backtrack), Some(leg)) => {
+            let (Some(original), Some((moved, max_mm))) = (backtracked_from, leg_separation) else {
+                unreachable!()
+            };
+            report.insert(
+                "start_repair".into(),
+                json!({
+                    "basis": "earlier_contact_clear_relaxation_and_opposing_leg_placement",
+                    "rejected_relax_iters": original,
+                    "accepted_relax_iters": accepted_relax_iters,
+                    "moved_welded_vertices": moved,
+                    "maximum_displacement_mm": max_mm,
+                    "steps": [backtrack, leg],
+                }),
+            );
+        }
+    }
+    if backtracked_from.is_some() {
+        report
+            .get_mut("flags")
+            .and_then(Value::as_array_mut)
+            .expect("metrics flags exist")
+            .push(json!(
+                "start restored to an earlier contact-clear relaxation checkpoint"
+            ));
+    }
+    if leg_separation.is_some() {
+        report
+            .get_mut("flags")
+            .and_then(Value::as_array_mut)
+            .expect("metrics flags exist")
+            .push(json!(
+                "opposing leg panels separated in the starting placement"
+            ));
+    }
+}
+
 fn add_run_fields(
     report: &mut Value,
     scene: &Scene,
@@ -1425,35 +1492,12 @@ fn add_run_fields(
         o.insert("gather_relief".into(), json!(bands));
     }
     o.insert("relax_iters".into(), json!(scene.start.relax_iterations));
-    if let Some(original) = scene.start_backtracked_from {
-        o.insert(
-            "start_repair".into(),
-            json!({
-                "basis":"earlier_contact_clear_relaxation",
-                "rejected_relax_iters":original,
-                "accepted_relax_iters":scene.start.relax_iterations,
-            }),
-        );
-        o.get_mut("flags")
-            .and_then(Value::as_array_mut)
-            .expect("metrics flags exist")
-            .push(json!(
-                "start restored to an earlier contact-clear relaxation checkpoint"
-            ));
-    }
-    if let Some((moved, max_mm)) = scene.start_leg_separation {
-        o.insert(
-            "start_repair".into(),
-            json!({"basis":"opposing_leg_placement","moved_welded_vertices":moved,
-                "maximum_displacement_mm":max_mm}),
-        );
-        o.get_mut("flags")
-            .and_then(Value::as_array_mut)
-            .expect("metrics flags exist")
-            .push(json!(
-                "opposing leg panels separated in the starting placement"
-            ));
-    }
+    add_start_repair(
+        o,
+        scene.start_backtracked_from,
+        scene.start.relax_iterations,
+        scene.start_leg_separation,
+    );
     o.insert(
         "frames".into(),
         json!({"sew": opts.sew_steps, "drape": opts.drape_steps}),
@@ -2211,6 +2255,81 @@ mod self_contact_tests {
         assert!(
             max_diff < 1e-4,
             "AdaptiveIlu and exact ProjectedNewton diverged at 1 ms rho_inf=0.8: max_diff={max_diff}"
+        );
+    }
+
+    #[test]
+    fn start_repair_preserves_single_schemas_and_retains_both_when_combined() {
+        let mut none = json!({"flags": []});
+        add_start_repair(none.as_object_mut().unwrap(), None, 200, None);
+        assert!(none.get("start_repair").is_none());
+        assert_eq!(none["flags"], json!([]));
+
+        let mut backtrack_only = json!({"flags": []});
+        add_start_repair(
+            backtrack_only.as_object_mut().unwrap(),
+            Some(600),
+            400,
+            None,
+        );
+        assert_eq!(
+            backtrack_only["start_repair"],
+            json!({
+                "basis": "earlier_contact_clear_relaxation",
+                "rejected_relax_iters": 600,
+                "accepted_relax_iters": 400,
+            })
+        );
+        assert_eq!(
+            backtrack_only["flags"],
+            json!(["start restored to an earlier contact-clear relaxation checkpoint"])
+        );
+
+        let mut leg_only = json!({"flags": []});
+        add_start_repair(
+            leg_only.as_object_mut().unwrap(),
+            None,
+            200,
+            Some((14, 3.25)),
+        );
+        assert_eq!(
+            leg_only["start_repair"],
+            json!({
+                "basis": "opposing_leg_placement",
+                "moved_welded_vertices": 14,
+                "maximum_displacement_mm": 3.25,
+            })
+        );
+        assert_eq!(
+            leg_only["flags"],
+            json!(["opposing leg panels separated in the starting placement"])
+        );
+
+        let mut combined = json!({"flags": []});
+        add_start_repair(
+            combined.as_object_mut().unwrap(),
+            Some(600),
+            400,
+            Some((14, 3.25)),
+        );
+        assert_eq!(
+            combined["start_repair"]["basis"],
+            "earlier_contact_clear_relaxation_and_opposing_leg_placement"
+        );
+        assert_eq!(combined["start_repair"]["rejected_relax_iters"], 600);
+        assert_eq!(combined["start_repair"]["accepted_relax_iters"], 400);
+        assert_eq!(combined["start_repair"]["moved_welded_vertices"], 14);
+        assert_eq!(combined["start_repair"]["maximum_displacement_mm"], 3.25);
+        assert_eq!(
+            combined["start_repair"]["steps"],
+            json!([backtrack_only["start_repair"], leg_only["start_repair"],])
+        );
+        assert_eq!(
+            combined["flags"],
+            json!([
+                "start restored to an earlier contact-clear relaxation checkpoint",
+                "opposing leg panels separated in the starting placement",
+            ])
         );
     }
 }

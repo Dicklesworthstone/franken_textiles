@@ -1338,6 +1338,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         &out,
     )?;
 
+    let arms_note = pose.arm_pose.map_or_else(String::new, |arms| {
+        format!(
+            "; arms L {}°/R {}°",
+            ftx_export::text::fnum(arms.left_abduction_deg, 2),
+            ftx_export::text::fnum(arms.right_abduction_deg, 2),
+        )
+    });
     let skinning_note = if skinning.is_lbs() {
         String::new()
     } else {
@@ -1354,7 +1361,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         format!("; shading {}", shading.name())
     };
     let mut text = format!(
-        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}{skinning_note}{hands_note}{shading_note}\n",
+        "{} vertices at {spacing} mm; start strain p95 {:.3} after {} iterations (target {RELAX_TARGET_P95}); inside body: wrap {}, start {}{arms_note}{skinning_note}{hands_note}{shading_note}\n",
         report["vertices"],
         report["start"]["plain_edge_strain_p95"]
             .as_f64()

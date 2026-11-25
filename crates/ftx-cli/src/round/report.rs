@@ -458,6 +458,23 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
             } else if let Some(legs) = legs {
                 let _ = write!(out, " Leg posture: {}.", xml_escape(legs));
             }
+            let arm_pair = |v: &Value| {
+                let arms = v.as_object()?;
+                let l = arms
+                    .get("left_abduction_deg")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite())?;
+                let r = arms
+                    .get("right_abduction_deg")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite())?;
+                Some((l, r))
+            };
+            if let Some((l, r)) =
+                arm_pair(&sim["arm_pose"]).or_else(|| arm_pair(&sim["body"]["arm_pose"]))
+            {
+                let _ = write!(out, " Arm abduction: L {}°, R {}°.", fnum(l, 2), fnum(r, 2));
+            }
             if let Some(skinning) = sim["body"]["skinning"].as_str() {
                 let _ = write!(out, " Skinning: {}.", xml_escape(skinning));
             }
@@ -494,6 +511,26 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 .filter(|s| *s != "backward_euler")
             {
                 let _ = write!(out, " Relaxation integration: {}.", xml_escape(scheme));
+            }
+            if let Some(model) = sim["bending_history"]["model"].as_str() {
+                let _ = write!(out, " Bending plasticity: {}", xml_escape(model));
+                if let Some(j) = sim["bending_history"]["plastic_dissipation_j"]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                {
+                    let _ = write!(out, " ({j:.3e} J)");
+                }
+                out.push('.');
+            }
+            if let Some(model) = sim["membrane_plasticity_history"]["model"].as_str() {
+                let _ = write!(out, " Membrane plasticity: {}", xml_escape(model));
+                if let Some(j) = sim["membrane_plasticity_history"]["plastic_dissipation_j"]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                {
+                    let _ = write!(out, " ({j:.3e} J)");
+                }
+                out.push('.');
             }
             if let Some(damage_model) = sim["membrane_plasticity_history"]["damage_model"].as_str()
             {
@@ -691,6 +728,47 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 let _ = write!(
                     out,
                     " Time subdivision: {subdivided}/{nominal} intervals subdivided ({accepted} substeps, {trials} trials)."
+                );
+            }
+            if let Some(repair) = sim["start_repair"].as_object() {
+                let mut parts = Vec::new();
+                if let (Some(rej), Some(acc)) = (
+                    repair.get("rejected_relax_iters").and_then(Value::as_u64),
+                    repair.get("accepted_relax_iters").and_then(Value::as_u64),
+                ) {
+                    parts.push(format!("earlier checkpoint ({rej} → {acc} iters)"));
+                }
+                if let Some(moved) = repair.get("moved_welded_vertices").and_then(Value::as_u64) {
+                    let max_note = repair
+                        .get("maximum_displacement_mm")
+                        .and_then(Value::as_f64)
+                        .filter(|v| v.is_finite())
+                        .map(|mm| format!(", max {} mm", fnum(mm, 2)))
+                        .unwrap_or_default();
+                    parts.push(format!(
+                        "opposing leg separation ({moved} vertices{max_note})"
+                    ));
+                }
+                if !parts.is_empty() {
+                    let _ = write!(out, " Start repair: {}.", xml_escape(&parts.join("; ")));
+                } else if let Some(basis) = repair.get("basis").and_then(Value::as_str) {
+                    let _ = write!(out, " Start repair: {}.", xml_escape(basis));
+                }
+            }
+            if let Some(hold) = sim["elastic_hold_window"].as_object()
+                && let Some(steps) = hold
+                    .get("requested_steps")
+                    .and_then(Value::as_u64)
+                    .filter(|&n| n > 0)
+            {
+                let status = hold
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let _ = write!(
+                    out,
+                    " Elastic hold window: {steps} step(s) ({}).",
+                    xml_escape(status)
                 );
             }
             out.push_str("</p>");
@@ -1173,5 +1251,80 @@ mod tests {
         assert!(ref_html.contains(
             "<h4>Static equilibrium comparison (frictionless)</h4><p>Status: refused — history &lt;law&gt; refused. Dynamic trajectory and flags remain authoritative.</p>"
         ));
+    }
+
+    #[test]
+    fn drape_summary_shows_arm_pose_plasticity_start_repair_and_elastic_hold_when_present() {
+        let default_entry = json!({
+            "round": 0,
+            "sim": {
+                "settled": true,
+                "self_contact": {"enabled": true},
+                "elastic_hold_window": {"requested_steps": 0, "status": "not_requested"},
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let default_html = render(Path::new("."), &[default_entry]).unwrap();
+        assert!(!default_html.contains("Arm abduction:"));
+        assert!(!default_html.contains("Bending plasticity:"));
+        assert!(!default_html.contains("Membrane plasticity:"));
+        assert!(!default_html.contains("Start repair:"));
+        assert!(!default_html.contains("Elastic hold window:"));
+
+        let rich = json!({
+            "round": 1,
+            "sim": {
+                "settled": true,
+                "self_contact": {"enabled": true},
+                "arm_pose": {"left_abduction_deg": 20.0, "right_abduction_deg": 72.5},
+                "bending_history": {
+                    "model": "orthotropic_bending_plasticity/<1>",
+                    "plastic_dissipation_j": 0.0025
+                },
+                "membrane_plasticity_history": {
+                    "model": "hill48_membrane_plasticity/1",
+                    "plastic_dissipation_j": 0.005
+                },
+                "start_repair": {
+                    "basis": "earlier_contact_clear_relaxation_and_opposing_leg_placement",
+                    "rejected_relax_iters": 600,
+                    "accepted_relax_iters": 400,
+                    "moved_welded_vertices": 14,
+                    "maximum_displacement_mm": 3.25
+                },
+                "elastic_hold_window": {
+                    "requested_steps": 6,
+                    "status": "available"
+                },
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let rich_html = render(Path::new("."), &[rich]).unwrap();
+        assert!(rich_html.contains("Arm abduction: L 20°, R 72.5°."));
+        assert!(rich_html.contains(
+            "Bending plasticity: orthotropic_bending_plasticity/&lt;1&gt; (2.500e-3 J)."
+        ));
+        assert!(
+            rich_html.contains("Membrane plasticity: hill48_membrane_plasticity/1 (5.000e-3 J).")
+        );
+        assert!(rich_html.contains(
+            "Start repair: earlier checkpoint (600 → 400 iters); opposing leg separation (14 vertices, max 3.25 mm)."
+        ));
+        assert!(rich_html.contains("Elastic hold window: 6 step(s) (available)."));
+
+        // Body-nested arm_pose fallback (e.g. failed round records) is also surfaced cleanly.
+        let nested_arms = json!({
+            "round": 2,
+            "sim": {
+                "settled": false,
+                "body": {"arm_pose": {"left_abduction_deg": 15.0, "right_abduction_deg": 45.0}},
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let nested_html = render(Path::new("."), &[nested_arms]).unwrap();
+        assert!(nested_html.contains("Arm abduction: L 15°, R 45°."));
     }
 }

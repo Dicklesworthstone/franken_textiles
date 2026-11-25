@@ -256,13 +256,29 @@ impl<'a, 'body> Session<'a, 'body> {
             }
             ftx_core::intersection::validate_mesh(vertices, triangles)?;
         }
-        Refusal::finite("scenario arm angle", body.arm_deg)?;
-        let body_sha256 = if let Some(arms) = body.arm_pose {
-            arms.validate()?;
-            hash(&(body.collision, body.display, body.arm_deg, arms))?
-        } else {
-            // Preserve the established body/scenario identity when independent arms are omitted.
-            hash(&(body.collision, body.display, body.arm_deg))?
+        let body_sha256 = match body.arm_pose {
+            Some(arms) => {
+                arms.validate()?;
+                if arms.left_abduction_deg == arms.right_abduction_deg {
+                    // Equal independent arms produce the exact same symmetric posed body as
+                    // `arm_deg`; preserve the matching legacy digest independent of any overridden
+                    // fallback angle.
+                    hash(&(body.collision, body.display, arms.left_abduction_deg + 0.0))?
+                } else {
+                    // Asymmetric independent arms override `body.arm_deg`; bind the actual pair
+                    // rather than the ignored fallback angle, canonicalizing signed zero.
+                    let canonical = ftx_body::drape::ArmPose {
+                        left_abduction_deg: arms.left_abduction_deg + 0.0,
+                        right_abduction_deg: arms.right_abduction_deg + 0.0,
+                    };
+                    hash(&(body.collision, body.display, canonical))?
+                }
+            }
+            None => {
+                Refusal::finite("scenario arm angle", body.arm_deg)?;
+                // Preserve the established body/scenario identity when independent arms are omitted.
+                hash(&(body.collision, body.display, body.arm_deg + 0.0))?
+            }
         };
         let scenario_sha256 = hash(&(scenario, &body_sha256))?;
         Ok(Self {
@@ -808,5 +824,157 @@ mod tests {
         assert!(scenario.validate().is_err());
         scenario.motion.as_mut().unwrap().air_velocity_schedule_m_s = None;
         scenario.validate().unwrap();
+    }
+
+    #[test]
+    fn session_body_identity_binds_actual_arm_pose_and_ignores_overridden_fallback_angle() {
+        use crate::start::PartFrame;
+        use ftx_body::drape::ArmPose;
+        use ftx_core::Vec3;
+
+        struct StubFrames;
+        impl crate::scene::PartFrames for StubFrames {
+            fn frame(&self, _: &str) -> Option<PartFrame> {
+                None
+            }
+            fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+                None
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                0.0
+            }
+        }
+
+        let scenario: Scenario = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-scenario.json"
+        ))
+        .unwrap();
+        let verts = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.1, 0.0, 0.0),
+            Vec3::new(0.0, 0.1, 0.0),
+        ];
+        let tris = [[0, 1, 2]];
+        let frames = StubFrames;
+        let make_body = |arm_deg, arm_pose| DrapeBody {
+            frames: &frames,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg,
+            arm_pose,
+        };
+
+        let legacy_35 = Session::new(&scenario, &make_body(35.0, None))
+            .unwrap()
+            .descriptor();
+        let equal_35 = Session::new(
+            &scenario,
+            &make_body(
+                50.0,
+                Some(ArmPose {
+                    left_abduction_deg: 35.0,
+                    right_abduction_deg: 35.0,
+                }),
+            ),
+        )
+        .unwrap()
+        .descriptor();
+        assert_eq!(
+            equal_35["body_geometry_sha256"],
+            legacy_35["body_geometry_sha256"]
+        );
+        assert_eq!(equal_35["scenario_sha256"], legacy_35["scenario_sha256"]);
+
+        let asym_a = Session::new(
+            &scenario,
+            &make_body(
+                35.0,
+                Some(ArmPose {
+                    left_abduction_deg: 20.0,
+                    right_abduction_deg: 80.0,
+                }),
+            ),
+        )
+        .unwrap()
+        .descriptor();
+        let asym_b = Session::new(
+            &scenario,
+            &make_body(
+                50.0,
+                Some(ArmPose {
+                    left_abduction_deg: 20.0,
+                    right_abduction_deg: 80.0,
+                }),
+            ),
+        )
+        .unwrap()
+        .descriptor();
+        let asym_swapped = Session::new(
+            &scenario,
+            &make_body(
+                35.0,
+                Some(ArmPose {
+                    left_abduction_deg: 80.0,
+                    right_abduction_deg: 20.0,
+                }),
+            ),
+        )
+        .unwrap()
+        .descriptor();
+        assert_eq!(
+            asym_a["body_geometry_sha256"],
+            asym_b["body_geometry_sha256"]
+        );
+        let asym_zero = Session::new(
+            &scenario,
+            &make_body(
+                35.0,
+                Some(ArmPose {
+                    left_abduction_deg: 0.0,
+                    right_abduction_deg: 80.0,
+                }),
+            ),
+        )
+        .unwrap()
+        .descriptor();
+        let asym_neg_zero = Session::new(
+            &scenario,
+            &make_body(
+                35.0,
+                Some(ArmPose {
+                    left_abduction_deg: -0.0,
+                    right_abduction_deg: 80.0,
+                }),
+            ),
+        )
+        .unwrap()
+        .descriptor();
+        assert_eq!(
+            asym_zero["body_geometry_sha256"],
+            asym_neg_zero["body_geometry_sha256"]
+        );
+        assert_ne!(
+            asym_a["body_geometry_sha256"],
+            legacy_35["body_geometry_sha256"]
+        );
+        assert_ne!(
+            asym_a["body_geometry_sha256"],
+            asym_swapped["body_geometry_sha256"]
+        );
+
+        assert!(Session::new(&scenario, &make_body(f64::NAN, None)).is_err());
+        assert!(
+            Session::new(
+                &scenario,
+                &make_body(
+                    35.0,
+                    Some(ArmPose {
+                        left_abduction_deg: -1.0,
+                        right_abduction_deg: 35.0,
+                    })
+                )
+            )
+            .is_err()
+        );
     }
 }

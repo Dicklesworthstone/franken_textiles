@@ -1673,6 +1673,13 @@ fn cmd_drape_bound(
     if !hands.is_wrist() {
         text.push_str(&format!("hand collider: {}\n", hands.as_str()));
     }
+    if let Some(arms) = pose.arm_pose {
+        text.push_str(&format!(
+            "arm abduction: L {}°, R {}°\n",
+            ftx_export::text::fnum(arms.left_abduction_deg, 2),
+            ftx_export::text::fnum(arms.right_abduction_deg, 2),
+        ));
+    }
     append_drape_constitutive_summary(&report, Some(&mut text), None);
     if let Some(equilibrium) = report.get("static_equilibrium") {
         if equilibrium["status"] == "available" {
@@ -1744,6 +1751,14 @@ fn append_drape_constitutive_summary(
     let scheme = report["membrane_history"]["integration"]
         .as_str()
         .filter(|s| *s != "backward_euler");
+    let bending_model = report["bending_history"]["model"].as_str();
+    let bending_j = report["bending_history"]["plastic_dissipation_j"]
+        .as_f64()
+        .filter(|v| v.is_finite());
+    let membrane_model = report["membrane_plasticity_history"]["model"].as_str();
+    let membrane_j = report["membrane_plasticity_history"]["plastic_dissipation_j"]
+        .as_f64()
+        .filter(|v| v.is_finite());
     let damage_model = report["membrane_plasticity_history"]["damage_model"].as_str();
     let damage_j = report["membrane_plasticity_history"]["damage_dissipation_j"]
         .as_f64()
@@ -1751,6 +1766,18 @@ fn append_drape_constitutive_summary(
     if let Some(text) = text {
         if let Some(scheme) = scheme {
             text.push_str(&format!("relaxation integration: {scheme}\n"));
+        }
+        if let Some(model) = bending_model {
+            match bending_j {
+                Some(j) => text.push_str(&format!("bending plasticity: {model} ({j:.3e} J)\n")),
+                None => text.push_str(&format!("bending plasticity: {model}\n")),
+            }
+        }
+        if let Some(model) = membrane_model {
+            match membrane_j {
+                Some(j) => text.push_str(&format!("membrane plasticity: {model} ({j:.3e} J)\n")),
+                None => text.push_str(&format!("membrane plasticity: {model}\n")),
+            }
         }
         if let Some(model) = damage_model {
             match damage_j {
@@ -1762,6 +1789,20 @@ fn append_drape_constitutive_summary(
     if let Some(out) = result {
         if let Some(scheme) = scheme {
             out["relaxation_integration"] = json!(scheme);
+        }
+        if let Some(model) = bending_model {
+            let mut bp = json!({"model": model});
+            if let Some(j) = bending_j {
+                bp["plastic_dissipation_j"] = json!(j);
+            }
+            out["bending_plasticity"] = bp;
+        }
+        if let Some(model) = membrane_model {
+            let mut mp = json!({"model": model});
+            if let Some(j) = membrane_j {
+                mp["plastic_dissipation_j"] = json!(j);
+            }
+            out["membrane_plasticity"] = mp;
         }
         if let Some(model) = damage_model {
             let mut dmg = json!({"damage_model": model});
@@ -2579,6 +2620,49 @@ mod tests {
             "isotropic_accumulated_damage/1"
         );
         assert_eq!(opt_json["membrane_damage"]["damage_dissipation_j"], 0.00125);
+        assert!(opt_json.get("bending_plasticity").is_none());
+        assert!(opt_json.get("membrane_plasticity").is_none());
+
+        let mut plastic_text = String::new();
+        let mut plastic_json = json!({});
+        append_drape_constitutive_summary(
+            &json!({
+                "bending_history": {
+                    "model": "orthotropic_bending_plasticity/1",
+                    "plastic_dissipation_j": 0.0025
+                },
+                "membrane_plasticity_history": {
+                    "model": "hill48_membrane_plasticity/1",
+                    "plastic_dissipation_j": 0.005
+                }
+            }),
+            Some(&mut plastic_text),
+            Some(&mut plastic_json),
+        );
+        assert!(
+            plastic_text
+                .contains("bending plasticity: orthotropic_bending_plasticity/1 (2.500e-3 J)\n")
+        );
+        assert!(
+            plastic_text
+                .contains("membrane plasticity: hill48_membrane_plasticity/1 (5.000e-3 J)\n")
+        );
+        assert_eq!(
+            plastic_json["bending_plasticity"]["model"],
+            "orthotropic_bending_plasticity/1"
+        );
+        assert_eq!(
+            plastic_json["bending_plasticity"]["plastic_dissipation_j"],
+            0.0025
+        );
+        assert_eq!(
+            plastic_json["membrane_plasticity"]["model"],
+            "hill48_membrane_plasticity/1"
+        );
+        assert_eq!(
+            plastic_json["membrane_plasticity"]["plastic_dissipation_j"],
+            0.005
+        );
     }
 
     #[test]
