@@ -559,7 +559,7 @@ fn summarize<'a>(
             }
         }
         let cut = finite_sum(route.runs.iter().map(|run| run.cut_length_mm))?;
-        let travel = route.checked_travel_length()?;
+        let travel = route.checked_policy_travel_length(policy)?;
         let (cutting_seconds, travel_seconds) = if policy.machine.motion_profile.is_some() {
             (
                 accelerated_cutting_seconds,
@@ -577,23 +577,6 @@ fn summarize<'a>(
         };
         if paths != expected
             || paths.is_empty()
-            || route
-                .drills
-                .first()
-                .map(|run| run.travel_mm[0])
-                .or_else(|| route.runs.first().map(|run| run.travel_mm[0]))
-                != Some(policy.machine.start_mm)
-            || route.return_mm.is_some() != policy.machine.return_to_start
-            || (policy.travel_routing.is_none()
-                && (!route.return_waypoints_mm.is_empty()
-                    || route
-                        .drills
-                        .iter()
-                        .any(|run| !run.travel_waypoints_mm.is_empty())
-                    || route
-                        .runs
-                        .iter()
-                        .any(|run| !run.travel_waypoints_mm.is_empty())))
             || !near(cut, route.cut_length_mm)
             || !near(travel, route.travel_length_mm)
             || !near(cutting_seconds, route.cutting_seconds)

@@ -106,7 +106,7 @@ fn routed_preview<'a>(
     if points > 1_000_000 {
         return Err(preview_budget());
     }
-    route.checked_travel_length()?;
+    route.checked_policy_travel_length(policy)?;
     if route
         .drills
         .iter()

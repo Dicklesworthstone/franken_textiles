@@ -1018,9 +1018,25 @@ fn nearest_drill_and_path_reorders_exact_source_holes_before_cutting() {
     assert_eq!(value(&plan.rolls), value(&legacy.rolls));
     assert!(ftx_export::cutting::preview::svg(&plan, 0).is_ok());
 
-    let mut tampered = plan;
-    tampered.program.as_mut().unwrap().markers[0].selected.drills[0].drill = 0;
-    assert!(ftx_export::cutting::preview::svg(&tampered, 0).is_err());
+    for defect in 0..6 {
+        let mut tampered = plan.clone();
+        let route = &mut tampered.program.as_mut().unwrap().markers[0].selected;
+        let point = Vec2::new(2., 3.);
+        match defect {
+            0 => route.drills[0].drill = 0,
+            1 => {
+                route.drills[0].travel_mm[0] = point;
+                route.return_mm.as_mut().unwrap()[1] = point;
+            }
+            2 => route.return_mm = None,
+            3 => route.drills[0].travel_waypoints_mm.push(point),
+            4 => route.runs[0].travel_waypoints_mm.push(point),
+            _ => route.return_waypoints_mm.push(point),
+        }
+        // These traversals remain connected, even when their source or machine policy is wrong.
+        assert!(route.checked_travel_length().is_ok());
+        assert!(ftx_export::cutting::preview::svg(&tampered, 0).is_err());
+    }
 
     // Incomplete hole search or incomplete knife search cannot replace the complete incumbent.
     for limit in [1, 6] {

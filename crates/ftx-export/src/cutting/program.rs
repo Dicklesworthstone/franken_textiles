@@ -437,6 +437,33 @@ impl Traversal {
         Ok(())
     }
 
+    /// Retained movement must start and return as declared, and detours need an explicit policy.
+    pub(crate) fn checked_policy_travel_length(&self, policy: &Policy) -> Result<f64, Refusal> {
+        let start = self
+            .drills
+            .first()
+            .map(|run| run.travel_mm[0])
+            .or_else(|| self.runs.first().map(|run| run.travel_mm[0]));
+        if start != Some(policy.machine.start_mm)
+            || self.return_mm.is_some() != policy.machine.return_to_start
+            || (policy.travel_routing.is_none()
+                && (!self.return_waypoints_mm.is_empty()
+                    || self
+                        .drills
+                        .iter()
+                        .any(|run| !run.travel_waypoints_mm.is_empty())
+                    || self
+                        .runs
+                        .iter()
+                        .any(|run| !run.travel_waypoints_mm.is_empty())))
+        {
+            return Err(bad(
+                "knife travel must retain the declared machine start, return policy and routing policy",
+            ));
+        }
+        self.checked_travel_length()
+    }
+
     /// Recompute all retained raised legs, including detours and the final return, in mm.
     /// This checks finite connected coordinates, not source applicability or fixture clearance.
     ///
