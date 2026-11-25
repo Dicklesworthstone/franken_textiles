@@ -189,6 +189,12 @@ factors. No partially completed motion report is returned as a successful result
 retained body-plus-cloth vertex positions. These bound subdivision and output,
 not the wall time of a
 Newton iteration. The solver's existing Newton/friction/PCG policies still apply.
+`intermediate_tol` (default `None`) is an opt-in Newton tolerance, in the units of
+`Solver::tol`, for every substep that ends before the request does; the substep that
+lands on the target always converges to the solver's own `tol`, and the returned solver
+keeps its `tol`. It is a work policy, not a physical parameter: looser intermediate
+solves change the cloth's path and, through friction and buckling, can change where it
+ends. Every substep still passes the same collision checks.
 Contact thickness and cloth material parameters are never relaxed to finish motion.
 `MotionReport.pairs_tested` includes completed initial-contact queries, body-surface
 audits and continuous body/body feature queries as well as cloth swept queries,
@@ -200,8 +206,11 @@ across both feature families; no candidate is dropped when it runs out.
 `tests/moving_contact.rs` covers tunnelling with clear endpoints, co-translation,
 self-contact, candidate/geometry refusals, frictional surface transport, a lifting
 collider with every returned substep rechecked, interior face collapse, body-surface
-intersections at initial/target/intermediate configurations, and rollback after
-accepted internal substeps. Valid shared-edge motion retains exact audit work.
+intersections at initial/target/intermediate configurations, rollback after
+accepted internal substeps, and an intermediate tolerance that loosens only the
+substeps before the target (each sample's last Newton step checked against its own
+bound; invalid tolerances refused with the solver unchanged). Valid shared-edge
+motion retains exact audit work.
 The streamed BVH query also matches exhaustive
 feature enumeration in the contact module's unit test. Existing static contact
 known-answer tests and pinned digest remain unchanged.

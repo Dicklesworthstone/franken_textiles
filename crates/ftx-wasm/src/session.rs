@@ -525,7 +525,7 @@ pub struct SessionSettings {
     /// substep's solve starts with the cloth within this distance moved along with the body. Zero
     /// starts from the cloth at rest ([`advance_body`]).
     pub motion_carry_mm: f64,
-    /// Newton tolerance (m/s) of every move substep but the last
+    /// Newton tolerance (m/s, above 0 and at most 0.1) of every move substep but the last
     /// ([`MotionOptions::intermediate_tol`]); absent keeps the drape's 1e-3 m/s throughout. The
     /// last substep of every move always converges to the drape's tolerance.
     pub motion_intermediate_tol_m_s: Option<f64>,
