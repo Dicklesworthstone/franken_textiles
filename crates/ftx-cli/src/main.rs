@@ -1659,7 +1659,7 @@ fn cmd_drape_bound(
         files.push(("outfit_request.json", pattern_bytes));
     }
     if let Some((selected, snapshot)) = fabric_override.as_ref().zip(snapshot) {
-        selected.save(&out)?;
+        files.extend(selected.entries()?);
         report["effective_pattern_sha256"] = json!(sha256_hex(&snapshot));
         files.push(("effective_pattern.json", snapshot));
     }
@@ -1749,6 +1749,12 @@ fn cmd_drape_bound(
     }
     if let Some(arms) = pose.arm_pose {
         result["arm_pose"] = json!(arms);
+    }
+    if let Some(override_receipt) = report.get("fabric_override") {
+        result["fabric_override"] = override_receipt.clone();
+    }
+    if let Some(hash) = report.get("effective_pattern_sha256") {
+        result["effective_pattern_sha256"] = hash.clone();
     }
     append_drape_constitutive_summary(&report, None, Some(&mut result));
     if let Some(composition) = report.get("outfit") {

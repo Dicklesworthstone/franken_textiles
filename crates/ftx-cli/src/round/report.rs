@@ -191,6 +191,87 @@ fn validation_body(out: &mut String, body: &Value) {
     );
 }
 
+fn material_override(out: &mut String, info: &Value) {
+    let Some(obj) = info.as_object() else {
+        return;
+    };
+    let op = obj.get("operation").and_then(Value::as_str).unwrap_or("");
+    let op_label = match op {
+        "replace_whole_fabric" => "Replace whole fabric",
+        "apply_material_bindings" => "Per-piece material bindings",
+        "" => "Material override",
+        other => other,
+    };
+    let _ = write!(
+        out,
+        "<h3>Material override</h3><p>Operation: {}. Basis: {}. Source: <code>{}</code>.",
+        xml_escape(op_label),
+        cell(&info["basis"]),
+        cell(&info["source"]),
+    );
+    if op == "replace_whole_fabric" {
+        if let Some(label) = info["effective_fabric"]["name"]
+            .as_str()
+            .or_else(|| info["effective_fabric"]["material"]["id"].as_str())
+            .or_else(|| info["effective_fabric"]["id"].as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let _ = write!(out, " Effective fabric: {}.", xml_escape(label));
+        }
+        if let Some(sha) = info["material_sha256"].as_str().filter(|s| !s.is_empty()) {
+            let _ = write!(out, " Material SHA-256: <code>{}</code>.", xml_escape(sha));
+        }
+    } else if op == "apply_material_bindings" {
+        if let Some(pieces) = info["pieces"].as_array() {
+            let explicit = pieces
+                .iter()
+                .filter(|p| p["inherited_default"].as_bool() == Some(false))
+                .count();
+            let _ = write!(
+                out,
+                " Bound pieces: {} ({explicit} explicit override(s)).",
+                pieces.len()
+            );
+        }
+        if let Some(bands) = info["frozen_elastic_casings"]
+            .as_array()
+            .filter(|a| !a.is_empty())
+        {
+            let _ = write!(out, " Frozen elastic casings: {}.", bands.len());
+        }
+        if let Some(sha) = info["bound_pattern_sha256"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+        {
+            let _ = write!(
+                out,
+                " Bound pattern SHA-256: <code>{}</code>.",
+                xml_escape(sha)
+            );
+        }
+    }
+    if let Some(sha) = info["source_sha256"].as_str().filter(|s| !s.is_empty()) {
+        let _ = write!(out, " Source SHA-256: <code>{}</code>.", xml_escape(sha));
+    }
+    out.push_str("</p>");
+    if let Some(note) = info["note"].as_str().filter(|s| !s.is_empty()) {
+        let _ = write!(out, "<p class=\"muted\">{}</p>", xml_escape(note));
+    }
+    if op == "apply_material_bindings" {
+        table(
+            out,
+            "Bound piece materials",
+            &info["pieces"],
+            &[
+                ("piece_id", "Piece"),
+                ("material_id", "Material"),
+                ("inherited_default", "Inherited default"),
+                ("material_sha256", "Material SHA-256"),
+            ],
+        );
+    }
+}
+
 fn round_dir(value: &Value) -> Option<&str> {
     let dir = value.as_str()?;
     let (base, number) = dir.split_once('/')?;
@@ -359,6 +440,8 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 out.push_str("<div class=\"downloads\">");
                 for (name, label) in [
                     ("pattern.json", "Pattern"),
+                    ("fabric_override.json", "Material override receipt"),
+                    ("fabric.source.json", "Material override source"),
                     ("fit_spec.json", "Fit contract"),
                     ("measurements.source.json", "Original evidence"),
                     ("measurements.json", "Fused measurements"),
@@ -373,6 +456,7 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 out.push_str("</div>");
             }
         }
+        material_override(&mut out, &entry["fabric_override"]);
         let ready = &entry["readiness"];
         let _ = write!(
             out,
@@ -1326,5 +1410,111 @@ mod tests {
         });
         let nested_html = render(Path::new("."), &[nested_arms]).unwrap();
         assert!(nested_html.contains("Arm abduction: L 15°, R 45°."));
+    }
+
+    #[test]
+    fn material_override_summary_and_download_links_render_when_present() {
+        let plain = json!({
+            "round": 0,
+            "fabric_override": null
+        });
+        let plain_html = render(Path::new("."), &[plain]).unwrap();
+        assert!(!plain_html.contains("<h3>Material override</h3>"));
+        assert!(!plain_html.contains("Material override receipt"));
+
+        let whole = json!({
+            "round": 1,
+            "fabric_override": {
+                "source": "fabrics/<linen>.json",
+                "source_sha256": "a".repeat(64),
+                "basis": "source_bearing_snapshot",
+                "material_sha256": "b".repeat(64),
+                "effective_fabric": {"name": "Linen <220>"},
+                "operation": "replace_whole_fabric",
+                "note": "No geometry changed <test>."
+            }
+        });
+        let whole_html = render(Path::new("."), &[whole]).unwrap();
+        assert!(whole_html.contains("<h3>Material override</h3>"));
+        assert!(whole_html.contains("Operation: Replace whole fabric."));
+        assert!(whole_html.contains("Basis: source_bearing_snapshot."));
+        assert!(whole_html.contains("Source: <code>fabrics/&lt;linen&gt;.json</code>."));
+        assert!(whole_html.contains("Effective fabric: Linen &lt;220&gt;."));
+        assert!(whole_html.contains(&format!(
+            "Material SHA-256: <code>{}</code>.",
+            "b".repeat(64)
+        )));
+        assert!(whole_html.contains(&format!("Source SHA-256: <code>{}</code>.", "a".repeat(64))));
+        assert!(whole_html.contains("<p class=\"muted\">No geometry changed &lt;test&gt;.</p>"));
+
+        let bindings = json!({
+            "round": 2,
+            "fabric_override": {
+                "source": "bindings.json",
+                "source_sha256": "c".repeat(64),
+                "basis": "source_bearing_snapshot",
+                "operation": "apply_material_bindings",
+                "bound_pattern_sha256": "d".repeat(64),
+                "pieces": [
+                    {
+                        "piece_id": "front",
+                        "material_id": "cotton_poplin",
+                        "inherited_default": true,
+                        "material_sha256": "e".repeat(64)
+                    },
+                    {
+                        "piece_id": "cuff_<L>",
+                        "material_id": "rib_knit",
+                        "inherited_default": false,
+                        "material_sha256": "f".repeat(64)
+                    }
+                ],
+                "frozen_elastic_casings": [{"instance": "waistband"}]
+            }
+        });
+        let bind_html = render(Path::new("."), &[bindings]).unwrap();
+        assert!(bind_html.contains("Operation: Per-piece material bindings."));
+        assert!(bind_html.contains("Bound pieces: 2 (1 explicit override(s))."));
+        assert!(bind_html.contains("Frozen elastic casings: 1."));
+        assert!(bind_html.contains(&format!(
+            "Bound pattern SHA-256: <code>{}</code>.",
+            "d".repeat(64)
+        )));
+        assert!(bind_html.contains("<h3>Bound piece materials</h3>"));
+        assert!(bind_html.contains("<td>cuff_&lt;L&gt;</td><td>rib_knit</td><td>false</td>"));
+
+        // Verify download links appear only when the round directory actually contains those files.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ftx_report_material_override_{}_{stamp}",
+            std::process::id()
+        ));
+        let round_path = dir.join("rounds/001");
+        std::fs::create_dir_all(&round_path).unwrap();
+        std::fs::write(round_path.join("fabric_override.json"), "{}\n").unwrap();
+        std::fs::write(round_path.join("fabric.source.json"), "{}\n").unwrap();
+        let linked = json!({
+            "round": 1,
+            "dir": "rounds/001",
+            "fabric_override": {
+                "source": "custom.json",
+                "basis": "legacy_uncertain",
+                "operation": "replace_whole_fabric"
+            }
+        });
+        let linked_html = render(&dir, &[linked]).unwrap();
+        assert!(
+            linked_html.contains(
+                "<a href=\"rounds/001/fabric_override.json\">Material override receipt</a>"
+            )
+        );
+        assert!(
+            linked_html
+                .contains("<a href=\"rounds/001/fabric.source.json\">Material override source</a>")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

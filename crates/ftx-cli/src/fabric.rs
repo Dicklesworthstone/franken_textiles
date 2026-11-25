@@ -60,9 +60,21 @@ impl Override {
         &self.receipt
     }
 
+    pub(super) fn entries(&self) -> Result<[(&'static str, Vec<u8>); 2], Refusal> {
+        Ok([
+            ("fabric.source.json", self.bytes.clone()),
+            (
+                "fabric_override.json",
+                workspace::json_bytes(&self.receipt)?,
+            ),
+        ])
+    }
+
     pub(super) fn save(&self, dir: &Path) -> Result<(), Refusal> {
-        workspace::write_new(&dir.join("fabric.source.json"), &self.bytes)?;
-        workspace::write_json(&dir.join("fabric_override.json"), &self.receipt)
+        for (name, bytes) in self.entries()? {
+            workspace::write_new(&dir.join(name), &bytes)?;
+        }
+        Ok(())
     }
 }
 
@@ -186,4 +198,31 @@ pub(super) fn load(args: &Args) -> Result<Option<Input>, Refusal> {
         selection: Selection::Fabric(fabric),
         frozen: Override { bytes, receipt },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn override_entries_match_source_bytes_and_pretty_receipt() {
+        let source = br#"{"areal_g_m2":180,"tensile_N_m":900,"bending_Nm":1e-5}"#.to_vec();
+        let receipt = json!({
+            "source": "custom_fabric.json",
+            "source_sha256": sha256_hex(&source),
+            "operation": "replace_whole_fabric",
+            "basis": "legacy_uncertain",
+        });
+        let ov = Override {
+            bytes: source.clone(),
+            receipt: receipt.clone(),
+        };
+        let [src_entry, receipt_entry] = ov.entries().expect("entries serialize");
+        assert_eq!(src_entry.0, "fabric.source.json");
+        assert_eq!(src_entry.1, source);
+        assert_eq!(receipt_entry.0, "fabric_override.json");
+        assert!(receipt_entry.1.ends_with(b"\n"));
+        let parsed: Value = serde_json::from_slice(&receipt_entry.1).expect("valid receipt JSON");
+        assert_eq!(parsed, receipt);
+    }
 }

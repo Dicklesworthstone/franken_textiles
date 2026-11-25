@@ -495,6 +495,22 @@ pub fn drape(
     drape_observed(pattern, fit_spec, body, opts, progress, &mut None)
 }
 
+fn effective_arm_deg(body: &DrapeBody) -> Result<f64, Refusal> {
+    if let Some(arms) = body.arm_pose {
+        arms.validate()?;
+        if arms.left_abduction_deg == arms.right_abduction_deg {
+            Ok(arms.left_abduction_deg + 0.0)
+        } else if body.arm_deg.is_finite() && (0.0..=180.0).contains(&body.arm_deg) {
+            Ok(body.arm_deg + 0.0)
+        } else {
+            Ok(0.5 * (arms.left_abduction_deg + arms.right_abduction_deg) + 0.0)
+        }
+    } else {
+        Refusal::finite("arm angle", body.arm_deg)?;
+        Ok(body.arm_deg + 0.0)
+    }
+}
+
 /// [`drape`], and when it refuses once the start state has been admitted, `refused` receives the mesh and
 /// the positions the refusal is about so that the caller can show them: the last accepted state when
 /// sewing, draping or settling refuses (the admitted start if the first sewing step does), or the frame
@@ -512,9 +528,7 @@ pub fn drape_observed(
     refused: &mut Option<RefusedRun>,
 ) -> Result<DrapeRun, Refusal> {
     *refused = None;
-    if let Some(arms) = &body.arm_pose {
-        arms.validate()?;
-    }
+    let arm_deg = effective_arm_deg(body)?;
     let scope = simulation_scope(pattern)?;
     let material = crate::material::resolve(pattern, opts)?;
     let opts = &material.options;
@@ -814,7 +828,7 @@ pub fn drape_observed(
         level_y: &level_y,
         fit_spec,
         spacing: opts.spacing,
-        arm_deg: body.arm_deg,
+        arm_deg,
         arm_pose: body.arm_pose,
     };
     let mut report = metrics(&scene.mesh, &input);
@@ -1658,7 +1672,7 @@ pub fn viewer(
             gating: run.gating(),
             advisory: run.advisory(),
             settled: run.report["settled"].as_bool().unwrap_or(false),
-            arm_deg: body.arm_deg,
+            arm_deg: run.report["arm_deg"].as_f64().unwrap_or(body.arm_deg),
         },
         150,
     );
@@ -2331,5 +2345,74 @@ mod self_contact_tests {
                 "opposing leg panels separated in the starting placement",
             ])
         );
+    }
+
+    #[test]
+    fn drape_validates_arm_deg_and_resolves_symmetric_and_fallback_arm_pose() {
+        let make_body = |arm_deg: f64, arm_pose: Option<ftx_body::drape::ArmPose>| DrapeBody {
+            frames: &LevelFrames,
+            collision: (&[], &[]),
+            display: (&[], &[]),
+            arm_deg,
+            arm_pose,
+        };
+        let pattern = Pattern::new(scope_pattern());
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let body = make_body(bad, None);
+            let err = drape(
+                &pattern,
+                &json!({}),
+                &body,
+                &DrapeOptions::default(),
+                |_| panic!("non-finite arm_deg must refuse before progress or meshing"),
+            )
+            .err()
+            .expect("non-finite arm_deg without arm_pose must refuse");
+            assert_eq!(err.code, RefusalCode::NonFinite);
+            assert!(err.message.contains("arm angle"));
+        }
+
+        // Canonicalizes -0.0 to +0.0 when arm_pose is absent.
+        let zero = effective_arm_deg(&make_body(-0.0, None)).unwrap();
+        assert_eq!(zero.to_bits(), 0.0_f64.to_bits());
+
+        // Symmetric arm_pose overrides fallback arm_deg (even if stale or non-finite).
+        let sym = ftx_body::drape::ArmPose {
+            left_abduction_deg: 35.0,
+            right_abduction_deg: 35.0,
+        };
+        assert_eq!(
+            effective_arm_deg(&make_body(50.0, Some(sym))).unwrap(),
+            35.0
+        );
+        assert_eq!(
+            effective_arm_deg(&make_body(f64::NAN, Some(sym))).unwrap(),
+            35.0
+        );
+
+        // Asymmetric arm_pose keeps a valid fallback arm_deg and falls back to midpoint otherwise.
+        let asym = ftx_body::drape::ArmPose {
+            left_abduction_deg: 20.0,
+            right_abduction_deg: 80.0,
+        };
+        assert_eq!(
+            effective_arm_deg(&make_body(35.0, Some(asym))).unwrap(),
+            35.0
+        );
+        assert_eq!(
+            effective_arm_deg(&make_body(f64::NAN, Some(asym))).unwrap(),
+            50.0
+        );
+        assert_eq!(
+            effective_arm_deg(&make_body(240.0, Some(asym))).unwrap(),
+            50.0
+        );
+
+        // Invalid arm_pose still refuses regardless of fallback arm_deg.
+        let invalid = ftx_body::drape::ArmPose {
+            left_abduction_deg: -5.0,
+            right_abduction_deg: 35.0,
+        };
+        assert!(effective_arm_deg(&make_body(35.0, Some(invalid))).is_err());
     }
 }
