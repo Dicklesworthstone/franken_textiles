@@ -187,20 +187,32 @@ pub fn evaluate_band(ease_mm: i32, sim_report: &Value) -> (Value, String, bool) 
     };
     let lm = &sim_report["landmarks"]["chest"];
     let raw_reading = lm["reading"].as_str().unwrap_or("?");
-    let mean_opt = lm["ring_strain_mean_pct"].as_f64();
-    let shift_opt = lm["ring_shift_mm"].as_f64();
-    let contact_opt = lm["contact_frac"].as_f64();
-    let shift = shift_opt.unwrap_or(0.0).abs();
-
-    let stretched = raw_reading == "TIGHT" && mean_opt.unwrap_or(0.0) > 2.0;
-    let escaped = shift > 15.0 && contact_opt.unwrap_or(1.0) < 0.3;
+    let mean_opt = lm["ring_strain_mean_pct"]
+        .as_f64()
+        .filter(|v| v.is_finite());
+    let shift_opt = lm["ring_shift_mm"].as_f64().filter(|v| v.is_finite());
+    let contact_opt = lm["contact_frac"].as_f64().filter(|v| v.is_finite());
+    // Missing diagnostics are not evidence that a band stayed at its landmark. Require a
+    // complete physical reading before either in-place or escaped behavior can qualify it.
+    let complete = matches!(raw_reading, "EASY" | "SNUG" | "TIGHT")
+        && mean_opt.is_some()
+        && shift_opt.is_some()
+        && contact_opt.is_some_and(|v| (0.0..=1.0).contains(&v));
+    let in_place = shift_opt.is_some_and(|v| v.abs() <= 15.0);
+    let stretched = raw_reading == "TIGHT" && mean_opt.is_some_and(|v| v > 2.0);
+    let escaped = complete
+        && shift_opt.is_some_and(|v| v.abs() > 15.0)
+        && contact_opt.is_some_and(|v| v < 0.3);
     let reading = if escaped { "ESCAPED" } else { raw_reading };
 
-    let good = match expected {
-        "TIGHT" => stretched || escaped,
-        "SNUG_OR_TIGHT" => matches!(reading, "SNUG" | "TIGHT") && shift <= 15.0,
-        _ => matches!(reading, "EASY" | "SNUG") && mean_opt.unwrap_or(9.0) < 1.0 && shift <= 15.0,
-    };
+    let good = complete
+        && match expected {
+            "TIGHT" => stretched || escaped,
+            "SNUG_OR_TIGHT" => matches!(reading, "SNUG" | "TIGHT") && in_place,
+            _ => {
+                matches!(reading, "EASY" | "SNUG") && mean_opt.is_some_and(|v| v < 1.0) && in_place
+            }
+        };
 
     let max_seam_gap_mm = sim_report["seams"].as_object().and_then(|seams| {
         seams
@@ -547,15 +559,20 @@ pub fn check_qualification(
                 "per-piece assemblies require per-piece qualification coverage: rerun `ftx qualify` with this pattern",
             );
         };
-        let piece_records = rec.get("piece_materials").and_then(Value::as_array);
+        let Some(piece_records) = rec.get("piece_materials").and_then(Value::as_array) else {
+            return QualificationStatus::unqualified(
+                "per-piece qualification is missing its material outcomes: rerun `ftx qualify` with this pattern",
+            );
+        };
         for req in required_shas {
+            let mut outcomes = piece_records
+                .iter()
+                .filter(|entry| &entry["material_sha256"] == req);
             let covered = recorded_shas.contains(req)
-                && piece_records.is_none_or(|entries| {
-                    entries.iter().any(|entry| {
-                        &entry["material_sha256"] == req
-                            && entry.get("pass").and_then(Value::as_bool) == Some(true)
-                    })
-                });
+                && outcomes
+                    .next()
+                    .is_some_and(|entry| entry.get("pass").and_then(Value::as_bool) == Some(true))
+                && outcomes.next().is_none();
             if !covered {
                 return QualificationStatus::unqualified(
                     "a piece material or body-contact policy is unqualified or changed since qualification: rerun `ftx qualify` with this pattern, body and fabric",
@@ -882,6 +899,69 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_band_refuses_incomplete_or_nonphysical_readings() {
+        for (ease, reading, mean, shift, contact) in [
+            (-20, "TIGHT", 2.45, -3.2, 0.95),
+            (-20, "EASY", 0.1, 22.0, 0.0),
+            (0, "SNUG", 0.8, -4.0, 0.92),
+            (20, "EASY", 0.2, -2.5, 0.45),
+        ] {
+            let valid = json!({"landmarks":{"chest":{
+                "reading":reading,"ring_strain_mean_pct":mean,
+                "ring_shift_mm":shift,"contact_frac":contact
+            }}});
+            assert!(evaluate_band(ease, &valid).2);
+            for field in ["ring_strain_mean_pct", "ring_shift_mm", "contact_frac"] {
+                let mut missing = valid.clone();
+                missing["landmarks"]["chest"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+                assert!(!evaluate_band(ease, &missing).2, "{ease}: missing {field}");
+                for value in [Value::Null, json!("0"), json!(false), json!([])] {
+                    let mut bad = valid.clone();
+                    bad["landmarks"]["chest"][field] = value;
+                    let (row, _, passed) = evaluate_band(ease, &bad);
+                    assert!(!passed, "{ease}: {bad}");
+                    assert_eq!(row["pass"], false);
+                    assert_eq!(row[field], bad["landmarks"]["chest"][field]);
+                }
+            }
+            for contact in [-0.1, 1.1] {
+                let mut bad = valid.clone();
+                bad["landmarks"]["chest"]["contact_frac"] = json!(contact);
+                assert!(!evaluate_band(ease, &bad).2, "{ease}: {bad}");
+            }
+            for reading in [Value::Null, json!("UNMEASURABLE"), json!("ESCAPED")] {
+                let mut bad = valid.clone();
+                bad["landmarks"]["chest"]["reading"] = reading;
+                assert!(!evaluate_band(ease, &bad).2, "{ease}: {bad}");
+            }
+        }
+    }
+
+    #[test]
+    fn complete_band_readings_preserve_strict_and_inclusive_thresholds() {
+        for (ease, reading, mean, shift, contact, pass) in [
+            (-20, "TIGHT", 2.0, 0.0, 1.0, false),
+            (-20, "TIGHT", 2.01, 0.0, 1.0, true),
+            (-20, "EASY", 0.0, 15.0, 0.0, false),
+            (-20, "EASY", 0.0, 15.1, 0.3, false),
+            (-20, "EASY", 0.0, -15.1, 0.299, true),
+            (0, "SNUG", 0.0, -15.0, 1.0, true),
+            (0, "TIGHT", 2.1, 15.1, 1.0, false),
+            (20, "EASY", 0.999, 15.0, 0.0, true),
+            (20, "SNUG", 1.0, 0.0, 1.0, false),
+        ] {
+            let report = json!({"landmarks":{"chest":{
+                "reading":reading,"ring_strain_mean_pct":mean,
+                "ring_shift_mm":shift,"contact_frac":contact
+            }}});
+            assert_eq!(evaluate_band(ease, &report).2, pass, "{ease}: {report}");
+        }
+    }
+
+    #[test]
     fn qualification_checks_every_condition_in_spec_order() {
         let fab = json!({"areal_g_m2": 260, "tensile_N_m": 8000, "bending_Nm": 3e-5});
         let basis = json!({"body_sha256":"b".repeat(64),"material_sha256":"a".repeat(64)});
@@ -1109,6 +1189,41 @@ mod tests {
         let mut failed_piece = doc.clone();
         failed_piece["piece_materials"][1]["pass"] = json!(false);
         assert!(!check_qualification(Some(Ok(&failed_piece)), "q", "ws", "abc", None, &basis).pass);
+
+        let mut missing = doc.clone();
+        missing.as_object_mut().unwrap().remove("piece_materials");
+        let mut invalid = vec![missing, failed_piece];
+        for outcomes in [
+            Value::Null,
+            json!({}),
+            json!([]),
+            json!([{"material_sha256":m1,"pass":true}]),
+            json!([{"material_sha256":m1,"pass":true},{"material_sha256":m2,"pass":"true"}]),
+            json!([{"material_sha256":m1,"pass":true},{"material_sha256":m2,"pass":true},{"material_sha256":m2,"pass":true}]),
+            json!([{"material_sha256":m1,"pass":true},{"material_sha256":m2,"pass":true},{"material_sha256":m2,"pass":false}]),
+        ] {
+            let mut changed = doc.clone();
+            changed["piece_materials"] = outcomes;
+            invalid.push(changed);
+        }
+        for invalid in invalid {
+            let qual = check_qualification(Some(Ok(&invalid)), "q", "ws", "abc", None, &basis);
+            assert!(!qual.pass && !qual.collider_pass, "{invalid}");
+            let tight = "chest: fabric stretched around the body (mean 2.3 %, p90 3.1 %)";
+            let other = "seam side_R did not close (6.2 mm): check its placement and lengths";
+            let mut sim = json!({
+                "flags":[tight,other],"gating":[tight,other],
+                "tightness_gating":[tight],"advisory":[]
+            });
+            assert!(gate_tightness(&mut sim, &qual).is_some());
+            assert_eq!(sim["gating"], json!([other]));
+            assert_eq!(sim["advisory"], json!([tight]));
+        }
+
+        // A complete earlier run may qualify a later assembly using a subset of its materials.
+        let subset =
+            json!({"body_sha256":body_sha,"material_sha256":null,"piece_material_sha256s":[m2]});
+        assert!(check_qualification(Some(Ok(&doc)), "q", "ws", "abc", None, &subset).pass);
     }
 
     #[test]

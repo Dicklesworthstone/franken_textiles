@@ -740,6 +740,11 @@ chest, body: chest, target_mm: [−50, 0, 50]}]}`.
 | 0 | `SNUG_OR_TIGHT` | reading ∈ {SNUG, TIGHT} and shift ≤ 15 |
 | +20 | `EASY_OR_SNUG` | reading ∈ {EASY, SNUG} and mean < 1.0 (missing → fail) and shift ≤ 15 |
 
+Native band evaluation requires all three numeric readings to be finite, `contact_frac` in
+`[0, 1]`, and an actual `EASY`, `SNUG` or `TIGHT` reading before applying these thresholds.
+Missing, null or malformed displacement cannot stand for zero motion; an incomplete or invalid
+reading fails rather than qualifying a band. Complete reports keep the table's exact thresholds.
+
 **Output.** `OUT/qualify.json` = `{pass, rows: [{ease_mm, reading, ring_strain_mean_pct, ring_shift_mm, contact_frac,
 expected, pass, max_seam_gap_mm}], fabric_key, measurements_sha256}`, where `fabric_key = [areal_g_m2, tensile_N_m,
 bending_Nm]` of the pattern's fabric (null when no pattern was given).
@@ -784,7 +789,10 @@ Check in order:
 The native round additionally requires an `ftx` engine result with matching `qualification_basis`
 `body_sha256` and either matching uniform `material_sha256` or complete `piece_material_sha256s`
 coverage across all active simulated pieces. Missing identities in older reports require a fresh
-qualification run. When the posed collider and material(s) pass the three chest bands (`collider_pass = true`),
+qualification run. Per-piece coverage additionally needs exactly one passing `piece_materials`
+outcome for each required sheet identity; a missing or malformed list, absent outcome or
+contradictory duplicate cannot inherit the aggregate `pass` flag. When the posed collider and
+material(s) pass the three chest bands (`collider_pass = true`),
 promoting a tightness flag from `advisory` to a wearer-blocking `gating` flag additionally requires:
 1. `input_chest_mm` present and `|posed_chest_girth_mm − input_chest_mm| ≤ 5.0` mm (`wearer_target_aligned = true`); and
 2. for any `tightness_gating` landmark evaluated on a fitted or accepted body, a measured/compared
