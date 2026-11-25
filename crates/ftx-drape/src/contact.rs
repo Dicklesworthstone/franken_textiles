@@ -2555,8 +2555,10 @@ pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f
 /// point beyond the trajectory. Every probe is still at most one safe step (`0.9 · gap / l_p`) after
 /// the previous one, so the guarantee is [`accd`]'s on `[0, t_max]`: the gap stays positive and is at
 /// least 10 % of its start value at every probe. [`accd`] itself also tests the point one step past
-/// `t_max`, and refuses the whole trajectory when the gap there is below target, even where it never
-/// is on the trajectory (a pair closing from 4 mm to 0.7 mm over a substep).
+/// `t_max`, and stops short of `t_max` when the gap there is below target, even where it never is on
+/// the trajectory (a pair closing from 4 mm to 0.7 mm over a substep). Unlike [`accd`]'s, the answer
+/// depends on `t_max` (the last probe moves with it), so a caller that passes its running minimum gets
+/// a bound that depends on the order of the pairs; any order gives a valid one.
 #[must_use]
 pub fn accd_chord(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f64 {
     accd_probing(pair, pts, dp, xi, t_max, true)

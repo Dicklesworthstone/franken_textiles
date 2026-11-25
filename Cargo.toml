@@ -67,11 +67,12 @@ wasm-bindgen = { version = "=0.2.128" }
 # current_num_threads (ThreadPoolBuilder in tests only); every reduction stays serial in its order, so
 # parallel and serial runs give the same bits (ftx-drape/src/par.rs, sparse/direct.rs). Measured
 # 2026-11-24 (headless Chromium, 8-core EPYC, identical digests): the posing room's sew 17.3 s on the
-# serial engine, 12.1 s on 6 threads (mean of three, interleaved with 14.3 s for the engine before the
-# parallel Hessian gather, LDLT factorization and coarse solve tasks); the first 5-degree arm nudge
-# after a sew 5.2-5.9 s on 6 threads. The LDLT solves (too small to split per call) and the line
-# search's per-pair CCD loop stay serial. Native CLI bolero drape on 4 threads: 25.1 to 24.1 s (4 %),
-# point cache identical.
+# serial engine, 12.1 s on 6 threads (mean of three, interleaved with 14.3 s for the same engine with
+# the solves split as finely as the factorization; the parallel Hessian gather and LDLT factorization
+# alone left the 6-thread sew where it was, 13.5 s before and 13.8 s after); the first 5-degree arm nudge
+# after a sew 5.2-5.9 s on 6 threads. The solve work outside subtrees of at least 2^16 entries of L
+# and the line search's per-pair CCD loop stay serial. Native CLI bolero drape on 4 threads: 25.1 to
+# 24.1 s (4 %), point cache identical.
 rayon = { version = "=1.12.0" }
 # Rayon's pool on Web Workers, ftx-wasm's `threads` feature only and only for wasm32 (the posing room's
 # threaded engine, built with atomics and served cross-origin isolated). 1.3.0 with `no-bundler` (our

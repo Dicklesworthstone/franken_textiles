@@ -68,8 +68,8 @@ const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_st
   motion_carry_mm: 20, motion_step_s: 0.05 };
 // A change of pose up to 10° (the arm is sampled every 10-15°) moves the arm under the sewn jacket with the
 // solver's checked moving-body step; a larger one sews the jacket on again in the nearest sampled pose, the
-// faster of the two there (measured in Node on one thread, 2026-11-24: a 5° move at 20°/s about 6-7 s, a 10°
-// move about 14 s, a fresh sew about 17 s).
+// faster of the two there (measured in Node on one thread, 2026-11-24: a 5° move at 20°/s 5.7-7.4 s, the
+// first after a sew the slowest; a 10° move 13.8 s; a fresh sew about 17 s).
 const MOVE_LIMIT_DEG = 10;
 const ARM_SPEED_DEG_S = 20;
 const same = (a?: [number, number] | null, b?: [number, number] | null) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
