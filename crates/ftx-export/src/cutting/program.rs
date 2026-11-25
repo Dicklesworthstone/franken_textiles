@@ -511,7 +511,8 @@ pub struct Marker {
     pub drill_qualification: Option<String>,
     /// Admitted nominal thickness or full source-reported interval, in mm.
     pub thickness_mm: [f64; 2],
-    /// Complete authored two-phase traversal.
+    /// Complete checked authored two-phase traversal, or the checked nearest-path replacement
+    /// when `baseline_clearance_refusal` records why the authored route was unavailable.
     pub baseline: Traversal,
     /// Complete selected traversal; never slower than baseline under an explicit motion profile,
     /// or never more raised-tool distance under the original constant-rate model.
@@ -519,6 +520,10 @@ pub struct Marker {
     /// Whether a complete nearest-path candidate improved modeled time (explicit motion profile)
     /// or raised distance (original constant-rate model) on the baseline.
     pub improved: bool,
+    /// The authored raised route failed clearance; the complete checked nearest-path candidate
+    /// supplies both baseline and selected. No cost improvement over an unsafe route is claimed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_clearance_refusal: Option<Refusal>,
     /// A candidate could not complete its checked raised route, so the checked baseline was kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidate_clearance_refusal: Option<Refusal>,
@@ -2073,13 +2078,22 @@ fn build_markers(
             &drills,
             drill_cycle_seconds,
         )?;
-        admit_travel(
+        let baseline_clearance_refusal = match admit_travel(
             &mut baseline,
             &policy.machine,
             corners.as_deref(),
             &mut search_work,
             &mut geometry_work,
-        )?;
+        ) {
+            Ok(()) => None,
+            Err(refusal)
+                if refusal.code == RefusalCode::BudgetExceeded
+                    || policy.ordering != Ordering::NearestPath =>
+            {
+                return Err(refusal);
+            }
+            Err(refusal) => Some(refusal),
+        };
         let mut candidate = if policy.ordering == Ordering::NearestPath {
             nearest(&paths, knife_start, &mut search_work)
                 .map(|order| {
@@ -2107,13 +2121,19 @@ fn build_markers(
                 &mut geometry_work,
             )
         {
-            if refusal.code == RefusalCode::BudgetExceeded
-                && !(search_work.exhausted && !geometry_work.exhausted)
+            if baseline_clearance_refusal.is_some()
+                || (refusal.code == RefusalCode::BudgetExceeded
+                    && !(search_work.exhausted && !geometry_work.exhausted))
             {
                 return Err(refusal);
             }
             candidate_clearance_refusal = Some(refusal);
             candidate = None;
+        }
+        if baseline_clearance_refusal.is_some() {
+            // An unadmitted authored route is never an incumbent. Only the fully checked
+            // alternative can recover the program, and exhausted search cannot create one.
+            baseline = candidate.take().ok_or_else(budget)?;
         }
         let improved = candidate.as_ref().is_some_and(|c| {
             if policy.machine.motion_profile.is_some() {
@@ -2139,10 +2159,14 @@ fn build_markers(
             baseline,
             selected,
             improved,
+            baseline_clearance_refusal,
             candidate_clearance_refusal,
         });
     }
     let uses_drilling = markers.iter().any(|m| m.drill_qualification.is_some());
+    let uses_recovered_baseline = markers
+        .iter()
+        .any(|m| m.baseline_clearance_refusal.is_some());
     Ok(Report {
         schema: if finite {
             "ftx-knife-cut-program/2"
@@ -2180,7 +2204,9 @@ fn build_markers(
                 } else {
                     "No kerf compensation, common-line cutting, drill operation, thermal processing, three-dimensional tool/body collision check, measured cut quality, physical cycle-time claim or hardware execution authorization."
                 },
-                if policy.machine.motion_profile.is_some() {
+                if uses_recovered_baseline {
+                    "Nearest-path ordering is a bounded heuristic. A fixture-blocked authored raised route may be replaced only by a complete independently checked candidate, retaining the original refusal. The replacement is the first feasible baseline, not a cost improvement over the unsafe route or a shortest-path proof."
+                } else if policy.machine.motion_profile.is_some() {
                     "Nearest-path ordering is a bounded heuristic; an unfinished candidate or one without strictly lower modeled time retains the complete authored baseline. Raised detours minimize exact-stop time within their finite checked graph, without a general fastest-path proof."
                 } else {
                     "Nearest-path ordering is a bounded heuristic; an unfinished or longer candidate retains the complete authored baseline, without a shortest-path proof."
@@ -2192,6 +2218,8 @@ fn build_markers(
             if policy.machine.fixture_clearance.is_some() {
                 if policy.travel_routing.is_some() {
                     limits.push("Raised moves use checked straight links through a conservative expanded fixture-box corner graph, including the final return. The explicit waypoint offset chooses candidate vertices, not a new physical clearance margin. Every retained chord passes the original exact tool/fixture sweep; cutting paths, starts and directions remain unchanged. Failure to find a complete checked route refuses that candidate and proves no general infeasibility or globally shortest path. No fixture motion, grip strength, registration or 3D clearance is inferred.");
+                } else if uses_recovered_baseline {
+                    limits.push("Declared fixed machine-frame fixtures are checked against complete cutting and raised-travel circular envelopes, including the final return. Touching and numerically unresolved strict clearance refuse, without adding a physical margin. A rejected authored order cannot block an independently checked nearest-path replacement; if neither complete order clears, the program refuses. No automatic routing, fixture motion, grip strength, registration or 3D clearance is inferred.");
                 } else {
                     limits.push("Declared fixed machine-frame fixtures are checked against complete cutting and raised-travel circular envelopes, including the final return. Touching and numerically unresolved strict clearance refuse, without adding a physical margin. The complete authored baseline must clear every fixture; a blocked ordering candidate falls back to that checked baseline. No automatic routing, fixture motion, grip strength, registration or 3D clearance is inferred.");
                 }

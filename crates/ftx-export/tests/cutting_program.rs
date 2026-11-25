@@ -577,6 +577,188 @@ fn blocked_nearest_travel_keeps_the_complete_checked_authored_baseline() {
     assert!(!report.budget_exhausted);
 }
 
+fn blocked_authored_fixture() -> (Pattern, CutOptions) {
+    let mut sheet = piece("front", 100., 100.);
+    sheet["internal"] = json!([
+        {"kind":"cut","closed":false,"pts":[[10,10],[11,10]]},
+        {"kind":"cut","closed":false,"pts":[[70,10],[71,10]]},
+        {"kind":"cut","closed":false,"pts":[[10,70],[11,70]]}
+    ]);
+    let p = pattern(vec![sheet]);
+    let mut opts = qualified_options(&p);
+    let policy = opts.program.as_mut().unwrap();
+    policy.machine.start_mm = Vec2::new(100., 90.);
+    policy.machine.return_to_start = false;
+    // The authored first move (100,90) -> (15,15) crosses the fixture at (57.5,52.5).
+    // Nearest order instead starts at (75,15), then visits (15,15), (15,75), (105,5).
+    // All three original one-millimetre slits and the original exterior remain unchanged.
+    fixture_policy(&mut opts, [[57., 52.], [58., 52.], [58., 53.], [57., 53.]]);
+    (p, opts)
+}
+
+#[test]
+fn blocked_authored_travel_recovers_a_complete_checked_nearest_program() {
+    for accelerated in [false, true] {
+        let (p, mut opts) = blocked_authored_fixture();
+        if accelerated {
+            set_motion_profile(&mut opts, motion_profile());
+            relock(&mut opts);
+        }
+        assert!(
+            process_refusal(&p, &opts)
+                .message
+                .contains("declared-clamp")
+        );
+        opts.program.as_mut().unwrap().ordering = Ordering::NearestPath;
+        let plan = CutPlan::build(&p, &opts).unwrap();
+        let report = plan
+            .program
+            .as_ref()
+            .expect("nearest order clears the fixture");
+        let marker = &report.markers[0];
+        assert!(
+            marker
+                .baseline_clearance_refusal
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("declared-clamp")
+        );
+        assert!(marker.candidate_clearance_refusal.is_none());
+        assert_eq!(value(&marker.baseline), value(&marker.selected));
+        assert!(
+            !marker.improved,
+            "a rejected route has no admitted comparison cost"
+        );
+        assert_eq!(
+            marker
+                .selected
+                .runs
+                .iter()
+                .map(|run| run.path.internal_cut)
+                .collect::<Vec<_>>(),
+            [Some(1), Some(0), Some(2), None]
+        );
+        near(marker.selected.cut_length_mm, 403.);
+        for run in &marker.selected.runs {
+            let placement = &plan.rolls[0].placements[run.path.placement];
+            let original = run
+                .path
+                .internal_cut
+                .map_or(placement.cut_mm.as_slice(), |i| {
+                    &placement.internal_cut_mm[i].0
+                });
+            assert_eq!(run.cut_endpoints_mm[0], original[0]);
+            assert_eq!(
+                run.cut_endpoints_mm[1],
+                if run.closed {
+                    original[0]
+                } else {
+                    *original.last().unwrap()
+                }
+            );
+        }
+        assert!(!report.budget_exhausted && !report.optimality_proven);
+        assert!(!report.hardware_execution_authorized && !report.physical_cutting_validated);
+        assert_eq!(value(&plan), value(&CutPlan::build(&p, &opts).unwrap()));
+    }
+}
+
+#[test]
+fn authored_recovery_still_requires_complete_cut_candidate_and_return_clearance() {
+    let (p, mut opts) = blocked_authored_fixture();
+    opts.program.as_mut().unwrap().ordering = Ordering::NearestPath;
+    let mut both_blocked = opts.clone();
+    let clearance = both_blocked
+        .program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap();
+    let mut second = clearance.fixtures[0].clone();
+    second.id = "nearest-order-clamp".into();
+    second.outline_mm = vec![
+        Vec2::new(87., 52.),
+        Vec2::new(88., 52.),
+        Vec2::new(88., 53.),
+        Vec2::new(87., 53.),
+    ];
+    clearance.fixtures.push(second);
+    relock(&mut both_blocked);
+    assert!(
+        process_refusal(&p, &both_blocked)
+            .message
+            .contains("nearest-order-clamp")
+    );
+
+    let mut with_return = opts.clone();
+    let clearance = with_return
+        .program
+        .as_mut()
+        .unwrap()
+        .machine
+        .fixture_clearance
+        .as_mut()
+        .unwrap();
+    let mut return_clamp = clearance.fixtures[0].clone();
+    return_clamp.id = "return-only-clamp".into();
+    // The closed exterior returns to (105,5), so its final return to (100,90)
+    // crosses (102.5,47.5), independently of the safe approach and original cuts.
+    return_clamp.outline_mm = vec![
+        Vec2::new(102., 47.),
+        Vec2::new(103., 47.),
+        Vec2::new(103., 48.),
+        Vec2::new(102., 48.),
+    ];
+    clearance.fixtures.push(return_clamp);
+    relock(&mut with_return);
+    assert!(CutPlan::build(&p, &with_return).unwrap().program.is_some());
+    with_return
+        .program
+        .as_mut()
+        .unwrap()
+        .machine
+        .return_to_start = true;
+    relock(&mut with_return);
+    assert!(
+        process_refusal(&p, &with_return)
+            .message
+            .contains("return-only-clamp")
+    );
+
+    fixture_policy(
+        &mut opts,
+        [[104.9, 44.], [105.1, 44.], [105.1, 46.], [104.9, 46.]],
+    );
+    assert!(
+        process_refusal(&p, &opts)
+            .message
+            .contains("cutting tool envelope")
+    );
+}
+
+#[test]
+fn authored_recovery_cannot_publish_an_unfinished_or_unchecked_alternative() {
+    let (p, mut opts) = blocked_authored_fixture();
+    opts.program.as_mut().unwrap().ordering = Ordering::NearestPath;
+    let plan = CutPlan::build(&p, &opts).unwrap();
+    let report = plan.program.unwrap();
+    let original = opts.clone();
+    opts.program.as_mut().unwrap().work_limit = 1;
+    assert_eq!(
+        process_refusal(&p, &opts).code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    opts = original;
+    opts.program.as_mut().unwrap().geometry_work_limit = report.geometry_work - 1;
+    assert_eq!(
+        process_refusal(&p, &opts).code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
 #[test]
 fn declared_final_return_and_geometry_budgets_cannot_skip_fixture_checks() {
     let p = pattern(vec![piece("a", 20., 20.), piece("b", 20., 20.)]);

@@ -11214,6 +11214,37 @@ test('qualified knife programs retain exact process scope and independent refusa
   assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
 });
 
+test('qualified knife replacement routes retain the rejected authored order without claiming a time saving', async () => {
+  for (const op of ['cut', 'stock', 'study', 'scenario']) {
+    const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);
+    p.select('cutOptions');p.select('stockRequest');
+    const route={runs:[{path:{placement:0}}],cut_length_mm:80,travel_length_mm:50,
+      cutting_seconds:0.8,travel_seconds:0.5,lift_lower_seconds:0.2,modeled_path_seconds:1.5};
+    const refusal={code:'INVALID_INPUT',message:'authored return crosses <qualified clamp>'};
+    const program={schema:'ftx-knife-cut-program/1',markers:[{marker:0,qualification:'qualified knife',
+      baseline:route,selected:route,improved:false,baseline_clearance_refusal:refusal}],
+      budget_exhausted:false,optimality_proven:false,physical_cutting_validated:false,hardware_execution_authorized:false};
+    const plan=op==='stock'?{schema:'ftx-finite-stock-plan/1',used_stock_count:1,markers:[{placements:[{}]}],program}:
+      {schema:'ftx-roll-cut-plan/1',rolls:[{}],program};
+    const row=studyRow('recovered'),study=studyReport([row]);row.cutting=outcome(plan);
+    const report=op==='cut'||op==='stock'?plan:op==='study'?study:{...scenarioReport(),manufacturing:study};
+    const label=op==='cut'?'Cutting plan':op==='stock'?'Finite-stock plan':'recovered';
+    await p.e[op].onclick();const raw=JSON.stringify(report);
+    p.emit(report,[{name:'recovered-cutting.json',text:raw,mime:'application/json'}],raw);
+    const s=section(p,op==='cut'||op==='stock'?op:op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===`${label}: material-qualified knife paths`);
+    assert.equal(table.children[2].children.at(-1).textContent,'Feasible replacement traversal');
+    assert.match(visibleText(s),/authored travel order could not clear the qualified fixtures/);
+    assert.match(visibleText(s),/Its time is not a saving against a feasible authored route/);
+    assert.doesNotMatch(visibleText(s),/Shorter complete traversal|Faster complete traversal|Complete authored traversal/);
+    const detail=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent===`${label}, marker 1: authored travel refusal (display only)`);
+    detail.open=true;detail.handlers.toggle();assert.match(visibleText(detail),/authored return crosses <qualified clamp>/);
+    const download=descendants(s).find(n=>n.download==='recovered-cutting.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+});
+
 test('exact-stop knife timing displays retained accelerations and producer totals without changing replay bytes', async () => {
   for (const op of ['cut','stock','study','scenario']) {
     const p=await pageModule();await p.load();await p.bind();scenarioInputs(p);

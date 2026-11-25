@@ -3095,8 +3095,17 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
     cells(t, [String(marker.marker + 1), marker.qualification, metric(route?.runs?.length),
       metric(route?.cut_length_mm), metric(route?.travel_length_mm), metric(route?.cutting_seconds),
       metric(route?.travel_seconds), metric(route?.lift_lower_seconds), metric(route?.modeled_path_seconds),
-      marker.improved ? (exactStop ? "Faster complete traversal" : "Shorter complete traversal") :
+      marker.baseline_clearance_refusal ? "Feasible replacement traversal" :
+        marker.improved ? (exactStop ? "Faster complete traversal" : "Shorter complete traversal") :
         program.travel_routing ? "Complete authored cut order" : "Complete authored traversal"]);
+  }
+  const recovered = (program.markers || []).filter(marker => marker.baseline_clearance_refusal);
+  for (const marker of recovered) {
+    const replacement = document.createElement("p");
+    replacement.textContent = `${label}, marker ${marker.marker + 1}: the authored travel order could not clear the qualified fixtures. ` +
+      "A complete checked replacement is retained with the same cutting paths and directions. Its time is not a saving against a feasible authored route.";
+    parent.append(replacement);
+    detail(parent, `${label}, marker ${marker.marker + 1}: authored travel refusal (display only)`, marker.baseline_clearance_refusal);
   }
   if (drilling) {
     const tool = table(parent, `${label}: retained drill configuration`,
@@ -3170,7 +3179,9 @@ function knifeProgramResult(parent, program, label = "Cutting plan", refusal) {
       "Lift/lower phases remain separate. Loading, blade turning and inspection are outside this model. " :
       profile ? "Timing assumptions are retained in the exact source report below. " :
       "Times cover declared constant-rate cutting, raised travel and lift/lower phases. Loading, acceleration, blade turning and inspection are outside this model. ") +
-    (program.budget_exhausted ? "The ordering budget ended; complete authored traversals remain available. " : "") +
+    (program.budget_exhausted ? recovered.length ?
+      "The ordering budget ended; complete checked traversals remain available. " :
+      "The ordering budget ended; complete authored traversals remain available. " : "") +
     "This reviewable plan does not establish physical cut quality, an optimal route or permission to run a machine.";
   parent.append(note);
   detail(parent, `${label}: exact knife paths, material locks and process limits (display only)`, program);

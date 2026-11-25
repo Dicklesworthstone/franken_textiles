@@ -299,11 +299,15 @@ Adding or changing this policy changes `machine_sha256`; all consumed process qu
 must admit that exact configuration. The program retains the original policy in
 `program.fixture_clearance`. Boundary contact and numerically unresolved strict separation refuse;
 outward-rounded bounds do not introduce a physical padding distance. Geometric work shares the existing
-`geometry_work_limit` across all fixtures and markers. Missing evidence, blocked cuts or a blocked
-authored traversal produce an independent `program_refusal`, preserving valid nesting and purchasing.
+`geometry_work_limit` across all fixtures and markers. Missing evidence, blocked cuts or the absence
+of a complete checked traversal produce an independent `program_refusal`, preserving valid nesting and purchasing.
 Without the opt-in routing policy below, raised moves stay straight. When a nearest-path candidate is blocked but the
 complete authored baseline is clear, it keeps that baseline and reports the obstruction in
-`program.markers[].candidate_clearance_refusal`. Exhausting geometric validation always refuses
+`program.markers[].candidate_clearance_refusal`. Conversely, when the authored raised route is blocked,
+`nearest_path` ordering can retain a complete independently checked candidate. Its original refusal is
+reported in `program.markers[].baseline_clearance_refusal`; the replacement supplies both `baseline`
+and `selected`, with `improved: false`. Its timing is not a saving against an unsafe authored route.
+Authored-only ordering still refuses a blocked authored route. Exhausting geometric validation always refuses
 the process; it never publishes an unchecked candidate. Omission makes no tool/fixture clearance
 claim and keeps the existing machine digest.
 
@@ -321,8 +325,9 @@ move stays direct. Blocked cuts or endpoints still refuse.
 The finite corner graph and deterministic search are conservative: a missing route does not prove
 that every possible path is blocked, and an accepted route carries no globally shortest-path claim.
 Node generation, candidate comparisons, checked links and final selected sweeps share the existing
-search/geometry budgets across all markers. Failure to complete the authored cut order's raised
-routes refuses the process. Once that baseline is complete, an unfinished or worse optional ordering
+search/geometry budgets across all markers. A blocked authored route can use the same checked
+nearest-path replacement policy described above; work exhaustion without a complete admitted route
+refuses the process. Once a baseline is complete, an unfinished or worse optional ordering
 candidate keeps it; geometry-budget exhaustion always refuses instead of retaining unchecked output.
 
 The report retains `travel_routing`. Each run keeps `travel_mm` as its original endpoints and adds

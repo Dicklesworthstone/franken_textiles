@@ -1291,8 +1291,11 @@ cutting/raised circular tool envelopes. Complete cut chords, travel and final re
 clear every filled footprint after any finite-stock loading translation. Exact endpoint predicates
 and outward-rounded line-distance bounds refuse contact or unresolved separation without adding a
 physical tolerance. The complete policy joins the machine lock and the geometry work budget. A
-blocked nearest-path candidate retains the checked authored baseline with its refusal; a blocked
-baseline, cut or exhausted check refuses only the process. This is planar geometry, with no inferred
+blocked nearest-path candidate retains the checked authored baseline with its refusal. If the authored
+raised route is blocked, a complete independently checked nearest-path candidate can instead supply
+both baseline and selected, retaining `baseline_clearance_refusal` and `improved: false`. This is a
+feasible replacement, not a time saving against an unsafe route. Missing complete alternatives,
+blocked cuts and exhausted geometric checks refuse only the process. This is planar geometry, with no inferred
 registration, grip or three-dimensional machine clearance. Direct geometry,
 roll/finite-stock and native/portable material-study regressions cover this boundary.
 
