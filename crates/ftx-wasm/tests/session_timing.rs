@@ -23,12 +23,17 @@ fn posing_session_timing() {
     let pattern: Value =
         serde_json::from_slice(&read("exhibits/poses/bolero-start.json")).expect("pattern");
     let fit: Value = serde_json::from_slice(&read("exhibits/poses/fit-spec.json")).expect("fit");
-    let settings: SessionSettings = serde_json::from_str(
-        &std::env::var("FTX_SESSION_SETTINGS").unwrap_or_else(|_| {
-            r#"{"spacing_mm":12,"sew_steps":12,"drape_steps":36,"time_subdivision":true,"motion_step_s":0.0333}"#.into()
-        }),
-    )
-    .expect("settings");
+    let settings: SessionSettings =
+        serde_json::from_str(&std::env::var("FTX_SESSION_SETTINGS").unwrap_or_else(|_| {
+            // The page's SETTINGS in showcase/components/doll/PoseScene.tsx: keep the two in step.
+            concat!(
+                r#"{"spacing_mm":16,"sew_steps":12,"drape_steps":36,"max_settle_steps":48,"#,
+                r#""time_subdivision":true,"self_contact_mm":0,"motion_carry_mm":20,"#,
+                r#""motion_step_s":0.05,"motion_intermediate_tol_m_s":0.005}"#
+            )
+            .into()
+        }))
+        .expect("settings");
     let body = PosableBody::parse(&header, &data).expect("baked body");
     let base = body.base_arm_deg();
     let began = Instant::now();
@@ -43,7 +48,8 @@ fn posing_session_timing() {
     let mut left = base;
     for _ in 0..3 {
         let began = Instant::now();
-        match session.advance(left + 10.0, base, 10.0 / 60.0) {
+        // At the page's ARM_SPEED_DEG_S, 20°/s.
+        match session.advance(left + 10.0, base, 10.0 / 20.0) {
             Ok(samples) => {
                 println!(
                     "move {left}° -> {}°: {} accepted steps in {:.1} s",

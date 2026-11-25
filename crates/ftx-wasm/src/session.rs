@@ -1235,9 +1235,18 @@ mod tests {
                 .expect("an out-of-range intermediate tolerance is refused");
             assert!(err.contains("intermediate move tolerance"), "{err}");
         }
-        let mut session = session(0.015);
+        // The setting reaches the move policy (as `session()` builds its session, plus the tolerance).
+        let settings = SessionSettings {
+            sew_steps: 24,
+            drape_steps: 0,
+            motion_intermediate_tol_m_s: Some(3e-3),
+            ..SessionSettings::default()
+        };
+        let body = PosableBody::parse(&header, &data).unwrap();
+        let mut session = Session::start(body, &pattern, &json!({}), settings, |_| {}).unwrap();
+        session.scene.solver.gravity = Vec3::ZERO;
+        assert_eq!(session.motion.intermediate_tol, Some(3e-3));
         let tol = session.scene.solver.tol;
-        session.motion.intermediate_tol = Some(3e-3);
         session.advance(45.0, 35.0, 0.25).unwrap();
         assert_eq!(session.arms(), [45.0, 35.0]);
         assert_eq!(session.scene.solver.tol, tol);
