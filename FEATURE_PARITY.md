@@ -267,6 +267,15 @@ evidence that the authored catalog garment is complete or fits a person.
 | Guided regional body contact-load decisions | Present for exact retained-instance scopes and explicit vertex/pair allowances, with initial and complete-motion resultant/nodal goals, nominal limits and independently required consumers. Single/named cases and adaptive guidance reuse the native force authority and per-case partial-budget behavior. No pressure, physiological comfort or continuous-time bound is inferred. | `tools/check_material_study_builder.cjs` scope/source/basis/case admission; `tools/check_materials_frontend.cjs` guided lifecycle and compiled replay; `docs/material-scenario-studies.md` body-contact-load contract |
 | Cylindrical-holder forward textile experiment (`ftx-cylinder-experiment/1`) | Present forward numerical model & browser workbench UI (`ftx_drape::cylinder`, `ftx`/`ftx-materials cylinder-experiment`, WASM `material_cylinder_experiment`, worker `cylinderExperiment`, `web/materials.html` `#cylinderExperiment`): `260 × 110 mm` wrapped sheet on `R = 40 mm` coaxial holders, explicit pretension offset (never `delta / nominal_height`), tare subtraction, `warp`/`weft`/`bias` grain, twist / compression / stretch-slip schedules, Maxwell + membrane/bending plasticity, unloaded-thickness self-contact (refusing presser-foot `reported_thickness`), and raw-timestamp vs nominal-rate `ProtocolAudit`. Inverse constitutive identification against unbundled external Fabric-101 curve archives and held-out physical specimens remains open under `ftx-tm2.1`; `mechanics_readiness_promoted: false`. | `cylinder::tests` (closed-form uniaxial tension `< 1e-11`, `n_theta`-gon apothem torsion `< 5e-5` discrete & `O(1/n_theta^2)` continuum convergence, `L01` discrepancy audit, Maxwell + plastic-bending dissipation); `strip_experiment_workflow`; `tools/check_strip_wasm.cjs`; `tools/check_materials_frontend.cjs`; `tools/check_materials_web.cjs`; `docs/fabric101-materials.md` |
 
+History-aware cylindrical-holder inverse identification is also present through explicit
+`ftx-cylinder-calibration/2` (plan §25.230). The same native, portable and workbench routes identify
+named Maxwell stiffness ratios and recovery times, retain untouched source quantities and complete
+material memory, and require doubled time-step stability in addition to the existing spatial,
+excitation and held-out gates. FIT-only support remains enforced in the published material.
+Independent synthetic ramp/hold recovery and physical-state replay are covered by `history_calibration`,
+`history_warm_guess`, `material_calibration::tests`, `strip_experiment_workflow` and the frontend suite.
+This extends the numerical software capability; measured Fabric-101 qualification remains open.
+
 ## Excluded by decision (plan §23)
 
 | Feature | Reason |

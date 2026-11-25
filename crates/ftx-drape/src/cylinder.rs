@@ -766,6 +766,24 @@ fn audit_protocol(
     })
 }
 
+fn validate_history_start(fixture: &Fixture, loading: &[Waypoint]) -> Result<(), Refusal> {
+    if loading.len() < 2 {
+        return Err(out_of_range(
+            "history-bearing materials require an explicit timed loading path (at least 2 waypoints)",
+        ));
+    }
+    let start_sep = holder_separation_m(fixture, &loading[0])?;
+    if (start_sep - fixture.nominal_free_height_m).abs() > 1e-12
+        || loading[0].rotation_deg != 0.0
+        || loading[0].clamp_slip_m != 0.0
+    {
+        return Err(out_of_range(
+            "history-bearing cylinder runs must start at pristine unstretched separation (axial_displacement_m = -pretension_displacement_m, rotation_deg = 0, clamp_slip_m = 0) and ramp pretension explicitly in time",
+        ));
+    }
+    Ok(())
+}
+
 fn subdivisions(input: &Request, has_history: bool) -> Result<Vec<usize>, Refusal> {
     input.fixture.validate()?;
     input.controls.validate()?;
@@ -781,20 +799,10 @@ fn subdivisions(input: &Request, has_history: bool) -> Result<Vec<usize>, Refusa
     if input.loading[0].time_s != 0.0 {
         return Err(invalid("cylinder loading must start at time_s = 0"));
     }
-    if input.loading.len() == 1 && has_history {
-        return Err(out_of_range(
-            "history-bearing materials require an explicit timed loading path (at least 2 waypoints)",
-        ));
-    }
-    let start_sep = holder_separation_m(&input.fixture, &input.loading[0])?;
-    if has_history
-        && ((start_sep - input.fixture.nominal_free_height_m).abs() > 1e-12
-            || input.loading[0].rotation_deg != 0.0
-            || input.loading[0].clamp_slip_m != 0.0)
-    {
-        return Err(out_of_range(
-            "history-bearing cylinder runs must start at pristine unstretched separation (axial_displacement_m = -pretension_displacement_m, rotation_deg = 0, clamp_slip_m = 0) and ramp pretension explicitly in time",
-        ));
+    if has_history {
+        validate_history_start(&input.fixture, &input.loading)?;
+    } else {
+        holder_separation_m(&input.fixture, &input.loading[0])?;
     }
     let mut total_steps = 0usize;
     let mut counts = Vec::with_capacity(input.loading.len().saturating_sub(1));
@@ -1324,6 +1332,8 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
 
     let has_history =
         relaxation.is_some() || membrane_plasticity.is_some() || bending_plasticity.is_some();
+    let maxwell_guess =
+        relaxation.is_some() && membrane_plasticity.is_none() && bending_plasticity.is_none();
     let counts = subdivisions(input, has_history)?;
 
     let any_net_compression = input.loading.iter().any(|w| {
@@ -1419,15 +1429,21 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             let omega_rad_s = (curr_rot_rad - prev_rot_rad) / h;
 
             let old_velocity = solver.v.clone();
-            let guess = (domain.is_some() && self_contact.is_none() && !has_history).then(|| {
-                affine_cylinder_guess(
-                    &solver.x,
-                    n_theta,
-                    n_z,
-                    curr_sep - prev_sep,
-                    curr_rot_rad - prev_rot_rad,
-                )
-            });
+            // Seed only the Newton minimizer. The step keeps the previous free positions,
+            // inertial target and accepted Maxwell memories; an imposed ring increment need
+            // not force the unrelaxed starting iterate outside the fitted physical domain.
+            let guess = (self_contact.is_none()
+                && ((domain.is_some() && !has_history) || maxwell_guess))
+                .then(|| {
+                    affine_cylinder_guess(
+                        &solver.x,
+                        n_theta,
+                        n_z,
+                        curr_sep - prev_sep,
+                        curr_rot_rad - prev_rot_rad,
+                    )
+                });
+            let accepted_positions = guess.as_ref().map(|_| solver.x.clone());
             set_upper_ring(
                 &mut solver.x,
                 n_theta,
@@ -1437,7 +1453,13 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
                 waypoint.rotation_deg,
             );
             let before_step = has_membrane_damage.then(|| solver.clone());
-            let numerical = solver.step_with_guess(h, guess.as_deref())?;
+            let numerical = if let (Some(accepted), Some(guess)) =
+                (accepted_positions.as_deref(), guess.as_deref())
+            {
+                solver.step_with_prescribed_boundary_guess(h, accepted, guess)?
+            } else {
+                solver.step_with_guess(h, None)?
+            };
             for i in 0..n_theta {
                 let idx = n_z * n_theta + i;
                 let p = solver.x[idx];

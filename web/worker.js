@@ -62,11 +62,11 @@ onmessage = async (ev) => {
     if (msg.type === "init") {
       postMessage({ type: "progress", text: "Loading FrankenTextiles…" });
       // Load bindings and module from the same numerical-engine revision.
-      const revision = "?v=2026-11-24.4";
+      const revision = "?v=2026-11-24.5";
       ftx = await import(msg.pkg + "ftx_wasm.js" + revision);
       await ftx.default({ module_or_path: msg.pkg + "ftx_wasm_bg.wasm" + revision });
       if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
-          (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== "ftx-wasm-interface/2026-11-24.4")) {
+          (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== "ftx-wasm-interface/2026-11-24.5")) {
         throw new Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
       }
       const info = JSON.parse(ftx.program_info());

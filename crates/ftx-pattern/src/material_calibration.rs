@@ -136,6 +136,7 @@ pub fn fitted_domain(material: &Material) -> Result<Option<StrainDomain>, Refusa
                             "local:ftx-nonlinear-swatch-calibration/",
                             "local:ftx-strip-calibration/",
                             "local:ftx-cylinder-calibration/",
+                            "local:ftx-cylinder-history-calibration/",
                             "local:ftx-nonlinear-swatch-area-calibration/",
                             "local:ftx-strip-area-calibration/",
                         ]
@@ -170,6 +171,71 @@ pub fn fitted_domain(material: &Material) -> Result<Option<StrainDomain>, Refusa
             identity = Some((source, domain));
         }
         if let Some((_, domain)) = identity {
+            result = Some(if let Some(prior) = result {
+                StrainDomain::new(std::array::from_fn(|axis| {
+                    [
+                        prior.ranges()[axis][0].max(domain.ranges()[axis][0]),
+                        prior.ranges()[axis][1].min(domain.ranges()[axis][1]),
+                    ]
+                }))?
+            } else {
+                domain
+            });
+        }
+    }
+    if let Some(law) = &material.membrane_relaxation {
+        let quantities = law
+            .branches
+            .iter()
+            .flat_map(|branch| {
+                [
+                    (
+                        branch.id.as_str(),
+                        "stiffness ratio",
+                        &branch.stiffness_ratio,
+                    ),
+                    (branch.id.as_str(), "recovery time", &branch.relaxation_time),
+                ]
+            })
+            .chain(
+                law.orthotropic_branches
+                    .iter()
+                    .map(|branch| (branch.id.as_str(), "recovery time", &branch.relaxation_time)),
+            );
+        for (branch, name, quantity) in quantities {
+            let fitted = quantity
+                .conditions
+                .contains_key("cylinder_history_fit_sha256")
+                || material
+                    .sources
+                    .get(&quantity.source)
+                    .is_some_and(|source| {
+                        source
+                            .reference
+                            .starts_with("local:ftx-cylinder-history-calibration/")
+                    });
+            if !fitted {
+                continue;
+            }
+            let ranges = quantity.conditions.get(KEY).ok_or_else(|| {
+                invalid(format!(
+                    "fitted Maxwell branch {branch} {name} is missing its Green-strain domain"
+                ))
+            })?;
+            let domain = StrainDomain::new(serde_json::from_str(ranges).map_err(|error| {
+                invalid(format!("fitted Maxwell branch {branch} domain: {error}"))
+            })?)?;
+            if !domain.contains([0.0; 3])
+                || domain
+                    .ranges()
+                    .iter()
+                    .zip(law.strain_range)
+                    .any(|(fitted, acquired)| fitted[0] < acquired[0] || fitted[1] > acquired[1])
+            {
+                return Err(invalid(
+                    "fitted Maxwell support must include the reference and remain inside the original acquired law domain",
+                ));
+            }
             result = Some(if let Some(prior) = result {
                 StrainDomain::new(std::array::from_fn(|axis| {
                     [
@@ -592,4 +658,284 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         fitted_strain_range: ranges,
         missing_mechanics,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::material_relaxation::{
+        Initialization, IntegrationScheme, MaxwellBranch, OrthotropicBranch, OrthotropicStiffness,
+        Relaxation,
+    };
+
+    const DOMAIN_KEY: &str = "fitted_green_strain_range";
+    const BRANCH_DOMAIN: [[f64; 2]; 3] = [[-0.05, 0.12], [-0.12, 0.20], [-0.10, 0.18]];
+
+    fn history_material() -> Material {
+        // Synthetic provenance classifications exercise admission; these are not measurements.
+        let conditions = BTreeMap::from([
+            ("specimen_id".into(), "synthetic-domain-coupon".into()),
+            ("conditioning".into(), "synthetic-dry-reference".into()),
+        ]);
+        let quantity = |value, unit: &str| Quantity {
+            value,
+            unit: unit.into(),
+            evidence: Evidence::Measured,
+            source: "acquired".into(),
+            method: "Synthetic source-authority fixture, not empirical textile data".into(),
+            conditions: conditions.clone(),
+            bounds: None,
+        };
+        Material {
+            id: "synthetic-history-domains".into(),
+            name: "Synthetic history domain authority".into(),
+            form: Form::Woven,
+            composition: vec![],
+            composition_complete: false,
+            structure: BTreeMap::new(),
+            properties: BTreeMap::from([
+                ("warp_stiffness".into(), quantity(1000.0, "N/m")),
+                ("weft_stiffness".into(), quantity(600.0, "N/m")),
+                ("poisson_warp_weft".into(), quantity(0.2, "1")),
+                ("shear_stiffness".into(), quantity(150.0, "N/m")),
+            ]),
+            membrane_response: None,
+            membrane_relaxation: Some(Relaxation {
+                model: "green_maxwell/1".into(),
+                branches: vec![MaxwellBranch {
+                    id: "proportional".into(),
+                    stiffness_ratio: quantity(0.8, "1"),
+                    relaxation_time: quantity(1.0, "s"),
+                }],
+                orthotropic_branches: vec![OrthotropicBranch {
+                    id: "directional".into(),
+                    stiffness: OrthotropicStiffness {
+                        warp: quantity(200.0, "N/m"),
+                        weft: quantity(100.0, "N/m"),
+                        coupling: quantity(10.0, "N/m"),
+                        shear: quantity(40.0, "N/m"),
+                    },
+                    relaxation_time: quantity(0.2, "s"),
+                }],
+                initialization: Initialization::StressFreeReference,
+                strain_range: [[-0.20, 0.30], [-0.20, 0.30], [-0.30, 0.30]],
+                source: "acquired".into(),
+                method: "Synthetic source domain, not physical characterization".into(),
+                conditions: conditions.clone(),
+                parallel_plasticity: None,
+                integration: IntegrationScheme::default(),
+            }),
+            thermal_response: None,
+            optical_faces: None,
+            sources: [
+                ("acquired", "test:synthetic-maxwell-domain"),
+                (
+                    "equilibrium",
+                    "local:ftx-swatch-calibration/synthetic-equilibrium",
+                ),
+                (
+                    "ratio-fit",
+                    "local:ftx-cylinder-history-calibration/synthetic-ratio",
+                ),
+                (
+                    "time-fit",
+                    "local:ftx-cylinder-history-calibration/synthetic-time",
+                ),
+                (
+                    "directional-fit",
+                    "local:ftx-cylinder-history-calibration/synthetic-directional",
+                ),
+            ]
+            .into_iter()
+            .map(|(id, reference)| {
+                (
+                    id.into(),
+                    Source {
+                        reference: reference.into(),
+                        accessed_on: "2026-11-24".into(),
+                        note: "Synthetic authority test; no laboratory or supplier claim".into(),
+                    },
+                )
+            })
+            .collect(),
+        }
+    }
+
+    fn history_quantity(material: &mut Material, index: usize) -> &mut Quantity {
+        let law = material.membrane_relaxation.as_mut().unwrap();
+        match index {
+            0 => &mut law.branches[0].stiffness_ratio,
+            1 => &mut law.branches[0].relaxation_time,
+            2 => &mut law.orthotropic_branches[0].relaxation_time,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn cylinder_history_source_or_fit_marker_requires_each_target_domain() {
+        let pristine = history_material();
+        pristine.validate().unwrap();
+        assert_eq!(fitted_domain(&pristine).unwrap(), None);
+        for index in 0..3 {
+            for source_authority in [true, false] {
+                let mut material = pristine.clone();
+                let target = history_quantity(&mut material, index);
+                if source_authority {
+                    target.source = "ratio-fit".into();
+                } else {
+                    target
+                        .conditions
+                        .insert("cylinder_history_fit_sha256".into(), "synthetic-fit".into());
+                }
+                target.evidence = Evidence::Estimate;
+                target.conditions.insert(
+                    DOMAIN_KEY.into(),
+                    serde_json::to_string(&BRANCH_DOMAIN).unwrap(),
+                );
+                material.validate().unwrap();
+                assert_eq!(
+                    fitted_domain(&material).unwrap().unwrap().ranges(),
+                    BRANCH_DOMAIN
+                );
+
+                history_quantity(&mut material, index)
+                    .conditions
+                    .remove(DOMAIN_KEY);
+                assert!(
+                    fitted_domain(&material)
+                        .unwrap_err()
+                        .message
+                        .contains("missing its Green-strain domain")
+                );
+                assert!(material.validate().is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn independent_history_fits_intersect_without_rewriting_equilibrium_support() {
+        let mut material = history_material();
+        let equilibrium_domain = [[-0.10, 0.20], [-0.08, 0.16], [-0.15, 0.15]];
+        for key in KEYS {
+            let quantity = material.properties.get_mut(key).unwrap();
+            quantity.source = "equilibrium".into();
+            quantity.conditions.insert(
+                DOMAIN_KEY.into(),
+                serde_json::to_string(&equilibrium_domain).unwrap(),
+            );
+        }
+        let equilibrium = serde_json::to_value(&material.properties).unwrap();
+        let acquired = material.membrane_relaxation.as_ref().unwrap().strain_range;
+        for (index, (source, domain)) in [
+            ("ratio-fit", BRANCH_DOMAIN),
+            ("time-fit", [[-0.04, 0.11], [-0.04, 0.12], [-0.12, 0.12]]),
+            (
+                "directional-fit",
+                [[-0.06, 0.13], [-0.06, 0.10], [-0.08, 0.14]],
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let target = history_quantity(&mut material, index);
+            target.source = source.into();
+            target.evidence = Evidence::Estimate;
+            target
+                .conditions
+                .insert(DOMAIN_KEY.into(), serde_json::to_string(&domain).unwrap());
+        }
+        material.validate().unwrap();
+        let domain = fitted_domain(&material).unwrap().unwrap();
+        assert_eq!(
+            domain.ranges(),
+            [[-0.04, 0.11], [-0.04, 0.10], [-0.08, 0.12]]
+        );
+        assert!(domain.contains([0.11, 0.10, 0.12]));
+        assert!(!domain.contains([0.110000001, 0.0, 0.0]));
+        assert!(!domain.contains([0.0, -0.040000001, 0.0]));
+        assert!(!domain.contains([0.0, 0.0, 0.120000001]));
+        assert_eq!(
+            serde_json::to_value(&material.properties).unwrap(),
+            equilibrium
+        );
+        assert_eq!(
+            material.membrane_relaxation.as_ref().unwrap().strain_range,
+            acquired
+        );
+        let replay: Material =
+            serde_json::from_slice(&serde_json::to_vec(&material).unwrap()).unwrap();
+        assert_eq!(fitted_domain(&replay).unwrap(), Some(domain));
+    }
+
+    #[test]
+    fn fitted_history_support_cannot_escape_acquisition_or_omit_the_reference() {
+        let mut material = history_material();
+        let acquired = material.membrane_relaxation.as_ref().unwrap().strain_range;
+        let target = history_quantity(&mut material, 1);
+        target.source = "time-fit".into();
+        target
+            .conditions
+            .insert(DOMAIN_KEY.into(), serde_json::to_string(&acquired).unwrap());
+        material.validate().unwrap();
+        assert_eq!(
+            fitted_domain(&material).unwrap().unwrap().ranges(),
+            acquired
+        );
+        for malformed in [
+            "not-json",
+            "[[0,0]]",
+            "[[-0.1,0.1],[0.1,-0.1],[-0.1,0.1]]",
+            "[[-0.1,1e400],[-0.1,0.1],[-0.1,0.1]]",
+            "[[0.001,0.1],[-0.1,0.1],[-0.1,0.1]]",
+            "[[-0.21,0.1],[-0.1,0.1],[-0.1,0.1]]",
+            "[[-0.1,0.31],[-0.1,0.1],[-0.1,0.1]]",
+        ] {
+            history_quantity(&mut material, 1)
+                .conditions
+                .insert(DOMAIN_KEY.into(), malformed.into());
+            assert!(fitted_domain(&material).is_err(), "accepted {malformed}");
+            assert!(material.validate().is_err(), "accepted {malformed}");
+        }
+    }
+
+    #[test]
+    fn history_evidence_labels_cannot_bypass_support_or_invalid_quantity_bounds() {
+        let mut material = history_material();
+        let target = history_quantity(&mut material, 1);
+        target.source = "time-fit".into();
+        target.conditions.insert(
+            DOMAIN_KEY.into(),
+            serde_json::to_string(&BRANCH_DOMAIN).unwrap(),
+        );
+        for evidence in [Evidence::Estimate, Evidence::Measured, Evidence::Published] {
+            let mut labeled = material.clone();
+            history_quantity(&mut labeled, 1).evidence = evidence;
+            labeled.validate().unwrap();
+            assert_eq!(
+                fitted_domain(&labeled).unwrap().unwrap().ranges(),
+                BRANCH_DOMAIN
+            );
+            history_quantity(&mut labeled, 1)
+                .conditions
+                .remove(DOMAIN_KEY);
+            assert!(labeled.validate().is_err());
+        }
+        let mut encoded = serde_json::to_value(&material).unwrap();
+        encoded["membrane_relaxation"]["branches"][0]["relaxation_time"]["evidence"] =
+            "model_identified".into();
+        assert!(serde_json::from_value::<Material>(encoded).is_err());
+
+        history_quantity(&mut material, 1).bounds = Some([0.1, 0.2]);
+        assert!(
+            material.validate().is_err(),
+            "old bounds cannot qualify the fitted 1 s value"
+        );
+        history_quantity(&mut material, 1).bounds = None;
+        history_quantity(&mut material, 1).evidence = Evidence::Estimate;
+        material.validate().unwrap();
+        let law = material.membrane_relaxation.as_ref().unwrap();
+        let tangent = [[1000.0, 50.0, 0.0], [50.0, 600.0, 0.0], [0.0, 0.0, 150.0]];
+        assert!(law.compile(&material.sources, false, tangent).is_err());
+        assert!(law.compile(&material.sources, true, tangent).is_ok());
+    }
 }

@@ -141,7 +141,8 @@ an existing directional panel-bending law stays active, including compression ex
 zero scalar hinge rigidity. Every candidate, sensitivity, refined mesh, held-out observation and
 publication replay uses those same unchanged laws and their source/estimate/domain admission.
 Targeting scalar coefficients of an already declared nonlinear or directional response still
-refuses, as do unsupported history laws. Calibration cannot silently fit a scalar surrogate and
+refuses, as do unsupported history laws. Version 2 below admits explicitly supplied Maxwell
+histories. Calibration cannot silently fit a scalar surrogate and
 then publish the coefficients alongside a different retained response.
 
 Acceptance and publication gates enforced before any `Selection` is emitted:
@@ -149,6 +150,98 @@ Acceptance and publication gates enforced before any `Selection` is emitted:
 - **Excitation Gram pivot (`min_excitation_pivot`)**: normalized sensitivity Cholesky pivot at the doubled-mesh optimum must exceed `policy.min_excitation_pivot` so unexcited moduli (for example weft stiffness under warp-only torsion) are rejected rather than guessed.
 - **Mesh doubling (`max_mesh_scaled`), held-out `CHECK`, and `fitted_green_strain_range` replay**: every `FIT` and independent `CHECK` experiment is replayed on both the declared `[n_theta, n_z]` mesh and `[2 * n_theta, 2 * n_z]`, held-out `CHECK` strains must remain inside `fitted_green_strain_range`, and a final `StrainDomain::Box` replay verifies the published material.
 - **No fabricated thickness or silent readiness**: identified quantities carry `Evidence::Estimate` and require explicit `--allow-estimates` (or request `allow_estimates: true` in the browser worker) to admit; presser-foot `reported_thickness` is never promoted to unloaded contact `thickness`, so sheets lacking unloaded thickness or body friction keep `mechanics()` unready (`simulation_ready: false`). External unbundled raw Fabric-101 curve archives (upstream `GongDeshan/Fabric_101_for_Wrinkles@510519be` has no repository license for raw archive redistribution) and physical held-out coupon validation remain open under `ftx-tm2.1`.
+
+### Identify relaxation from complete timed cylinder histories (`/2`)
+
+An explicit `"schema": "ftx-cylinder-calibration/2"` request uses the same forward cylinder
+solver with its supplied, source-qualified Maxwell law. It identifies selected branch
+quantities from actual holder forces, torques and/or mid-height radii over the complete
+loading history. The solver determines local cloth strains; no conversion from nominal
+holder travel to uniform material strain is substituted for the 3D experiment.
+
+The source material must already declare `membrane_relaxation` and its equilibrium response,
+branch identities, initialization and integration scheme. Select one to five parameters in
+total, using the existing scalar targets and/or these branch targets:
+
+```json
+"targets": [
+  {"parameter": "maxwell_stiffness_ratio", "branch_id": "recovery", "bounds": [0.2, 1.0]},
+  {"parameter": "maxwell_relaxation_time", "branch_id": "recovery", "bounds": [0.05, 0.3]}
+]
+```
+
+These illustrative bounds are dimensionless for the stiffness ratio and seconds for the
+recovery time. Every branch target needs its exact existing `branch_id`. Stiffness-ratio
+targets apply to proportional branches; recovery-time targets also support independently
+qualified orthotropic branches. The fitter does not create branches or infer an unmeasured
+direction's tensor. `replace_existing: true` explicitly permits replacement of the selected
+source quantities. Untargeted branch tensors, equilibrium properties and original acquired
+strain limits remain intact. Specimen and conditioning must agree with the source law.
+
+Histories must begin at the pristine, unstretched nominal holder separation, with zero rotation
+and slip at time zero, followed by strictly increasing physical times. An authored pretension
+offset must be canceled by the initial axial displacement, then reached through actual timed
+loading waypoints. Holds are repeated displacement
+and rotation at later times. Every waypoint advances the same material memory, whether or
+not it carries an observation; a static solve cannot erase a prehistory. Plastic/damage laws
+and parallel plasticity remain outside this inverse mode.
+
+For non-contact Maxwell cylinders, affine holder motion supplies an initial Newton guess. The
+previous physical positions, inertia and accepted material memory remain unchanged until the solve
+converges. This lets a fitted material replay within its supported domain without treating a moved
+holder and an untouched interior as the required starting geometry or widening the source limits.
+The prescribed-boundary step checks the actual accepted pose before the holder moves, verifies
+that only fixed coordinates changed, and checks the new guess against the active material domains.
+
+Version 2 requires finite-difference sensitivity and an explicit finite positive numerical
+time-refinement tolerance, for example:
+
+```json
+"policy": {
+  "max_rms_scaled": 0.2,
+  "max_peak_scaled": 0.3,
+  "max_mesh_scaled": 0.2,
+  "max_time_scaled": 0.2,
+  "min_excitation_pivot": 0.0001,
+  "max_iterations": 40,
+  "max_forward_solves": 32768,
+  "sensitivity": "finite_difference"
+}
+```
+
+After the selected candidate passes the existing search, excitation, interior-minimum and
+spatial-refinement checks, it replays on the doubled spatial mesh with **two substeps for
+every ordinary time step**. This refines short authored intervals too. The largest absolute
+change in any observed force, torque or radius channel, divided by that channel's residual
+scale, must not exceed `max_time_scaled`. This is a numerical acceptance criterion, not
+measurement uncertainty. `temporal_refinement` records the subdivision factor, both step
+upper bounds, the actual scaled change and acceptance. The same `controls.max_steps`,
+vertex-state and aggregate forward-solve budgets charge all probes and final replays.
+
+Optimization and strain support use FIT histories only. CHECK histories can reject the
+fixed candidate; they cannot select different coefficients or enlarge its support. A
+successful frozen material marks only the replaced quantities as estimates, removes their
+old uncertainty bounds and binds their FIT-only strain domain. That domain intersects any
+independently fitted equilibrium support and remains inside the original acquired Maxwell
+domain. Ordinary downstream forward and garment consumers enforce the resulting support.
+Failed temporal, held-out, identifiability or domain checks publish a diagnostic report
+without a selectable material.
+Prediction histories identify the candidate source law. Publishing fitted-source provenance
+changes the frozen law's identity while preserving its physical coefficients and memory evolution.
+
+Run the supplied synthetic example with either ordinary command:
+
+```sh
+ftx materials calibrate-cylinder examples/cylinder-maxwell-calibration.json --allow-estimates --json
+ftx-materials calibrate-cylinder examples/cylinder-maxwell-calibration.json --allow-estimates
+```
+
+The Material Workbench's **Cylindrical-holder inverse identification** accepts the same JSON,
+retains exact original and frozen-selection bytes, and displays branch IDs and time-refinement
+results. Version 1 requests retain their existing elastic behavior and report format.
+The example's reactions are independently calculated synthetic axial and torsional histories. They test
+numerical identification, not measured Fabric-101 material behavior or garment fit. Source
+acquisition and physical specimen qualification remain open under `ftx-tm2.1` and `ftx-rc1`.
 
 ## Focused checks
 

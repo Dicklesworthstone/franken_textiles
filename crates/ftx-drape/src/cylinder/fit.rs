@@ -9,6 +9,9 @@
 //! fixed-parameter predictions on independent held-out `CHECK` experiments and both mesh levels.
 //! Independently qualified nonlinear membrane and directional panel-bending laws remain active
 //! when that response is not targeted; their original source observations are retained unchanged.
+//! Version 2 additionally identifies explicitly selected Maxwell branch ratios or recovery times
+//! through pristine production history integration, with fixed-candidate temporal subdivision
+//! checks on the doubled mesh. Branch identities, untargeted observations and source bounds survive.
 //!
 //! Published coefficients remain `Evidence::Estimate` with explicit `fitted_green_strain_range`
 //! support. Unloaded contact `thickness` is never fabricated from presser-foot `reported_thickness`,
@@ -22,6 +25,7 @@ use ftx_pattern::{
     material_bending::BendingTensor,
     material_calibration::{Partition, fitted_domain},
     material_catalog::Selection,
+    material_relaxation::Relaxation,
     material_response::{CompiledMembrane, StrainDomain},
     materials::{Evidence, Form, Material, Quantity, Source},
     textile_import,
@@ -31,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     Controls, Fixture, NominalProtocol, ProtocolAudit, State, Waypoint, assemble_solver,
     audit_protocol, budget, build_cylinder_mesh, holder_separation_m, invalid, out_of_range,
-    record_state, set_upper_ring,
+    record_state, set_upper_ring, validate_history_start,
 };
 use crate::{Membrane, Solver};
 
@@ -39,10 +43,15 @@ use crate::{Membrane, Solver};
 pub const INPUT_SCHEMA: &str = "ftx-cylinder-calibration/1";
 /// Schema identifier of [`Report`].
 pub const REPORT_SCHEMA: &str = "ftx-cylinder-calibration-report/1";
+/// Opt-in history-aware identification; legacy elastic requests keep their original contract.
+pub const HISTORY_INPUT_SCHEMA: &str = "ftx-cylinder-calibration/2";
+/// History-aware diagnostics include independently bounded temporal refinement.
+pub const HISTORY_REPORT_SCHEMA: &str = "ftx-cylinder-calibration-report/2";
 
 const FIT_SCOPE: &str = "Bounded 3D cylindrical-holder inverse identification on an isometric chord-radius welded shell: rigid coaxial lower/upper holder rings, explicit pretension offset (never delta/nominal_height), explicit force/torque tare subtraction, grain-rotated scalar or independently qualified nonlinear Green-strain membrane, scalar hinge and independently qualified directional panel bending, three-start projected Levenberg-Marquardt search with doubled-mesh refinement, sensitivity Gram-pivot check on the reported prediction mesh, coarse-to-doubled-mesh stability check, held-out CHECK verification and fitted Green-strain domain replay. Zero gravity. Identified coefficients are model estimates; unloaded contact thickness, skin friction, inside-clamp slip physics, moisture/thermal coupling and physical garment fit are never inferred.";
+const HISTORY_FIT_SCOPE: &str = "Bounded 3D cylindrical-holder identification with an explicitly supplied source-qualified Maxwell law, pristine timed loading and actual production history integration. Caller-selected proportional branch stiffness ratios, proportional or orthotropic branch recovery times, and scalar equilibrium/bending coefficients share the existing three-start finite-difference search, excitation and FIT/CHECK gates. Untargeted branch tensors and initialization/integration policies remain unchanged. Doubled-mesh predictions additionally require a fixed-candidate half-time-step check under the same aggregate solve and path limits. FIT-only strain support is enforced on frozen material replay. No inferred branch count, unmeasured direction, grip slip/compliance, plastic law, statistical confidence, empirical validation or garment-fit claim.";
 
-/// Canonical scalar material property identifiable from cylindrical-holder experiments.
+/// Scalar equilibrium, bending or explicitly named Maxwell coefficient identifiable from cylinders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
@@ -56,6 +65,10 @@ pub enum TargetKind {
     ShearStiffness,
     /// Scalar dihedral hinge bending rigidity `B` (`N*m`).
     BendingRigidity,
+    /// Positive multiplier of the equilibrium tangent for the explicitly named proportional branch.
+    MaxwellStiffnessRatio,
+    /// Positive recovery time of the explicitly named proportional or orthotropic Maxwell branch.
+    MaxwellRelaxationTime,
 }
 
 impl TargetKind {
@@ -68,6 +81,8 @@ impl TargetKind {
             Self::PoissonWarpWeft => "poisson_warp_weft",
             Self::ShearStiffness => "shear_stiffness",
             Self::BendingRigidity => "bending_rigidity",
+            Self::MaxwellStiffnessRatio => "maxwell_stiffness_ratio",
+            Self::MaxwellRelaxationTime => "maxwell_relaxation_time",
         }
     }
 
@@ -76,13 +91,31 @@ impl TargetKind {
     pub const fn unit(self) -> &'static str {
         match self {
             Self::WarpStiffness | Self::WeftStiffness | Self::ShearStiffness => "N/m",
-            Self::PoissonWarpWeft => "1",
+            Self::PoissonWarpWeft | Self::MaxwellStiffnessRatio => "1",
             Self::BendingRigidity => "N*m",
+            Self::MaxwellRelaxationTime => "s",
         }
     }
 
     const fn requires_positive_lower_bound(self) -> bool {
         !matches!(self, Self::PoissonWarpWeft)
+    }
+
+    const fn is_maxwell(self) -> bool {
+        matches!(
+            self,
+            Self::MaxwellStiffnessRatio | Self::MaxwellRelaxationTime
+        )
+    }
+
+    const fn is_membrane(self) -> bool {
+        matches!(
+            self,
+            Self::WarpStiffness
+                | Self::WeftStiffness
+                | Self::PoissonWarpWeft
+                | Self::ShearStiffness
+        )
     }
 }
 
@@ -94,6 +127,19 @@ pub struct TargetParameter {
     pub parameter: TargetKind,
     /// Explicit finite search bounds `[lo, hi]` with `hi > lo` (strictly positive for stiffnesses/bending).
     pub bounds: [f64; 2],
+    /// Version 2 Maxwell targets require an exact existing branch ID. Scalar targets omit it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "branch_id"
+    )]
+    pub branch_id: Option<String>,
+}
+
+fn branch_id<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 
 /// Descriptor of one identified parameter in [`Report`].
@@ -105,6 +151,9 @@ pub struct ParameterDescriptor {
     pub unit: String,
     /// Declared search bounds `[lo, hi]`.
     pub bounds: [f64; 2],
+    /// Exact Maxwell branch for a history coefficient; omitted for equilibrium/bending scalars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<String>,
 }
 
 /// Measured scalar channel reading and its explicit residual weighting scale.
@@ -204,6 +253,14 @@ pub struct Policy {
     pub max_peak_scaled: f64,
     /// Maximum coarse-to-doubled-mesh change divided by each channel's scale.
     pub max_mesh_scaled: f64,
+    /// Version 2 requires a positive half-time-step prediction tolerance in channel-scale units.
+    /// Version 1 omits this field and performs its original spatial check only.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "time_tolerance"
+    )]
+    pub max_time_scaled: Option<f64>,
     /// Minimum column-normalized sensitivity Gram Cholesky pivot (`0 < pivot < 1`).
     pub min_excitation_pivot: f64,
     /// Per-start Levenberg-Marquardt iteration cap across coarse search and refinement (`1..=80`).
@@ -213,6 +270,27 @@ pub struct Policy {
     /// Sensitivity differentiation mode; omitted on the wire when default `finite_difference`.
     #[serde(default, skip_serializing_if = "SensitivityMode::is_default")]
     pub sensitivity: SensitivityMode,
+}
+
+fn time_tolerance<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error> {
+    f64::deserialize(deserializer).map(Some)
+}
+
+/// Fixed-candidate time refinement on the reported doubled spatial mesh, charged to ordinary work.
+#[derive(Clone, Debug, Serialize)]
+pub struct TemporalRefinement {
+    /// Each ordinary authored-interval step is replaced by this many equal substeps, exactly two.
+    pub subdivision_factor: usize,
+    /// Maximum integration step used for the reported predictions, s.
+    pub max_step_s: f64,
+    /// Independently checked maximum step, exactly half the original limit, s.
+    pub refined_max_step_s: f64,
+    /// Largest observed channel change divided by its declared residual scale.
+    pub peak_scaled: f64,
+    /// Whether the complete temporal check met the separately declared numerical tolerance.
+    pub accepted: bool,
 }
 
 /// Reproducible cylindrical-holder constitutive identification request.
@@ -317,7 +395,7 @@ pub struct Prediction {
 /// Complete cylindrical-holder calibration diagnostics and conditional frozen material publication.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// Equals [`REPORT_SCHEMA`] (`"ftx-cylinder-calibration-report/1"`).
+    /// Equals [`REPORT_SCHEMA`] or [`HISTORY_REPORT_SCHEMA`] for the admitted input version.
     pub schema: String,
     /// Complete source input retained for exact audit and replay.
     pub input: Input,
@@ -327,7 +405,7 @@ pub struct Report {
     pub parameters: Vec<f64>,
     /// Target keys, units and bounds in `parameters` order.
     pub parameter_descriptors: Vec<ParameterDescriptor>,
-    /// Whether every convergence, excitation, mesh, `FIT`, `CHECK` and domain-replay gate passed.
+    /// Whether convergence, excitation, mesh, optional time, `FIT`, `CHECK` and domain replay passed.
     pub accepted: bool,
     /// Explicit reasons blocking publication when `accepted == false` (empty when `accepted == true`).
     pub reasons: Vec<String>,
@@ -341,7 +419,7 @@ pub struct Report {
     pub starts: Vec<Start>,
     /// Column-normalized `FIT` sensitivity Gram Cholesky pivot.
     pub excitation_pivot: f64,
-    /// Total static and dynamic Newton equilibrium solves attempted across the entire run.
+    /// Total charged initializations and physical Newton solves attempted across the entire run.
     pub forward_solves: usize,
     /// Total static IFT adjoint linear solves executed (omitted on the wire when zero).
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -355,6 +433,9 @@ pub struct Report {
     pub check: Option<Quality>,
     /// Largest coarse-to-doubled-mesh channel change in measurement-scale units.
     pub mesh_change_peak_scaled: f64,
+    /// Present only for explicit history-aware schema /2; CHECK never refits a time coefficient.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_refinement: Option<TemporalRefinement>,
     /// Whether every coarse and doubled `FIT` and `CHECK` experiment replayed cleanly inside `fitted_green_strain_range`.
     pub domain_replay_verified: bool,
     /// Pathwise `FIT` Green-strain envelope `[E_11, E_22, 2E_12]` including `[0, 0]` reference.
@@ -376,6 +457,7 @@ struct Baseline {
     membrane_response: Option<CompiledMembrane>,
     panel_bending: Option<BendingTensor>,
     self_contact: Option<(f64, f64)>,
+    relaxation: Option<Relaxation>,
 }
 
 impl Baseline {
@@ -388,9 +470,45 @@ impl Baseline {
                 TargetKind::PoissonWarpWeft => result.poisson = val,
                 TargetKind::ShearStiffness => result.shear_n_m = val,
                 TargetKind::BendingRigidity => result.bending_nm = val,
+                TargetKind::MaxwellStiffnessRatio | TargetKind::MaxwellRelaxationTime => {
+                    let quantity = target_quantity_mut(
+                        result.relaxation.as_mut().expect("validated Maxwell law"),
+                        target,
+                    )
+                    .expect("validated Maxwell target");
+                    quantity.value = val;
+                    // Replacement is explicit; the old observation's uncertainty is not a bound
+                    // on the declared inverse search or an uncertainty interval for its estimate.
+                    quantity.bounds = None;
+                }
             }
         }
         result
+    }
+}
+
+fn target_quantity_mut<'a>(
+    law: &'a mut Relaxation,
+    target: &TargetParameter,
+) -> Option<&'a mut Quantity> {
+    let id = target.branch_id.as_deref()?;
+    match target.parameter {
+        TargetKind::MaxwellStiffnessRatio => law
+            .branches
+            .iter_mut()
+            .find(|branch| branch.id == id)
+            .map(|branch| &mut branch.stiffness_ratio),
+        TargetKind::MaxwellRelaxationTime => {
+            if let Some(branch) = law.branches.iter_mut().find(|branch| branch.id == id) {
+                Some(&mut branch.relaxation_time)
+            } else {
+                law.orthotropic_branches
+                    .iter_mut()
+                    .find(|branch| branch.id == id)
+                    .map(|branch| &mut branch.relaxation_time)
+            }
+        }
+        _ => None,
     }
 }
 
@@ -449,9 +567,15 @@ fn validate_loading_counts(
     fixture: &Fixture,
     loading: &[Waypoint],
     controls: &Controls,
+    refine_time: bool,
 ) -> Result<Vec<usize>, Refusal> {
     fixture.validate()?;
     controls.validate()?;
+    if refine_time && controls.max_step_s * 0.5 <= 0.0 {
+        return Err(invalid(
+            "refined cylinder time-step bound is not representable",
+        ));
+    }
     if loading.is_empty() || loading.len() > 129 {
         return Err(invalid(
             "cylinder calibration experiment loading requires 1..=129 waypoints",
@@ -476,7 +600,8 @@ fn validate_loading_counts(
                 "clamp_slip_m is cumulative irreversible pull-out and must not decrease",
             ));
         }
-        let raw_count = (dt / controls.max_step_s).ceil().max(1.0);
+        let raw_count =
+            (dt / controls.max_step_s).ceil().max(1.0) * if refine_time { 2.0 } else { 1.0 };
         if !raw_count.is_finite()
             || raw_count > controls.max_steps.saturating_sub(total_steps) as f64
         {
@@ -522,7 +647,9 @@ impl Budget<'_> {
         parameters: &[f64],
         domain: Option<StrainDomain>,
         keep_static_solver: bool,
+        refine_time: bool,
     ) -> Result<ExperimentRun, ForwardFailure> {
+        let controls = self.input.controls.clone();
         let coeffs = self.baseline.apply(&self.input.targets, parameters);
         let membrane = Membrane::orthotropic(
             coeffs.warp_n_m,
@@ -544,7 +671,22 @@ impl Budget<'_> {
             )
             .into());
         }
-        let counts = validate_loading_counts(fixture, &experiment.loading, &self.input.controls)?;
+        let counts = validate_loading_counts(fixture, &experiment.loading, &controls, refine_time)?;
+        let has_history = coeffs.relaxation.is_some();
+        if has_history {
+            validate_history_start(fixture, &experiment.loading)?;
+        }
+        let relaxation = coeffs
+            .relaxation
+            .as_ref()
+            .map(|law| {
+                law.compile(
+                    &self.input.material.sources,
+                    self.input.allow_estimated_observations,
+                    membrane.q,
+                )
+            })
+            .transpose()?;
         let protocol_audit = audit_protocol(
             fixture,
             &experiment.loading,
@@ -572,7 +714,7 @@ impl Budget<'_> {
 
         let (mut solver, initial_solve) = assemble_solver(
             fixture,
-            &self.input.controls,
+            &controls,
             &mesh,
             membrane,
             coeffs.bending_nm,
@@ -580,7 +722,7 @@ impl Budget<'_> {
             coeffs.membrane_response,
             domain,
             coeffs.panel_bending,
-            None,
+            relaxation,
             None,
             None,
             self_contact,
@@ -591,7 +733,7 @@ impl Budget<'_> {
         let zero_vel = vec![Vec3::ZERO; mesh.n_verts];
         let first_state = record_state(
             fixture,
-            &self.input.controls,
+            &controls,
             &solver,
             &experiment.loading[0],
             0.0,
@@ -638,6 +780,8 @@ impl Budget<'_> {
 
                 self.admit()?;
                 let old_velocity = solver.v.clone();
+                // The public pure-Maxwell cylinder uses the same history-safe Newton seed.
+                // It changes neither the inertial reference nor accepted material memory.
                 let guess = self_contact.is_none().then(|| {
                     super::affine_cylinder_guess(
                         &solver.x,
@@ -647,6 +791,7 @@ impl Budget<'_> {
                         curr_rot_rad - prev_rot_rad,
                     )
                 });
+                let accepted_positions = guess.as_ref().map(|_| solver.x.clone());
                 set_upper_ring(
                     &mut solver.x,
                     n_theta,
@@ -655,9 +800,14 @@ impl Budget<'_> {
                     curr_sep,
                     waypoint.rotation_deg,
                 );
-                let numerical = solver
-                    .step_with_guess(h, guess.as_deref())
-                    .map_err(map_trial)?;
+                let numerical = if let (Some(accepted), Some(guess)) =
+                    (accepted_positions.as_deref(), guess.as_deref())
+                {
+                    solver.step_with_prescribed_boundary_guess(h, accepted, guess)
+                } else {
+                    solver.step_with_guess(h, None)
+                }
+                .map_err(map_trial)?;
                 for i in 0..n_theta {
                     let idx = n_z * n_theta + i;
                     let p = solver.x[idx];
@@ -665,7 +815,7 @@ impl Budget<'_> {
                 }
                 let st = record_state(
                     fixture,
-                    &self.input.controls,
+                    &controls,
                     &solver,
                     &waypoint,
                     h,
@@ -703,6 +853,7 @@ impl Budget<'_> {
             parameters,
             self.inherited_domain,
             false,
+            false,
         )
         .map_err(ForwardFailure::refusal)
     }
@@ -715,7 +866,29 @@ impl Budget<'_> {
         domain: StrainDomain,
     ) -> Result<ExperimentRun, Refusal> {
         let enforced = self.within_inherited_domain(domain)?;
-        self.execute(experiment, fixture, parameters, Some(enforced), false)
+        self.execute(
+            experiment,
+            fixture,
+            parameters,
+            Some(enforced),
+            false,
+            false,
+        )
+        .map_err(ForwardFailure::refusal)
+    }
+
+    fn refined_time(
+        &mut self,
+        experiment: &Experiment,
+        fixture: &Fixture,
+        parameters: &[f64],
+        domain: Option<StrainDomain>,
+    ) -> Result<ExperimentRun, Refusal> {
+        let domain = domain
+            .map(|domain| self.within_inherited_domain(domain))
+            .transpose()?
+            .or(self.inherited_domain);
+        self.execute(experiment, fixture, parameters, domain, false, true)
             .map_err(ForwardFailure::refusal)
     }
 }
@@ -723,9 +896,10 @@ impl Budget<'_> {
 fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
     input.material.validate()?;
     input.controls.validate()?;
-    if input.schema != INPUT_SCHEMA {
+    let history = input.schema == HISTORY_INPUT_SCHEMA;
+    if input.schema != INPUT_SCHEMA && !history {
         return Err(invalid(format!(
-            "unsupported cylinder calibration schema {}; expected {INPUT_SCHEMA}",
+            "unsupported cylinder calibration schema {}; expected {INPUT_SCHEMA} or {HISTORY_INPUT_SCHEMA}",
             input.schema
         )));
     }
@@ -739,10 +913,10 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         || input.targets.len() > 5
     {
         return Err(invalid(
-            "cylinder calibration requires schema ftx-cylinder-calibration/1, explicit cylindrical-shell model consent, a sheet material, method/date, 1..=5 targets and 1..=16 experiments",
+            "cylinder calibration requires schema ftx-cylinder-calibration/1 or /2, explicit cylindrical-shell model consent, a sheet material, method/date, 1..=5 targets and 1..=16 experiments",
         ));
     }
-    if input.material.membrane_relaxation.is_some()
+    if (input.material.membrane_relaxation.is_some() && !history)
         || input
             .material
             .structure
@@ -761,6 +935,31 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         ));
     }
     let policy = &input.policy;
+    if history {
+        let law = input.material.membrane_relaxation.as_ref().ok_or_else(|| {
+            invalid("cylinder calibration /2 requires an explicitly source-qualified Maxwell law")
+        })?;
+        if law.parallel_plasticity.is_some()
+            || policy
+                .max_time_scaled
+                .is_none_or(|value| !value.is_finite() || value <= 0.0)
+            || policy.sensitivity != SensitivityMode::FiniteDifference
+        {
+            return Err(invalid(
+                "history-aware cylinder calibration requires finite_difference sensitivity, positive max_time_scaled and no parallel plastic law",
+            ));
+        }
+        validate_history_conditions(input, law)?;
+    } else if policy.max_time_scaled.is_some()
+        || input
+            .targets
+            .iter()
+            .any(|target| target.parameter.is_maxwell() || target.branch_id.is_some())
+    {
+        return Err(invalid(
+            "Maxwell targets, branch_id and max_time_scaled require cylinder calibration /2",
+        ));
+    }
     if [
         policy.max_rms_scaled,
         policy.max_peak_scaled,
@@ -782,11 +981,30 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
     let mut fits_membrane = false;
     let mut fits_bending = false;
     for target in &input.targets {
-        if !target_kinds.insert(target.parameter) {
+        if !target_kinds.insert((target.parameter, target.branch_id.as_deref())) {
             return Err(invalid(format!(
                 "duplicate cylinder calibration target {}",
                 target.parameter.key()
             )));
+        }
+        if target.parameter.is_maxwell() {
+            let mut law = input
+                .material
+                .membrane_relaxation
+                .clone()
+                .ok_or_else(|| invalid("Maxwell target requires an existing source law"))?;
+            if target
+                .branch_id
+                .as_ref()
+                .is_none_or(|id| id.trim().is_empty() || id.len() > 512)
+                || target_quantity_mut(&mut law, target).is_none()
+            {
+                return Err(invalid(
+                    "Maxwell target requires an exact existing branch_id; stiffness ratios apply only to proportional branches",
+                ));
+            }
+        } else if target.branch_id.is_some() {
+            return Err(invalid("scalar cylinder targets must omit branch_id"));
         }
         let [lo, hi] = target.bounds;
         if !lo.is_finite()
@@ -807,14 +1025,15 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         }
         if target.parameter == TargetKind::BendingRigidity {
             fits_bending = true;
-        } else {
+        } else if target.parameter.is_membrane() {
             fits_membrane = true;
         }
         if !input.replace_existing
-            && input
-                .material
-                .properties
-                .contains_key(target.parameter.key())
+            && (target.parameter.is_maxwell()
+                || input
+                    .material
+                    .properties
+                    .contains_key(target.parameter.key()))
         {
             return Err(invalid(format!(
                 "cylinder calibration would replace existing {}; explicit replace_existing is required",
@@ -841,6 +1060,11 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         allow_estimates: allow_obs,
         ..Selection::default()
     })?;
+    if history {
+        // Validate the complete original law and its equilibrium binding before replacing any
+        // selected quantities; fixed branches retain their ordinary evidence-admission policy.
+        resolved.membrane_relaxation()?;
+    }
     // Untargeted constitutive laws are the same source-qualified authority used by the public
     // forward experiment and the published selection, never a scalar surrogate during fitting.
     let membrane_response = resolved.membrane_response()?;
@@ -958,7 +1182,15 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
     let mut obs_ids = BTreeSet::new();
     let mut fit_channels = 0usize;
     for experiment in &input.experiments {
-        validate_loading_counts(&experiment.fixture, &experiment.loading, &input.controls)?;
+        validate_loading_counts(
+            &experiment.fixture,
+            &experiment.loading,
+            &input.controls,
+            false,
+        )?;
+        if history {
+            validate_history_start(&experiment.fixture, &experiment.loading)?;
+        }
         let mut doubled = experiment.fixture.clone();
         doubled.cells = doubled.cells.map(|n| n * 2);
         doubled.validate().map_err(|_| {
@@ -966,7 +1198,10 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
                 "inverse cylinder meshes must permit doubling [2 * n_theta, 2 * n_z] within the 64x32 and 1024-cell forward limit",
             )
         })?;
-        validate_loading_counts(&doubled, &experiment.loading, &input.controls)?;
+        validate_loading_counts(&doubled, &experiment.loading, &input.controls, false)?;
+        if history {
+            validate_loading_counts(&doubled, &experiment.loading, &input.controls, true)?;
+        }
         audit_protocol(
             &experiment.fixture,
             &experiment.loading,
@@ -1095,7 +1330,76 @@ fn resolve_baseline_and_validate(input: &Input) -> Result<Baseline, Refusal> {
         membrane_response,
         panel_bending,
         self_contact,
+        relaxation: input.material.membrane_relaxation.clone(),
     })
+}
+
+fn validate_history_conditions(input: &Input, law: &Relaxation) -> Result<(), Refusal> {
+    if ["specimen_id", "conditioning"].iter().any(|key| {
+        law.conditions
+            .get(*key)
+            .is_none_or(|value| value.trim().is_empty())
+    }) {
+        return Err(invalid(
+            "history-aware cylinder identification needs an exact Maxwell specimen_id and conditioning",
+        ));
+    }
+    let matches = |conditions: &BTreeMap<String, String>| {
+        law.conditions
+            .iter()
+            .all(|(key, value)| conditions.get(key) == Some(value))
+    };
+    if !matches(&input.conditions) {
+        return Err(invalid(
+            "cylinder acquisition conditions must match the source Maxwell specimen and conditioning",
+        ));
+    }
+    let mut conditions = Vec::new();
+    if let Some(response) = &input.material.membrane_response {
+        conditions.extend([
+            &response.warp.conditions,
+            &response.weft.conditions,
+            &response.shear.conditions,
+            &response.coupling.conditions,
+        ]);
+        if let Some(area) = &response.area_response {
+            conditions.extend([&area.quadratic.conditions, &area.log_squared.conditions]);
+        }
+    } else {
+        for key in [
+            "warp_stiffness",
+            "weft_stiffness",
+            "poisson_warp_weft",
+            "shear_stiffness",
+        ] {
+            conditions.push(&input.material.properties.get(key)
+                .ok_or_else(|| invalid("history-aware cylinder calibration needs characterized equilibrium properties"))?.conditions);
+        }
+    }
+    for branch in &law.branches {
+        conditions.extend([
+            &branch.stiffness_ratio.conditions,
+            &branch.relaxation_time.conditions,
+        ]);
+    }
+    for branch in &law.orthotropic_branches {
+        conditions.extend([
+            &branch.stiffness.warp.conditions,
+            &branch.stiffness.weft.conditions,
+            &branch.stiffness.coupling.conditions,
+            &branch.stiffness.shear.conditions,
+            &branch.relaxation_time.conditions,
+        ]);
+    }
+    if conditions
+        .into_iter()
+        .any(|conditions| !matches(conditions))
+    {
+        return Err(invalid(
+            "cylinder Maxwell branches and equilibrium observations must share the declared specimen and conditioning",
+        ));
+    }
+    Ok(())
 }
 
 fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
@@ -1143,6 +1447,7 @@ fn evaluate_fit<const N: usize>(
             &parameters,
             budget.inherited_domain,
             keep_solvers,
+            false,
         ) {
             Ok(run) => run,
             Err(failure @ ForwardFailure::Trial(_)) => {
@@ -1179,38 +1484,45 @@ fn adjoint_jacobian<const N: usize>(
     budget: &mut Budget<'_>,
     eval: &mut Evaluation,
 ) -> Result<Vec<[f64; N]>, Refusal> {
-    if budget.baseline.membrane_response.is_some() || budget.baseline.panel_bending.is_some() {
+    if budget.baseline.membrane_response.is_some()
+        || budget.baseline.panel_bending.is_some()
+        || budget.baseline.relaxation.is_some()
+    {
         return Err(invalid(
             "adjoint cylinder Jacobian requires homogeneous scalar orthotropic membrane and hinge bending",
         ));
     }
     let phys = physical(input, p);
     let coeffs = budget.baseline.apply(&input.targets, &phys);
-    let target_row =
-        |grad: crate::adjoint::ConstitutiveGradient, scale: f64| -> Result<[f64; N], Refusal> {
-            let d_ortho = crate::adjoint::orthotropic_chain_rule(
-                coeffs.warp_n_m,
-                coeffs.weft_n_m,
-                coeffs.poisson,
-                coeffs.shear_n_m,
-                grad.dq,
-            )?;
-            let row = std::array::from_fn(|k| {
-                let deriv = match input.targets[k].parameter {
-                    TargetKind::WarpStiffness => d_ortho[0],
-                    TargetKind::WeftStiffness => d_ortho[1],
-                    TargetKind::PoissonWarpWeft => d_ortho[2],
-                    TargetKind::ShearStiffness => d_ortho[3],
-                    TargetKind::BendingRigidity => grad.d_bending,
-                };
-                let [lo, hi] = input.targets[k].bounds;
-                deriv * (hi - lo) / scale
-            });
-            if row.iter().any(|v| !v.is_finite()) {
-                return Err(invalid("cylinder adjoint sensitivity overflow"));
-            }
-            Ok(row)
-        };
+    let target_row = |grad: crate::adjoint::ConstitutiveGradient,
+                      scale: f64|
+     -> Result<[f64; N], Refusal> {
+        let d_ortho = crate::adjoint::orthotropic_chain_rule(
+            coeffs.warp_n_m,
+            coeffs.weft_n_m,
+            coeffs.poisson,
+            coeffs.shear_n_m,
+            grad.dq,
+        )?;
+        let row = std::array::from_fn(|k| {
+            let deriv = match input.targets[k].parameter {
+                TargetKind::WarpStiffness => d_ortho[0],
+                TargetKind::WeftStiffness => d_ortho[1],
+                TargetKind::PoissonWarpWeft => d_ortho[2],
+                TargetKind::ShearStiffness => d_ortho[3],
+                TargetKind::BendingRigidity => grad.d_bending,
+                TargetKind::MaxwellStiffnessRatio | TargetKind::MaxwellRelaxationTime => {
+                    unreachable!("Maxwell sensitivity requires complete timed finite differences")
+                }
+            };
+            let [lo, hi] = input.targets[k].bounds;
+            deriv * (hi - lo) / scale
+        });
+        if row.iter().any(|v| !v.is_finite()) {
+            return Err(invalid("cylinder adjoint sensitivity overflow"));
+        }
+        Ok(row)
+    };
     let mut rows = Vec::with_capacity(eval.residuals.len());
     let mut solvers = eval.adjoint_solvers.iter_mut();
     for experiment in input
@@ -1749,6 +2061,7 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
     let mut check_errors = Vec::new();
     let mut check_strain_ranges = Vec::new();
     let mut mesh_peak = 0.0_f64;
+    let mut time_peak = 0.0_f64;
     let mut ranges = [[0.0_f64; 2]; 3];
 
     for experiment in &input.experiments {
@@ -1756,18 +2069,53 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
         refined.cells = refined.cells.map(|n| n * 2);
         let coarse_run = budget.solve(experiment, &experiment.fixture, &parameters)?;
         let refined_run = budget.solve(experiment, &refined, &parameters)?;
+        let temporal_run = input
+            .policy
+            .max_time_scaled
+            .map(|_| budget.refined_time(experiment, &refined, &parameters, None))
+            .transpose()?;
 
         if experiment.partition == Partition::Fit {
             merge_strain_range(&mut ranges, coarse_run.path_strain_range);
             merge_strain_range(&mut ranges, refined_run.path_strain_range);
+            if let Some(run) = &temporal_run {
+                merge_strain_range(&mut ranges, run.path_strain_range);
+            }
         } else {
             check_strain_ranges.push(coarse_run.path_strain_range);
             check_strain_ranges.push(refined_run.path_strain_range);
+            if let Some(run) = &temporal_run {
+                check_strain_ranges.push(run.path_strain_range);
+            }
         }
 
         for obs in &experiment.observations {
             let coarse_state = &coarse_run.waypoint_states[obs.waypoint_index];
             let state = refined_run.waypoint_states[obs.waypoint_index].clone();
+            if let Some(run) = &temporal_run {
+                let refined_state = &run.waypoint_states[obs.waypoint_index];
+                for (channel, original, refined) in [
+                    (
+                        &obs.force_n,
+                        state.tare_adjusted_force_n,
+                        refined_state.tare_adjusted_force_n,
+                    ),
+                    (
+                        &obs.torque_nm,
+                        state.tare_adjusted_torque_nm,
+                        refined_state.tare_adjusted_torque_nm,
+                    ),
+                    (
+                        &obs.mean_mid_radius_m,
+                        state.mid_radius_range_m[2],
+                        refined_state.mid_radius_range_m[2],
+                    ),
+                ] {
+                    if let Some(channel) = channel {
+                        time_peak = time_peak.max((original - refined).abs() / channel.scale);
+                    }
+                }
+            }
             let errors = if experiment.partition == Partition::Fit {
                 &mut fit_errors
             } else {
@@ -1857,6 +2205,22 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
                 .into(),
         );
     }
+    let temporal_refinement = input
+        .policy
+        .max_time_scaled
+        .map(|limit| TemporalRefinement {
+            subdivision_factor: 2,
+            max_step_s: input.controls.max_step_s,
+            refined_max_step_s: input.controls.max_step_s * 0.5,
+            peak_scaled: time_peak,
+            accepted: time_peak.is_finite() && time_peak <= limit,
+        });
+    if temporal_refinement
+        .as_ref()
+        .is_some_and(|report| !report.accepted)
+    {
+        reasons.push("halving the cylinder time step changes predictions beyond the declared temporal budget".into());
+    }
 
     let mut domain_replay_verified = false;
     if reasons.is_empty() {
@@ -1871,6 +2235,22 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
                     }
                     reasons.push(format!(
                         "fitted-domain replay failed for {} at mesh factor {factor}: {}; no domain was widened",
+                        experiment.id, refusal.message
+                    ));
+                    break 'replay;
+                }
+            }
+            if temporal_refinement.is_some() {
+                let mut fixture = experiment.fixture.clone();
+                fixture.cells = fixture.cells.map(|n| n * 2);
+                if let Err(refusal) =
+                    budget.refined_time(experiment, &fixture, &parameters, Some(domain))
+                {
+                    if refusal.code == RefusalCode::BudgetExceeded {
+                        return Err(refusal);
+                    }
+                    reasons.push(format!(
+                        "fitted-domain temporal replay failed for {}: {}; no domain was widened",
                         experiment.id, refusal.message
                     ));
                     break 'replay;
@@ -1919,11 +2299,17 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
             key: t.parameter.key().into(),
             unit: t.parameter.unit().into(),
             bounds: t.bounds,
+            branch_id: t.branch_id.clone(),
         })
         .collect();
 
     Ok(Report {
-        schema: REPORT_SCHEMA.into(),
+        schema: if input.schema == HISTORY_INPUT_SCHEMA {
+            HISTORY_REPORT_SCHEMA
+        } else {
+            REPORT_SCHEMA
+        }
+        .into(),
         input: input.clone(),
         input_sha256: digest,
         parameters,
@@ -1942,10 +2328,16 @@ fn calibrate_n<const N: usize>(input: &Input, baseline: Baseline) -> Result<Repo
         fit,
         check,
         mesh_change_peak_scaled: mesh_peak,
+        temporal_refinement,
         domain_replay_verified,
         fitted_green_strain_range: ranges,
         predictions,
-        model_scope: FIT_SCOPE.into(),
+        model_scope: if input.schema == HISTORY_INPUT_SCHEMA {
+            HISTORY_FIT_SCOPE
+        } else {
+            FIT_SCOPE
+        }
+        .into(),
     })
 }
 
@@ -1957,6 +2349,12 @@ fn publish(
     ranges: [[f64; 2]; 3],
 ) -> Result<Material, Refusal> {
     let mut material = input.material.clone();
+    let history = input.schema == HISTORY_INPUT_SCHEMA;
+    let report_schema = if history {
+        HISTORY_REPORT_SCHEMA
+    } else {
+        REPORT_SCHEMA
+    };
     let source = format!("cylinder-{digest}");
     if material.sources.contains_key(&source) {
         return Err(invalid("cylinder calibration source key already exists"));
@@ -1964,10 +2362,10 @@ fn publish(
     material.sources.insert(
         source.clone(),
         Source {
-            reference: format!("local:ftx-cylinder-calibration/{digest}"),
+            reference: format!("local:ftx-cylinder{}-calibration/{digest}", if history { "-history" } else { "" }),
             accessed_on: input.fitted_on.clone(),
             note: format!(
-                "Inverse 3D cylindrical-holder model; complete experiments, pretension/tare protocol audit, sensitivity and doubled-mesh checks retained in {REPORT_SCHEMA} input {digest}. {}",
+                "Inverse 3D cylindrical-holder model; complete experiments, pretension/tare protocol audit, sensitivity and doubled-mesh checks retained in {report_schema} input {digest}. {}",
                 input.method
             ),
         },
@@ -1978,13 +2376,18 @@ fn publish(
         serde_json::to_string(&ranges).map_err(invalid)?,
     );
     conditions.insert("held_out_checks".into(), "true".into());
-    conditions.insert("fixture_model".into(), FIT_SCOPE.into());
+    conditions.insert(
+        "fixture_model".into(),
+        if history {
+            HISTORY_FIT_SCOPE
+        } else {
+            FIT_SCOPE
+        }
+        .into(),
+    );
 
     let coeffs = baseline.apply(&input.targets, parameters);
-    let fits_membrane = input
-        .targets
-        .iter()
-        .any(|t| t.parameter != TargetKind::BendingRigidity);
+    let fits_membrane = input.targets.iter().any(|t| t.parameter.is_membrane());
     let method = "Bounded inverse 3D cylindrical-holder shell identification using isometric chord-radius clamping, explicit pretension/tare, local sensitivity pivot and held-out doubled-mesh checks. No unloaded contact thickness or skin friction is inferred.";
 
     if fits_membrane {
@@ -2021,10 +2424,29 @@ fn publish(
                 evidence: Evidence::Estimate,
                 source: source.clone(),
                 method: method.into(),
-                conditions,
+                conditions: conditions.clone(),
                 bounds: None,
             },
         );
+    }
+    if history {
+        let mut law = coeffs.relaxation.expect("validated Maxwell law");
+        for target in input
+            .targets
+            .iter()
+            .filter(|target| target.parameter.is_maxwell())
+        {
+            let quantity = target_quantity_mut(&mut law, target).expect("validated Maxwell target");
+            quantity.evidence = Evidence::Estimate;
+            quantity.source.clone_from(&source);
+            quantity.method = "Bounded inverse 3D cylindrical-holder Maxwell history using actual grip reactions, fixed branch identity, independent FIT/CHECK and mesh/time refinement. Unselected branch observations and equilibrium evidence are preserved.".into();
+            quantity.conditions.clone_from(&conditions);
+            quantity
+                .conditions
+                .insert("cylinder_history_fit_sha256".into(), digest.into());
+            quantity.bounds = None;
+        }
+        material.membrane_relaxation = Some(law);
     }
     material.validate()?;
     Ok(material)
@@ -2035,6 +2457,368 @@ mod tests {
     use super::*;
     use crate::cylinder;
     use serde_json::json;
+
+    fn history_input() -> Input {
+        serde_json::from_str(include_str!(
+            "../../../../examples/cylinder-maxwell-calibration.json"
+        ))
+        .unwrap()
+    }
+
+    fn history_budget(input: &Input) -> Budget<'_> {
+        Budget {
+            used: 0,
+            adjoint_solves: 0,
+            limit: input.policy.max_forward_solves,
+            inherited_domain: fitted_domain(&input.material).unwrap(),
+            baseline: resolve_baseline_and_validate(input).unwrap(),
+            input,
+            recovery: SearchRecovery::default(),
+        }
+    }
+
+    #[test]
+    fn history_calibration_forward_replays_source_law() {
+        let input = history_input();
+        let parameters = [0.6, 0.15];
+        let mut budget = history_budget(&input);
+        let mut material = input.material.clone();
+        let law = material.membrane_relaxation.as_mut().unwrap();
+        for (target, value) in input.targets.iter().zip(parameters) {
+            target_quantity_mut(law, target).unwrap().value = value;
+        }
+        for (experiment, factor) in input
+            .experiments
+            .iter()
+            .flat_map(|experiment| [1, 2].map(|factor| (experiment, factor)))
+        {
+            let mut fixture = experiment.fixture.clone();
+            fixture.cells = fixture.cells.map(|n| n * factor);
+            let fitted = budget.solve(experiment, &fixture, &parameters).unwrap();
+            let ordinary = cylinder::evaluate(&cylinder::Request {
+                schema: cylinder::REQUEST_SCHEMA.into(),
+                material: Selection {
+                    id: material.id.clone(),
+                    record: Some(material.clone()),
+                    allow_estimates: true,
+                    ..Selection::default()
+                },
+                fixture,
+                loading: experiment.loading.clone(),
+                nominal_protocol: None,
+                controls: input.controls.clone(),
+            })
+            .unwrap();
+            assert!(fitted.waypoint_states[0].solve.is_none());
+            assert!(fitted.waypoint_states[0].stored_membrane_energy_j.abs() < 1e-20);
+            for state in &fitted.waypoint_states {
+                let replay = ordinary
+                    .states
+                    .iter()
+                    .find(|replay| replay.time_s == state.time_s)
+                    .unwrap();
+                assert_eq!(
+                    serde_json::to_value(state).unwrap(),
+                    serde_json::to_value(replay).unwrap()
+                );
+            }
+            // Independent continuum Maxwell convolution for a linear grip ramp: Green strain
+            // is quadratic in time. Neither source observations nor this answer use the fitter.
+            let extension = experiment.loading[1].axial_displacement_m
+                / experiment.fixture.nominal_free_height_m;
+            let (ramp, tau, ratio) = (experiment.loading[1].time_s, 0.15_f64, 0.6_f64);
+            let rate = extension / ramp;
+            let one_minus_decay = 1.0 - (-ramp / tau).exp();
+            let transient = rate * tau * one_minus_decay
+                + rate * rate * (tau * ramp - tau * tau * one_minus_decay);
+            for observation in &experiment.observations {
+                let state = &fitted.waypoint_states[observation.waypoint_index];
+                let axial_stress = 800.0
+                    * (extension
+                        + 0.5 * extension * extension
+                        + ratio * transient * (-(state.time_s - ramp) / tau).exp());
+                if let Some(force) = &observation.force_n {
+                    let expected = experiment.fixture.wrapped_circumference_m()
+                        * (1.0 + extension)
+                        * axial_stress;
+                    assert!((force.value - expected).abs() < 1e-12);
+                    assert!(
+                        (state.tare_adjusted_force_n - expected).abs() < 0.01,
+                        "mesh {factor}, t {}: {} versus analytic {expected}",
+                        state.time_s,
+                        state.tare_adjusted_force_n
+                    );
+                }
+                if let Some(torque) = &observation.torque_nm {
+                    // Independent small-angle torsion convolution, including axial-stress
+                    // stiffening from the preceding ramp. No production solver supplies a target.
+                    let gamma = |waypoint: &Waypoint| {
+                        experiment.fixture.holder_radius_m * waypoint.rotation_deg.to_radians()
+                            / experiment.fixture.nominal_free_height_m
+                    };
+                    let mut shear_transient = 0.0;
+                    for pair in experiment.loading[..=observation.waypoint_index].windows(2) {
+                        let duration = pair[1].time_s - pair[0].time_s;
+                        let decay = (-duration / tau).exp();
+                        shear_transient = shear_transient * decay
+                            + (gamma(&pair[1]) - gamma(&pair[0])) / duration * tau * (1.0 - decay);
+                    }
+                    let shear = gamma(&experiment.loading[observation.waypoint_index]);
+                    let expected = experiment.fixture.wrapped_circumference_m()
+                        * experiment.fixture.holder_radius_m
+                        * (200.0 * (shear + ratio * shear_transient) + shear * axial_stress);
+                    assert!((torque.value - expected).abs() < 1e-12);
+                    assert!(
+                        (state.tare_adjusted_torque_nm - expected).abs()
+                            < input.policy.max_peak_scaled * torque.scale,
+                        "mesh {factor}, t {}: {} versus small-angle continuum {expected}",
+                        state.time_s,
+                        state.tare_adjusted_torque_nm
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn history_calibration_temporal_refinement_doubles_short_intervals() {
+        let input = history_input();
+        let mut experiment = input.experiments[0].clone();
+        experiment.loading.truncate(3);
+        experiment.loading[1].time_s = 0.01;
+        experiment.loading[2].time_s = 0.02;
+        experiment.loading[1].axial_displacement_m = 0.0005;
+        experiment.loading[2].axial_displacement_m = 0.0005;
+        let original = validate_loading_counts(
+            &experiment.fixture,
+            &experiment.loading,
+            &input.controls,
+            false,
+        )
+        .unwrap();
+        let refined = validate_loading_counts(
+            &experiment.fixture,
+            &experiment.loading,
+            &input.controls,
+            true,
+        )
+        .unwrap();
+        assert_eq!(original, [1, 1]);
+        assert_eq!(refined, [2, 2]);
+        let mut controls = input.controls.clone();
+        controls.max_steps = 3;
+        assert!(
+            validate_loading_counts(&experiment.fixture, &experiment.loading, &controls, false)
+                .is_ok()
+        );
+        assert_eq!(
+            validate_loading_counts(&experiment.fixture, &experiment.loading, &controls, true)
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+
+        let mut budget = history_budget(&input);
+        let original = budget
+            .solve(&experiment, &experiment.fixture, &[0.6, 0.15])
+            .unwrap();
+        assert_eq!(budget.used, 3);
+        let refined = budget
+            .refined_time(&experiment, &experiment.fixture, &[0.6, 0.15], None)
+            .unwrap();
+        assert_eq!(budget.used, 8);
+        assert_eq!(original.waypoint_states[1].time_step_s, 0.01);
+        assert_eq!(refined.waypoint_states[1].time_step_s, 0.005);
+        assert!(
+            (original.waypoint_states[1].upper_force_n - refined.waypoint_states[1].upper_force_n)
+                .abs()
+                > 1e-8
+        );
+        budget.limit = budget.used + 3;
+        assert_eq!(
+            budget
+                .refined_time(&experiment, &experiment.fixture, &[0.6, 0.15], None)
+                .err()
+                .unwrap()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+        assert_eq!(budget.used, budget.limit);
+    }
+
+    #[test]
+    fn history_calibration_validates_branch_sources_and_pristine_histories() {
+        let input = history_input();
+        assert!(resolve_baseline_and_validate(&input).is_ok());
+        let refuses = |candidate: Input, fragment: &str| {
+            let refusal = resolve_baseline_and_validate(&candidate)
+                .err()
+                .expect("malformed history must refuse");
+            assert!(refusal.message.contains(fragment), "{refusal:?}");
+        };
+        let mut candidate = input.clone();
+        candidate.schema = INPUT_SCHEMA.into();
+        refuses(candidate, "cannot erase");
+        let mut candidate = input.clone();
+        candidate.targets[0].branch_id = Some("unacquired".into());
+        refuses(candidate, "branch_id");
+        let mut candidate = input.clone();
+        candidate.targets[0].branch_id = None;
+        refuses(candidate, "branch_id");
+        let mut candidate = input.clone();
+        candidate.targets.push(candidate.targets[0].clone());
+        refuses(candidate, "duplicate");
+        let mut candidate = input.clone();
+        candidate.targets[1].bounds = [0.0, 1.0];
+        refuses(candidate, "lo > 0");
+        let mut candidate = input.clone();
+        candidate.replace_existing = false;
+        refuses(candidate, "replace_existing");
+        let mut candidate = input.clone();
+        candidate.policy.max_time_scaled = None;
+        refuses(candidate, "max_time_scaled");
+        let mut candidate = input.clone();
+        candidate.policy.sensitivity = SensitivityMode::Adjoint;
+        refuses(candidate, "finite_difference");
+        let mut candidate = input.clone();
+        candidate
+            .conditions
+            .insert("specimen_id".into(), "other-specimen".into());
+        refuses(candidate, "conditions");
+        let mut candidate = input.clone();
+        candidate
+            .material
+            .membrane_relaxation
+            .as_mut()
+            .unwrap()
+            .branches[0]
+            .relaxation_time
+            .source = "missing-source".into();
+        refuses(candidate, "sourced positive");
+        let mut candidate = input.clone();
+        candidate.experiments[0].fixture.pretension_displacement_m = 0.001;
+        refuses(candidate, "pristine");
+        let mut candidate = input.clone();
+        candidate.experiments[0].loading.truncate(1);
+        refuses(candidate, "timed loading");
+        let mut value = serde_json::to_value(&input).unwrap();
+        value["targets"][0]["branch_id"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<Input>(value).is_err());
+        let mut value = serde_json::to_value(&input).unwrap();
+        value["policy"]["max_time_scaled"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<Input>(value).is_err());
+    }
+
+    #[test]
+    fn history_calibration_publication_preserves_fixed_coefficients_and_domain() {
+        let mut input = history_input();
+        input.targets.remove(0);
+        let baseline = resolve_baseline_and_validate(&input).unwrap();
+        let domain = [[0.0, 0.05], [-1e-12, 1e-12], [-1e-12, 1e-12]];
+        let material = publish(
+            &input,
+            &baseline,
+            "synthetic-history-domain",
+            &[0.15],
+            domain,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&material.properties).unwrap(),
+            serde_json::to_value(&input.material.properties).unwrap()
+        );
+        let original = input.material.membrane_relaxation.as_ref().unwrap();
+        let published = material.membrane_relaxation.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(&published.branches[0].stiffness_ratio).unwrap(),
+            serde_json::to_value(&original.branches[0].stiffness_ratio).unwrap()
+        );
+        assert_eq!(published.branches[0].relaxation_time.value, 0.15);
+        assert_eq!(
+            published.branches[0].relaxation_time.evidence,
+            Evidence::Estimate
+        );
+        assert_eq!(published.strain_range, original.strain_range);
+        assert_eq!(published.initialization, original.initialization);
+        assert_eq!(published.integration, original.integration);
+        assert_eq!(published.conditions, original.conditions);
+        assert_eq!(fitted_domain(&material).unwrap().unwrap().ranges(), domain);
+        let resolved = textile_import::catalog()
+            .unwrap()
+            .resolve(&Selection {
+                id: material.id.clone(),
+                record: Some(material.clone()),
+                allow_estimates: true,
+                ..Selection::default()
+            })
+            .unwrap();
+        assert!(resolved.membrane_relaxation().unwrap().is_some());
+        let mut incomplete = material.clone();
+        incomplete.membrane_relaxation.as_mut().unwrap().branches[0]
+            .relaxation_time
+            .conditions
+            .remove("fitted_green_strain_range");
+        assert!(incomplete.validate().is_err());
+    }
+
+    #[test]
+    fn history_calibration_identifies_named_orthotropic_time_without_replacing_its_tensor() {
+        use ftx_pattern::material_relaxation::{OrthotropicBranch, OrthotropicStiffness};
+
+        let mut input = history_input();
+        let prototype = input.material.properties["warp_stiffness"].clone();
+        let stiffness = |value| {
+            let mut quantity = prototype.clone();
+            quantity.value = value;
+            quantity
+        };
+        let law = input.material.membrane_relaxation.as_mut().unwrap();
+        law.orthotropic_branches.push(OrthotropicBranch {
+            id: "directional-recovery".into(),
+            stiffness: OrthotropicStiffness {
+                warp: stiffness(50.0),
+                weft: stiffness(20.0),
+                coupling: stiffness(0.0),
+                shear: stiffness(10.0),
+            },
+            relaxation_time: law.branches[0].relaxation_time.clone(),
+        });
+        input.targets = vec![TargetParameter {
+            parameter: TargetKind::MaxwellRelaxationTime,
+            branch_id: Some("directional-recovery".into()),
+            bounds: [0.05, 0.3],
+        }];
+        let baseline = resolve_baseline_and_validate(&input).unwrap();
+        let domain = [[0.0, 0.05], [-1e-3, 1e-3], [-1e-2, 1e-2]];
+        let published = publish(
+            &input,
+            &baseline,
+            "directional-history-domain",
+            &[0.15],
+            domain,
+        )
+        .unwrap();
+        let original = input.material.membrane_relaxation.as_ref().unwrap();
+        let fitted = published.membrane_relaxation.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(&fitted.branches).unwrap(),
+            serde_json::to_value(&original.branches).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&fitted.orthotropic_branches[0].stiffness).unwrap(),
+            serde_json::to_value(&original.orthotropic_branches[0].stiffness).unwrap()
+        );
+        assert_eq!(fitted.orthotropic_branches[0].id, "directional-recovery");
+        assert_eq!(fitted.orthotropic_branches[0].relaxation_time.value, 0.15);
+        assert_eq!(fitted_domain(&published).unwrap().unwrap().ranges(), domain);
+
+        input.targets[0].parameter = TargetKind::MaxwellStiffnessRatio;
+        let refusal = resolve_baseline_and_validate(&input).err().unwrap();
+        assert!(refusal.message.contains("proportional branches"));
+        input.targets[0].parameter = TargetKind::WarpStiffness;
+        let refusal = resolve_baseline_and_validate(&input).err().unwrap();
+        assert!(refusal.message.contains("must omit branch_id"));
+    }
 
     fn synthetic_base_material(include_unloaded_thickness: bool) -> Material {
         let mut props = json!({
@@ -2170,6 +2954,7 @@ mod tests {
             TargetParameter {
                 parameter: TargetKind::BendingRigidity,
                 bounds: [0.001, 0.005],
+                branch_id: None,
             }
         } else {
             material.structure.insert(
@@ -2189,6 +2974,7 @@ mod tests {
             TargetParameter {
                 parameter: TargetKind::WarpStiffness,
                 bounds: [600.0, 1400.0],
+                branch_id: None,
             }
         };
         let mut fixture = base_fixture([0.0, 1.0]);
@@ -2247,6 +3033,7 @@ mod tests {
                 max_rms_scaled: 0.2,
                 max_peak_scaled: 0.3,
                 max_mesh_scaled: 0.3,
+                max_time_scaled: None,
                 min_excitation_pivot: 1e-4,
                 max_iterations: 40,
                 max_forward_solves: 2048,
@@ -2362,6 +3149,7 @@ mod tests {
         nonlinear.targets[0] = TargetParameter {
             parameter: TargetKind::WarpStiffness,
             bounds: [600.0, 1400.0],
+            branch_id: None,
         };
         assert!(
             resolve_baseline_and_validate(&nonlinear)
@@ -2424,6 +3212,7 @@ mod tests {
         directional.targets[0] = TargetParameter {
             parameter: TargetKind::BendingRigidity,
             bounds: [0.001, 0.005],
+            branch_id: None,
         };
         assert!(
             resolve_baseline_and_validate(&directional)
@@ -2615,18 +3404,22 @@ mod tests {
                 TargetParameter {
                     parameter: TargetKind::WarpStiffness,
                     bounds: [400.0, 1500.0],
+                    branch_id: None,
                 },
                 TargetParameter {
                     parameter: TargetKind::WeftStiffness,
                     bounds: [300.0, 1200.0],
+                    branch_id: None,
                 },
                 TargetParameter {
                     parameter: TargetKind::ShearStiffness,
                     bounds: [60.0, 400.0],
+                    branch_id: None,
                 },
                 TargetParameter {
                     parameter: TargetKind::BendingRigidity,
                     bounds: [1.0e-3, 5.0e-3],
+                    branch_id: None,
                 },
             ],
             experiments: vec![
@@ -2754,6 +3547,7 @@ mod tests {
                 max_rms_scaled: 0.35,
                 max_peak_scaled: 0.6,
                 max_mesh_scaled: 0.6,
+                max_time_scaled: None,
                 min_excitation_pivot: 1e-4,
                 max_iterations: 40,
                 max_forward_solves: 8192,
@@ -3091,22 +3885,27 @@ mod tests {
                 TargetParameter {
                     parameter: TargetKind::WarpStiffness,
                     bounds: [500.0, 1400.0],
+                    branch_id: None,
                 },
                 TargetParameter {
                     parameter: TargetKind::WeftStiffness,
                     bounds: [350.0, 1100.0],
+                    branch_id: None,
                 },
                 TargetParameter {
                     parameter: TargetKind::PoissonWarpWeft,
                     bounds: [0.05, 0.45],
+                    branch_id: None,
                 },
                 TargetParameter {
                     parameter: TargetKind::ShearStiffness,
                     bounds: [80.0, 360.0],
+                    branch_id: None,
                 },
                 TargetParameter {
                     parameter: TargetKind::BendingRigidity,
                     bounds: [1.0e-3, 5.0e-3],
+                    branch_id: None,
                 },
             ],
             experiments: vec![
@@ -3164,6 +3963,7 @@ mod tests {
                 max_rms_scaled: 0.35,
                 max_peak_scaled: 0.6,
                 max_mesh_scaled: 0.6,
+                max_time_scaled: None,
                 min_excitation_pivot: 1e-4,
                 max_iterations: 40,
                 max_forward_solves: 8192,
@@ -3342,6 +4142,7 @@ mod tests {
         sc_input.targets = vec![TargetParameter {
             parameter: TargetKind::WarpStiffness,
             bounds: [600.0, 1200.0],
+            branch_id: None,
         }];
         sc_input.experiments[0].fixture.self_contact = true;
         sc_input.policy.sensitivity = SensitivityMode::Adjoint;

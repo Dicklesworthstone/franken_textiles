@@ -4816,7 +4816,7 @@ function measuredMechanicsResult(parent, r) {
 }
 function calibrationResult(parent, r) {
   if (r.calibration?.schema === "ftx-strip-calibration-report/1") return stripCalibrationResult(parent, r);
-  if (r.calibration?.schema === "ftx-cylinder-calibration-report/1") return cylinderCalibrationResult(parent, r);
+  if (["ftx-cylinder-calibration-report/1", "ftx-cylinder-calibration-report/2"].includes(r.calibration?.schema)) return cylinderCalibrationResult(parent, r);
   if (r.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1") return permanentStretchResult(parent, r);
   if (["ftx-swatch-calibration-report/1", "ftx-bending-calibration-report/1", "ftx-friction-calibration-report/1"].includes(r.calibration?.schema)) {
     return measuredMechanicsResult(parent, r);
@@ -5051,16 +5051,18 @@ function cylinderExperimentResult(parent, r) {
 }
 function cylinderCalibrationResult(parent, r) {
   const c = r.calibration;
+  const history = c.schema === "ftx-cylinder-calibration-report/2";
   const errors = table(parent, "Observed cylindrical-holder channel errors — independent partitions",
     ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
   for (const [name, quality] of [["Fit", c.fit], ["Held out", c.check]]) {
     cells(errors, [quality ? name : `${name}: not supplied`, metric(quality?.components),
       metric(quality?.rms_scaled), metric(quality?.peak_scaled)]);
   }
-  const params = table(parent, "Identified canonical shell parameters",
-    ["Property", "Unit", "Lower bound", "Candidate value", "Upper bound"]);
+  const params = table(parent, history ? "Identified canonical shell and Maxwell branch parameters" : "Identified canonical shell parameters",
+    ["Property", ...(history ? ["Maxwell branch"] : []), "Unit", "Lower bound", "Candidate value", "Upper bound"]);
   for (const [i, d] of (c.parameter_descriptors || []).entries()) {
-    cells(params, [d.key, d.unit, metric(d.bounds?.[0]), metric(c.parameters?.[i]), metric(d.bounds?.[1])]);
+    cells(params, [d.key, ...(history ? [d.branch_id ?? "Not applicable"] : []),
+      d.unit, metric(d.bounds?.[0]), metric(c.parameters?.[i]), metric(d.bounds?.[1])]);
   }
   const domain = table(parent, "Observed material Green-strain range in FIT cylindrical fields",
     ["Material direction", "Minimum Green strain", "Maximum Green strain"]);
@@ -5084,6 +5086,16 @@ function cylinderCalibrationResult(parent, r) {
     ["Sensitivity interval halvings", metric(c.search_recovery.sensitivity_halvings)],
     ["One-sided sensitivity columns", metric(c.search_recovery.one_sided_sensitivity_columns)]
   ]) cells(work, row);
+  if (c.temporal_refinement) {
+    const refinement = c.temporal_refinement;
+    const time = table(parent, "Doubled temporal subdivisions at the fixed candidate", ["Diagnostic", "Value"]);
+    for (const row of [
+      ["Substeps per original step", metric(refinement.subdivision_factor)],
+      ["Original / refined step upper bounds (s)", `${metric(refinement.max_step_s)} / ${metric(refinement.refined_max_step_s)}`],
+      ["Scaled temporal change / limit", `${metric(refinement.peak_scaled)} / ${metric(c.input.policy.max_time_scaled)}`],
+      ["Temporal refinement", refinement.accepted ? "ACCEPTED" : "NOT ACCEPTED"]
+    ]) cells(time, row);
+  }
   const predictions = table(parent, "Doubled-mesh cylindrical predictions and signed channel residuals",
     ["Experiment / observation", "Partition", "Waypoint", "Tare force (N)", "Force residual (N)",
       "Tare torque (N·m)", "Torque residual (N·m)", "Mean mid-radius (m)", "Mid-radius residual (m)"]);
@@ -5099,8 +5111,11 @@ function cylinderCalibrationResult(parent, r) {
   const note = document.createElement("p");
   note.textContent = "Each prediction solves the 3D wrapped cylindrical shell with isometric polygon chord radius, " +
     "explicit pretension offset, tare subtraction and prescribed axial/twist holder trajectories. " +
-    "Pressure-specific reported_thickness is never promoted to unloaded contact thickness, and missing body friction, " +
-    "rate dependence, hysteresis or unmodeled clamp slip remain uninferred.";
+    (history ? "Rate-dependent coefficients retain the explicitly supplied generalized-Maxwell branches. " +
+      "Temporal checks use two substeps for every original step on the doubled spatial mesh. " +
+      "Pressure-specific reported_thickness remains separate from unloaded contact thickness; additional plasticity, body friction and clamp-slip mechanics remain uninferred." :
+      "Pressure-specific reported_thickness is never promoted to unloaded contact thickness, and missing body friction, " +
+      "rate dependence, hysteresis or unmodeled clamp slip remain uninferred.");
   parent.append(note);
   detail(parent, "Complete cylindrical calibration decision, starts, protocol audits and residuals", c);
   return { response: "3D cylindrical-holder shell", status: c.accepted ? "ACCEPTED" : "NOT ACCEPTED",
@@ -5109,6 +5124,7 @@ function cylinderCalibrationResult(parent, r) {
     allow_estimates: r.selection?.allow_estimates,
     ...(c.input?.policy?.sensitivity === "adjoint" ? { sensitivity: "adjoint" } : {}),
     ...(c.adjoint_solves > 0 ? { adjoint_solves: c.adjoint_solves } : {}),
+    ...(c.temporal_refinement ? { temporal_refinement: c.temporal_refinement } : {}),
     simulation_ready: r.simulation_ready === true,
     mechanical_coefficients_available: r.material?.capabilities.mechanical_coefficients?.ready === true,
     mechanics_refusal: r.mechanics_refusal || r.material?.capabilities.mechanical_coefficients?.refusal,

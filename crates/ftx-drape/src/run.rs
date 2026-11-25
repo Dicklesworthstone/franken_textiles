@@ -169,7 +169,7 @@ pub struct DrapeOptions {
     pub mesh: MeshOptions,
     /// Opt-in folded-hem and sewn seam-allowance mass and bending multipliers (default: 1.0× everywhere, 0 mm bands).
     pub construction: ConstructionMechanicsOptions,
-    /// Opt-in spatial-hash cloth–cloth self-repulsion during start-state relaxation (`None` preserves legacy reference relaxation).
+    /// Opt-in bounded cloth–cloth and body-feature start separation (`None` preserves legacy relaxation).
     pub start_self_repulsion: Option<SelfRepulsionOptions>,
 }
 

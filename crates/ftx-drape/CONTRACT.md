@@ -125,6 +125,14 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   `BudgetExceeded`, non-finite separation geometry refuses, and no partial start is returned.
   Body, seam and final exact contact admission remain authoritative; this is a bounded start
   heuristic, not a general untangling guarantee or empirical layer-order qualification.
+  The same opt-in pass now queries cloth edges against body faces and body edges against cloth
+  faces. Exact segment/face witnesses catch an interior piercing even when all vertices and
+  endpoint/edge proximity checks miss it. Body-feature corrections use the requested body clearance
+  and outward normals, move welded members together, and share the existing candidate allowance.
+  Immutable body query trees are reused within each relaxation call. A complete sweep validates
+  every finite corrected position before publishing; zero body clearance is a no-op. The ordinary
+  exact contact audit can still refuse symmetric, infeasible or unresolved starts. The existing
+  native `--start-self-repulsion` and portable option reach this path without a new schema.
 - **Offline stills & 3D viewer shading (`FTX-27h`)**: deterministic 2×2 MSAA, grazing sheen, and
   16-sample AO in `render`, plus physical fabric sheen, 3-point shadow rig, legible toggle, wireframe
   overlay, and named camera views in `assets/fold_viewer_template.html`.
@@ -155,6 +163,22 @@ admission on their already selected `FittedBody`, with no second shape fit.
 `flat_fit_identity` retains the existing canonical model identity and adds only
 required independent passage evidence under `supplemental_measurements`.
 Unrelated measurement names cannot supplement or replace model dimensions.
+
+**Body-contact start recovery (ftx-jnqs).** If the final kinematic start remains intersecting
+after the existing exact body untangler, scene construction now tries earlier relaxation checkpoints
+before refusing. Complete 200-iteration blocks take precedence, followed by the existing 25-iteration
+push-out checkpoints. Each candidate retains the original pre-sewn state, welds, rest geometry,
+material assignments and gather weights; its strain receipt is recomputed from its actual replay.
+Both pre- and post-untangle material-domain admission remain required. Non-contact refusals propagate,
+failed searches publish no candidate, and explicit caller-supplied checkpoints are never replaced.
+Body, self-contact and displayed-body recovery share this replay policy. Every complete and partial
+block's strain receipt is measured on the actual candidate, including non-divisor repulsion periods.
+Only contact refusals permit another checkpoint; source, material-domain, non-finite and work-budget
+failures stop the whole search, even if an earlier candidate passed or leg separation is attempted.
+Any selected start must still pass physical contact, self-contact and displayed-body admission before
+dynamics. The original rejected iteration count survives subsequent self-contact or leg-start repair.
+The synthetic closed-body regression verifies this formerly unreachable recovery path; it does not
+qualify the unchanged 385 mm sleeve on Anny or establish physical garment fit.
 
 **Optional convergence-driven subdivision.** `DrapeOptions.time_subdivision` connects the existing
 transactional `Solver::step_subdivided` to ordinary sewing, gravity and settling. Explicit
@@ -735,8 +759,9 @@ friction, attached weight, disabled behavior, frozen replay and drafted jacket/t
   2 mm self-contact and retains a 50 mm offset refusal control. This is start admission, not settling,
   independent anatomy, measured fabric or physical-fit qualification.
   If no replacement passes, the original selected state remains available to the existing refusal
-  observer; the full-display check is not suppressed. Body-only requests preserve their existing
-  initialization path. `tests/outfit.rs` exercises a final-state displayed protrusion with an
+  observer; the full-display check is not suppressed. Successful primary body-only starts preserve
+  their original initialization; a primary body-untangling refusal now reaches the earlier-start
+  recovery described above before solver creation. `tests/outfit.rs` exercises a final-state displayed protrusion with an
   earlier clear checkpoint, unchanged rest geometry/mass, and initial/later refusal snapshots.
 - After all relaxation checkpoints fail, a leg crossing the centre plane can recover its own-side
   placement. Only welds owned exclusively by the same leg move, by at most one mesh spacing.
@@ -1518,6 +1543,23 @@ mesh stability `<= max_mesh_scaled`, independent held-out `CHECK` residuals with
 `fitted_green_strain_range`, and a final `StrainDomain::Box` replay. Presser-foot `reported_thickness` is never
 promoted to unloaded contact `thickness`; `fit_claim` and `empirical_validation_claim` remain `false`, and
 empirical calibration against external raw Fabric-101 curve archives and physical coupons remains open under `ftx-tm2.1`.
+
+Opt-in `ftx-cylinder-calibration/2` retains this optimizer and adds exact-branch
+`maxwell_stiffness_ratio` and `maxwell_relaxation_time` targets, with one to five total scalar/branch
+coordinates. A source-qualified Maxwell law, matching specimen/conditioning, explicit replacement
+permission and pristine timed start are required; orthotropic branches admit recovery-time fitting
+without replacing their tensors. Every waypoint and hold advances the production history kernel.
+Non-contact Maxwell cylinders may seed Newton with an affine holder-motion guess; the prior physical
+state, inertia and accepted memory remain unchanged until convergence, with transactional refusal.
+Finite-difference sensitivity and positive `max_time_scaled` are mandatory. On the doubled spatial
+mesh, each original interval's step count is doubled, including short intervals, under the existing
+step, vertex-state and forward-solve caps. The report records this temporal comparison separately
+from residual and mesh gates. FIT-only support constrains the replaced estimate quantities and
+intersects independently fitted equilibrium support; CHECK cannot widen it. Full frozen-law replay
+precedes publication. `history_calibration`, `history_warm_guess`, material-domain unit tests and
+the native/portable `strip_experiment_workflow` exercise analytic ramp/hold recovery, exact physical
+memory replay, rollback and held-out rejection. `/1` remains the existing elastic contract; plastic
+identification and empirical Fabric-101 qualification remain outside this extension.
 
 **Material-frame strain consumer** (`study::strain`, `ftx-ds2`). Optional scenario `material_strain`
 requests raw `[E11, E22, 2E12]` on explicitly selected retained instances or the whole retained garment.

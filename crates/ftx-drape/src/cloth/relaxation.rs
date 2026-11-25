@@ -251,6 +251,16 @@ impl Solver {
         body_start: Option<&[Vec3]>,
         guess: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
+        self.relaxing_step_from_source(h, body_start, guess, None)
+    }
+
+    pub(super) fn relaxing_step_from_source(
+        &mut self,
+        h: f64,
+        body_start: Option<&[Vec3]>,
+        guess: Option<&[Vec3]>,
+        accepted_positions: Option<&[Vec3]>,
+    ) -> Result<SolveReport, Refusal> {
         if !h.is_finite()
             || h <= 0.0
             || self.v.len() != self.x.len()
@@ -260,19 +270,20 @@ impl Solver {
                 "material-history step needs a positive finite duration and finite velocities",
             ));
         }
+        let source = accepted_positions.unwrap_or(&self.x);
         if let Some(field) = &self.relaxation {
-            field.check(&self.model, &self.x)?;
+            field.check(&self.model, source)?;
         }
         if let Some(field) = &self.plasticity {
-            field.check(&self.model, &self.x)?;
+            field.check(&self.model, source)?;
         }
         if let Some(field) = &self.membrane_plasticity {
-            field.check(&self.model, &self.x)?;
+            field.check(&self.model, source)?;
         }
         let mut trial = self.clone();
         // Check and freeze accepted material history before seeding Newton. The inner step keeps
         // inertia and friction anchored at x_n; only its converged endpoint advances the memories.
-        let report = trial.step_inner_with_guess(h, body_start, guess)?;
+        let report = trial.step_inner_from_source(h, body_start, guess, accepted_positions)?;
         if !report.converged {
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
@@ -465,6 +476,223 @@ mod carried_start_tests {
         solver.max_newton = 100;
         solver.friction_rounds = 1;
         solver
+    }
+
+    fn domain_limited_strip(h: f64) -> (Solver, Vec<Vec3>, Vec<Vec3>) {
+        let selection: Selection = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-relaxation.json"
+        ))
+        .unwrap();
+        let material = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+        let m = material.mechanics().unwrap();
+        let rest = vec![
+            Vec2::new(0., 0.),
+            Vec2::new(0.1, 0.),
+            Vec2::new(0., 0.1),
+            Vec2::new(0.1, 0.1),
+            Vec2::new(0., 0.2),
+            Vec2::new(0.1, 0.2),
+        ];
+        let positions = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.)).collect();
+        let mut model = ClothModel::new(
+            rest,
+            &[[0, 1, 2], [1, 3, 2], [2, 3, 4], [3, 5, 4]],
+            Membrane::orthotropic(m.warp_n_m, m.weft_n_m, m.poisson, m.shear_n_m, 1.),
+            0.,
+            m.areal_kg_m2,
+        )
+        .unwrap();
+        let fitted = StrainDomain::new([[-0.01, 0.01], [-0.01, 0.025], [-0.01, 0.01]]).unwrap();
+        model.set_membrane_domains(&[Some(fitted); 4]).unwrap();
+        let mut solver = Solver::new(
+            model,
+            positions,
+            &[
+                [true; 3],
+                [true; 3],
+                [true, false, true],
+                [true, false, true],
+                [true; 3],
+                [true; 3],
+            ],
+            Vec3::ZERO,
+        )
+        .with_relaxation(&vec![material.membrane_relaxation().unwrap(); 4])
+        .unwrap();
+        solver.tol = 1e-10;
+        solver.max_newton = 100;
+        let accepted = solver.x.clone();
+        // Moving only the upper pins temporarily gives the upper half E22 = .0408,
+        // outside the fitted .025 limit but inside the original acquired Maxwell domain.
+        solver.x[4].y += 0.004;
+        solver.x[5].y += 0.004;
+        let mut guess = solver.x.clone();
+        for i in [2, 3] {
+            guess[i].y += 0.002;
+            solver.v[i].y = 0.002 / h;
+        }
+        // Uniform 2% extension gives E22 = .0202 in both halves and is the exact predictor.
+        (solver, accepted, guess)
+    }
+
+    #[test]
+    fn history_warm_guess_admits_fitted_domain_without_replacing_inertia_or_memory() {
+        let h = 0.01;
+        let (original, accepted, guess) = domain_limited_strip(h);
+        let before = format!("{original:?}");
+        assert!(original.model.check_membrane_domains(&original.x).is_err());
+        original.model.check_membrane_domains(&guess).unwrap();
+        original
+            .relaxation
+            .as_ref()
+            .unwrap()
+            .check(&original.model, &original.x)
+            .unwrap();
+        let mut plain = original.clone();
+        assert!(
+            plain.step(h).is_err(),
+            "the mixed boundary state requires a valid Newton guess"
+        );
+        assert_eq!(format!("{plain:?}"), before);
+        // Ordinary and body-carried starts must not use an admissible guess to hide an invalid
+        // accepted source. Only the explicit holder path admits this fixed-only boundary update.
+        assert_eq!(
+            plain.step_with_guess(h, Some(&guess)).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(format!("{plain:?}"), before);
+        assert_eq!(
+            plain
+                .step_at_body_with_guess(h, None, &guess)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(format!("{plain:?}"), before);
+
+        let predictor: Vec<_> = original
+            .x
+            .iter()
+            .zip(&original.v)
+            .map(|(x, v)| *x + *v * h)
+            .collect();
+        assert_eq!(predictor, guess);
+        let expected_energy = original.potential(&guess, Some((&predictor, h))).unwrap();
+        let mut seeded = original.clone();
+        let mut raw_guess = guess.clone();
+        raw_guess[0] += Vec3::new(10., 10., 10.);
+        let report = seeded
+            .step_with_prescribed_boundary_guess(h, &accepted, &raw_guess)
+            .unwrap();
+        assert!(report.converged);
+        assert!((report.energy_start - expected_energy).abs() < 1e-12);
+        for i in 0..original.x.len() {
+            assert!((seeded.x[i] - guess[i]).norm() < 1e-10);
+            assert!((seeded.v[i] - (seeded.x[i] - original.x[i]) / h).norm() < 1e-12);
+        }
+        assert_eq!(
+            seeded.x[0], original.x[0],
+            "fixed components are never warm-started"
+        );
+        let mut memory = original.relaxation.clone().unwrap();
+        memory.advance(&seeded.x, h).unwrap();
+        assert_eq!(
+            format!("{:?}", seeded.relaxation.as_ref().unwrap()),
+            format!("{memory:?}")
+        );
+        assert_eq!(memory.steps, 1);
+        assert_eq!(memory.time_seconds, h);
+        assert!(memory.dissipated_j > 0.);
+        assert_eq!(
+            format!("{original:?}"),
+            before,
+            "trial solves cannot mutate their source history"
+        );
+    }
+
+    #[test]
+    fn history_warm_guess_refusals_preserve_state_and_existing_admission_guards() {
+        let h = 0.01;
+        let (original, accepted, valid_guess) = domain_limited_strip(h);
+        let mut expected = original.clone();
+        expected
+            .step_with_prescribed_boundary_guess(h, &accepted, &valid_guess)
+            .unwrap();
+        for fault in [
+            "length",
+            "domain",
+            "non_finite",
+            "newton",
+            "history_commit",
+            "source",
+            "source_length",
+            "source_free",
+            "source_domain",
+            "source_non_finite",
+            "contact",
+            "integrator",
+            "finite_angle",
+            "bending_damping",
+        ] {
+            let mut solver = original.clone();
+            let mut guess = valid_guess.clone();
+            let mut source = accepted.clone();
+            match fault {
+                "length" => {
+                    guess.pop();
+                }
+                "domain" => guess[2].y = 0.13,
+                "non_finite" => guess[2].y = f64::NAN,
+                "newton" => {
+                    guess[2].y -= 0.0002;
+                    guess[3].y -= 0.0002;
+                    solver.max_newton = 0;
+                }
+                "history_commit" => solver.relaxation.as_mut().unwrap().steps = usize::MAX,
+                "source" => solver.model.membranes[0].area *= 2.,
+                "source_length" => {
+                    source.pop();
+                }
+                "source_free" => source[2].y -= 0.001,
+                "source_domain" => source[4].y += 0.01,
+                "source_non_finite" => source[0].x = f64::NAN,
+                "contact" => solver.contact = sheet(false).contact,
+                "integrator" => {
+                    solver.integrator = crate::TimeIntegrator::GeneralizedAlpha { rho_inf: 0.5 }
+                }
+                "finite_angle" => solver.model.bending_model = crate::BendingModel::DiscreteShells,
+                "bending_damping" => solver.damping.rayleigh_bending_s = 0.01,
+                _ => unreachable!(),
+            }
+            let before = format!("{solver:?}");
+            let refusal = solver
+                .step_with_prescribed_boundary_guess(h, &source, &guess)
+                .unwrap_err();
+            if fault == "history_commit" {
+                assert!(
+                    refusal.message.contains("Maxwell step count overflow"),
+                    "{refusal:?}"
+                );
+            }
+            if fault == "source_free" {
+                assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+            } else if fault == "source_domain" {
+                assert_eq!(refusal.code, RefusalCode::OutOfRange);
+            } else if fault == "domain" {
+                assert_eq!(refusal.code, RefusalCode::NotConverged);
+            }
+            assert_eq!(format!("{solver:?}"), before, "{fault}");
+            solver.model = original.model.clone();
+            solver.contact = original.contact.clone();
+            solver.integrator = original.integrator;
+            solver.damping = original.damping;
+            solver.max_newton = original.max_newton;
+            solver.relaxation.as_mut().unwrap().steps = 0;
+            solver
+                .step_with_prescribed_boundary_guess(h, &accepted, &valid_guess)
+                .unwrap();
+            assert_eq!(format!("{solver:?}"), format!("{expected:?}"), "{fault}");
+        }
     }
 
     #[test]
