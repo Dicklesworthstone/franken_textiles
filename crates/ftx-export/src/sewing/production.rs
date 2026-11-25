@@ -397,26 +397,12 @@ fn evaluate_in_calendar(
             .as_ref()
             .is_some_and(|parallel| parallel.feed_time_search.is_some())
         {
-            if parallel
-                .as_ref()
-                .is_some_and(|parallel| parallel.shared_operator.is_some())
-            {
-                "ftx-sewing-production/24"
-            } else {
-                "ftx-sewing-production/23"
-            }
+            "ftx-sewing-production/23"
         } else if parallel
             .as_ref()
             .is_some_and(|parallel| parallel.thread_order_search.is_some())
         {
-            if parallel
-                .as_ref()
-                .is_some_and(|parallel| parallel.shared_operator.is_some())
-            {
-                "ftx-sewing-production/26"
-            } else {
-                "ftx-sewing-production/20"
-            }
+            "ftx-sewing-production/20"
         } else if parallel
             .as_ref()
             .is_some_and(|parallel| !parallel.cell_plans.is_empty())
