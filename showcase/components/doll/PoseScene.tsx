@@ -65,10 +65,10 @@ const FIT = "/exhibits/poses/fit-spec.json";
 // A move under the sewn jacket takes substeps of up to 50 ms, each starting with the cloth within 20 mm
 // of the body carried along with it (ftx_drape::motion::advance_body_carried). Every substep but a move's
 // last stops at a Newton tolerance of 5 mm/s instead of the drape's 1 mm/s (MotionOptions::intermediate_tol);
-// the last converges fully. Measured 2026-11-25 in Node on one thread over two sequences of page moves, it
+// the last converges to 1 mm/s. Measured 2026-11-25 in Node on one thread over two sequences of page moves, it
 // took 24-27 % less time. Against a run whose intermediate substeps were 10x tighter (1e-4 m/s), a move's
 // final cloth was 0.07-0.98 mm away on average (0.05-1.23 mm without the setting): within the default's own
-// spread, though on a move where no fold flips it was up to 0.2 mm further on average (1.1 mm at the 95th
+// spread, though on a move where no fold flips it was up to 0.2 mm further on average (1.1 mm further at the 95th
 // percentile). The bolero's folds can settle either way, 12-18 mm apart at a few vertices, with or without it.
 const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_steps: 48, time_subdivision: true, self_contact_mm: 0,
   motion_carry_mm: 20, motion_step_s: 0.05, motion_intermediate_tol_m_s: 5e-3 };

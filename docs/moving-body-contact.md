@@ -194,7 +194,9 @@ Newton iteration. The solver's existing Newton/friction/PCG policies still apply
 lands on the target always converges to the solver's own `tol`, and the returned solver
 keeps its `tol`. It is a work policy, not a physical parameter: looser intermediate
 solves change the cloth's path and, through friction and buckling, can change where it
-ends. Every substep still passes the same collision checks.
+ends. Every substep still passes the same collision checks. Material-scenario motion
+requests always pass `None` (their JSON has no such field and refuses unknown ones); the
+browser posing session sets it with `motion_intermediate_tol_m_s`.
 Contact thickness and cloth material parameters are never relaxed to finish motion.
 `MotionReport.pairs_tested` includes completed initial-contact queries, body-surface
 audits and continuous body/body feature queries as well as cloth swept queries,

@@ -126,8 +126,8 @@ export default function PoseRoom() {
               apart), the solver moves the arm there under the jacket in short steps: each starts with the
               cloth near the form moved along with it and is accepted only after the solver&rsquo;s collision
               checks, and the replay shows those steps. Every step but the last stops at a looser solver
-              tolerance, which saves about a quarter of the time; the last is solved fully. Further than that, a
-              new drape starts in the nearest of the arm&rsquo;s sampled poses, which is the quicker of the two
+              tolerance, which saved a fifth to a quarter of a move&rsquo;s time in our tests; the last meets the
+              usual tolerance. Further than that, a new drape starts in the nearest of the arm&rsquo;s sampled poses, which is the quicker of the two
               for a large change; if you move again before it finishes, that drape is dropped. In our tests
               (headless Chrome on an 8-core Linux machine, six solver threads, timing the solver alone) a fresh
               sew took about 11 s, a 5° move 3 to 4 s and a 10° move about 7 s.</li>
