@@ -1017,8 +1017,79 @@ fn apply_self_repulsion(
         }
     }
 
+    // A segment can pass through the interior of another panel without an endpoint or either
+    // boundary edge inside d_min. Resolve proper piercings before proximity on the affected
+    // vertices: unsigned proximity alone pushes an already pierced endpoint the wrong way.
+    let mut crossing_acc = vec![Vec3::ZERO; topo.n_weld];
+    let mut crossing_weight = vec![0.0; topo.n_weld];
+    for (ei, &bounds) in edge_boxes.iter().enumerate() {
+        let edge = topo.edges[ei];
+        triangle_query.query(bounds, &mut candidates);
+        work.spend(candidates.len())?;
+        for &ti in &candidates {
+            if !crate::bvh::overlaps(bounds, triangle_boxes[ti])
+                || edge
+                    .iter()
+                    .any(|&v| topo.excluded(v, ti, verts2d, mesh_owner, rest_margin_mm))
+            {
+                continue;
+            }
+            let face = topo.tris[ti];
+            let triangle = face.map(|v| p[v]);
+            let segment = edge.map(|v| p[v]);
+            if ftx_core::intersection::segment_triangle(segment[0], segment[1], triangle)
+                != Some(ftx_core::intersection::IntersectionKind::Crossing)
+            {
+                continue;
+            }
+            // Keep the farther endpoint on its current side and move the shallower endpoint
+            // across the face. On an exact tie the ordered welded edge breaks symmetry. The
+            // direction is invariant to triangle winding and independent of garment part names.
+            let normal = (triangle[1] - triangle[0])
+                .cross(triangle[2] - triangle[0])
+                .normalized();
+            let signed = segment.map(|v| (v - triangle[0]).dot(normal));
+            let tip = usize::from(signed[1].abs() < signed[0].abs());
+            let v = edge[tip];
+            let dir = if signed[1 - tip] >= 0.0 {
+                normal
+            } else {
+                -normal
+            };
+            // Linearize the signed normal clearance at the tip with the opposing face lagged.
+            // Nearest face weights stay nonnegative even if the projected tip is outside it.
+            let (shape, _) = point_triangle_closest(p[v], triangle[0], triangle[1], triangle[2]);
+            let tip_free = body_floor[v].is_none_or(|n| dir.dot(n) >= -1e-6);
+            let face_shape = std::array::from_fn::<_, 3, _>(|k| {
+                if body_floor[face[k]].is_some_and(|n| dir.dot(n) > 1e-6) {
+                    0.0
+                } else {
+                    shape[k]
+                }
+            });
+            let denom =
+                f64::from(u8::from(tip_free)) + face_shape.iter().map(|w| w * w).sum::<f64>();
+            if denom <= 1e-12 {
+                continue;
+            }
+            let delta = dir * (opts.stiffness * (d_min + signed[tip].abs()) / denom);
+            if tip_free {
+                crossing_acc[v] += delta;
+                crossing_weight[v] += 1.0;
+            }
+            for k in 0..3 {
+                crossing_acc[face[k]] -= delta * face_shape[k];
+                crossing_weight[face[k]] += face_shape[k];
+            }
+        }
+    }
+
     let max_step = 0.5 * d_min;
     for w in 0..topo.n_weld {
+        if crossing_weight[w] > 0.0 {
+            acc[w] = crossing_acc[w];
+            w_sum[w] = crossing_weight[w];
+        }
         if w_sum[w] <= 0.0 {
             continue;
         }
@@ -1550,6 +1621,102 @@ mod tests {
             ],
             "placement": {"part": "torso"}
         })
+    }
+
+    #[test]
+    fn self_repulsion_clears_panel_piercing_in_public_relaxation() {
+        use crate::contact::{Body, Contact, ContactParams};
+
+        let body = flat_body();
+        // A tilted sleeve tip starts 10 mm through a bodice triangle. The other corners
+        // are 25 mm clear, and both crossing edges pass well inside the bodice boundary.
+        // The second copy of the tip is a welded seam member.
+        let depth = 25.0_f64.hypot(35.0);
+        for mirror in [1.0, -1.0] {
+            for face in [[0, 1, 2], [0, 2, 1]] {
+                let mesh = GarmentMesh {
+                    instances: vec!["bodice".into(), "sleeve".into()],
+                    verts2d: vec![
+                        Vec2::new(-120.0, -100.0),
+                        Vec2::new(120.0, -100.0),
+                        Vec2::new(0.0, 160.0),
+                        Vec2::new(0.0, 0.0),
+                        Vec2::new(-15.0, -depth),
+                        Vec2::new(15.0, -depth),
+                        Vec2::new(0.0, 0.0),
+                    ],
+                    owner: vec![0, 0, 0, 1, 1, 1, 1],
+                    faces: vec![face, [3, 4, 5]],
+                    inst_range: vec![(0, 3), (3, 7)],
+                    pairs: vec![(3, 6)],
+                    seams: vec![],
+                    corner: Default::default(),
+                    index: Default::default(),
+                    creases: vec![],
+                };
+                let z = 0.100;
+                let tip = Vec3::new(0.0, 0.0, z - mirror * 0.010);
+                let start = vec![
+                    Vec3::new(-0.120, -0.100, z),
+                    Vec3::new(0.120, -0.100, z),
+                    Vec3::new(0.0, 0.160, z),
+                    tip,
+                    Vec3::new(-0.015, -0.025, z + mirror * 0.025),
+                    Vec3::new(0.015, -0.025, z + mirror * 0.025),
+                    tip,
+                ];
+                let params = ContactParams {
+                    dhat: 0.001,
+                    thickness: 0.0,
+                    kappa: 1.0,
+                    mu: 0.0,
+                    eps_v: 0.001,
+                };
+                let (vertices, faces) = body.surface();
+                let audit = Contact::new(
+                    Body::new(vertices.to_vec(), faces.to_vec(), 0.01).unwrap(),
+                    params,
+                    mesh.faces.clone(),
+                    |_, _| 0.001,
+                );
+                let groups = vec![vec![3, 6]];
+                let weights = vec![1.0; start.len()];
+                let unrepelled = relax(
+                    &mesh,
+                    &start,
+                    &groups,
+                    &body,
+                    RELAX_ITERS,
+                    RELAX_CLEARANCE,
+                    &weights,
+                );
+                assert_eq!(
+                    audit
+                        .clone()
+                        .with_self_contact(&unrepelled[..6], params)
+                        .unwrap_err()
+                        .code,
+                    RefusalCode::IntersectingStart
+                );
+                let repaired = relax_with_repulsion(
+                    &mesh,
+                    &start,
+                    &groups,
+                    &body,
+                    RELAX_ITERS,
+                    RELAX_CLEARANCE,
+                    &weights,
+                    Some(SelfRepulsionOptions::default()),
+                )
+                .unwrap();
+                assert_eq!(repaired[3], repaired[6]);
+                assert!((repaired[3].z - tip.z) * mirror > 0.0);
+                assert!((0..3).any(|v| (repaired[v].z - z) * mirror < 0.0));
+                audit
+                    .with_self_contact(&repaired[..6], params)
+                    .expect("both layers must pass production self-contact admission");
+            }
+        }
     }
 
     #[test]
