@@ -21,8 +21,8 @@ use crate::elements::ElasticSegment;
 use crate::garment::{ConstructionField, ConstructionMechanicsOptions, GarmentMesh};
 use crate::nearest::NearestTree;
 use crate::start::{
-    GATHER_COMPRESSION, MM, PartFrame, SelfRepulsionOptions, StartState, WrapPlacement,
-    start_state, wrap_points,
+    GATHER_COMPRESSION, MM, PartFrame, SelfRepulsionOptions, StartRelaxation, StartState,
+    WrapPlacement, wrap_points,
 };
 use crate::stepping::{AcceptedSubstep, SubdivisionOptions};
 
@@ -880,6 +880,7 @@ pub fn build_scene_with_options(
         None,
         None,
         options,
+        None,
     )
 }
 
@@ -957,7 +958,8 @@ pub(crate) fn build_scene_resolved_with_options(
 ) -> Result<Scene, Refusal> {
     options.validate()?;
     let (skin_vertices, skin_triangles) = collision;
-    let build = |mesh, start| {
+    let mut relaxation = StartRelaxation::new(options.start_self_repulsion)?;
+    let build = |mesh, start, work: Option<&mut StartRelaxation>| {
         let mut scene = build_scene_inner(
             pattern,
             mesh,
@@ -974,13 +976,14 @@ pub(crate) fn build_scene_resolved_with_options(
             material.contact_materials.as_ref(),
             start,
             options,
+            work,
         )?;
         // Constitutive memory binds to the selected strain transform. Apply it to every start
         // candidate before initialization, including contact-driven fallback rebuilds.
         scene.solver.model.compression_model = material.options.compression_model;
         Ok::<_, Refusal>(scene)
     };
-    let mut scene = build(mesh, None)?;
+    let mut scene = build(mesh, None, Some(&mut relaxation))?;
     if let Some(params) = material.options.self_contact {
         let mut admit = |candidate: &Scene| -> Result<(), Refusal> {
             candidate
@@ -1021,7 +1024,8 @@ pub(crate) fn build_scene_resolved_with_options(
                     })
                     .collect();
                 let mut rebuild = |start: &StartState| {
-                    let candidate = build(scene.mesh.clone(), Some(start.clone()))?;
+                    // Explicit checkpoints cannot start another relaxation/recovery path.
+                    let candidate = build(scene.mesh.clone(), Some(start.clone()), None)?;
                     admit(&candidate)?;
                     Ok(candidate)
                 };
@@ -1030,7 +1034,7 @@ pub(crate) fn build_scene_resolved_with_options(
                     &scene.start,
                     rejected,
                     &tree,
-                    options.start_self_repulsion,
+                    &mut relaxation,
                     &mut rebuild,
                 )?;
                 if let Some((_, mut candidate)) = replacement {
@@ -1152,6 +1156,7 @@ fn build_scene_inner(
     contact_materials: Option<&crate::material::ContactMaterials>,
     start_override: Option<StartState>,
     options: SceneBuildOptions,
+    relaxation: Option<&mut StartRelaxation>,
 ) -> Result<Scene, Refusal> {
     options.validate()?;
     fabric.validate()?;
@@ -1240,15 +1245,12 @@ fn build_scene_inner(
         ));
     }
     let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
+    let mut local_relaxation = StartRelaxation::new(options.start_self_repulsion)?;
+    let relaxation = relaxation.unwrap_or(&mut local_relaxation);
     let allow_body_recovery = start_override.is_none();
     let mut start = match start_override {
         Some(start) => start,
-        None => match options.start_self_repulsion {
-            Some(repulsion) => {
-                crate::start::start_state_with_repulsion(&mesh, wrapped, &tree, Some(repulsion))?
-            }
-            None => start_state(&mesh, wrapped, &tree),
-        },
+        None => relaxation.start(&mesh, wrapped, &tree)?,
     };
     // Weld each sewing group into one vertex.
     let mut weld = vec![usize::MAX; mesh.verts2d.len()];
@@ -1520,7 +1522,7 @@ fn build_scene_inner(
         &tris,
         &body,
         &tree,
-        options.start_self_repulsion,
+        relaxation,
         allow_body_recovery,
     )?;
     // The relaxed start keeps every vertex 4.8 mm out, but an edge between two of them can pass close to
@@ -1613,7 +1615,7 @@ fn admit_body_start(
     tris: &[[usize; 3]],
     body: &Body,
     tree: &NearestTree,
-    repulsion: Option<SelfRepulsionOptions>,
+    relaxation: &mut StartRelaxation,
     allow_recovery: bool,
 ) -> Result<(Vec<usize>, Option<usize>), Refusal> {
     let mut trial = x.clone();
@@ -1627,7 +1629,7 @@ fn admit_body_start(
         Err(refusal) => return Err(refusal),
     };
     let original = start.relax_iterations;
-    let recovered = earlier_relaxed_start(mesh, start, original, tree, repulsion, |candidate| {
+    let recovered = earlier_relaxed_start(mesh, start, original, tree, relaxation, |candidate| {
         let mut positions = vec![Vec3::ZERO; x.len()];
         for (vertex, &welded) in weld.iter().enumerate() {
             positions[welded] = candidate.relaxed[vertex];
@@ -1657,7 +1659,7 @@ fn earlier_relaxed_start<T>(
     source: &StartState,
     rejected_iterations: usize,
     tree: &NearestTree,
-    repulsion: Option<SelfRepulsionOptions>,
+    relaxation: &mut StartRelaxation,
     mut admit: impl FnMut(&StartState) -> Result<T, Refusal>,
 ) -> Result<Option<(StartState, T)>, Refusal> {
     let plain: Vec<_> = crate::start::face_edges(&mesh.faces)
@@ -1672,7 +1674,7 @@ fn earlier_relaxed_start<T>(
         let mut blocks = Vec::new();
         let mut replacement = None;
         for iterations in (stride..rejected_iterations).step_by(stride) {
-            positions = crate::start::relax_with_repulsion(
+            positions = relaxation.relax(
                 mesh,
                 &positions,
                 &source.groups,
@@ -1680,7 +1682,6 @@ fn earlier_relaxed_start<T>(
                 stride,
                 crate::start::RELAX_CLEARANCE,
                 &source.gather_weights,
-                repulsion,
             )?;
             let strain: Vec<_> = crate::start::edge_strain(&positions, &mesh.verts2d, &plain)
                 .into_iter()
@@ -1697,7 +1698,9 @@ fn earlier_relaxed_start<T>(
             }
             if stride == crate::start::RELAX_PUSH_OUT_ITERS
                 && complete_block
-                && repulsion.is_none_or(|r| stride.is_multiple_of(r.period))
+                && relaxation
+                    .options()
+                    .is_none_or(|r| stride.is_multiple_of(r.period))
             {
                 continue; // The identical complete-block state already failed contact admission.
             }
@@ -3701,7 +3704,7 @@ mod grain_tests {
             &mesh.faces,
             &body,
             &tree,
-            None,
+            &mut StartRelaxation::new(None).unwrap(),
             true,
         )
         .unwrap();
@@ -3739,7 +3742,7 @@ mod grain_tests {
             &mesh.faces,
             &body,
             &tree,
-            None,
+            &mut StartRelaxation::new(None).unwrap(),
             false,
         )
         .unwrap_err();
@@ -3747,6 +3750,140 @@ mod grain_tests {
         assert_eq!(refusal.message, expected.message);
         assert_eq!(x, before);
         assert_eq!(format!("{start:?}"), original);
+    }
+
+    #[test]
+    fn body_start_recovery_shares_primary_work_and_discards_budget_limited_incumbents() {
+        let (mut mesh, _, _, _, body, tree) = body_start_recovery_fixture();
+        mesh.verts2d.push(Vec2::new(30.0, 30.0));
+        mesh.faces.push([1, 3, 2]);
+        mesh.owner.push(0);
+        mesh.inst_range[0].1 = 4;
+        let wrapped: Vec<_> = mesh
+            .verts2d
+            .iter()
+            .map(|p| Vec3::new(p.x * MM, p.y * MM, 0.2))
+            .collect();
+        let model = ClothModel::new(
+            mesh.verts2d.iter().map(|p| *p * MM).collect(),
+            &mesh.faces,
+            Fabric::default().membrane(0.05),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let weld = [0, 1, 2, 3];
+        let options = SelfRepulsionOptions {
+            period: crate::start::RELAX_PUSH_OUT_ITERS,
+            ..SelfRepulsionOptions::default()
+        };
+        let mut probe = StartRelaxation::new(Some(options)).unwrap();
+        let initial = probe.start(&mesh, wrapped.clone(), &tree).unwrap();
+        let primary_work = probe.candidate_checks();
+        assert_eq!(initial.relax_iterations, crate::start::RELAX_ITERS);
+        let mut checkpoint = StartRelaxation::new(Some(options)).unwrap();
+        checkpoint
+            .relax(
+                &mesh,
+                &initial.presewn,
+                &initial.groups,
+                &tree,
+                crate::start::RELAX_PUSH_OUT_ITERS,
+                crate::start::RELAX_CLEARANCE,
+                &initial.gather_weights,
+            )
+            .unwrap();
+        let checkpoint_work = checkpoint.candidate_checks();
+        assert!(primary_work > checkpoint_work && checkpoint_work > 0);
+
+        // Both initial relaxation and an individual recovery checkpoint fit. Together they
+        // consume the declared allowance, so the next checkpoint must refuse even after an
+        // earlier admissible candidate. Replaying may not renew the primary call's budget.
+        let limited = SelfRepulsionOptions {
+            max_candidate_checks: primary_work + checkpoint_work,
+            ..options
+        };
+        for options in [options, limited] {
+            let mut work = StartRelaxation::new(Some(options)).unwrap();
+            let mut start = work.start(&mesh, wrapped.clone(), &tree).unwrap();
+            // As in the base fixture, an inside-body terminal recording isolates recovery.
+            for p in &mut start.relaxed {
+                p.z = 0.01;
+            }
+            let before = format!("{start:?}");
+            let mut x = start.relaxed.clone();
+            let positions_before = x.clone();
+            let result = admit_body_start(
+                &mesh,
+                &mut start,
+                &weld,
+                &model,
+                &mut x,
+                &mesh.faces,
+                &body,
+                &tree,
+                &mut work,
+                true,
+            );
+            if options == limited {
+                let refusal = result.unwrap_err();
+                assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+                assert!(
+                    refusal
+                        .message
+                        .contains(&limited.max_candidate_checks.to_string())
+                );
+                assert_eq!(work.candidate_checks(), limited.max_candidate_checks);
+                assert_eq!(x, positions_before);
+                assert_eq!(format!("{start:?}"), before);
+            } else {
+                let (counts, rejected) = result.unwrap();
+                assert!(counts.is_empty());
+                assert_eq!(rejected, Some(crate::start::RELAX_ITERS));
+                assert_eq!(start.relax_iterations, 175);
+                assert_eq!(x, initial.relaxed);
+                assert_eq!(start.block_p95, initial.block_p95);
+                assert_eq!(work.candidate_checks(), primary_work + 7 * checkpoint_work);
+            }
+        }
+
+        // Restarting from the pre-sewn state for fine recovery does not reset work already
+        // consumed while testing both earlier complete blocks.
+        let mut source = initial;
+        source.relax_iterations = 600;
+        source.block_p95 = vec![0.0; 3];
+        let source_before = format!("{source:?}");
+        let mut work = StartRelaxation::new(Some(SelfRepulsionOptions {
+            max_candidate_checks: 2 * primary_work + checkpoint_work,
+            ..options
+        }))
+        .unwrap();
+        let mut visited = Vec::new();
+        let refusal = earlier_relaxed_start(
+            &mesh,
+            &source,
+            source.relax_iterations,
+            &tree,
+            &mut work,
+            |candidate| {
+                visited.push(candidate.relax_iterations);
+                if candidate
+                    .relax_iterations
+                    .is_multiple_of(crate::start::RELAX_ITERS)
+                {
+                    Err(Refusal::new(
+                        RefusalCode::IntersectingTrajectory,
+                        "coarse display crossing",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+        assert_eq!(visited, vec![200, 400, 25]);
+        assert_eq!(format!("{source:?}"), source_before);
     }
 
     #[test]
@@ -3760,7 +3897,7 @@ mod grain_tests {
             &source,
             source.relax_iterations,
             &tree,
-            None,
+            &mut StartRelaxation::new(None).unwrap(),
             |candidate| {
                 visited.push(candidate.relax_iterations);
                 Ok(())
@@ -3785,7 +3922,7 @@ mod grain_tests {
                 &source,
                 source.relax_iterations,
                 &tree,
-                None,
+                &mut StartRelaxation::new(None).unwrap(),
                 |candidate| {
                     visited.push(candidate.relax_iterations);
                     Err::<(), _>(Refusal::new(code, "independent admission refusal"))
@@ -3795,14 +3932,20 @@ mod grain_tests {
             assert_eq!(refusal.code, code);
             assert_eq!(visited, vec![25]);
         }
-        let none =
-            earlier_relaxed_start(&mesh, &source, source.relax_iterations, &tree, None, |_| {
+        let none = earlier_relaxed_start(
+            &mesh,
+            &source,
+            source.relax_iterations,
+            &tree,
+            &mut StartRelaxation::new(None).unwrap(),
+            |_| {
                 Err::<(), _>(Refusal::new(
                     RefusalCode::IntersectingStart,
                     "body crossing remains",
                 ))
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(none.is_none());
         assert_eq!(source.relax_iterations, 200);
         assert_eq!(source.block_p95, vec![9.0]);
@@ -3819,7 +3962,7 @@ mod grain_tests {
             &source,
             source.relax_iterations,
             &tree,
-            None,
+            &mut StartRelaxation::new(None).unwrap(),
             |candidate| {
                 visited.push(candidate.relax_iterations);
                 if candidate
@@ -3901,6 +4044,7 @@ mod grain_tests {
         )
         .unwrap();
         let mut positions = source.relaxed.clone();
+        let mut relaxation = StartRelaxation::new(None).unwrap();
         let (_, rejected) = admit_body_start(
             &mesh,
             &mut source,
@@ -3910,7 +4054,7 @@ mod grain_tests {
             &mesh.faces,
             &body,
             &tree,
-            None,
+            &mut relaxation,
             true,
         )
         .unwrap();
@@ -3968,17 +4112,23 @@ mod grain_tests {
                 &source,
                 source.relax_iterations,
                 &tree,
-                None,
+                &mut relaxation,
                 &mut admit,
             )
             .unwrap()
             .is_none(),
             "the former body-selected horizon discards every display-clear candidate"
         );
-        let (accepted, ()) =
-            earlier_relaxed_start(&mesh, &source, rejected.unwrap(), &tree, None, &mut admit)
-                .unwrap()
-                .expect("body backtracking must not discard later display-clear checkpoints");
+        let (accepted, ()) = earlier_relaxed_start(
+            &mesh,
+            &source,
+            rejected.unwrap(),
+            &tree,
+            &mut relaxation,
+            &mut admit,
+        )
+        .unwrap()
+        .expect("body backtracking must not discard later display-clear checkpoints");
         assert_eq!(accepted.relax_iterations, 575);
         assert_eq!(accepted.relaxed, late);
         assert_eq!(accepted.wrapped, original.wrapped);
@@ -4006,7 +4156,7 @@ mod grain_tests {
                 &source,
                 source.relax_iterations,
                 &tree,
-                None,
+                &mut StartRelaxation::new(None).unwrap(),
                 |candidate| {
                     visited.push(candidate.relax_iterations);
                     if candidate.relax_iterations == 200 {
@@ -4074,7 +4224,7 @@ mod grain_tests {
             &source,
             source.relax_iterations,
             &tree,
-            Some(repulsion),
+            &mut StartRelaxation::new(Some(repulsion)).unwrap(),
             |candidate| {
                 if candidate
                     .relax_iterations

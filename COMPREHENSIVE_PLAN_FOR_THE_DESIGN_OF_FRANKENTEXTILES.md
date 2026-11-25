@@ -6336,10 +6336,20 @@ piercings missed by isolated vertex push-out or endpoint proximity. Bounded corr
 body outward normals, preserve welded seam equality, and share the existing candidate-work limit.
 Successful legacy starts without the option retain their relaxation arithmetic.
 
-Seven focused test groups cover the recovery handoff, source/domain refusal propagation, actual
-replay receipts, geometric crossing witnesses, production contact admission, seam consistency and
-transactional work-budget failure. These tests are authored; local execution was unavailable and
-GitHub Rust checks were queued at this implementation checkpoint. The unchanged 385 mm sleeve
+One scene-owned context now reuses immutable welded/body queries and charges a single candidate
+allowance across primary relaxation and all coarse, fine, body, self-contact and displayed-body
+recovery. A fallback checkpoint cannot renew the allowance. Exhaustion remains a refusal even after
+an earlier candidate was admissible; no partial replacement is published. Joint contact recovery
+also retains the original rejected iteration horizon after a body-only fallback, preserving later
+fine checkpoints that may clear all surfaces. Standalone public relaxation calls retain their
+independent budgets and ordinary unrepelled arithmetic is unchanged.
+
+Focused test groups cover the recovery handoff, source/domain refusal propagation, actual replay
+receipts, geometric crossing witnesses, production contact admission, seam consistency, cumulative
+work across replay phases and cached/uncached agreement. The initial `start::` test invocation passed
+16 tests before this shared-context increment. Final native regression execution was blocked by
+compiler SIGKILL and executor loss; pre-merge formatting and independent source review completed. GitHub
+Rust checks remain queued, so no final native, WASM or runtime performance pass is asserted here. The unchanged 385 mm sleeve
 still requires its pinned-Anny full-frame replay and original flat-design checks. Neither these
 software changes nor their synthetic fixtures establish measured garment fit or a runtime speedup.
 The parent `ftx-jnqs` remains open.

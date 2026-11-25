@@ -66,8 +66,8 @@ pub struct SelfRepulsionOptions {
     /// Apply cloth–cloth and body-feature impulses every `period` iterations (`1..=RELAX_PUSH_OUT_ITERS`).
     pub period: usize,
     /// Broad-phase candidates examined over a complete relaxation call (`1..=128000000`).
-    /// All blocks of [`start_state_with_repulsion`] share one allowance; standalone checkpoint
-    /// replay calls each have their own allowance. Exhaustion refuses without returning a start.
+    /// All primary and recovery blocks of an ordinary scene share one allowance. Standalone
+    /// [`relax_with_repulsion`] calls each have their own. Exhaustion returns no partial start.
     #[serde(skip_serializing_if = "default_repulsion_candidate_checks")]
     pub max_candidate_checks: usize,
 }
@@ -496,10 +496,8 @@ pub fn relax(
     clearance: f64,
     weights: &[f64],
 ) -> Vec<Vec3> {
-    relax_inner(
-        mesh, start, groups, body, iters, clearance, weights, None, None,
-    )
-    .expect("legacy relaxation has no fallible self-repulsion work")
+    relax_inner(mesh, start, groups, body, iters, clearance, weights, None)
+        .expect("legacy relaxation has no fallible self-repulsion work")
 }
 
 /// As [`relax`], with optional deterministic cloth–cloth and two-way body-feature separation
@@ -522,21 +520,78 @@ pub fn relax_with_repulsion(
     weights: &[f64],
     repulsion: Option<SelfRepulsionOptions>,
 ) -> Result<Vec<Vec3>, Refusal> {
-    if let Some(opts) = repulsion {
-        opts.validate()?;
+    StartRelaxation::new(repulsion)?.relax(mesh, start, groups, body, iters, clearance, weights)
+}
+
+/// One scene's immutable welded/body feature queries and monotone candidate allowance. Primary
+/// relaxation and all fallback replays use the same mesh, sewing groups and rigid body. Explicit
+/// checkpoint admission performs no relaxation and cannot mint another allowance.
+pub(crate) struct StartRelaxation {
+    options: Option<SelfRepulsionOptions>,
+    prepared: Option<PreparedRepulsion>,
+}
+
+struct PreparedRepulsion {
+    cloth: RepulsionTopology,
+    body: BodyRepulsion,
+    work: RepulsionWork,
+}
+
+impl StartRelaxation {
+    pub(crate) fn new(options: Option<SelfRepulsionOptions>) -> Result<Self, Refusal> {
+        if let Some(options) = options {
+            options.validate()?;
+        }
+        Ok(Self {
+            options,
+            prepared: None,
+        })
     }
-    let mut work = repulsion.map(RepulsionWork::new);
-    relax_inner(
-        mesh,
-        start,
-        groups,
-        body,
-        iters,
-        clearance,
-        weights,
-        repulsion,
-        work.as_mut(),
-    )
+
+    pub(crate) fn options(&self) -> Option<SelfRepulsionOptions> {
+        self.options
+    }
+
+    #[cfg(test)]
+    pub(crate) fn candidate_checks(&self) -> usize {
+        self.prepared
+            .as_ref()
+            .map_or(0, |prepared| prepared.work.limit - prepared.work.remaining)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn relax(
+        &mut self,
+        mesh: &GarmentMesh,
+        start: &[Vec3],
+        groups: &[Vec<usize>],
+        body: &NearestTree,
+        iters: usize,
+        clearance: f64,
+        weights: &[f64],
+    ) -> Result<Vec<Vec3>, Refusal> {
+        if self.options.is_some() && start.iter().any(|p| !p.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite self-repulsion start",
+            ));
+        }
+        let prepared = if let Some(options) = self.options {
+            if self.prepared.is_none() {
+                self.prepared = Some(PreparedRepulsion {
+                    cloth: RepulsionTopology::build(mesh, groups),
+                    body: BodyRepulsion::new(body)?,
+                    work: RepulsionWork::new(options),
+                });
+            }
+            Some((options, self.prepared.as_mut().expect("prepared repulsion")))
+        } else {
+            None
+        };
+        relax_inner(
+            mesh, start, groups, body, iters, clearance, weights, prepared,
+        )
+    }
 }
 
 /// Precomputed welded cloth topology used for deterministic vertex–triangle and edge–edge
@@ -1237,8 +1292,7 @@ fn relax_inner(
     iters: usize,
     clearance: f64,
     weights: &[f64],
-    repulsion: Option<SelfRepulsionOptions>,
-    mut work: Option<&mut RepulsionWork>,
+    mut repulsion: Option<(SelfRepulsionOptions, &mut PreparedRepulsion)>,
 ) -> Result<Vec<Vec3>, Refusal> {
     if repulsion.is_some() && start.iter().any(|p| !p.is_finite()) {
         return Err(Refusal::new(
@@ -1257,8 +1311,6 @@ fn relax_inner(
         .collect();
     let n = start.len();
     let deg: Vec<f64> = degrees(n, &edges).into_iter().map(|d| d.max(1.0)).collect();
-    let topo = repulsion.map(|_| RepulsionTopology::build(mesh, groups));
-    let body_topo = repulsion.map(|_| BodyRepulsion::new(body)).transpose()?;
     let mut q = start.to_vec();
     for it in 0..iters {
         let corr: Vec<Vec3> = edges
@@ -1287,29 +1339,27 @@ fn relax_inner(
                 q[v] = m;
             }
         }
-        if let (Some(opts), Some(topo)) = (repulsion, topo.as_ref())
+        if let Some((opts, prepared)) = repulsion.as_mut()
             && (it % opts.period == opts.period - 1 || it + 1 == iters)
         {
             apply_self_repulsion(
                 &mut q,
                 &mesh.verts2d,
                 &mesh.owner,
-                topo,
+                &prepared.cloth,
                 body,
                 clearance,
-                opts,
-                work.as_deref_mut()
-                    .expect("repulsion has a complete-call budget"),
+                *opts,
+                &mut prepared.work,
             )?;
             apply_body_repulsion(
                 &mut q,
-                topo,
+                &prepared.cloth,
                 body,
-                body_topo.as_ref().expect("repulsion has body features"),
+                &prepared.body,
                 clearance,
-                opts,
-                work.as_deref_mut()
-                    .expect("repulsion has a complete-call budget"),
+                *opts,
+                &mut prepared.work,
             )?;
         }
         if it % RELAX_PUSH_OUT_ITERS == RELAX_PUSH_OUT_ITERS - 1 || it + 1 == iters {
@@ -1342,7 +1392,9 @@ pub struct StartState {
 /// [`RELAX_MAX_ITERS`] have run (spec 04 §4).
 #[must_use]
 pub fn start_state(mesh: &GarmentMesh, wrapped: Vec<Vec3>, body: &NearestTree) -> StartState {
-    start_state_inner(mesh, wrapped, body, None)
+    StartRelaxation::new(None)
+        .expect("legacy relaxation options are valid")
+        .start(mesh, wrapped, body)
         .expect("legacy start has no fallible self-repulsion work")
 }
 
@@ -1359,69 +1411,65 @@ pub fn start_state_with_repulsion(
     body: &NearestTree,
     repulsion: Option<SelfRepulsionOptions>,
 ) -> Result<StartState, Refusal> {
-    if let Some(opts) = repulsion {
-        opts.validate()?;
-    }
-    start_state_inner(mesh, wrapped, body, repulsion)
+    StartRelaxation::new(repulsion)?.start(mesh, wrapped, body)
 }
 
-fn start_state_inner(
-    mesh: &GarmentMesh,
-    wrapped: Vec<Vec3>,
-    body: &NearestTree,
-    repulsion: Option<SelfRepulsionOptions>,
-) -> Result<StartState, Refusal> {
-    if repulsion.is_some() && wrapped.iter().any(|p| !p.is_finite()) {
-        return Err(Refusal::new(
-            RefusalCode::NonFinite,
-            "non-finite self-repulsion wrap",
-        ));
-    }
-    let mut work = repulsion.map(RepulsionWork::new);
-    let weights = gather_weights(mesh);
-    let (presewn, groups) = presew(mesh, &wrapped, body, PRESEW_CLEARANCE, PRESEW_ITERS);
-    let edges = face_edges(&mesh.faces);
-    let plain: Vec<(usize, usize)> = edges
-        .into_iter()
-        .filter(|&(a, b)| weights[a] >= 1.0 && weights[b] >= 1.0)
-        .collect();
-    let (mut q, mut done, mut blocks) = (presewn.clone(), 0, Vec::new());
-    while done < RELAX_MAX_ITERS {
-        q = relax_inner(
-            mesh,
-            &q,
-            &groups,
-            body,
-            RELAX_ITERS,
-            RELAX_CLEARANCE,
-            &weights,
-            repulsion,
-            work.as_mut(),
-        )?;
-        done += RELAX_ITERS;
-        let strain: Vec<f64> = edge_strain(&q, &mesh.verts2d, &plain)
-            .into_iter()
-            .map(f64::abs)
-            .collect();
-        let p95 = if strain.is_empty() {
-            0.0
-        } else {
-            percentile(&strain, 95.0)
-        };
-        blocks.push(p95);
-        if p95 <= RELAX_TARGET_P95 {
-            break;
+impl StartRelaxation {
+    pub(crate) fn start(
+        &mut self,
+        mesh: &GarmentMesh,
+        wrapped: Vec<Vec3>,
+        body: &NearestTree,
+    ) -> Result<StartState, Refusal> {
+        if self.options.is_some() && wrapped.iter().any(|p| !p.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite self-repulsion wrap",
+            ));
         }
+        let weights = gather_weights(mesh);
+        let (presewn, groups) = presew(mesh, &wrapped, body, PRESEW_CLEARANCE, PRESEW_ITERS);
+        let edges = face_edges(&mesh.faces);
+        let plain: Vec<(usize, usize)> = edges
+            .into_iter()
+            .filter(|&(a, b)| weights[a] >= 1.0 && weights[b] >= 1.0)
+            .collect();
+        let (mut q, mut done, mut blocks) = (presewn.clone(), 0, Vec::new());
+        while done < RELAX_MAX_ITERS {
+            q = self.relax(
+                mesh,
+                &q,
+                &groups,
+                body,
+                RELAX_ITERS,
+                RELAX_CLEARANCE,
+                &weights,
+            )?;
+            done += RELAX_ITERS;
+            let strain: Vec<f64> = edge_strain(&q, &mesh.verts2d, &plain)
+                .into_iter()
+                .map(f64::abs)
+                .collect();
+            let p95 = if strain.is_empty() {
+                0.0
+            } else {
+                percentile(&strain, 95.0)
+            };
+            blocks.push(p95);
+            if p95 <= RELAX_TARGET_P95 {
+                break;
+            }
+        }
+        Ok(StartState {
+            wrapped,
+            presewn,
+            groups,
+            relaxed: q,
+            relax_iterations: done,
+            block_p95: blocks,
+            gather_weights: weights,
+        })
     }
-    Ok(StartState {
-        wrapped,
-        presewn,
-        groups,
-        relaxed: q,
-        relax_iterations: done,
-        block_p95: blocks,
-        gather_weights: weights,
-    })
 }
 
 #[cfg(test)]
@@ -1660,16 +1708,8 @@ mod tests {
         for clearance in [-1.0, f64::NAN] {
             let mut q = initial.clone();
             assert!(
-                apply_body_repulsion(
-                    &mut q,
-                    &topo,
-                    &body,
-                    &body_topo,
-                    clearance,
-                    opts,
-                    &mut work,
-                )
-                .is_err()
+                apply_body_repulsion(&mut q, &topo, &body, &body_topo, clearance, opts, &mut work,)
+                    .is_err()
             );
             assert_eq!(q, initial);
         }
@@ -1762,6 +1802,8 @@ mod tests {
         )
         .unwrap();
         let mut chunked = start.clone();
+        let mut shared = start.clone();
+        let mut workspace = StartRelaxation::new(Some(opts)).unwrap();
         for _ in 0..(RELAX_ITERS / RELAX_PUSH_OUT_ITERS) {
             chunked = relax_with_repulsion(
                 &mesh,
@@ -1774,6 +1816,21 @@ mod tests {
                 Some(opts),
             )
             .unwrap();
+            shared = workspace
+                .relax(
+                    &mesh,
+                    &shared,
+                    &[],
+                    &body,
+                    RELAX_PUSH_OUT_ITERS,
+                    RELAX_CLEARANCE,
+                    &weights,
+                )
+                .unwrap();
+            assert_eq!(
+                shared, chunked,
+                "cached queries must preserve every checkpoint"
+            );
         }
         for (a, b) in whole.iter().zip(&chunked) {
             assert_eq!(
@@ -1889,20 +1946,11 @@ mod tests {
             period: 1,
             ..SelfRepulsionOptions::default()
         };
-        let mut work = RepulsionWork::new(opts);
-        let first = relax_inner(
-            &mesh,
-            &start,
-            &[],
-            &body,
-            1,
-            RELAX_CLEARANCE,
-            &weights,
-            Some(opts),
-            Some(&mut work),
-        )
-        .unwrap();
-        let spent = opts.max_candidate_checks - work.remaining;
+        let mut work = StartRelaxation::new(Some(opts)).unwrap();
+        let first = work
+            .relax(&mesh, &start, &[], &body, 1, RELAX_CLEARANCE, &weights)
+            .unwrap();
+        let spent = opts.max_candidate_checks - work.prepared.as_ref().unwrap().work.remaining;
         assert!(spent > 0);
         opts.max_candidate_checks = spent;
         let wire = serde_json::to_value(opts).unwrap();

@@ -120,8 +120,9 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   impulses preserved through backtrack checkpoint replay. Existing BVH queries stream candidates
   in fixed order without materializing a quadratic edge-pair list or an oversized-edge Cartesian
   product. `max_candidate_checks` bounds the complete call (default 32 million, supported range
-  1–128 million, omitted from JSON at its default); all blocks of a start share the allowance,
-  while standalone checkpoint replay calls each retain their own allowance. Exhaustion returns
+  1–128 million, omitted from JSON at its default); primary relaxation and every body, self-contact
+  and displayed-body recovery checkpoint in a scene share one allowance. Standalone public
+  relaxation calls retain independent allowances. Exhaustion returns
   `BudgetExceeded`, non-finite separation geometry refuses, and no partial start is returned.
   Body, seam and final exact contact admission remain authoritative; this is a bounded start
   heuristic, not a general untangling guarantee or empirical layer-order qualification.
@@ -129,7 +130,8 @@ from JSON reports and `DrapeOptions` / `FoldSettings` when at its legacy default
   faces. Exact segment/face witnesses catch an interior piercing even when all vertices and
   endpoint/edge proximity checks miss it. Body-feature corrections use the requested body clearance
   and outward normals, move welded members together, and share the existing candidate allowance.
-  Immutable body query trees are reused within each relaxation call. A complete sweep validates
+  Immutable welded topology and body query trees are prepared once and reused across the scene's
+  primary and fallback relaxation blocks. A complete sweep validates
   every finite corrected position before publishing; zero body clearance is a no-op. The ordinary
   exact contact audit can still refuse symmetric, infeasible or unresolved starts. The existing
   native `--start-self-repulsion` and portable option reach this path without a new schema.
@@ -175,6 +177,10 @@ Body, self-contact and displayed-body recovery share this replay policy. Every c
 block's strain receipt is measured on the actual candidate, including non-divisor repulsion periods.
 Only contact refusals permit another checkpoint; source, material-domain, non-finite and work-budget
 failures stop the whole search, even if an earlier candidate passed or leg separation is attempted.
+The scene-owned relaxation context carries one monotone candidate counter through initial work,
+coarse replay, fine replay and later contact recovery; explicit checkpoints cannot renew it.
+Focused tests cover exhaustion after an admissible incumbent and exact cached/uncached replay.
+Final execution of these new regressions remains pending after compiler SIGKILL and executor loss.
 Any selected start must still pass physical contact, self-contact and displayed-body admission before
 dynamics. The original rejected iteration count survives subsequent self-contact or leg-start repair.
 The synthetic closed-body regression verifies this formerly unreachable recovery path; it does not
