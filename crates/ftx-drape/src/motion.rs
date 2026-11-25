@@ -26,6 +26,12 @@ pub struct MotionOptions {
     /// `advance_body_with_dissipation`, each retained triangle-work scalar also consumes one
     /// vertex-equivalent unit; ordinary motion does not retain or charge those extra arrays.
     pub max_sample_vertices: usize,
+    /// Newton tolerance (the units of `Solver::tol`: m/s for a dynamic step) for every substep that
+    /// ends before the request does; `None` keeps the solver's own. The substep that lands on the
+    /// target always converges to the solver's tolerance. A work policy, not a physical parameter:
+    /// looser intermediate solves change the path the cloth takes and, through friction and
+    /// buckling, can change where it ends.
+    pub intermediate_tol: Option<f64>,
 }
 
 impl Default for MotionOptions {
@@ -35,6 +41,7 @@ impl Default for MotionOptions {
             max_trials: 512,
             max_pairs: 1_000_000,
             max_sample_vertices: 4_000_000,
+            intermediate_tol: None,
         }
     }
 }
@@ -386,6 +393,14 @@ fn advance_body_inner<S: Clone>(
     {
         return Err(invalid("invalid motion time or work/sample budget"));
     }
+    if options
+        .intermediate_tol
+        .is_some_and(|tol| !tol.is_finite() || tol <= 0.0)
+    {
+        return Err(invalid(
+            "the intermediate Newton tolerance must be finite and positive",
+        ));
+    }
     let original = solver
         .contact
         .as_ref()
@@ -570,6 +585,12 @@ fn advance_body_inner<S: Clone>(
         }
         let previous_body = c.body.vertices.clone();
         let mut trial = work.clone();
+        // Only the substep that lands on the target is held to the solver's own tolerance.
+        if end_time != duration_s
+            && let Some(tol) = options.intermediate_tol
+        {
+            trial.tol = tol;
+        }
         trial
             .contact
             .as_mut()
@@ -580,6 +601,7 @@ fn advance_body_inner<S: Clone>(
             Some(guess) => trial.step_at_body_with_guess(h, Some(&previous_body), guess),
             None => trial.step_at_body(h, Some(&previous_body)),
         };
+        trial.tol = work.tol;
         let solve = match solved {
             Ok(r)
                 if r.converged

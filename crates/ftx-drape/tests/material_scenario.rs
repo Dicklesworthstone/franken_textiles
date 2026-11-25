@@ -1186,6 +1186,7 @@ fn motion_continues_the_same_sewn_solver_and_recomputes_endpoint_heat() {
                 max_trials: trials,
                 max_pairs: 100000,
                 max_sample_vertices: vertices,
+                intermediate_tol: None,
             },
         )
         .unwrap();

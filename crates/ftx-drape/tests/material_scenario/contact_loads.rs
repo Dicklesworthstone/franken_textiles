@@ -366,6 +366,7 @@ fn contact_loads_follow_adaptive_barrier_kappa_during_motion() {
         max_trials: req.max_trials,
         max_pairs: req.max_pairs,
         max_sample_vertices: req.max_sample_vertices,
+        intermediate_tol: None,
     };
     let mut all_samples = Vec::new();
     let mut prev_t = 0.0;

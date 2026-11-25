@@ -525,6 +525,10 @@ pub struct SessionSettings {
     /// substep's solve starts with the cloth within this distance moved along with the body. Zero
     /// starts from the cloth at rest ([`advance_body`]).
     pub motion_carry_mm: f64,
+    /// Newton tolerance (m/s) of every move substep but the last
+    /// ([`MotionOptions::intermediate_tol`]); absent keeps the drape's 1e-3 m/s throughout. The
+    /// last substep of every move always converges to the drape's tolerance.
+    pub motion_intermediate_tol_m_s: Option<f64>,
 }
 
 impl Default for SessionSettings {
@@ -551,6 +555,7 @@ impl Default for SessionSettings {
             start_self_repulsion: drape.start_self_repulsion,
             motion_step_s: MotionOptions::default().max_step_s,
             motion_carry_mm: 0.0,
+            motion_intermediate_tol_m_s: None,
         }
     }
 }
@@ -629,6 +634,7 @@ impl Session {
             start_self_repulsion,
             motion_step_s,
             motion_carry_mm,
+            motion_intermediate_tol_m_s,
         } = settings;
         if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
             return Err("self-contact thickness must be finite and nonnegative".into());
@@ -638,6 +644,13 @@ impl Session {
         }
         if !motion_step_s.is_finite() || !(1e-4..=0.1).contains(&motion_step_s) {
             return Err("the motion step must lie between 0.0001 and 0.1 s".into());
+        }
+        if motion_intermediate_tol_m_s
+            .is_some_and(|tol| !(tol.is_finite() && tol > 0.0 && tol <= 0.1))
+        {
+            return Err(
+                "the intermediate move tolerance must lie above 0 and at most 0.1 m/s".into(),
+            );
         }
         if sew_steps
             .saturating_add(drape_steps)
@@ -754,6 +767,7 @@ impl Session {
             summary,
             motion: MotionOptions {
                 max_step_s: motion_step_s,
+                intermediate_tol: motion_intermediate_tol_m_s,
                 ..MotionOptions::default()
             },
             carry_m: (motion_carry_mm > 0.0).then_some(motion_carry_mm * 1e-3),
@@ -1205,6 +1219,28 @@ mod tests {
             carried < plain,
             "carrying the band took {carried} substeps, at rest {plain}"
         );
+    }
+
+    #[test]
+    fn a_looser_intermediate_move_tolerance_is_opt_in_bounded_and_leaves_the_solver_alone() {
+        assert_eq!(SessionSettings::default().motion_intermediate_tol_m_s, None);
+        let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+        let (header, data) = baked(0.015);
+        for tol in [0.0, -1e-3, 0.2] {
+            let settings: SessionSettings =
+                serde_json::from_value(json!({ "motion_intermediate_tol_m_s": tol })).unwrap();
+            let body = PosableBody::parse(&header, &data).unwrap();
+            let err = Session::start(body, &pattern, &json!({}), settings, |_| {})
+                .err()
+                .expect("an out-of-range intermediate tolerance is refused");
+            assert!(err.contains("intermediate move tolerance"), "{err}");
+        }
+        let mut session = session(0.015);
+        let tol = session.scene.solver.tol;
+        session.motion.intermediate_tol = Some(3e-3);
+        session.advance(45.0, 35.0, 0.25).unwrap();
+        assert_eq!(session.arms(), [45.0, 35.0]);
+        assert_eq!(session.scene.solver.tol, tol);
     }
 
     #[test]

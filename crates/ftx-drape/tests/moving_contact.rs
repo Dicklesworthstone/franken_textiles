@@ -342,6 +342,75 @@ fn checked_carried_lift(integrator: ftx_drape::TimeIntegrator) {
 }
 
 #[test]
+fn intermediate_tolerance_loosens_only_the_substeps_before_the_target() {
+    let mut original = sliding_patch(0.0, false);
+    original.gravity = Vec3::new(0.0, 0.0, -9.81);
+    let target: Vec<_> = original
+        .contact
+        .as_ref()
+        .unwrap()
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.0, 0.0, 0.004))
+        .collect();
+    let options = MotionOptions::default();
+    let mut strict = original.clone();
+    let tight = advance_body_carried(&mut strict, &target, 0.2, options, 0.02).unwrap();
+    let loose_tol = 1e-2;
+    let mut relaxed = original.clone();
+    let loose = advance_body_carried(
+        &mut relaxed,
+        &target,
+        0.2,
+        MotionOptions {
+            intermediate_tol: Some(loose_tol),
+            ..options
+        },
+        0.02,
+    )
+    .unwrap();
+    // Every solve meets its own tolerance (a converged report's last step is the one it declined):
+    // the loose one before the target, the solver's own on the substep that lands there.
+    let (last, early) = loose.samples.split_last().unwrap();
+    let mut before = 0.0;
+    for sample in early {
+        assert!(sample.solve.converged);
+        assert!(sample.solve.last_step / (sample.time_s - before) < loose_tol);
+        before = sample.time_s;
+    }
+    assert!(last.solve.converged);
+    assert!(last.solve.last_step / (last.time_s - before) < original.tol);
+    assert_eq!(last.time_s, 0.2);
+    let newton = |samples: &[ftx_drape::motion::MotionSample]| -> usize {
+        samples.iter().map(|s| s.solve.iterations).sum()
+    };
+    assert!(newton(early) < newton(&tight.samples[..tight.samples.len() - 1]));
+    // The policy is the move's, not the solver's: it leaves the solver's tolerance as it was.
+    assert_eq!(relaxed.tol, original.tol);
+    assert_eq!(relaxed.contact.as_ref().unwrap().body.vertices, target);
+
+    for tol in [0.0, -1e-3, f64::NAN, f64::INFINITY] {
+        let mut refused = original.clone();
+        assert_eq!(
+            advance_body(
+                &mut refused,
+                &target,
+                0.2,
+                MotionOptions {
+                    intermediate_tol: Some(tol),
+                    ..options
+                },
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(format!("{refused:?}"), format!("{original:?}"));
+    }
+}
+
+#[test]
 fn carried_start_never_prescribes_frictionless_tangential_cloth_motion() {
     let original = sliding_patch(0.0, true);
     let target: Vec<_> = original

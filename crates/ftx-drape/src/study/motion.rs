@@ -677,6 +677,7 @@ fn evaluate_path(
             max_trials: remaining_trials,
             max_pairs: request.max_pairs,
             max_sample_vertices: remaining_vertices,
+            intermediate_tol: None,
         };
         let report = if coupled {
             let history = surface_heat
@@ -1645,6 +1646,7 @@ mod tests {
             max_trials: 16,
             max_pairs: 100000,
             max_sample_vertices: 2 * count,
+            intermediate_tol: None,
         };
         let mut expected = original.clone();
         let advance = |solver: &mut crate::Solver, endpoint: &[Vec3]| {
@@ -1812,6 +1814,7 @@ mod tests {
             max_trials: 16,
             max_pairs: 100000,
             max_sample_vertices: 2 * count,
+            intermediate_tol: None,
         };
         let mut expected = original.clone();
         let first = advance_body(&mut expected, &path.vertices[0], 0.002, options).unwrap();

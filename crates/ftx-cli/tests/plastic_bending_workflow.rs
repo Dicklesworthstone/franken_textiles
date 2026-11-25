@@ -465,6 +465,7 @@ fn sewn_membrane_set_stays_piece_local_and_body_motion_keeps_accepted_history() 
             max_trials: 16,
             max_pairs: 100000,
             max_sample_vertices: sample_budget,
+            intermediate_tol: None,
         },
     )
     .unwrap();
