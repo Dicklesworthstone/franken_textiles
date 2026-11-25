@@ -349,7 +349,7 @@ pub fn active_piece_fabric_selectors(pattern: &Value) -> Vec<(String, Value)> {
 /// Inputs must be the body and material admitted for the drape.
 ///
 /// # Errors
-/// Missing torso/chest frames, missing per-piece metadata, or serialization failure.
+/// Missing torso/chest frames, invalid arm pose, missing per-piece metadata, or serialization failure.
 pub fn qualification_basis(
     body: &DrapeBody<'_>,
     material: &MaterialInputs,
@@ -362,12 +362,39 @@ pub fn qualification_basis(
         .frames
         .landmark_h("torso", "chest")
         .ok_or_else(|| bad_input("qualification needs the chest landmark"))?;
-    let body_sha256 = digest(&(
-        body.collision,
-        body.arm_deg,
-        [frame.origin, frame.up, frame.front, frame.lat],
-        chest,
-    ))?;
+    let body_sha256 = match body.arm_pose {
+        Some(arms) => {
+            arms.validate()?;
+            if arms.left_abduction_deg == arms.right_abduction_deg {
+                // Equal independent arms produce the exact same symmetric posed body and frames as
+                // `--arm-deg`; preserve the matching legacy digest independent of any overridden arm_deg.
+                digest(&(
+                    body.collision,
+                    arms.left_abduction_deg + 0.0,
+                    [frame.origin, frame.up, frame.front, frame.lat],
+                    chest,
+                ))?
+            } else {
+                // Asymmetric independent arms override `body.arm_deg`; bind the actual pair rather
+                // than the ignored fallback angle.
+                digest(&(
+                    body.collision,
+                    arms,
+                    [frame.origin, frame.up, frame.front, frame.lat],
+                    chest,
+                ))?
+            }
+        }
+        None => {
+            Refusal::finite("qualification arm angle", body.arm_deg)?;
+            digest(&(
+                body.collision,
+                body.arm_deg,
+                [frame.origin, frame.up, frame.front, frame.lat],
+                chest,
+            ))?
+        }
+    };
     if let Some(piece_fabrics) = &material.piece_fabrics {
         let order = material.report["contact_material_order"]
             .as_array()
@@ -1247,5 +1274,118 @@ mod tests {
             )
             .pass
         );
+    }
+
+    #[test]
+    fn qualification_basis_binds_actual_arm_pose_and_ignores_overridden_common_angle() {
+        struct TorsoFrame;
+        impl crate::scene::PartFrames for TorsoFrame {
+            fn frame(&self, part: &str) -> Option<crate::start::PartFrame> {
+                (part == "torso").then_some(crate::start::PartFrame {
+                    origin: ftx_core::Vec3::ZERO,
+                    up: ftx_core::Vec3::new(0.0, 0.0, 1.0),
+                    front: ftx_core::Vec3::new(0.0, -1.0, 0.0),
+                    lat: ftx_core::Vec3::new(1.0, 0.0, 0.0),
+                })
+            }
+            fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+                (part == "torso" && name == "chest").then_some(0.25)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                0.1
+            }
+        }
+
+        let verts = [
+            ftx_core::Vec3::new(0.0, 0.0, 0.0),
+            ftx_core::Vec3::new(0.1, 0.0, 0.0),
+            ftx_core::Vec3::new(0.0, 0.1, 0.0),
+        ];
+        let tris = [[0, 1, 2]];
+        let pat = ftx_pattern::Pattern::new(band_pattern_from_girth(500.0, 0, 60.0, None).unwrap());
+        let material =
+            crate::material::resolve(&pat, &crate::run::DrapeOptions::default()).unwrap();
+        let make_body = |arm_deg, arm_pose| DrapeBody {
+            frames: &TorsoFrame,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg,
+            arm_pose,
+        };
+
+        let legacy_35 = qualification_basis(&make_body(35.0, None), &material).unwrap();
+        let equal_35_default = qualification_basis(
+            &make_body(
+                35.0,
+                Some(ftx_body::drape::ArmPose {
+                    left_abduction_deg: 35.0,
+                    right_abduction_deg: 35.0,
+                }),
+            ),
+            &material,
+        )
+        .unwrap();
+        let equal_35_overridden = qualification_basis(
+            &make_body(
+                50.0,
+                Some(ftx_body::drape::ArmPose {
+                    left_abduction_deg: 35.0,
+                    right_abduction_deg: 35.0,
+                }),
+            ),
+            &material,
+        )
+        .unwrap();
+        assert_eq!(equal_35_default, legacy_35);
+        assert_eq!(equal_35_overridden, legacy_35);
+
+        let asym_default = qualification_basis(
+            &make_body(
+                35.0,
+                Some(ftx_body::drape::ArmPose {
+                    left_abduction_deg: 20.0,
+                    right_abduction_deg: 80.0,
+                }),
+            ),
+            &material,
+        )
+        .unwrap();
+        let asym_overridden = qualification_basis(
+            &make_body(
+                50.0,
+                Some(ftx_body::drape::ArmPose {
+                    left_abduction_deg: 20.0,
+                    right_abduction_deg: 80.0,
+                }),
+            ),
+            &material,
+        )
+        .unwrap();
+        let asym_swapped = qualification_basis(
+            &make_body(
+                35.0,
+                Some(ftx_body::drape::ArmPose {
+                    left_abduction_deg: 80.0,
+                    right_abduction_deg: 20.0,
+                }),
+            ),
+            &material,
+        )
+        .unwrap();
+        assert_eq!(asym_default, asym_overridden);
+        assert_ne!(asym_default["body_sha256"], legacy_35["body_sha256"]);
+        assert_ne!(asym_default["body_sha256"], asym_swapped["body_sha256"]);
+
+        for invalid in [f64::NAN, f64::INFINITY, -1.0, 181.0] {
+            let bad = make_body(
+                35.0,
+                Some(ftx_body::drape::ArmPose {
+                    left_abduction_deg: invalid,
+                    right_abduction_deg: 35.0,
+                }),
+            );
+            assert!(qualification_basis(&bad, &material).is_err());
+        }
+        assert!(qualification_basis(&make_body(f64::NAN, None), &material).is_err());
     }
 }
