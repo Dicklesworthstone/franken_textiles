@@ -81,6 +81,7 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "as-of",
             "no-priors",
             "fabric",
+            "material-bindings",
             "body-fit",
             "model",
         ],
@@ -115,11 +116,9 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None => None,
     };
     let out = PathBuf::from(required(args, "out")?);
-    let fabric = super::fabric::load(args)?;
+    let input = super::fabric::load(args)?;
     let (mut pat, spec, body) = prepare(args, program, &meas, style.as_ref())?;
-    if let Some(selected) = &fabric {
-        selected.apply(&mut pat)?;
-    }
+    let fabric = input.map(|input| input.apply(&mut pat)).transpose()?;
     let (pp, sp) = (out.join("pattern.json"), out.join("fit_spec.json"));
     let errs = Pattern::new(pat.clone()).structure_errors();
     if fabric.is_some() || body.is_some() {
@@ -186,11 +185,9 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
         .get("style")
         .map(|p| read_json(p).map(|x| x.0))
         .transpose()?;
-    let fabric = super::fabric::load(args)?;
+    let input = super::fabric::load(args)?;
     let (mut pat, spec, body) = prepare(args, program, &evidence.value, style.as_ref())?;
-    if let Some(selected) = &fabric {
-        selected.apply(&mut pat)?;
-    }
+    let fabric = input.map(|input| input.apply(&mut pat)).transpose()?;
     let errs = Pattern::new(pat.clone()).structure_errors();
     let readiness = ftx_measure::round_readiness(&pat, &evidence.value, &date);
     // Do not silently repair or replace an unreadable existing workspace contract.

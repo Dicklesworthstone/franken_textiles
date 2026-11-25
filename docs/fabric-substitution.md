@@ -24,3 +24,35 @@ is enabled. Invalid directional grain and inconsistent snapshot digests remain f
 Browser fold-up has no filesystem override switch, but it preflights the pattern's effective
 material before the expensive body fit using the same drape resolver. Malformed material evidence
 therefore cannot silently fall back to default cloth because a body model happens to be loaded.
+
+## Assign separate materials to one garment
+
+Pass an `ftx-material-bindings/1` file with `--material-bindings` to draft, round, drape or
+qualify. It uses the same binding operation as `ftx materials bind-changes`. For example, on the
+zouave bolero draft, this assigns the default linen selection to inherited panels and a different
+source record to the sleeve:
+
+```json
+{
+  "schema": "ftx-material-bindings/1",
+  "default": {"id": "fs_il019_natural"},
+  "pieces": {"sleeve": {"id": "fsri/hfm/cotton-sheet/dry/220330-r1"}}
+}
+```
+
+```sh
+ftx draft zouave_bolero --measurements measurements.json --ws jacket --material-bindings bindings.json
+ftx round jacket --export
+```
+
+Keys in `pieces` are source-piece IDs. Both mirrored sleeve instances inherit the same source
+assignment. The binding file can also specify the full interface table or name finished elastic
+casings. Pass either a binding file or a whole-fabric override. Use a pattern with source pieces
+for per-piece qualification. Joint outfit requests take their materials from their component patterns.
+
+The example exercises flat drafting and export. Running a drape also requires applicable mechanical
+and contact properties. Each saved override includes the original input bytes and its digest.
+The binding receipt records the source and bound pattern digests and the effective material hash
+for every piece. A successful standalone drape also saves `effective_pattern.json` alongside its
+receipt. The viewer checks that snapshot's digest when rebuilding from the simulation directory.
+An explicit replacement pattern must reproduce the same canonical pattern, including its materials.

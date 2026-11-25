@@ -328,13 +328,36 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None
     };
     let pat_doc = if let Some(explicit) = args.options.get("pattern") {
-        let (doc, _) = document(Path::new(explicit))?;
+        let doc = if let Some(hash) = report.get("effective_pattern_sha256") {
+            let path = Path::new(explicit);
+            let raw = bytes(path, crate::fabric::MAX_SNAPSHOT_BYTES)?;
+            let value: Value =
+                serde_json::from_slice(&raw).map_err(|e| workspace::io_error(path, e))?;
+            let canonical = serde_json::to_vec(&value).map_err(|e| bad_input(e.to_string()))?;
+            if hash.as_str() != Some(sha256_hex(&canonical).as_str()) {
+                return Err(bad_input(
+                    "explicit pattern differs from the simulated material-bound pattern",
+                ));
+            }
+            value
+        } else {
+            document(Path::new(explicit))?.0
+        };
         let pat = Pattern::new(doc.clone());
         let errors = pat.structure_errors();
         if !errors.is_empty() {
             return Err(bad_input(errors.join("; ")));
         }
         Some(doc)
+    } else if let Some(hash) = report.get("effective_pattern_sha256") {
+        let path = dir.join("effective_pattern.json");
+        let snapshot = bytes(&path, crate::fabric::MAX_SNAPSHOT_BYTES)?;
+        if hash.as_str() != Some(sha256_hex(&snapshot).as_str()) {
+            return Err(bad_input(
+                "effective_pattern.json differs from the simulated pattern",
+            ));
+        }
+        Some(serde_json::from_slice(&snapshot).map_err(|e| workspace::io_error(&path, e))?)
     } else if let Some(parent) = resolved_dir.parent().filter(|parent| {
         resolved_dir.file_name().is_some_and(|name| name == "sim")
             && report["style"]

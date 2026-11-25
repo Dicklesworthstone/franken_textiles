@@ -1,4 +1,4 @@
-//! Immutable whole-fabric overrides shared by draft, round and direct drape.
+//! Immutable whole-fabric and per-piece overrides shared by native garment workflows.
 //! The source file is read once, validated and frozen before any workspace/output publication.
 
 use std::fs::File;
@@ -7,28 +7,55 @@ use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_drape::material::Fabric;
-use ftx_pattern::{Pattern, textile_import::resolve_fabric};
+use ftx_pattern::{Pattern, material_binding::Changes, textile_import::resolve_fabric};
 use serde_json::{Value, json};
 
 use crate::{Args, bad_input, workspace};
 
-const MAX_BYTES: u64 = 1024 * 1024;
+pub(super) const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+
+enum Selection {
+    Fabric(Value),
+    Bindings(Box<Changes>),
+}
+
+pub(super) struct Input {
+    selection: Selection,
+    frozen: Override,
+}
+
+impl Input {
+    pub(super) fn apply(mut self, pattern: &mut Value) -> Result<Override, Refusal> {
+        match self.selection {
+            Selection::Fabric(fabric) => {
+                pattern
+                    .as_object_mut()
+                    .ok_or_else(|| bad_input("pattern must be an object"))?
+                    .insert("fabric".into(), fabric);
+            }
+            Selection::Bindings(changes) => {
+                let mut result = changes.apply(&Pattern::new(pattern.clone()))?;
+                // A later round may infer placement. Keep the hash of this binding stage.
+                let receipt = &mut self.frozen.receipt;
+                receipt["source_pattern_sha256"] = result["source_pattern_sha256"].take();
+                receipt["bound_pattern_sha256"] = result["pattern_sha256"].take();
+                receipt["pieces"] = result["pieces"].take();
+                if let Some(bands) = result.get_mut("frozen_elastic_casings") {
+                    receipt["frozen_elastic_casings"] = bands.take();
+                }
+                *pattern = result["pattern"].take();
+            }
+        }
+        Ok(self.frozen)
+    }
+}
 
 pub(super) struct Override {
     bytes: Vec<u8>,
-    fabric: Value,
     receipt: Value,
 }
 
 impl Override {
-    pub(super) fn apply(&self, pattern: &mut Value) -> Result<(), Refusal> {
-        pattern
-            .as_object_mut()
-            .ok_or_else(|| bad_input("pattern must be an object"))?
-            .insert("fabric".into(), self.fabric.clone());
-        Ok(())
-    }
-
     pub(super) fn receipt(&self) -> &Value {
         &self.receipt
     }
@@ -39,9 +66,24 @@ impl Override {
     }
 }
 
-pub(super) fn load(args: &Args) -> Result<Option<Override>, Refusal> {
-    let Some(path) = args.options.get("fabric") else {
-        return Ok(None);
+pub(super) fn load(args: &Args) -> Result<Option<Input>, Refusal> {
+    let (path, limit, bindings) = match (
+        args.options.get("fabric"),
+        args.options.get("material-bindings"),
+    ) {
+        (None, None) => return Ok(None),
+        (Some(_), Some(_)) => return Err(bad_input("choose --fabric or --material-bindings")),
+        (Some(path), None) => (path, 1024 * 1024, false),
+        (None, Some(path)) => (path, 64 * 1024 * 1024, true),
+    };
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "material input exceeds the {} MiB input budget",
+                limit / (1024 * 1024)
+            ),
+        )
     };
     let file =
         File::open(path).map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
@@ -49,17 +91,29 @@ pub(super) fn load(args: &Args) -> Result<Option<Override>, Refusal> {
         .metadata()
         .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
     if !metadata.is_file() {
-        return Err(bad_input("--fabric requires a regular JSON file"));
+        return Err(bad_input("material input requires a regular JSON file"));
     }
-    if metadata.len() > MAX_BYTES {
+    if metadata.len() > limit {
         return Err(budget());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1)
+    file.take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    if bytes.len() as u64 > MAX_BYTES {
+    if bytes.len() as u64 > limit {
         return Err(budget());
+    }
+    if bindings {
+        let changes: Changes = serde_json::from_slice(&bytes)
+            .map_err(|e| bad_input(format!("material bindings: {e}")))?;
+        let receipt = json!({
+            "source": path, "source_sha256": sha256_hex(&bytes),
+            "operation": "apply_material_bindings", "basis": "source_bearing_snapshot"
+        });
+        return Ok(Some(Input {
+            selection: Selection::Bindings(Box::new(changes)),
+            frozen: Override { bytes, receipt },
+        }));
     }
     let mut fabric: Value =
         serde_json::from_slice(&bytes).map_err(|e| bad_input(format!("fabric override: {e}")))?;
@@ -128,16 +182,8 @@ pub(super) fn load(args: &Args) -> Result<Option<Override>, Refusal> {
         "operation": "replace_whole_fabric",
         "note": "No geometry, fit contract or measurement evidence is changed by a fabric substitution."
     });
-    Ok(Some(Override {
-        bytes,
-        fabric,
-        receipt,
+    Ok(Some(Input {
+        selection: Selection::Fabric(fabric),
+        frozen: Override { bytes, receipt },
     }))
-}
-
-fn budget() -> Refusal {
-    Refusal::new(
-        RefusalCode::BudgetExceeded,
-        "fabric override exceeds the 1 MiB input budget",
-    )
 }

@@ -46,6 +46,99 @@ fn read(path: &Path) -> Value {
 }
 
 #[test]
+fn draft_and_round_replay_frozen_shell_and_sleeve_assignments() {
+    let dir = setup();
+    let draft = [
+        "draft",
+        "zouave_bolero",
+        "--measurements",
+        "m.json",
+        "--ws",
+        "w",
+    ];
+    run(&dir, &draft, 0);
+    let first = dir.join("w/rounds/000");
+    let original = read(&first.join("pattern.json"));
+    let sleeve = original["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|piece| piece["role"] == "sleeve")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mut changes = json!({
+        "schema": "ftx-material-bindings/1", "default": {"id":"fs_il019_natural"},
+        "pieces": {(sleeve): {"id":"fsri/hfm/cotton-sheet/dry/220330-r1"}}
+    });
+    let bytes = serde_json::to_vec_pretty(&changes).unwrap();
+    fs::write(dir.join("materials.json"), &bytes).unwrap();
+    let binding: ftx_pattern::material_binding::Changes =
+        serde_json::from_value(changes.clone()).unwrap();
+    let expected = binding
+        .apply(&ftx_pattern::Pattern::new(original.clone()))
+        .unwrap();
+    let round = [
+        "round",
+        "w",
+        "--pattern",
+        "w/rounds/000/pattern.json",
+        "--export",
+    ];
+    for (index, command) in [(1, draft.as_slice()), (2, round.as_slice())] {
+        let mut args = command.to_vec();
+        args.extend(["--material-bindings", "materials.json"]);
+        run(&dir, &args, 0);
+        let saved = dir.join(format!("w/rounds/{index:03}"));
+        let pattern = read(&saved.join("pattern.json"));
+        assert_eq!(pattern["pieces"], expected["pattern"]["pieces"]);
+        assert_eq!(pattern["seams"], original["seams"]);
+        assert_eq!(pattern["fabric"], expected["pattern"]["fabric"]);
+        assert_eq!(
+            read(&saved.join("fit_spec.json")),
+            read(&first.join("fit_spec.json"))
+        );
+        assert_eq!(fs::read(saved.join("fabric.source.json")).unwrap(), bytes);
+        let receipt = read(&saved.join("fabric_override.json"));
+        assert_eq!(receipt["pieces"], expected["pieces"]);
+        assert_eq!(
+            receipt["source_pattern_sha256"],
+            expected["source_pattern_sha256"]
+        );
+        assert_eq!(receipt["bound_pattern_sha256"], expected["pattern_sha256"]);
+    }
+    assert_eq!(
+        read(&dir.join("w/rounds/002/exports/checks.json"))["status"],
+        "PASS"
+    );
+    changes["pieces"][sleeve]["expected_sha256"] = json!("stale");
+    fs::write(
+        dir.join("materials.json"),
+        serde_json::to_vec(&changes).unwrap(),
+    )
+    .unwrap();
+    run(
+        &dir,
+        &["round", "w", "--material-bindings", "materials.json"],
+        3,
+    );
+    run(
+        &dir,
+        &[
+            "round",
+            "w",
+            "--material-bindings",
+            "materials.json",
+            "--fabric",
+            "materials.json",
+        ],
+        3,
+    );
+    assert!(!dir.join("w/rounds/003").exists());
+    assert_eq!(read(&first.join("pattern.json")), original);
+}
+
+#[test]
 fn every_program_drafts_into_a_new_round_and_preserves_the_first_contract() {
     let dir = setup();
     let mut first_contract = Vec::new();

@@ -225,6 +225,49 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
         dir.join("sim/fold_viewer.html").display()
     );
 
+    let source = std::fs::read(dir.join("p.json")).unwrap();
+    let mut bound: Value = serde_json::from_slice(&source).unwrap();
+    bound["meta"]["title"] = json!("Bound sleeve");
+    let snapshot = serde_json::to_vec(&bound).unwrap();
+    let saved = dir.join("sim/effective_pattern.json");
+    std::fs::write(&saved, &snapshot).unwrap();
+    save(
+        &dir.join("sim/sim_report.json"),
+        &json!({"pattern":"p.json", "effective_pattern_sha256":ftx_core::receipt::sha256_hex(&snapshot)}),
+    );
+    let rebuild = |name: &str| {
+        Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", "sim", "--out", name, "--json"])
+            .output()
+            .unwrap()
+    };
+    assert!(rebuild("bound.html").status.success());
+    assert!(
+        std::fs::read_to_string(dir.join("bound.html"))
+            .unwrap()
+            .contains("<title>Bound sleeve Fold-up</title>")
+    );
+    let explicit = |path: &str, out: &str| {
+        Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args(["viewer", "sim", "--pattern", path, "--out", out, "--json"])
+            .output()
+            .unwrap()
+    };
+    save(&dir.join("pretty-bound.json"), &bound);
+    assert!(
+        explicit("pretty-bound.json", "explicit.html")
+            .status
+            .success()
+    );
+    assert_eq!(explicit("p.json", "original.html").status.code(), Some(3));
+    assert!(!dir.join("original.html").exists());
+    std::fs::write(&saved, source).unwrap();
+    let stale = rebuild("stale.html");
+    assert_eq!(stale.status.code(), Some(3));
+    assert!(!dir.join("stale.html").exists());
+
     for arms in [
         Value::Null,
         json!({"left_abduction_deg":20.0}),

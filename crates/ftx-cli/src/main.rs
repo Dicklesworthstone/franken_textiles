@@ -59,11 +59,11 @@ const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template
 
 const USAGE: &str = "usage:
   ftx import garmentcode INPUT.json --out NEW_DIR [--annotations ANNOTATIONS.json] [--json]
-  ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--fabric F.json] [--json]
-  ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--fabric F.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
+  ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--fabric F.json | --material-bindings B.json] [--json]
+  ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--fabric F.json | --material-bindings B.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
             [--model PATH] [--body-fit REPORT] (draft from a tape-fitted or accepted body; MODEL_FIT, not new measurements)
   ftx validate PATTERN --measurements M [--fit F] [--model PATH] [--body-fit REPORT] [--flat-body] [--json]
-  ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
+  ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json | --material-bindings B.json] [--export]
             [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N] [--res WIDTHxHEIGHT] [--shading standard|legible|both]
             [--thumb-pose JSON] [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--left-arm-deg DEG --right-arm-deg DEG] (independent initial arms; overrides --arm-deg)
@@ -75,7 +75,7 @@ const USAGE: &str = "usage:
             [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
             [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
-  ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
+  ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json | --material-bindings B.json] [--sew N] [--drape N] [--time-step-s SECONDS] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--compression F] [--self-contact-mm MM] [--self-mu MU] [--json]
@@ -91,7 +91,7 @@ const USAGE: &str = "usage:
             [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
-  ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
+  ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json | --material-bindings B.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
               [--left-arm-deg DEG --right-arm-deg DEG]
               [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--thumb-pose JSON]
               [--compression F] [--newton-strategy projected|adaptive-ilu|trust-region] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
@@ -1407,6 +1407,7 @@ fn cmd_drape_bound(
             "body-fit",
             "two-start-sew",
             "fabric",
+            "material-bindings",
             "spread-vertex-mm",
             "spread-hem-mm",
             "spread-clearance-mm",
@@ -1428,11 +1429,13 @@ fn cmd_drape_bound(
     }
     let pattern_path = &args.positional[1];
     let (mut pat, pattern_bytes) = read_json(pattern_path)?;
-    let fabric_override = fabric::load(args)?;
     let outfit = if pat["schema"] == ftx_drape::outfit::SCHEMA {
-        if fabric_override.is_some() || pair.is_some() {
+        if args.options.contains_key("fabric")
+            || args.options.contains_key("material-bindings")
+            || pair.is_some()
+        {
             return Err(bad_input(
-                "joint outfit requests do not accept --fabric or --two-start-sew; retain explicit source selections and one joint start",
+                "joint outfit requests do not accept --fabric, --material-bindings or --two-start-sew; retain explicit source selections and one joint start",
             ));
         }
         let input =
@@ -1443,8 +1446,21 @@ fn cmd_drape_bound(
     } else {
         None
     };
-    if let Some(selected) = &fabric_override {
-        selected.apply(&mut pat)?;
+    let fabric_override = fabric::load(args)?
+        .map(|input| input.apply(&mut pat))
+        .transpose()?;
+    let snapshot = fabric_override
+        .as_ref()
+        .map(|_| serde_json::to_vec(&pat).map_err(|e| bad_input(e.to_string())))
+        .transpose()?;
+    if snapshot
+        .as_ref()
+        .is_some_and(|bytes| bytes.len() > fabric::MAX_SNAPSHOT_BYTES)
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "effective drape pattern exceeds the 64 MiB replay budget",
+        ));
     }
     let material_probe = Pattern::new(pat.clone());
     ftx_drape::garment::simulation_scope(&material_probe)?;
@@ -1641,6 +1657,11 @@ fn cmd_drape_bound(
             serde_json::to_vec_pretty(pattern.raw()).map_err(|e| bad_input(e.to_string()))?,
         ));
         files.push(("outfit_request.json", pattern_bytes));
+    }
+    if let Some((selected, snapshot)) = fabric_override.as_ref().zip(snapshot) {
+        selected.save(&out)?;
+        report["effective_pattern_sha256"] = json!(sha256_hex(&snapshot));
+        files.push(("effective_pattern.json", snapshot));
     }
     write_drape_output(&out, &report, &files)?;
     let (gating, advisory) = (run.gating(), run.advisory());

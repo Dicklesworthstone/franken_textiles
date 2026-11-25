@@ -380,6 +380,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         &[
             "pattern",
             "fabric",
+            "material-bindings",
             "measurements",
             "fit",
             "export",
@@ -502,10 +503,9 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .or(latest)
         .ok_or_else(|| bad_input("workspace has no round with a pattern; pass --pattern P"))?;
     let (mut raw, _) = read_json(&source.to_string_lossy())?;
-    let fabric = super::fabric::load(args)?;
-    if let Some(selected) = &fabric {
-        selected.apply(&mut raw)?;
-    }
+    let fabric = super::fabric::load(args)?
+        .map(|input| input.apply(&mut raw))
+        .transpose()?;
     let body = WorkspaceBody::read(&ws, args)?;
     let data = measurements(&body.raw)?;
     let drafted_on_body = raw["meta"].get("draft_body").is_some();
@@ -1005,6 +1005,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             "measurements",
             "pattern",
             "fabric",
+            "material-bindings",
             "out",
             "model",
             "body-fit",
@@ -1060,8 +1061,8 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     opts.sew_steps = QUALIFY_SEW_STEPS;
     opts.drape_steps = QUALIFY_DRAPE_STEPS;
     opts.validate()?;
-    let fabric_override = super::fabric::load(args)?;
 
+    let input = super::fabric::load(args)?;
     let (data, meas_bytes, mut pat, published, _ws_lock) = if let Some(ws) = ws_arg.as_deref() {
         if args.options.contains_key("out") {
             return Err(bad_input(
@@ -1091,15 +1092,15 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             Some(p) => read_json(p)?.0,
             None => json!({}),
         };
-        super::reserve_drape_output(&out)?;
         (data, meas_bytes, pat, out, None)
     };
 
-    if let Some(selected) = &fabric_override {
-        if !pat.is_object() {
-            pat = json!({});
-        }
-        selected.apply(&mut pat)?;
+    if !pat.is_object() && args.options.contains_key("fabric") {
+        pat = json!({});
+    }
+    let fabric_override = input.map(|input| input.apply(&mut pat)).transpose()?;
+    if ws_arg.is_none() {
+        super::reserve_drape_output(&published)?;
     }
 
     let super::body_source::PreparedBody {
@@ -1363,6 +1364,10 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     }
     if !authored_pose.is_empty() {
         rec["body"] = Value::Object(authored_pose);
+    }
+    if let Some(selected) = &fabric_override {
+        selected.save(&out)?;
+        rec["fabric_override"] = selected.receipt().clone();
     }
     write_json(&out.join("qualify.json"), &rec)?;
     if let Some(ws) = ws_arg.as_deref() {
