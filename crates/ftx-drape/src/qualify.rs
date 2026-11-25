@@ -338,7 +338,15 @@ pub fn active_piece_fabric_selectors(pattern: &Value) -> Vec<(String, Value)> {
         let pid = piece["id"]
             .as_str()
             .map_or_else(|| format!("piece_{idx}"), String::from);
-        let sel = piece.get("fabric").unwrap_or(&pattern["fabric"]).clone();
+        let mut sel = piece.get("fabric").unwrap_or(&pattern["fabric"]).clone();
+        if piece.get("fabric").is_none()
+            && let Some(obj) = sel.as_object_mut()
+        {
+            // Pairwise unlike-cloth interfaces belong to the full multi-material assembly
+            // (validated separately by `material::resolve(&pat, &opts)`), never to a single-sheet
+            // chest-band selector.
+            obj.remove("interfaces");
+        }
         out.push((pid, sel));
     }
     out
@@ -377,9 +385,13 @@ pub fn qualification_basis(
             } else {
                 // Asymmetric independent arms override `body.arm_deg`; bind the actual pair rather
                 // than the ignored fallback angle.
+                let canonical = ftx_body::drape::ArmPose {
+                    left_abduction_deg: arms.left_abduction_deg + 0.0,
+                    right_abduction_deg: arms.right_abduction_deg + 0.0,
+                };
                 digest(&(
                     body.collision,
-                    arms,
+                    canonical,
                     [frame.origin, frame.up, frame.front, frame.lat],
                     chest,
                 ))?
@@ -389,7 +401,7 @@ pub fn qualification_basis(
             Refusal::finite("qualification arm angle", body.arm_deg)?;
             digest(&(
                 body.collision,
-                body.arm_deg,
+                body.arm_deg + 0.0,
                 [frame.origin, frame.up, frame.front, frame.lat],
                 chest,
             ))?
@@ -1376,6 +1388,36 @@ mod tests {
         assert_ne!(asym_default["body_sha256"], legacy_35["body_sha256"]);
         assert_ne!(asym_default["body_sha256"], asym_swapped["body_sha256"]);
 
+        // Signed zero normalizes identically to +0.0 across legacy and independent-arm poses.
+        assert_eq!(
+            qualification_basis(&make_body(-0.0, None), &material).unwrap()["body_sha256"],
+            qualification_basis(&make_body(0.0, None), &material).unwrap()["body_sha256"],
+        );
+        assert_eq!(
+            qualification_basis(
+                &make_body(
+                    35.0,
+                    Some(ftx_body::drape::ArmPose {
+                        left_abduction_deg: -0.0,
+                        right_abduction_deg: 40.0,
+                    }),
+                ),
+                &material,
+            )
+            .unwrap()["body_sha256"],
+            qualification_basis(
+                &make_body(
+                    35.0,
+                    Some(ftx_body::drape::ArmPose {
+                        left_abduction_deg: 0.0,
+                        right_abduction_deg: 40.0,
+                    }),
+                ),
+                &material,
+            )
+            .unwrap()["body_sha256"],
+        );
+
         for invalid in [f64::NAN, f64::INFINITY, -1.0, 181.0] {
             let bad = make_body(
                 35.0,
@@ -1387,5 +1429,181 @@ mod tests {
             assert!(qualification_basis(&bad, &material).is_err());
         }
         assert!(qualification_basis(&make_body(f64::NAN, None), &material).is_err());
+    }
+
+    #[test]
+    fn active_piece_fabric_selectors_strips_inherited_interfaces_for_band_probes() {
+        struct TorsoFrame;
+        impl crate::scene::PartFrames for TorsoFrame {
+            fn frame(&self, part: &str) -> Option<crate::start::PartFrame> {
+                (part == "torso").then_some(crate::start::PartFrame {
+                    origin: ftx_core::Vec3::ZERO,
+                    up: ftx_core::Vec3::new(0.0, 0.0, 1.0),
+                    front: ftx_core::Vec3::new(0.0, -1.0, 0.0),
+                    lat: ftx_core::Vec3::new(1.0, 0.0, 0.0),
+                })
+            }
+            fn landmark_h(&self, part: &str, name: &str) -> Option<f64> {
+                (part == "torso" && name == "chest").then_some(0.25)
+            }
+            fn section_radius(&self, _: &str, _: f64) -> f64 {
+                0.1
+            }
+        }
+
+        let synthetic_sheet = |id: &str, friction_skin: f64| -> Value {
+            let mut props = serde_json::Map::new();
+            for (name, value, unit) in [
+                ("areal_density", 200.0, "g/m2"),
+                ("thickness", 0.6, "mm"),
+                ("warp_stiffness", 100.0, "N/m"),
+                ("weft_stiffness", 40.0, "N/m"),
+                ("shear_stiffness", 10.0, "N/m"),
+                ("poisson_warp_weft", 0.2, "1"),
+                ("bending_rigidity", 3e-5, "N*m"),
+                ("friction_skin", friction_skin, "1"),
+                ("friction_self", 0.3, "1"),
+            ] {
+                props.insert(
+                    name.into(),
+                    json!({
+                        "value": value,
+                        "unit": unit,
+                        "source": "test",
+                        "evidence": "estimate",
+                        "method": "Synthetic qualification selector test",
+                    }),
+                );
+            }
+            json!({
+                "id": id,
+                "allow_estimates": true,
+                "record": {
+                    "id": id,
+                    "name": id,
+                    "form": "woven",
+                    "properties": props,
+                    "sources": {
+                        "test": {
+                            "reference": "test:qualify-interfaces",
+                            "accessed_on": "2026-11-25",
+                            "note": "Synthetic fixture, not a textile measurement",
+                        }
+                    }
+                }
+            })
+        };
+
+        let mat_a = synthetic_sheet("synthetic-shell", 0.35);
+        let mat_b = synthetic_sheet("synthetic-lining", 0.25);
+        let mut pat =
+            band_pattern_from_girth(500.0, 0, 60.0, Some(&json!({"material": mat_a}))).unwrap();
+        // band_front inherits pattern.fabric; band_back overrides piece.fabric; an excluded piece
+        // with sim:false must not enter active selectors.
+        pat["pieces"][1]["fabric"] = json!({"material": mat_b});
+        let mut excluded = pat["pieces"][0].clone();
+        excluded["id"] = json!("excluded_facing");
+        excluded["sim"] = json!(false);
+        pat["pieces"].as_array_mut().unwrap().push(excluded);
+
+        let qualify_opts = crate::run::DrapeOptions::default();
+        let initial_report = crate::material::resolve(&Pattern::new(pat.clone()), &qualify_opts)
+            .unwrap()
+            .report;
+        let sha_a = initial_report["pieces"][0]["record_sha256"].clone();
+        let sha_b = initial_report["pieces"][1]["record_sha256"].clone();
+        pat["fabric"]["interfaces"] = json!([{
+            "materials": [sha_a, sha_b],
+            "friction": {
+                "value": 0.22,
+                "unit": "1",
+                "source": "pair",
+                "evidence": "estimate",
+                "method": "Synthetic unlike-sheet coefficient",
+                "bounds": [0.22, 0.22],
+                "conditions": {"orientation": "symmetric scalar, both sides"},
+            },
+            "sources": {
+                "pair": {
+                    "reference": "test:qualify-pair",
+                    "accessed_on": "2026-11-25",
+                    "note": "Synthetic interface, not a textile measurement",
+                }
+            },
+            "allow_estimates": true,
+        }]);
+
+        let verts = [
+            ftx_core::Vec3::new(0.0, 0.0, 0.0),
+            ftx_core::Vec3::new(0.1, 0.0, 0.0),
+            ftx_core::Vec3::new(0.0, 0.1, 0.0),
+        ];
+        let tris = [[0, 1, 2]];
+        let body = DrapeBody {
+            frames: &TorsoFrame,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg: 35.0,
+            arm_pose: None,
+        };
+
+        let garment_qualify =
+            crate::material::resolve(&Pattern::new(pat.clone()), &qualify_opts).unwrap();
+        let mut sim_opts = qualify_opts;
+        sim_opts.self_contact = Some(qualify_opts.contact);
+        let garment_sim = crate::material::resolve(&Pattern::new(pat.clone()), &sim_opts).unwrap();
+        let basis_qualify = qualification_basis(&body, &garment_qualify).unwrap();
+        let basis_sim = qualification_basis(&body, &garment_sim).unwrap();
+        assert_eq!(basis_qualify, basis_sim);
+
+        let selectors = active_piece_fabric_selectors(&pat);
+        assert_eq!(selectors.len(), 2);
+        assert_eq!(selectors[0].0, "band_front");
+        assert!(selectors[0].1.get("interfaces").is_none());
+        assert_eq!(selectors[1].0, "band_back");
+
+        let mut band_shas = Vec::new();
+        for (_, sel) in &selectors {
+            let probe = band_pattern_from_girth(500.0, 0, 60.0, Some(sel)).unwrap();
+            let umat = crate::material::resolve(&Pattern::new(probe), &qualify_opts).unwrap();
+            let ubasis = qualification_basis(&body, &umat).unwrap();
+            band_shas.push(
+                ubasis["material_sha256"]
+                    .as_str()
+                    .expect("single-sheet band probe must resolve uniformly")
+                    .to_string(),
+            );
+        }
+        band_shas.sort_unstable();
+        band_shas.dedup();
+        assert_eq!(json!(band_shas), basis_qualify["piece_material_sha256s"]);
+
+        // Empty pattern.fabric.interfaces with all pieces inheriting must also resolve uniformly.
+        let mut empty_iface =
+            band_pattern_from_girth(500.0, 0, 60.0, Some(&json!({"material": mat_a}))).unwrap();
+        empty_iface["fabric"]["interfaces"] = json!([]);
+        let empty_mat =
+            crate::material::resolve(&Pattern::new(empty_iface.clone()), &qualify_opts).unwrap();
+        let empty_basis = qualification_basis(&body, &empty_mat).unwrap();
+        let empty_selectors = active_piece_fabric_selectors(&empty_iface);
+        assert_eq!(empty_selectors.len(), 2);
+        let mut empty_shas = Vec::new();
+        for (_, sel) in &empty_selectors {
+            let probe = band_pattern_from_girth(500.0, 0, 60.0, Some(sel)).unwrap();
+            let umat = crate::material::resolve(&Pattern::new(probe), &qualify_opts).unwrap();
+            let ubasis = qualification_basis(&body, &umat).unwrap();
+            empty_shas.push(ubasis["material_sha256"].as_str().unwrap().to_string());
+        }
+        empty_shas.sort_unstable();
+        empty_shas.dedup();
+        assert_eq!(json!(empty_shas), empty_basis["piece_material_sha256s"]);
+
+        // An illegal explicit piece.fabric.interfaces must NOT be stripped or silently accepted.
+        let mut bad_piece =
+            band_pattern_from_girth(500.0, 0, 60.0, Some(&json!({"material": mat_a}))).unwrap();
+        bad_piece["pieces"][1]["fabric"] = json!({"material": mat_b, "interfaces": []});
+        let bad_selectors = active_piece_fabric_selectors(&bad_piece);
+        assert!(bad_selectors[1].1.get("interfaces").is_some());
+        assert!(crate::material::resolve(&Pattern::new(bad_piece), &qualify_opts).is_err());
     }
 }
