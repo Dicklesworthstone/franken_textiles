@@ -109,6 +109,55 @@ screen can select these observations; a request that requires mechanics or therm
 correctly refuses them until those measurements are supplied. Frozen selections replay against
 an empty catalog with their exact sources and checksums intact.
 
+### Read the released L01 instrument recordings
+
+The offline importer reads the warp or weft recording for L01 run 001, repeat s1, from a local
+copy of the pinned Fabric-101 release. It verifies the Git blob identity of the specimen header,
+direction-specific tare sheet and three instrument files. The JSON output retains every force,
+torque, displacement, angle and timestamp in instrument units. Twist, compression and stretch/slip
+each retain their own clock and the original tare entries.
+
+```sh
+node scripts/import_fabric101_cylinders.cjs /path/to/Fabric_101_for_Wrinkles warp > warp-acquisition.json
+```
+
+To predict a candidate material's response to the **initial twist**, supply an ordinary
+`ftx-cylinder-experiment/1` template with a memoryless material, the measured apparatus dimensions
+and a grain axis for the selected mounting. Declare whether the direction named by the release
+folder runs axially or circumferentially; the acquisition headers do not resolve this mapping.
+The importer checks the template’s grain axis against that convention for each direction.
+The template supplies the proposed material, reaction offsets, mesh and solver controls. Set
+its integration budget for the complete approximately 107-second twist. The example declares
+that the named direction is axial and uses a 0.01° angular interpolation tolerance.
+
+```sh
+node scripts/import_fabric101_cylinders.cjs /path/to/Fabric_101_for_Wrinkles warp \
+  candidate-cylinder.json measured-twist.json 0.01 named-direction-axial > warp-acquisition.json
+ftx materials cylinder-experiment measured-twist.json --json > prediction.json
+```
+
+The generated request uses the measured mounting displacement. It retains the ends of every hold
+and reversal, bounds linear angle interpolation error at every sensor timestamp, and refuses a
+path needing more than 129 waypoints. At 0.01°, the 787 warp samples yield 60 waypoints and the 786
+weft samples yield 62. The acquisition records selected row indices, clock origin, maximum angle
+error and the digest of the generated request. The template and the raw recordings are preserved.
+
+Section 3.1 of the paper locates the torque sensor and rotary drive on the lower holder and the
+axial force sensor on the upper holder. The lower holder turns counterclockwise when viewed from
+above. The native fixture rotates the upper holder while fixing the lower. The replay reverses
+the measured rotation to reproduce the same relative angle and records both assignments. Angular
+inertia and reaction histories for the actual driven holder require a physical lower-holder model.
+The model assumes zero axial grip slip during the initial twist. Internal-history laws require
+a pristine timed mounting history, which these files do not provide. The native solver enforces
+that requirement. Cross-stage elapsed time, measured grip slip, sensor-to-holder reaction signs
+and offsets still require independent evidence before a full inverse experiment. These
+recordings qualify actuator replay and instrument observations; they supply no calibrated law.
+Run the optional source-backed regression against the same local checkout:
+
+```sh
+FABRIC101_RELEASE=/path/to/Fabric_101_for_Wrinkles node --test scripts/test_import_fabric101_cylinders.cjs
+```
+
 ## Cylindrical-holder forward experiment (`ftx-cylinder-experiment/1`)
 
 `ftx_drape::cylinder::evaluate` (`ftx materials cylinder-experiment REQUEST.json`, `ftx-materials
