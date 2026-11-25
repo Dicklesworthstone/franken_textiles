@@ -598,20 +598,26 @@ fn exact_exp_dissipation_coeffs(tau: f64, h: f64) -> (f64, f64, f64, f64, f64) {
         // Exact Maclaurin expansion of (r - 2(1 - e^-r) + 0.5(1 - e^-2r)) / r^2
         // = sum_{k>=3} (-1)^(k-1) (2^(k-1) - 2) / k! * r^(k-2), avoiding catastrophic
         // cancellation for small step/tau ratios and preserving ~15-digit continuity at r = 0.2.
-        r * (1.0 / 3.0
-            + r * (-1.0 / 4.0
-                + r * (7.0 / 60.0
-                    + r * (-1.0 / 24.0
-                        + r * (31.0 / 2520.0
-                            + r * (-1.0 / 320.0
-                                + r * (127.0 / 181_440.0
-                                    + r * (-17.0 / 120_960.0
-                                        + r * (73.0 / 2_851_200.0
-                                            + r * (-31.0 / 7_257_600.0
-                                                + r * (2047.0 / 3_113_510_400.0
-                                                    + r * (-8190.0 / 87_178_291_200.0
-                                                        + r * (16_382.0
-                                                            / 1_307_674_368_000.0)))))))))))))
+        const COEFFS: [f64; 13] = [
+            16_382.0 / 1_307_674_368_000.0,
+            -8190.0 / 87_178_291_200.0,
+            2047.0 / 3_113_510_400.0,
+            -31.0 / 7_257_600.0,
+            73.0 / 2_851_200.0,
+            -17.0 / 120_960.0,
+            127.0 / 181_440.0,
+            -1.0 / 320.0,
+            31.0 / 2520.0,
+            -1.0 / 24.0,
+            7.0 / 60.0,
+            -1.0 / 4.0,
+            1.0 / 3.0,
+        ];
+        let mut poly = COEFFS[0];
+        for &c in &COEFFS[1..] {
+            poly = c + r * poly;
+        }
+        r * poly
     } else {
         // Divide sequentially by `r` so `r * r` never overflows for huge `h / tau`.
         ((1.0 / r) - (2.0 * one_minus_a - c_qq) / r / r).max(0.0)

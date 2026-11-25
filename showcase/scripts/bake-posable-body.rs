@@ -44,8 +44,10 @@ impl Blob {
             self.bytes.extend((value as f32).to_le_bytes());
             count += 1;
         }
-        self.directory
-            .insert(name.into(), json!({"dtype": "f32", "offset": offset, "count": count}));
+        self.directory.insert(
+            name.into(),
+            json!({"dtype": "f32", "offset": offset, "count": count}),
+        );
     }
 
     fn indices(&mut self, name: &str, values: impl Iterator<Item = usize>) {
@@ -56,8 +58,10 @@ impl Blob {
                 .extend(u32::try_from(value).expect("index fits u32").to_le_bytes());
             count += 1;
         }
-        self.directory
-            .insert(name.into(), json!({"dtype": "u32", "offset": offset, "count": count}));
+        self.directory.insert(
+            name.into(),
+            json!({"dtype": "u32", "offset": offset, "count": count}),
+        );
     }
 }
 
@@ -85,7 +89,12 @@ enum Corner {
 }
 
 impl Cut {
-    fn new(points: &[Vec3], triangles: &[[usize; 3]], z: f64, exempt: &[bool]) -> Result<Self, String> {
+    fn new(
+        points: &[Vec3],
+        triangles: &[[usize; 3]],
+        z: f64,
+        exempt: &[bool],
+    ) -> Result<Self, String> {
         let above = |v: usize| exempt[v] || points[v].z >= z;
         let mut on_plane = Vec::new();
         let mut plane_index = std::collections::BTreeMap::new();
@@ -120,7 +129,13 @@ impl Cut {
         let mut kept: Vec<usize> = polygons
             .iter()
             .flatten()
-            .filter_map(|c| if let Corner::Source(v) = c { Some(*v) } else { None })
+            .filter_map(|c| {
+                if let Corner::Source(v) = c {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
             .collect();
         kept.sort_unstable();
         kept.dedup();
@@ -131,17 +146,25 @@ impl Cut {
         let mut out = Vec::new();
         for polygon in &polygons {
             for i in 1..polygon.len() - 1 {
-                out.push([number(&polygon[0]), number(&polygon[i]), number(&polygon[i + 1])]);
+                out.push([
+                    number(&polygon[0]),
+                    number(&polygon[i]),
+                    number(&polygon[i + 1]),
+                ]);
             }
         }
         // The opening's edges are those used in one direction only; each must lie on the plane.
-        let directed: std::collections::BTreeSet<(usize, usize)> =
-            out.iter().flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]).collect();
+        let directed: std::collections::BTreeSet<(usize, usize)> = out
+            .iter()
+            .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+            .collect();
         let mut next = std::collections::BTreeMap::new();
         for &(a, b) in &directed {
             if !directed.contains(&(b, a)) {
                 if a < kept.len() || b < kept.len() {
-                    return Err("the cut left an opening off the plane: move it away from the arms".into());
+                    return Err(
+                        "the cut left an opening off the plane: move it away from the arms".into(),
+                    );
                 }
                 next.insert(a, b);
             }
@@ -164,7 +187,12 @@ impl Cut {
             }
             caps.push(cap);
         }
-        Ok(Self { kept, on_plane, caps, triangles: out })
+        Ok(Self {
+            kept,
+            on_plane,
+            caps,
+            triangles: out,
+        })
     }
 
     fn apply(&self, points: &[Vec3]) -> Vec<Vec3> {
@@ -198,12 +226,18 @@ impl Cut {
 fn arm_vertices(model: &AnnyModel) -> Vec<bool> {
     let data = model.data();
     let k = data.header.counts.influences;
-    let arms: Vec<usize> = ["upperarm01.L", "upperarm01.R"].iter().filter_map(|b| model.bone_index(b)).collect();
+    let arms: Vec<usize> = ["upperarm01.L", "upperarm01.R"]
+        .iter()
+        .filter_map(|b| model.bone_index(b))
+        .collect();
     (0..data.header.counts.vertices)
         .map(|vertex| {
             let first = vertex * k;
             let strongest = (0..k)
-                .max_by(|a, b| data.vertex_bone_weights[first + a].total_cmp(&data.vertex_bone_weights[first + b]))
+                .max_by(|a, b| {
+                    data.vertex_bone_weights[first + a]
+                        .total_cmp(&data.vertex_bone_weights[first + b])
+                })
                 .expect("a vertex has influences");
             let mut bone = data.vertex_bone_indices[first + strongest] as usize;
             loop {
@@ -238,7 +272,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     // Legs end at the top of the thigh: everything skinned to either upper leg and below is removed.
-    let legs: &[&str] = if upper { &["upperleg01.R", "upperleg01.L"] } else { &[] };
+    let legs: &[&str] = if upper {
+        &["upperleg01.R", "upperleg01.L"]
+    } else {
+        &[]
+    };
     let model = AnnyModel::from_data(AnnyData::read(Path::new(&args[1]), true)?)?;
     let measurements: Value = serde_json::from_slice(&fs::read(&args[2])?)?;
     let out = Path::new(&args[3]);
@@ -275,8 +313,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         let (collision, display) = if upper {
             let mut roots = vec!["wrist.R", "wrist.L"];
             roots.extend(legs);
-            roots.extend(["levator05.R", "levator05.L"].into_iter().filter(|label| model.bone_index(label).is_some()));
-            (trimmed_skin(&model, &posed.vertices, &roots)?, trimmed_skin(&model, &posed.vertices, legs)?)
+            roots.extend(
+                ["levator05.R", "levator05.L"]
+                    .into_iter()
+                    .filter(|label| model.bone_index(label).is_some()),
+            );
+            (
+                trimmed_skin(&model, &posed.vertices, &roots)?,
+                trimmed_skin(&model, &posed.vertices, legs)?,
+            )
         } else {
             (
                 clothing_skin_with_hands(&model, &posed.vertices, HandCollider::Wrist)?,
@@ -291,13 +336,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     // The trunk's cut, found on the base pose and kept for every pose. Arm vertices are never cut.
     let arms = arm_vertices(&model);
     let exempt = |skin: &ftx_body::SkinMesh| -> Vec<bool> {
-        skin.source_vertex.iter().map(|&s| arms.get(s).copied().unwrap_or(false)).collect()
+        skin.source_vertex
+            .iter()
+            .map(|&s| arms.get(s).copied().unwrap_or(false))
+            .collect()
     };
     let cuts = match cut_mm {
         Some(mm) => {
             let z = (frames.floor_z + mm) / 1000.0;
-            let c = Cut::new(&collision_skin.vertices, &collision_skin.triangles, z, &exempt(&collision_skin))?;
-            let d = Cut::new(&display_skin.vertices, &display_skin.triangles, z, &exempt(&display_skin))?;
+            let c = Cut::new(
+                &collision_skin.vertices,
+                &collision_skin.triangles,
+                z,
+                &exempt(&collision_skin),
+            )?;
+            let d = Cut::new(
+                &display_skin.vertices,
+                &display_skin.triangles,
+                z,
+                &exempt(&display_skin),
+            )?;
             c.check(&collision_skin.vertices)?;
             d.check(&display_skin.vertices)?;
             Some((c, d))
@@ -311,7 +369,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let (collision_triangles, display_triangles) = match &cuts {
         Some((c, d)) => (c.triangles.clone(), d.triangles.clone()),
-        None => (collision_skin.triangles.clone(), display_skin.triangles.clone()),
+        None => (
+            collision_skin.triangles.clone(),
+            display_skin.triangles.clone(),
+        ),
     };
     // The moving-body step refuses to start from or move to a body that crosses itself.
     let crossings = |points: &[Vec3]| -> Result<Option<String>, Box<dyn Error>> {
@@ -349,9 +410,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         directory: Map::new(),
     };
     blob.floats("collision_vertices", xyz(&collision));
-    blob.indices("collision_triangles", collision_triangles.iter().flatten().copied());
+    blob.indices(
+        "collision_triangles",
+        collision_triangles.iter().flatten().copied(),
+    );
     blob.floats("display_vertices", xyz(&display));
-    blob.indices("display_triangles", display_triangles.iter().flatten().copied());
+    blob.indices(
+        "display_triangles",
+        display_triangles.iter().flatten().copied(),
+    );
 
     let mut part_frames = Map::new();
     let mut landmarks = Map::new();
@@ -368,12 +435,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         let heights: Map<String, Value> = names
             .iter()
-            .filter_map(|name| frames.landmark_h(part, name).map(|h| ((*name).to_string(), json!(h))))
+            .filter_map(|name| {
+                frames
+                    .landmark_h(part, name)
+                    .map(|h| ((*name).to_string(), json!(h)))
+            })
             .collect();
         landmarks.insert(part.into(), Value::Object(heights));
         blob.floats(
             &format!("radius_{part}"),
-            (RADIUS_RANGE_MM.0..=RADIUS_RANGE_MM.1).map(|h| frames.section_radius(part, f64::from(h))),
+            (RADIUS_RANGE_MM.0..=RADIUS_RANGE_MM.1)
+                .map(|h| frames.section_radius(part, f64::from(h))),
         );
     }
 
@@ -392,10 +464,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         let vector = |v: Vec3| json!([v.x, v.y, v.z]);
         let heights: Map<String, Value> = ["shoulder_tip", "elbow", "wrist"]
             .iter()
-            .filter_map(|name| frames.landmark_h(part, name).map(|h| ((*name).to_string(), json!(h))))
+            .filter_map(|name| {
+                frames
+                    .landmark_h(part, name)
+                    .map(|h| ((*name).to_string(), json!(h)))
+            })
             .collect();
-        Ok(json!({"origin": vector(f.origin), "up": vector(f.up), "front": vector(f.front), "lat": vector(f.lat),
-                  "landmarks": heights, "radius_mm": frames.section_radius(part, 0.0)}))
+        Ok(
+            json!({"origin": vector(f.origin), "up": vector(f.up), "front": vector(f.front), "lat": vector(f.lat),
+                  "landmarks": heights, "radius_mm": frames.section_radius(part, 0.0)}),
+        )
     };
     for &angle in &requested {
         let (left_posed, left_c, left_d) = posed_at(angle, base)?;
@@ -412,12 +490,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     if admitted.len() < 2 {
-        return Err("fewer than two arm angles have a collision surface that does not cross itself".into());
+        return Err(
+            "fewer than two arm angles have a collision surface that does not cross itself".into(),
+        );
     }
     for (side, first) in [("left", 0), ("right", 2)] {
-        for (surface, base_points, which) in [("collision", &collision, first), ("display", &display, first + 1)] {
+        for (surface, base_points, which) in [
+            ("collision", &collision, first),
+            ("display", &display, first + 1),
+        ] {
             let moved: Vec<usize> = (0..base_points.len())
-                .filter(|&v| samples.iter().any(|sample| (sample[which][v] - base_points[v]).norm() > 1e-9))
+                .filter(|&v| {
+                    samples
+                        .iter()
+                        .any(|sample| (sample[which][v] - base_points[v]).norm() > 1e-9)
+                })
                 .collect();
             blob.indices(&format!("{side}_{surface}_indices"), moved.iter().copied());
             blob.floats(

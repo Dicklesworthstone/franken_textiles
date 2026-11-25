@@ -18,8 +18,10 @@ fn posing_session_timing() {
     let read = |p: &str| std::fs::read(site.join(p)).expect("a published file");
     let header = String::from_utf8(read("exhibits/pose/child-520.json")).expect("utf-8");
     let packed = read("exhibits/pose/child-520.bin.gz");
-    let data = miniz_oxide::inflate::decompress_to_vec(&packed[10..packed.len() - 8]).expect("gzip body");
-    let pattern: Value = serde_json::from_slice(&read("exhibits/poses/bolero-start.json")).expect("pattern");
+    let data =
+        miniz_oxide::inflate::decompress_to_vec(&packed[10..packed.len() - 8]).expect("gzip body");
+    let pattern: Value =
+        serde_json::from_slice(&read("exhibits/poses/bolero-start.json")).expect("pattern");
     let fit: Value = serde_json::from_slice(&read("exhibits/poses/fit-spec.json")).expect("fit");
     let settings: SessionSettings = serde_json::from_str(
         &std::env::var("FTX_SESSION_SETTINGS").unwrap_or_else(|_| {
@@ -30,7 +32,8 @@ fn posing_session_timing() {
     let body = PosableBody::parse(&header, &data).expect("baked body");
     let base = body.base_arm_deg();
     let began = Instant::now();
-    let mut session = Session::start(body, &pattern, &fit, settings, |_| {}).expect("opening drape");
+    let mut session =
+        Session::start(body, &pattern, &fit, settings, |_| {}).expect("opening drape");
     println!(
         "opening drape: {:.1} s, {} cloth vertices",
         began.elapsed().as_secs_f64(),
@@ -51,7 +54,10 @@ fn posing_session_timing() {
                 left += 10.0;
             }
             Err(refusal) => {
-                println!("move refused after {:.1} s: {refusal}", began.elapsed().as_secs_f64());
+                println!(
+                    "move refused after {:.1} s: {refusal}",
+                    began.elapsed().as_secs_f64()
+                );
                 break;
             }
         }
