@@ -63,13 +63,17 @@ const FIT = "/exhibits/poses/fit-spec.json";
 // The drape room's bolero, at the browser's step budget.
 // Settling stops as soon as the cloth is quiet; raised arms need a few more steps than hanging ones.
 // A move under the sewn jacket takes substeps of up to 50 ms, each starting with the cloth within 20 mm
-// of the body carried along with it (ftx_drape::motion::advance_body_carried).
+// of the body carried along with it (ftx_drape::motion::advance_body_carried). Every substep but a move's
+// last stops at a Newton tolerance of 5 mm/s instead of the drape's 1 mm/s (MotionOptions::intermediate_tol);
+// the last converges fully. Measured 2026-11-25 in Node on one thread over two sequences of page moves, it
+// took 24-27 % less time, and each move's final cloth stayed as close to a solve 10x tighter as the default's
+// did: the bolero's folds can settle either way, a few mm at a few vertices, with or without it.
 const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_steps: 48, time_subdivision: true, self_contact_mm: 0,
-  motion_carry_mm: 20, motion_step_s: 0.05 };
+  motion_carry_mm: 20, motion_step_s: 0.05, motion_intermediate_tol_m_s: 5e-3 };
 // A change of pose up to 10° (the arm is sampled every 10-15°) moves the arm under the sewn jacket with the
 // solver's checked moving-body step; a larger one sews the jacket on again in the nearest sampled pose, the
-// faster of the two there (measured in Node on one thread, 2026-11-24: a 5° move at 20°/s 5.7-7.4 s, the
-// first after a sew the slowest; a 10° move 13.8 s; a fresh sew about 17 s).
+// faster of the two there (measured in Node on one thread, 2026-11-25: a 5° move at 20°/s 4.4-5.3 s; a 10°
+// move 14.7 s; a fresh sew about 16 s).
 const MOVE_LIMIT_DEG = 10;
 const ARM_SPEED_DEG_S = 20;
 const same = (a?: [number, number] | null, b?: [number, number] | null) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
