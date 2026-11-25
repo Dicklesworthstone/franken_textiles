@@ -241,6 +241,9 @@ pub(super) struct Operation<'a> {
     pub after: &'a [String],
     pub needle: &'a str,
     pub thread: &'a str,
+    /// Present only when every operation sharing a distinct copy ID is an identical garment replica
+    /// (same intra-copy prerequisites, setups, handling class, fixture holds, and calendar feed).
+    pub interchangeable_copy: Option<usize>,
 }
 
 /// Shared integer occupancy authority for the resource-qualified production caller and search.
@@ -334,6 +337,7 @@ struct Task<'a> {
     predecessors: OperationSet,
     needle: usize,
     thread: usize,
+    interchangeable_copy: Option<usize>,
 }
 
 struct Search<'a> {
@@ -478,12 +482,32 @@ impl Search<'_> {
 
     fn frame(&self, mask: OperationSet, last: Option<usize>, cost: u64) -> Frame {
         let occupied = self.resources.map(|resources| resources.occupied(mask));
+        let mut started = OperationSet::default();
+        for (i, task) in self.tasks.iter().enumerate() {
+            if mask.contains(i)
+                && let Some(copy) = task.interchangeable_copy
+            {
+                started.insert(copy);
+            }
+        }
+        // Untouched interchangeable copies share identical prerequisites, setups, handling,
+        // fixture lifecycles, and calendar feeds; swapping two untouched copy IDs preserves
+        // feasibility and every objective value. Keep only the first untouched copy in the
+        // existing lexicographic task-ID order so equal-cost incumbents keep traversal order.
+        let first_untouched = self
+            .tasks
+            .iter()
+            .filter_map(|task| task.interchangeable_copy)
+            .find(|&copy| !started.contains(copy));
         let mut candidates: Vec<_> = self
             .tasks
             .iter()
             .enumerate()
             .filter(|(i, task)| {
                 !mask.contains(*i)
+                    && task
+                        .interchangeable_copy
+                        .is_none_or(|copy| started.contains(copy) || Some(copy) == first_untouched)
                     && mask.contains_all(task.predecessors)
                     && self.resources.is_none_or(|resources| {
                         resources.admits(occupied.as_ref().expect("resource state"), *i)
@@ -640,6 +664,7 @@ pub(super) fn optimize(policy: &Policy, seams: &[PlannedSeam]) -> Result<Report,
                 after: &seam.pass.after,
                 needle: &seam.pass.needle,
                 thread: &seam.pass.thread,
+                interchangeable_copy: None,
             })
             .collect::<Vec<_>>(),
         seams.iter().map(|s| s.feed_seconds).sum(),
@@ -858,14 +883,30 @@ pub(super) fn optimize_operations_with_resources(
         .enumerate()
         .map(|(i, pass)| (pass.id, i))
         .collect();
+    let has_copies = passes
+        .first()
+        .is_some_and(|pass| pass.interchangeable_copy.is_some());
+    if passes
+        .iter()
+        .any(|pass| pass.interchangeable_copy.is_some() != has_copies)
+    {
+        return Err(bad(
+            "interchangeable copy annotations must be either present on every operation or omitted",
+        ));
+    }
     let mut needles = BTreeMap::new();
     let mut threads = BTreeMap::new();
+    let mut copy_slots = BTreeMap::new();
     let mut tasks = Vec::with_capacity(passes.len());
     for pass in passes {
         let next_needle = needles.len();
         let needle = *needles.entry(pass.needle).or_insert(next_needle);
         let next_thread = threads.len();
         let thread = *threads.entry(pass.thread).or_insert(next_thread);
+        let interchangeable_copy = pass.interchangeable_copy.map(|copy| {
+            let next_copy = copy_slots.len();
+            *copy_slots.entry(copy).or_insert(next_copy)
+        });
         let predecessors = pass.after.iter().fold(OperationSet::default(), |mask, id| {
             mask.with(ids[id.as_str()])
         });
@@ -874,6 +915,7 @@ pub(super) fn optimize_operations_with_resources(
             predecessors,
             needle,
             thread,
+            interchangeable_copy,
         });
     }
     let search = Search {

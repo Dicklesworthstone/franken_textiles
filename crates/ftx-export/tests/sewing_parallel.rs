@@ -5622,3 +5622,87 @@ fn parallel_feed_shared_operator_deadlines_include_calendar_delays_pools_and_fin
         }
     }
 }
+
+#[test]
+fn independent_cell_calendars_prune_interchangeable_copy_starts_for_multi_copy_proof() {
+    let (pattern, mut options) = calendar_order_fixture(12400);
+    // 4 identical copies of join (2400 ms) -> reinforce (4000 ms), zero setup/handling.
+    // Each 6000 ms opening fits either two joins (4800 ms) or one reinforce (4000 ms), never one
+    // of each (6400 ms). The copy-ordered baseline needs 8 openings; interleaving fits in 6.
+    options["production"]["production_copies"] = json!(4);
+    options["passes"][1]["after"] = json!(["join"]);
+    options["production"]["parallel"]["max_search_nodes"] = json!(20000);
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["ordering"]["max_search_nodes"] = json!(2000);
+    }
+
+    // 5 openings (30000 ms >= 25600 ms total feed): relaxed capacity admits 4 copies, so proving
+    // infeasibility requires exhaustive calendar search over all dependency-feasible orders.
+    let mut five_openings = options.clone();
+    independent_calendars(
+        &mut five_openings,
+        json!({
+            "cell-a": windows(&[[0, 6000], [10000, 16000], [20000, 26000], [30000, 36000], [40000, 46000]]),
+            "cell-b": windows(&[[0, 0]])
+        }),
+    );
+    let refusal = build(&pattern, five_openings).unwrap_err();
+    assert_eq!(
+        refusal.code,
+        RefusalCode::InvalidDocument,
+        "expected exhaustive calendar infeasibility proof within 2000 nodes, got {refusal:?}"
+    );
+
+    // 6 openings: serial baseline fails, while symmetry-pruned calendar search finds and proves
+    // the exact 54000 ms interleaved optimum inside the tight node budget and replays cleanly.
+    independent_calendars(
+        &mut options,
+        json!({
+            "cell-a": windows(&[[0, 6000], [10000, 16000], [20000, 26000], [30000, 36000], [40000, 46000], [50000, 56000]]),
+            "cell-b": windows(&[[0, 0]])
+        }),
+    );
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let parallel = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    assert_eq!(parallel.selected.makespan_milliseconds, 54_000);
+    assert_eq!(parallel.lower_bound_makespan_milliseconds, 54_000);
+    assert!(parallel.optimality_proven);
+    let schedule = parallel
+        .selected
+        .cells
+        .iter()
+        .find(|cell| cell.cell == "cell-a")
+        .unwrap()
+        .schedule
+        .as_ref()
+        .unwrap();
+    let calendar = schedule.ordering.calendar_timing.as_ref().unwrap();
+    assert_eq!(calendar.serial_incumbent_finish_milliseconds, None);
+    assert_eq!(calendar.selected_finish_milliseconds, Some(54_000));
+    assert!(calendar.optimality_proven && calendar.search_complete && !calendar.budget_exhausted);
+    assert!(calendar.search_nodes < 2000);
+    let replayed: Vec<_> = program
+        .stitches
+        .iter()
+        .filter(|step| step.begins_run)
+        .map(|step| {
+            format!(
+                "{}/{}",
+                step.copy.unwrap(),
+                program.plan.seams[step.operation].pass.operation_id()
+            )
+        })
+        .collect();
+    assert_eq!(replayed, schedule.ordering.selected_order);
+}

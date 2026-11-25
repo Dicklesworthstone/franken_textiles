@@ -1706,3 +1706,162 @@ fn source_input_order_and_explicit_single_copy_preserve_deterministic_ordering()
             .collect::<Vec<_>>()
     );
 }
+
+// Independent O(copies^2) exact DP oracle for identical (a -> b) copies with finite fixture
+// capacity, directed setup times from `timed()`, and `handling(transfer)` costs.
+fn exact_two_op_handling_dp(copies: usize, capacity: usize, transfer: u64) -> u64 {
+    // state: [done_a][done_b][last] where last: 0 = a, 1 = b.
+    let mut dp = vec![vec![[u64::MAX; 2]; copies + 1]; copies + 1];
+    dp[1][0][0] = 1000 + 100; // initial_setup(idle -> a) + initial_handling(a)
+    for done_a in 1..=copies {
+        for done_b in 0..=done_a {
+            let held = done_a - done_b;
+            if held > capacity {
+                continue;
+            }
+            for last in 0..2 {
+                let current = dp[done_a][done_b][last];
+                if current == u64::MAX {
+                    continue;
+                }
+                // Next op = a on a new untouched copy (always different_copy).
+                if done_a < copies && held < capacity {
+                    let setup = if last == 0 { 0 } else { 2000 };
+                    let next = current + setup + transfer;
+                    dp[done_a + 1][done_b][0] = dp[done_a + 1][done_b][0].min(next);
+                }
+                // Next op = b on an already started copy.
+                if done_b < done_a {
+                    let setup = if last == 0 { 500 } else { 0 };
+                    // After `a`, that same copy is ready for `b` (same_copy = 100); if another
+                    // copy is also started, different_copy = transfer is also legal.
+                    let handling_cost = if last == 0 {
+                        if held > 1 { 100_u64.min(transfer) } else { 100 }
+                    } else {
+                        transfer
+                    };
+                    let next = current + setup + handling_cost;
+                    dp[done_a][done_b + 1][1] = dp[done_a][done_b + 1][1].min(next);
+                }
+            }
+        }
+    }
+    dp[copies][copies][1] + 200 // final unload after last b
+}
+
+#[test]
+fn interchangeable_copy_pruning_matches_oracles_and_proves_eight_copy_optimum() {
+    let (pattern, base_options) = fixture();
+
+    // Cross-check the DP oracle against the unpruned exhaustive enumerator on 3 copies, then
+    // verify the symmetry-pruned production optimizer matches both across handling regimes.
+    for transfer in [200_u32, 800, 1500, 5000] {
+        let exhaustive = exhaustive_handling_cost(3, 2, u64::from(transfer));
+        assert_eq!(
+            exhaustive,
+            exact_two_op_handling_dp(3, 2, u64::from(transfer))
+        );
+
+        let mut options = base_options.clone();
+        batch(&mut options, 3);
+        timed(&mut options);
+        handling(&pattern, &mut options, transfer);
+        fixtures(&pattern, &mut options, 2, one_hold());
+        let plan = build(pattern.clone(), options).unwrap();
+        complete(&plan);
+        let ordering = plan.ordering_report().unwrap();
+        let timing = ordering.timing.as_ref().unwrap();
+        let handling_report = ordering.handling_timing.as_ref().unwrap();
+        assert!(
+            ordering.optimality_proven && ordering.search_complete && !ordering.budget_exhausted
+        );
+        assert_eq!(
+            timing.selected_setup_milliseconds + handling_report.selected_handling_milliseconds,
+            exhaustive
+        );
+        assert_eq!(
+            handling_report.lower_bound_setup_and_handling_milliseconds,
+            exhaustive
+        );
+    }
+
+    // Eight identical copies with fixture capacity 2 and transfer = 200 ms have a loose relaxed
+    // incoming-edge lower bound and 8! = 40,320 redundant copy-start permutations. Untouched-copy
+    // canonicalization proves the exact global optimum well inside a 2,000-node budget.
+    let expected = exact_two_op_handling_dp(8, 2, 200);
+    let mut options = base_options.clone();
+    batch(&mut options, 8);
+    timed(&mut options);
+    handling(&pattern, &mut options, 200);
+    fixtures(&pattern, &mut options, 2, one_hold());
+    options["production"]["ordering"]["max_search_nodes"] = json!(2000);
+    let plan = build(pattern.clone(), options).unwrap();
+    complete(&plan);
+    let ordering = plan.ordering_report().unwrap();
+    let timing = ordering.timing.as_ref().unwrap();
+    let handling_report = ordering.handling_timing.as_ref().unwrap();
+    assert!(ordering.optimality_proven && ordering.search_complete && !ordering.budget_exhausted);
+    assert!(
+        ordering.search_nodes < 2000,
+        "expected symmetry pruning to prove 8-copy optimum well under 2000 nodes, got {}",
+        ordering.search_nodes
+    );
+    assert_eq!(
+        timing.selected_setup_milliseconds + handling_report.selected_handling_milliseconds,
+        expected
+    );
+    assert_eq!(
+        handling_report.lower_bound_setup_and_handling_milliseconds,
+        expected
+    );
+    assert!(
+        timing.selected_setup_milliseconds + handling_report.selected_handling_milliseconds
+            < timing.baseline_setup_milliseconds + handling_report.baseline_handling_milliseconds
+    );
+    let program = SewProgram::build(&Pattern::new(pattern.clone()), &plan.options).unwrap();
+    let replayed: Vec<_> = program
+        .stitches
+        .iter()
+        .filter(|step| step.begins_run)
+        .map(|step| {
+            format!(
+                "{}/{}",
+                step.copy.unwrap(),
+                program.plan.seams[step.operation].pass.operation_id()
+            )
+        })
+        .collect();
+    assert_eq!(replayed, ordering.selected_order);
+
+    // Multi-copy deadlock recovery: 4 copies with a single jig where starting `a` deadlocks.
+    // Untouched-copy pruning avoids re-trying identical deadlocks on copies 1..3.
+    let mut deadlock = base_options;
+    let pass = deadlock["passes"][0].clone();
+    deadlock["passes"] = json!(["a", "b", "c", "d"].map(|id| {
+        let mut p = pass.clone();
+        p["id"] = json!(id);
+        p
+    }));
+    deadlock["passes"][3]["after"] = json!(["c"]);
+    deadlock["qualifications"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    batch(&mut deadlock, 4);
+    fixtures(
+        &pattern,
+        &mut deadlock,
+        1,
+        json!([
+            {"id":"first","resource":"jig","units":1,"acquire":"a","release":"d"},
+            {"id":"second","resource":"jig","units":1,"acquire":"b","release":"c"}
+        ]),
+    );
+    deadlock["production"]["ordering"]["max_search_nodes"] = json!(40);
+    let recovered = build(pattern, deadlock).unwrap();
+    complete(&recovered);
+    let order = recovered.ordering_report().unwrap();
+    assert!(order.baseline_replaced && order.optimality_proven && !order.budget_exhausted);
+    assert_eq!(order.selected_order.len(), 16);
+    assert!(order.search_nodes < 40);
+}

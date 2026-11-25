@@ -85,7 +85,11 @@ contain slashes without colliding with another copy.
 `plan.production.ordering` contains the complete baseline and selected sequences, separate
 needle/thread counts, qualified timing, search work, lower bound and proof/budget status. The initial
 setup is charged once for the entire batch. No final reset is assumed. Timing sums use 64-bit integer
-milliseconds on native and WASM, so large complete batch totals cannot wrap at 32 bits.
+milliseconds on native and WASM, so large complete batch totals cannot wrap at 32 bits. Within a
+cell's serial or independent-cell calendar search, untouched garment copies share identical
+prerequisites, setups, handling classes, fixture lifecycles and feed clocks; the search starts one
+untouched representative at a time in existing lexicographic ID order (matching shared-operator
+search) while keeping all ready operations of started copies independently interleavable.
 
 `plan.stitch_intervals` and `plan.feed_seconds` retain their one-garment scope. Batch totals live at
 `plan.production.stitch_intervals` and `plan.production.feed_seconds`. Rust callers can use

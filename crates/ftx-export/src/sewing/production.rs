@@ -228,6 +228,7 @@ fn replay_order(
                 after: &operation.after,
                 needle: &pass.needle,
                 thread: &pass.thread,
+                interchangeable_copy: Some(operation.copy),
             }
         })
         .collect();
@@ -309,6 +310,7 @@ fn evaluate_in_calendar(
                 after: &operation.after,
                 needle: &pass.needle,
                 thread: &pass.thread,
+                interchangeable_copy: Some(operation.copy),
             }
         })
         .collect();
