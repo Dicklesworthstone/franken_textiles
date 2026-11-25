@@ -309,7 +309,7 @@ of a complete checked traversal produce an independent `program_refusal`, preser
 Without the opt-in routing policy below, raised moves stay straight. When a nearest-path candidate is blocked but the
 complete authored baseline is clear, it keeps that baseline and reports the obstruction in
 `program.markers[].candidate_clearance_refusal`. Conversely, when the authored raised route is blocked,
-`nearest_path` ordering can retain a complete independently checked candidate. Its original refusal is
+`nearest_path` or `nearest_drill_and_path` ordering can retain a complete independently checked candidate. Its original refusal is
 reported in `program.markers[].baseline_clearance_refusal`; the replacement supplies both `baseline`
 and `selected`, with `improved: false`. Its timing is not a saving against an unsafe authored route.
 Authored-only ordering still refuses a blocked authored route. Exhausting geometric validation always refuses
