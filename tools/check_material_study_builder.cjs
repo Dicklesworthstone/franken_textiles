@@ -2798,11 +2798,29 @@ test('adaptive constraint restoration rejects missing effective limits and unsup
   for(const constraintRestoration of [false,true,null,'weighted','']) {
     assert.throws(()=>build({...state(),design:{...design,constraintRestoration}}),/componentwise/);
   }
-  assert.throws(()=>build({...state(),design:adaptiveDesignInput({constraintRestoration:'componentwise'})}),/consumer guidance/);
   assert.throws(()=>build({...state(),design:multiDesignInput({constraintRestoration:'componentwise'})}),/unsupported/);
   const input={...state(),constraints:[{metric:'stock_mass_kg',maximum:0.3}],design:{...design,caseKey:'cold'}};
   const noGuards=namedContext([{key:'cold',surface:false,comparison:casePolicy('stock_area_m2','minimize')}]);
   assert.throws(()=>build(input,noGuards),/explicit comparison limit/,'An overridden fallback limit cannot authorize restoration');
+});
+
+test('fit-only seam restoration is explicit and preserves exact targets, sources and shared trial limits', async () => {
+  const {buildMaterialStudyRequest:build}=await modulePromise;
+  const input={...state(),constraints:[],design:adaptiveDesignInput({constraintRestoration:'componentwise',
+    maxEvaluations:24,maxDesigns:1})};
+  const before=JSON.stringify(input),raw=build(input),result=JSON.parse(raw);
+  assert.equal(JSON.stringify(input),before);
+  assert.equal(result.design_adaptive.constraint_restoration,'componentwise');
+  assert.equal(result.design_adaptive.objective,'fit_band_violation_mm');
+  assert.equal(result.design_adaptive.max_evaluations,24);assert.equal(result.design_adaptive.max_designs,1);
+  assert.equal(Object.hasOwn(result.design_adaptive,'material_key'),false);
+  assert.ok(raw.includes(input.design.fitSpec));assert.ok(raw.includes(input.candidates[0].selection));
+  const ordinary={...input.design};delete ordinary.constraintRestoration;
+  assert.equal(Object.hasOwn(JSON.parse(build({...input,design:ordinary})).design_adaptive,'constraint_restoration'),false);
+  assert.throws(()=>build({...input,design:{...input.design,materialKey:'baseline'}}),/does not accept guidance material/);
+  for(const constraintRestoration of [false,true,null,'weighted','']) {
+    assert.throws(()=>build({...input,design:{...input.design,constraintRestoration}}),/componentwise/);
+  }
 });
 
 test('multi-material adaptive authoring preserves explicit order and exact sources with one or several goals', async () => {

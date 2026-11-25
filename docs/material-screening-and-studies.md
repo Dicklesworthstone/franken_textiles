@@ -1555,6 +1555,29 @@ metrics and unknown material keys still refuse.
 Both modes retain `complete_search: false` and `global_optimum_claim: false`; neither an empty
 result nor a local improvement establishes empirical garment fit or a global optimum.
 
+### Restore seam feasibility before fit and production selection
+
+The existing `"constraint_restoration": "componentwise"` option also lets adaptive discovery
+approach mismatched seams through several small alterations. It is available with
+`objective: "fit_band_violation_mm"` without a production comparison constraint. In the Material
+Workbench, enable **Approach seam tolerances and declared comparison limits** under adaptive design.
+Omission preserves the original search; grid searches do not use this option.
+
+Each usable trial retains `seam_violations`: the original seam identity and edge references, ratio
+policy, signed unrounded whole-seam residual, and each matched notch interval with its effective
+tolerance and canonical pass/fail result. Whole-seam acceptance uses the existing unrounded test;
+notch acceptance retains the reference's rounded interval test. The display does not recompute either
+decision. The stricter flat and fit tolerance applies, while explicit per-seam overrides remain
+authoritative. Every component must be no worse and at least one must improve before an infeasible
+polling center can advance; opposing seam or notch errors cannot cancel in an aggregate score.
+
+Structure, sampled outlines, truing, cut/grain completeness and required body readings must already
+be valid. Missing references, malformed ratios, unmatched notch scope or unavailable measurements
+provide no restoration direction. Intermediate trials retain their original refusals and cannot call
+manufacturing or simulation. Once all seams pass, ordinary fit and consumer guidance takes over.
+All phases share the existing coordinate cache, evaluation allowance and retention limits. A bounded
+stop with no selected design makes no claim that another point in the domain is infeasible.
+
 ### Approach explicit production constraints before an eligible design is found
 
 Add `"constraint_restoration": "componentwise"` to an existing consumer-guided

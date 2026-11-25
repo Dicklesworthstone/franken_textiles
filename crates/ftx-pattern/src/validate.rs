@@ -182,6 +182,37 @@ pub struct SeamRow {
     pub message: Option<String>,
 }
 
+/// One canonical seam constraint before display rounding, in millimetres.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SeamResidual {
+    /// Signed length difference against the declared seam ratio.
+    pub residual_mm: f64,
+    /// The effective tolerance, including the reference's notch-interval rule.
+    pub tolerance_mm: f64,
+    /// Exact canonical admission. Notch intervals deliberately compare the rounded residual;
+    /// the total seam compares its unrounded residual (spec 01 §9.1).
+    pub within_tolerance: bool,
+}
+
+/// Complete, named, unrounded seam constraints for bounded geometry restoration.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SeamMeasurement {
+    /// Original seam identity, including null when no ID was supplied.
+    pub seam: Value,
+    /// Exact authored side-a reference.
+    pub a: String,
+    /// Exact authored side-b reference.
+    pub b: String,
+    /// Exact accepted ratio endpoints; equal for a single ratio.
+    pub target_ratio: [f64; 2],
+    /// Explicit nominal notch ratio, or null when the canonical walk uses the measured ratio.
+    pub notch_ratio: Option<f64>,
+    /// Total seam-length constraint, independent of every matched notch interval.
+    pub length: SeamResidual,
+    /// Matched notch intervals in canonical side-a order. No mismatched scope is synthesized.
+    pub notch_intervals: Vec<SeamResidual>,
+}
+
 /// A truing row.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TruingRow {
@@ -345,6 +376,41 @@ impl SeamRow {
 /// The seam walk (spec 01 §9.1).
 #[must_use]
 pub fn seam_walk(pat: &Pattern, tol_mm: f64) -> Vec<SeamRow> {
+    seam_walk_impl(pat, tol_mm, None)
+}
+
+/// Measure every canonical seam without rounding its numerical residuals for display.
+/// The ordinary report and its reference notch-acceptance rule remain unchanged.
+///
+/// # Errors
+/// Invalid structure, unresolved sides, nonfinite/nonpositive ratios, invalid tolerances or
+/// unmatched notches cannot supply a complete restoration vector.
+pub fn measure_seams_unrounded(
+    pat: &Pattern,
+    tol_mm: f64,
+) -> Result<Vec<SeamMeasurement>, PyError> {
+    if !tol_mm.is_finite() || tol_mm < 0.0 || !pat.structure_errors().is_empty() {
+        return Err(PyError::Value(
+            "unrounded seam measurements require valid structure and a finite nonnegative tolerance"
+                .into(),
+        ));
+    }
+    let mut measurements = Vec::with_capacity(pat.seams().len());
+    let rows = seam_walk_impl(pat, tol_mm, Some(&mut measurements));
+    if measurements.len() != rows.len() {
+        return Err(PyError::Value(
+            "unrounded seam measurements require complete finite ratios, sides, tolerances and matched notch intervals"
+                .into(),
+        ));
+    }
+    Ok(measurements)
+}
+
+fn seam_walk_impl(
+    pat: &Pattern,
+    tol_mm: f64,
+    mut measurements: Option<&mut Vec<SeamMeasurement>>,
+) -> Vec<SeamRow> {
     let mut rows = Vec::new();
     for s in pat.seams() {
         let o = Value::Object(s.0.clone());
@@ -429,14 +495,26 @@ pub fn seam_walk(pat: &Pattern, tol_mm: f64) -> Vec<SeamRow> {
             notch_segments_mm: None,
             message: None,
         };
+        let mut notch_intervals = Vec::new();
         if pr.notch_match == "piecewise" {
             let ka = [&[0.0][..], &pr.notches_a, &[1.0][..]].concat();
             let kb = [&[0.0][..], &pr.notches_b, &[1.0][..]].concat();
             let r = nominal.filter(|&n| n != 0.0).unwrap_or(ratio);
+            let limit = tol.max(0.08 * la / (ka.len() - 1) as f64);
             let segs: Vec<f64> = (0..ka.len() - 1)
-                .map(|i| py::round((ka[i + 1] - ka[i]) * la - r * (kb[i + 1] - kb[i]) * lb, 1))
+                .map(|i| {
+                    let residual = (ka[i + 1] - ka[i]) * la - r * (kb[i + 1] - kb[i]) * lb;
+                    let rounded = py::round(residual, 1);
+                    if measurements.is_some() {
+                        notch_intervals.push(SeamResidual {
+                            residual_mm: residual,
+                            tolerance_mm: limit,
+                            within_tolerance: rounded.abs() <= limit,
+                        });
+                    }
+                    rounded
+                })
                 .collect();
-            let limit = tol.max(0.08 * la / segs.len() as f64);
             if segs.iter().any(|x| x.abs() > limit) {
                 row.status = "FAIL".into();
                 row.message = Some("ease is not where the notches say it is".into());
@@ -468,6 +546,59 @@ pub fn seam_walk(pat: &Pattern, tol_mm: f64) -> Vec<SeamRow> {
                     py::fixed(resid.abs(), 1)
                 )
             });
+        }
+        if let Some(measurements) = measurements.as_deref_mut() {
+            let target_ratio = band.map_or([nominal.unwrap_or(1.0); 2], |(lo, hi)| [lo, hi]);
+            let declared_band_valid = band_v.is_none_or(|value| {
+                value.is_null() || value.as_array().is_some_and(|values| values.len() == 2)
+            });
+            let declared_ratio_valid = s.0.get("ratio").is_none_or(|value| {
+                value.is_null()
+                    || value
+                        .as_f64()
+                        .is_some_and(|value| value.is_finite() && value > 0.0)
+            });
+            let declared_tolerance_valid = s.0.get("tol_mm").is_none_or(|value| {
+                value
+                    .as_f64()
+                    .is_some_and(|value| value.is_finite() && value >= 0.0)
+            });
+            if declared_band_valid
+                && declared_ratio_valid
+                && declared_tolerance_valid
+                && [la, lb, ratio]
+                    .iter()
+                    .all(|value| value.is_finite() && *value > 0.0)
+                && resid.is_finite()
+                && tol.is_finite()
+                && tol >= 0.0
+                && target_ratio
+                    .iter()
+                    .all(|value| value.is_finite() && *value > 0.0)
+                && target_ratio[0] <= target_ratio[1]
+                && matches!(pr.notch_match.as_str(), "none" | "piecewise")
+                && notch_intervals.iter().all(|interval| {
+                    interval.residual_mm.is_finite() && interval.tolerance_mm.is_finite()
+                })
+                && let (Some(a), Some(b)) = (
+                    s.0.get("a").and_then(Value::as_str),
+                    s.0.get("b").and_then(Value::as_str),
+                )
+            {
+                measurements.push(SeamMeasurement {
+                    seam: row.seam.clone(),
+                    a: a.into(),
+                    b: b.into(),
+                    target_ratio,
+                    notch_ratio: nominal,
+                    length: SeamResidual {
+                        residual_mm: resid,
+                        tolerance_mm: tol,
+                        within_tolerance: resid.abs() <= tol,
+                    },
+                    notch_intervals,
+                });
+            }
         }
         rows.push(row);
     }
@@ -1208,6 +1339,114 @@ pub fn default_fit_spec(pat: &Pattern, garment: &str) -> Value {
 #[cfg(test)]
 mod raw_point_tests {
     use super::*;
+
+    fn seam_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn raw_seam_measurements_preserve_sub_display_failures_and_exact_ratio_bands() {
+        let mut value = seam_fixture();
+        value["pieces"][1]["vertices"]["c"][1] = json!(103.04);
+        value["pieces"][1]["vertices"]["d"][1] = json!(103.04);
+        let pattern = Pattern::new(value.clone());
+        let display = seam_walk(&pattern, 3.0);
+        assert_eq!(display[0].residual_mm, Some(-3.0));
+        assert_eq!(display[0].status, "FAIL");
+        let raw = measure_seams_unrounded(&pattern, 3.0).unwrap();
+        assert!((raw[0].length.residual_mm + 3.04).abs() < 1e-12);
+        assert!(!raw[0].length.within_tolerance);
+        assert_eq!(raw[0].target_ratio, [1.0, 1.0]);
+        assert_eq!(display, seam_walk(&pattern, 3.0));
+        assert!(
+            serde_json::to_value(&display).unwrap()[0]
+                .get("length")
+                .is_none()
+        );
+
+        value["seams"][0]["ratio_band"] = json!([0.9, 1.1]);
+        value["seams"][0]["tol_mm"] = json!(0.01);
+        let raw = measure_seams_unrounded(&Pattern::new(value), 10.0).unwrap();
+        assert_eq!(raw[0].target_ratio, [0.9, 1.1]);
+        assert_eq!(raw[0].notch_ratio, None);
+        assert_eq!(raw[0].length.residual_mm, 0.0);
+        assert_eq!(raw[0].length.tolerance_mm, 0.01);
+        assert!(raw[0].length.within_tolerance);
+    }
+
+    #[test]
+    fn raw_notch_intervals_keep_signed_values_and_reference_rounded_acceptance() {
+        let mut value = seam_fixture();
+        value["pieces"][0]["notches"] = json!([{"edge":"right","s":0.2904}]);
+        value["pieces"][1]["notches"] = json!([{"edge":"left","s":0.75}]);
+        for (fraction, within, expected) in [(0.2904, true, 4.04), (0.2906, false, 4.06)] {
+            value["pieces"][0]["notches"][0]["s"] = json!(fraction);
+            let pattern = Pattern::new(value.clone());
+            let raw = measure_seams_unrounded(&pattern, 0.0).unwrap();
+            assert!(raw[0].length.within_tolerance);
+            assert_eq!(raw[0].notch_intervals.len(), 2);
+            for (interval, sign) in raw[0].notch_intervals.iter().zip([1.0, -1.0]) {
+                assert!((interval.residual_mm - sign * expected).abs() < 1e-12);
+                assert_eq!(interval.tolerance_mm, 4.0);
+                assert_eq!(interval.within_tolerance, within);
+            }
+            assert_eq!(
+                seam_walk(&pattern, 0.0)[0].status,
+                if within { "PASS" } else { "FAIL" }
+            );
+        }
+    }
+
+    #[test]
+    fn raw_seam_band_preserves_omitted_and_null_nominal_equivalence_with_matched_notches() {
+        let mut value = seam_fixture();
+        value["seams"][0]["ratio_band"] = json!([0.9, 1.1]);
+        value["pieces"][0]["notches"] = json!([{"edge":"right","s":0.25}]);
+        value["pieces"][1]["notches"] = json!([{"edge":"left","s":0.75}]);
+        for vertex in ["c", "d"] {
+            value["pieces"][1]["vertices"][vertex][1] = json!(103.04);
+        }
+        let omitted = Pattern::new(value.clone());
+        let expected = measure_seams_unrounded(&omitted, 3.0).unwrap();
+        assert_eq!(expected[0].notch_ratio, None);
+        assert_eq!(expected[0].notch_intervals.len(), 2);
+        value["seams"][0]["ratio"] = Value::Null;
+        let explicit_null = Pattern::new(value);
+        assert_eq!(
+            measure_seams_unrounded(&explicit_null, 3.0).unwrap(),
+            expected
+        );
+        assert_eq!(seam_walk(&explicit_null, 3.0), seam_walk(&omitted, 3.0));
+    }
+
+    #[test]
+    fn raw_seam_measurements_refuse_partial_or_undefined_constraint_scopes() {
+        for (field, invalid) in [
+            ("a", json!("missing/right")),
+            ("ratio", json!(0.0)),
+            ("ratio", json!("unknown")),
+            ("ratio_band", json!([1.1, 0.9])),
+            ("ratio_band", json!([0.9])),
+            ("ratio_band", json!([])),
+            ("ratio_band", json!(false)),
+            ("tol_mm", json!(-1.0)),
+            ("tol_mm", Value::Null),
+        ] {
+            let mut value = seam_fixture();
+            value["seams"][0][field] = invalid;
+            assert!(
+                measure_seams_unrounded(&Pattern::new(value), 3.0).is_err(),
+                "{field}"
+            );
+        }
+        let mut value = seam_fixture();
+        value["pieces"][0]["notches"] = json!([{"edge":"right","s":0.5}]);
+        assert!(measure_seams_unrounded(&Pattern::new(value), 3.0).is_err());
+        assert!(measure_seams_unrounded(&Pattern::new(seam_fixture()), f64::NAN).is_err());
+    }
 
     #[test]
     fn physical_side_uses_its_own_landmark_for_finished_width() {

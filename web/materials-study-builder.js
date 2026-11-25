@@ -1787,12 +1787,14 @@ function adaptiveGuidance(design, candidates, comparison, matrix) {
     throw Error("Choose fit-band, nominated-case, worst-case or Pareto adaptive guidance.");
   }
   if (own(design, "constraintRestoration")) {
-    if (design.constraintRestoration !== "componentwise" || design.objective === "fit_band_violation_mm") {
-      throw Error("Constraint restoration requires componentwise consumer guidance.");
+    if (design.constraintRestoration !== "componentwise") {
+      throw Error("Constraint restoration requires the componentwise policy.");
     }
-    const policies = matrix ? matrix.cases.map(item => item.comparison ?? comparison) : [comparison];
-    if (!policies.some(policy => Array.isArray(policy?.constraints) && policy.constraints.length)) {
-      throw Error("Constraint restoration needs at least one explicit comparison limit.");
+    if (design.objective !== "fit_band_violation_mm") {
+      const policies = matrix ? matrix.cases.map(item => item.comparison ?? comparison) : [comparison];
+      if (!policies.some(policy => Array.isArray(policy?.constraints) && policy.constraints.length)) {
+        throw Error("Constraint restoration needs at least one explicit comparison limit.");
+      }
     }
   }
   if (design.objective === "fit_band_violation_mm") {

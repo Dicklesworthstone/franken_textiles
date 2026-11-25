@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, curve::OUTLINE_DENSE};
-use ftx_pattern::{Pattern, material_screen::Direction};
+use ftx_pattern::{Pattern, material_screen::Direction, validate};
 use serde::{Deserialize, Serialize};
 
 use super::super::{Outcome, PreparedVariant, Request as StudyRequest, comparison};
@@ -30,11 +30,11 @@ pub enum Objective {
     ConsumerWorstCase,
 }
 
-/// Explicit progress rule while complete production evidence still violates authored guards.
+/// Explicit progress rule for canonical seam constraints and qualified production guards.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintRestoration {
-    /// No guard side may worsen and at least one must improve, without combining physical units.
+    /// No seam or guard component may worsen and at least one must improve, without combining units.
     Componentwise,
 }
 
@@ -70,8 +70,8 @@ pub struct Variable {
 pub struct Request {
     /// Raw fit-band discovery or an explicit production comparison; never an inferred fit score.
     pub objective: Objective,
-    /// Opt-in approach to a feasible production region after flat fit passes. Unavailable sources
-    /// never supply residuals, and failed constraints never enter the retained eligible designs.
+    /// Opt-in seam restoration before flat-fit admission and production restoration afterward.
+    /// Unavailable geometry/sources never supply residuals; failed trials remain ineligible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraint_restoration: Option<ConstraintRestoration>,
     /// Omission preserves axis-only discovery. Joint steps still require complete canonical
@@ -182,6 +182,10 @@ pub struct Trial {
     /// only for opted-in restoration. Absence means this trial cannot guide that phase.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub constraint_violations: Option<Vec<ConstraintViolation>>,
+    /// Complete canonical seam constraints for opted-in restoration, including satisfied rows.
+    /// Missing geometry, truing, body readings or notch scope cannot supply partial guidance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seam_violations: Option<Vec<validate::SeamMeasurement>>,
     /// Canonical geometry/fit refusal or consumer-admission/protocol exclusion, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
@@ -420,11 +424,6 @@ impl Request {
     }
 
     pub(super) fn validate(&self) -> Result<(), Refusal> {
-        if self.constraint_restoration.is_some() && !self.consumer_guided() {
-            return Err(invalid(
-                "constraint_restoration requires explicit production-consumer guidance",
-            ));
-        }
         if self.consumer_guided() != (self.material_key.is_some() || self.material_keys.is_some())
             || (self.material_key.is_some() && self.material_keys.is_some())
             || self
@@ -783,9 +782,14 @@ impl Request {
         // Canonical validation and the shared raw readings both sample actual geometry.
         if fit
             .measurement_work_units()
+            .saturating_mul(2)
+            .saturating_add(if self.constraint_restoration.is_some() {
+                pattern.seams().len().saturating_mul(2)
+            } else {
+                0
+            })
             .saturating_mul(samples.max(dense))
             .saturating_mul(trials)
-            .saturating_mul(2)
             > 40_000_000
         {
             return Err(budget(
@@ -892,6 +896,7 @@ impl Request {
             .chain(&domain_restart_points_mm)
             .collect();
         if self.constraint_restoration.is_some()
+            && self.consumer_guided()
             && if cases.is_empty() {
                 study
                     .comparison
@@ -985,6 +990,7 @@ impl Request {
                 .sewing_options()
                 .map_or(3.0, |options| options.seam_tolerance_mm),
             work: Work::new(40_000_000),
+            restore_seams: self.constraint_restoration.is_some(),
         };
         let baseline = Variant {
             key: super::BASELINE.into(),
@@ -1434,6 +1440,7 @@ struct Evaluator<'request, 'body> {
     context: &'request fit::Context<'body>,
     seam_tolerance_mm: f64,
     work: Work,
+    restore_seams: bool,
 }
 
 impl Evaluator<'_, '_> {
@@ -1473,29 +1480,68 @@ impl Evaluator<'_, '_> {
             validation.flat["status"] == "CONVERGED"
                 && matches!(&validation.outlines, Outcome::Available { .. })
         });
+        let nonseam_admitted = |report: &serde_json::Value| {
+            report["summary"]["truing_failing"] == 0
+                && report["completeness"].as_array().is_some_and(Vec::is_empty)
+                && report["missing_measurements"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty)
+        };
+        let seam_restoration_admitted = self.restore_seams
+            && design.validation.as_ref().is_some_and(|validation| {
+                nonseam_admitted(&validation.flat)
+                    && matches!(&validation.outlines, Outcome::Available { .. })
+            })
+            && matches!(&design.fit, Some(Outcome::Available { result })
+                if nonseam_admitted(&result.validation));
         let fit_structure_admitted = matches!(&design.fit, Some(Outcome::Available { result })
             if result.validation["summary"]["seams_failing"] == 0
                 && result.validation["summary"]["truing_failing"] == 0
                 && result.validation["completeness"].as_array().is_some_and(Vec::is_empty)
                 && result.validation["missing_measurements"].as_array().is_some_and(Vec::is_empty));
-        let raw_fit = Outcome::from_result(if geometry_admitted {
+        let restored_pattern =
+            if result.is_err() && (seam_restoration_admitted || geometry_admitted) {
+                design
+                    .altered_pattern_json
+                    .as_deref()
+                    .map(Pattern::from_json)
+                    .transpose()
+                    .map_err(invalid)
+            } else {
+                Ok(None)
+            };
+        let raw_fit = Outcome::from_result(if geometry_admitted || seam_restoration_admitted {
             match &result {
                 Ok(pattern) => self.fit.unrounded(pattern, self.context),
-                Err(_) => Pattern::from_json(
-                    design
-                        .altered_pattern_json
-                        .as_deref()
-                        .expect("validated altered geometry"),
-                )
-                .map_err(invalid)
-                .and_then(|pattern| self.fit.unrounded(&pattern, self.context)),
+                Err(_) => match &restored_pattern {
+                    Ok(Some(pattern)) => self.fit.unrounded(pattern, self.context),
+                    Err(refusal) => Err(refusal.clone()),
+                    Ok(None) => Err(invalid("adaptive design is missing its altered geometry")),
+                },
             }
         } else {
             Err(invalid(
                 "adaptive raw fit requires admitted canonical structure, seams, completeness and sampled outlines",
             ))
         });
-        let score = if fit_structure_admitted {
+        let seam_violations = if seam_restoration_admitted && raw_fit.value().is_some() {
+            // Both existing validators must pass. A per-seam override remains authoritative;
+            // otherwise one walk at the stricter default covers both without duplicate guards.
+            let tolerance = self
+                .seam_tolerance_mm
+                .min(self.fit.fit_spec["seam_tol_mm"].as_f64().unwrap_or(3.0));
+            result
+                .as_ref()
+                .ok()
+                .or_else(|| restored_pattern.as_ref().ok().and_then(Option::as_ref))
+                .and_then(|pattern| validate::measure_seams_unrounded(pattern, tolerance).ok())
+        } else {
+            None
+        };
+        let score = if geometry_admitted
+            && fit_structure_admitted
+            && (!self.restore_seams || seam_violations.is_some())
+        {
             raw_fit.value().and_then(|readings| {
                 let maximum = readings
                     .iter()
@@ -1512,7 +1558,11 @@ impl Evaluator<'_, '_> {
         };
         if result.is_ok() && score != Some((0.0, 0.0)) {
             result = Err(invalid(
-                "adaptive design requires complete finite unrounded readings inside every declared fit band",
+                if self.restore_seams && seam_violations.is_none() {
+                    "adaptive seam restoration requires complete finite canonical seam constraints and matched notch scope"
+                } else {
+                    "adaptive design requires complete finite unrounded readings inside every declared fit band"
+                },
             ));
         }
         Ok((
@@ -1529,6 +1579,7 @@ impl Evaluator<'_, '_> {
                 max_fit_band_violation_mm: score.map(|score| score.0),
                 total_fit_band_violation_mm: score.map(|score| score.1),
                 constraint_violations: None,
+                seam_violations,
                 refusal: result.as_ref().err().cloned(),
             },
             result,
@@ -1766,6 +1817,11 @@ impl<T> Discovery<'_, '_, '_, T> {
     }
 
     fn improves(&self, candidate: &Trial, current: &Trial) -> bool {
+        if self.request.constraint_restoration.is_some()
+            && let Some(progress) = seam_progress(candidate, current)
+        {
+            return progress;
+        }
         let Some(guidance) = &self.guidance else {
             return improves(candidate, current);
         };
@@ -2073,6 +2129,59 @@ fn improves(candidate: &Trial, current: &Trial) -> bool {
     }
 }
 
+// Restore only complete compatible seam vectors, before using any fit or consumer score. Passing
+// components stay passing. For two failing components compare their unrounded tolerance excess;
+// the reference's rounded notch decision still decides when that component is satisfied.
+fn seam_progress(candidate: &Trial, current: &Trial) -> Option<bool> {
+    let previous = current.seam_violations.as_ref()?;
+    if previous.iter().all(|seam| {
+        seam.length.within_tolerance
+            && seam
+                .notch_intervals
+                .iter()
+                .all(|interval| interval.within_tolerance)
+    }) {
+        return None;
+    }
+    let Some(next) = &candidate.seam_violations else {
+        return Some(false);
+    };
+    if next.len() != previous.len() {
+        return Some(false);
+    }
+    let mut strictly = false;
+    for (a, b) in next.iter().zip(previous) {
+        if a.seam != b.seam
+            || a.a != b.a
+            || a.b != b.b
+            || a.target_ratio != b.target_ratio
+            || a.notch_ratio != b.notch_ratio
+            || a.length.tolerance_mm != b.length.tolerance_mm
+            || a.notch_intervals.len() != b.notch_intervals.len()
+        {
+            return Some(false);
+        }
+        for (a, b) in std::iter::once((&a.length, &b.length))
+            .chain(a.notch_intervals.iter().zip(&b.notch_intervals))
+        {
+            match (a.within_tolerance, b.within_tolerance) {
+                (true, true) => {}
+                (true, false) => strictly = true,
+                (false, true) => return Some(false),
+                (false, false) => {
+                    let a = a.residual_mm.abs() - a.tolerance_mm;
+                    let b = b.residual_mm.abs() - b.tolerance_mm;
+                    if a > b {
+                        return Some(false);
+                    }
+                    strictly |= a < b;
+                }
+            }
+        }
+    }
+    Some(strictly)
+}
+
 fn cases_prefer(
     policies: &[comparison::Policy],
     order: &[String],
@@ -2330,6 +2439,7 @@ mod regional_restoration_tests {
             raw_fit: Outcome::NotRequested,
             max_fit_band_violation_mm: None,
             total_fit_band_violation_mm: None,
+            seam_violations: None,
             constraint_violations: Some(
                 [("left", 2.), ("right", 3.)]
                     .into_iter()

@@ -629,7 +629,7 @@ fn constraint_restoration_requires_complete_evidence_from_every_material_nominee
 }
 
 #[test]
-fn constraint_restoration_refuses_empty_or_nonconsumer_policies_before_callbacks() {
+fn constraint_restoration_refuses_empty_consumer_policies_before_callbacks() {
     let pattern = Pattern::from_json(PATTERN).unwrap();
     let body = Measurements(json!({"desired_length":100}));
     let identity = json!({"source":"test:restoration-body"});
@@ -637,34 +637,302 @@ fn constraint_restoration_refuses_empty_or_nonconsumer_policies_before_callbacks
         body: &body,
         identity: &identity,
     };
-    for mode in ["no-guards", "fit-only"] {
-        let mut value = serde_json::to_value(restoring_request(false, 12)).unwrap();
-        if mode == "no-guards" {
-            value["comparison"]["constraints"] = json!([]);
-        } else {
-            value["design_adaptive"]["objective"] = json!("fit_band_violation_mm");
-            value["design_adaptive"]
-                .as_object_mut()
-                .unwrap()
-                .remove("material_key");
-        }
-        let request: Request = serde_json::from_value(value).unwrap();
-        let mut calls = 0;
-        let error = request
-            .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |_, _| {
-                calls += 1;
-                Ok(json!({}))
-            })
-            .unwrap_err();
-        assert!(
-            error.message.contains("constraint_restoration"),
-            "{mode}: {error:?}"
-        );
-        assert_eq!(calls, 0);
-    }
+    let mut value = serde_json::to_value(restoring_request(false, 12)).unwrap();
+    value["comparison"]["constraints"] = json!([]);
+    let request: Request = serde_json::from_value(value).unwrap();
+    let mut calls = 0;
+    let error = request
+        .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |_, _| {
+            calls += 1;
+            Ok(json!({}))
+        })
+        .unwrap_err();
+    assert!(
+        error.message.contains("constraint_restoration"),
+        "{error:?}"
+    );
+    assert_eq!(calls, 0);
     let mut unknown = serde_json::to_value(restoring_request(false, 12)).unwrap();
     unknown["design_adaptive"]["constraint_restoration"] = json!("weighted_sum");
     assert!(serde_json::from_value::<Request>(unknown).is_err());
+}
+
+fn seam_request(evaluations: usize, consumer: bool, step: f64) -> Request {
+    let mut value = serde_json::to_value(request(false, evaluations, json!([]))).unwrap();
+    value["design_adaptive"]["constraint_restoration"] = json!("componentwise");
+    if !consumer {
+        value["design_adaptive"]["objective"] = json!("fit_band_violation_mm");
+        value["design_adaptive"]
+            .as_object_mut()
+            .unwrap()
+            .remove("material_key");
+    }
+    value["design_adaptive"]["variables"] = json!([{
+        "key":"repair","bounds_mm":[0.0,6.0*step],"initial_mm":0.0,
+        "initial_step_mm":step,"minimum_step_mm":step,
+        "sites":[{"piece":"front","axis":"y","at_mm":50.0,"multiplier":1.0}]
+    }]);
+    value["comparison"]["constraints"] = json!([{"metric":"assembly_mass_kg","minimum":0.0001}]);
+    serde_json::from_value(value).unwrap()
+}
+
+fn seam_report(request: &Request, pattern: &Pattern) -> (Value, usize) {
+    let body = Measurements(json!({"desired_length":100}));
+    let identity = json!({"source":"test:seam-restoration-body"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let mut calls = 0;
+    let report = request
+        .evaluate_with_fit(pattern, &json!({}), Some(&fit), |_, bound| {
+            calls += 1;
+            assert!(
+                ftx_pattern::validate::seam_walk(
+                    bound,
+                    request.sewing.as_ref().unwrap().seam_tolerance_mm
+                )
+                .iter()
+                .all(|seam| !matches!(seam.status.as_str(), "FAIL" | "ERROR"))
+            );
+            Ok(json!({"source":sha256_hex(&serde_json::to_vec(bound.raw()).unwrap())}))
+        })
+        .unwrap();
+    (serde_json::to_value(report).unwrap(), calls)
+}
+
+#[test]
+fn seam_restoration_repairs_several_steps_without_admitting_partial_geometry() {
+    for (step, tolerance) in [(5.0, 0.5), (0.01, 0.001)] {
+        let mut value: Value = serde_json::from_str(PATTERN).unwrap();
+        for vertex in ["c", "d"] {
+            value["pieces"][1]["vertices"][vertex][1] = json!(100.0 + 4.0 * step);
+        }
+        value["seams"][0]["tol_mm"] = json!(tolerance);
+        let pattern = Pattern::new(value);
+        for consumer in [false, true] {
+            let request = seam_request(16, consumer, step);
+            let mut disabled = request.clone();
+            disabled
+                .design_adaptive
+                .as_mut()
+                .unwrap()
+                .constraint_restoration = None;
+            let (old, calls) = seam_report(&disabled, &pattern);
+            assert_eq!(calls, 0);
+            assert_eq!(old["manufacturing"]["design_search"]["selected_designs"], 0);
+            assert!(
+                old["manufacturing"]["design_search"]["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row.get("seam_violations").is_none())
+            );
+
+            let (report, calls) = seam_report(&request, &pattern);
+            assert!(calls > 0);
+            assert_eq!(report, seam_report(&request, &pattern).0);
+            let manufacturing = &report["manufacturing"];
+            let chosen = selected(manufacturing);
+            assert!(
+                (chosen["design"]["variables_mm"]["repair"].as_f64().unwrap() - 4.0 * step).abs()
+                    < 1e-12
+            );
+            assert_eq!(chosen["design"]["validation"]["passed"], true);
+            let rows = manufacturing["design_search"]["rows"].as_array().unwrap();
+            assert!(rows.len() >= 5);
+            for row in rows
+                .iter()
+                .filter(|row| row["seam_violations"][0]["length"]["within_tolerance"] == false)
+            {
+                assert_eq!(row["selected"], false);
+                assert_eq!(row["design"]["validation"]["passed"], false);
+                assert!(row["consumer_comparison"].is_null());
+                assert!(row["max_fit_band_violation_mm"].is_null());
+                assert!(row.get("refusal").is_some());
+            }
+            assert_eq!(
+                rows[0]["seam_violations"][0]["length"]["tolerance_mm"],
+                tolerance
+            );
+            if step < 1.0 {
+                assert_eq!(
+                    rows[0]["design"]["validation"]["flat"]["seams"][0]["residual_mm"],
+                    -0.0
+                );
+                assert!(
+                    rows[0]["seam_violations"][0]["length"]["residual_mm"]
+                        .as_f64()
+                        .unwrap()
+                        < -0.03
+                );
+            }
+            let key =
+                serde_json::to_string(&(chosen["design"]["key"].as_str().unwrap(), "light-sheet"))
+                    .unwrap();
+            let row = manufacturing["alternatives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["key"] == key)
+                .unwrap();
+            let bound = Pattern::new(row["binding"]["result"]["pattern"].clone());
+            assert_eq!(
+                row["cutting"]["result"],
+                serde_json::to_value(
+                    CutPlan::build(&bound, request.cutting.as_ref().unwrap()).unwrap()
+                )
+                .unwrap()
+            );
+            assert_eq!(
+                row["sewing"]["result"],
+                serde_json::to_value(
+                    SewPlan::build(&bound, request.sewing.as_ref().unwrap()).unwrap()
+                )
+                .unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn seam_restoration_moves_notch_geometry_without_cancelling_opposite_interval_errors() {
+    let mut value: Value = serde_json::from_str(PATTERN).unwrap();
+    value["pieces"][0]["vertices"]["m"] = json!([20, 25]);
+    value["pieces"][0]["edges"] = json!([
+        {"id":"bottom","from":"a","to":"b"},
+        {"id":"lower","from":"b","to":"m"},
+        {"id":"upper","from":"m","to":"c"},
+        {"id":"top","from":"c","to":"d"},
+        {"id":"left","from":"d","to":"a"}
+    ]);
+    value["pieces"][0]["notches"] = json!([{"edge":"lower","s":1.0}]);
+    value["pieces"][1]["notches"] = json!([{"edge":"left","s":0.5}]);
+    value["seams"][0]["a"] = json!("front/lower+upper");
+    let pattern = Pattern::new(value);
+    let mut request_value = serde_json::to_value(seam_request(16, false, 5.0)).unwrap();
+    request_value["design_adaptive"]["variables"][0]["sites"] = json!([
+        {"op":"move","piece":"front","vertex":"m","dx_multiplier":0,"dy_multiplier":1}
+    ]);
+    let request: Request = serde_json::from_value(request_value).unwrap();
+    let (report, calls) = seam_report(&request, &pattern);
+    assert!(calls > 0);
+    let manufacturing = &report["manufacturing"];
+    let rows = manufacturing["design_search"]["rows"].as_array().unwrap();
+    let first = &rows[0]["seam_violations"][0];
+    assert_eq!(first["length"]["residual_mm"], 0.0);
+    assert_eq!(first["notch_intervals"][0]["residual_mm"], -25.0);
+    assert_eq!(first["notch_intervals"][1]["residual_mm"], 25.0);
+    assert_eq!(rows[0]["selected"], false);
+    let chosen = selected(manufacturing);
+    assert_eq!(chosen["design"]["variables_mm"]["repair"], 25.0);
+    assert_eq!(
+        chosen["design"]["validation"]["flat"]["status"],
+        "CONVERGED"
+    );
+    assert!(
+        chosen["seam_violations"][0]["notch_intervals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|interval| interval["within_tolerance"] == true)
+    );
+}
+
+#[test]
+fn seam_restoration_rejects_tradeoffs_and_preserves_the_unique_trial_budget() {
+    let mut value: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut third = value["pieces"][0].clone();
+    third["id"] = json!("third");
+    value["pieces"].as_array_mut().unwrap().push(third);
+    for vertex in ["c", "d"] {
+        value["pieces"][1]["vertices"][vertex][1] = json!(120);
+    }
+    value["seams"].as_array_mut().unwrap().push(json!({
+        "id":"other","a":"front/left","b":"third/right","reverse":true
+    }));
+    let (report, calls) = seam_report(&seam_request(16, false, 5.0), &Pattern::new(value.clone()));
+    assert_eq!(calls, 0);
+    let search = &report["manufacturing"]["design_search"];
+    assert_eq!(search["evaluations"], 2);
+    assert_eq!(search["selected_designs"], 0);
+    assert_eq!(search["stop_reason"], "minimum_steps");
+    assert_eq!(
+        search["rows"][0]["seam_violations"][1]["length"]["within_tolerance"],
+        true
+    );
+    assert_eq!(
+        search["rows"][1]["seam_violations"][1]["length"]["within_tolerance"],
+        false
+    );
+
+    value["seams"].as_array_mut().unwrap().pop();
+    value["pieces"].as_array_mut().unwrap().pop();
+    let (report, calls) = seam_report(&seam_request(3, true, 5.0), &Pattern::new(value));
+    assert_eq!(calls, 0);
+    let search = &report["manufacturing"]["design_search"];
+    assert_eq!(search["evaluations"], 3);
+    assert_eq!(search["selected_designs"], 0);
+    assert_eq!(search["stop_reason"], "evaluation_budget");
+    assert_eq!(search["rows"][2]["design"]["variables_mm"]["repair"], 10.0);
+    assert_eq!(search["consumer_guidance"]["evaluations"], 0);
+}
+
+#[test]
+fn seam_restoration_never_guides_from_incomplete_geometry_or_body_evidence() {
+    for failure in [
+        "side", "ratio", "notches", "outline", "truing", "grain", "body",
+    ] {
+        let mut value: Value = serde_json::from_str(PATTERN).unwrap();
+        for vertex in ["c", "d"] {
+            value["pieces"][1]["vertices"][vertex][1] = json!(120);
+        }
+        match failure {
+            "side" => value["seams"][0]["a"] = json!("missing/right"),
+            "ratio" => value["seams"][0]["ratio"] = json!("unknown"),
+            "notches" => value["pieces"][0]["notches"] = json!([{"edge":"right","s":0.5}]),
+            "outline" => value["pieces"][0]["vertices"]["c"] = json!([-10, 100]),
+            "truing" => value["pieces"][0]["vertices"]["c"] = json!([80, 100]),
+            "grain" => value["pieces"][0]["grain"] = Value::Null,
+            "body" => {}
+            _ => unreachable!(),
+        }
+        let pattern = Pattern::new(value);
+        let body = Measurements(if failure == "body" {
+            json!({})
+        } else {
+            json!({"desired_length":100})
+        });
+        let identity = json!({"source":"test:unavailable-restoration"});
+        let fit = Context {
+            body: &body,
+            identity: &identity,
+        };
+        let mut calls = 0;
+        let result = seam_request(8, true, 5.0).evaluate_with_fit(
+            &pattern,
+            &json!({}),
+            Some(&fit),
+            |_, _| {
+                calls += 1;
+                Ok(json!({}))
+            },
+        );
+        assert_eq!(calls, 0, "{failure}");
+        if let Ok(report) = result {
+            let report = serde_json::to_value(report).unwrap();
+            let search = &report["manufacturing"]["design_search"];
+            assert_eq!(search["selected_designs"], 0, "{failure}");
+            assert!(
+                search["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row.get("seam_violations").is_none()),
+                "{failure}"
+            );
+        }
+    }
 }
 
 fn independent_lengths(evaluations: usize, joint: bool) -> Request {

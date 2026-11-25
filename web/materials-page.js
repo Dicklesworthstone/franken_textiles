@@ -538,7 +538,7 @@ function controls() {
     "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) $(id).disabled ||= !adaptiveDesign;
   const objective = $("guidedDesignObjective").value;
   const consumerDesign = ["consumer_comparison", "consumer_pareto", "consumer_worst_case", "consumer_matrix_pareto"].includes(objective);
-  $("guidedDesignRestoreField").hidden = !consumerDesign; $("guidedDesignRestore").disabled ||= !consumerDesign;
+  $("guidedDesignRestoreField").hidden = !adaptiveDesign;
   const materialPareto = ["consumer_pareto", "consumer_matrix_pareto"].includes(objective);
   const severalMaterials = materialPareto && $("guidedDesignMultiple").checked;
   $("guidedDesignMultipleField").hidden = !materialPareto; $("guidedDesignMultiple").disabled ||= !materialPareto;
@@ -2428,15 +2428,6 @@ function designComparison(op, parent, study, casePolicies = {}) {
           "Existing source admission, required consumers, protocol rules and inclusive constraints govern each probe. " +
           "Callback slots are an upper bound on attempted work, not a preapproved simulation allowance; cumulative consumer budgets still apply.";
         parent.append(objective);
-        if (grid.request?.constraint_restoration === "componentwise") {
-          const restoration = document.createElement("p");
-          restoration.textContent = "Constraint restoration is enabled. Before reaching an eligible design, the search may follow " +
-            "source-qualified steps that reduce at least one comparison-limit violation without increasing any other. " +
-            "Minimum shortfalls and maximum excesses stay separate in their original units and each guard's declared basis. " +
-            "Intermediate designs remain excluded; only the ordinary complete comparison can admit or select a design. " +
-            "This uses the same trial allowance and does not establish that a feasible design exists elsewhere.";
-          parent.append(restoration);
-        }
         if (severalMaterials) {
           const materials = table(parent, "Adaptive frontiers by guidance material",
             ["Material", "Consumer probes", "Evaluated frontier", "Retained designs", "Omitted by capacity", "First admitted source protocol"]);
@@ -2467,6 +2458,17 @@ function designComparison(op, parent, study, casePolicies = {}) {
         cells(search, [metric(grid.evaluations), metric(grid.qualified_designs), metric(grid.selected_designs),
           grid.stop_reason?.replaceAll("_", " ") ?? "Unknown", metric(grid.best_max_fit_band_violation_mm),
           metric(grid.best_total_fit_band_violation_mm)]);
+      }
+      if (grid.request?.constraint_restoration === "componentwise") {
+        const restoration = document.createElement("p");
+        restoration.textContent = "Constraint restoration is enabled. Before reaching an eligible design, the search may follow " +
+          "seam and notch corrections that reduce at least one violation without increasing any other. " +
+          "Every structural, outline, truing and measurement requirement still applies. " +
+          (guidance ? "After seams and fit pass, source-qualified comparison-limit violations can guide the same search. " +
+            "Minimum shortfalls and maximum excesses stay separate in their original units and each guard's declared basis. " : "") +
+          "Intermediate designs remain excluded; all original seam and fit tolerances must pass before manufacturing or simulation runs. " +
+          "This uses the same trial allowance and does not establish that a feasible design exists elsewhere.";
+        parent.append(restoration);
       }
       const scope = document.createElement("p");
       scope.textContent = (guidance ?
@@ -2564,6 +2566,18 @@ function designComparison(op, parent, study, casePolicies = {}) {
             formatComparisonReadings(item.comparison, item.key),
             [...(item.comparison?.exclusions || []).map(reason => reason.message), item.refusal?.message]
               .filter(Boolean).join("; ") || "None"]);
+        }
+        if (row.seam_violations?.length) {
+          const seams = table(parent, `${design.key ?? "Unknown design"}: seam restoration measurements`,
+            ["Seam", "Edge A", "Edge B", "Section", "Residual (mm)", "Tolerance (mm)", "Canonical check"]);
+          for (const item of row.seam_violations) {
+            const measurements = [{ label: "Whole seam", measurement: item.length },
+              ...(item.notch_intervals || []).map((measurement, index) => ({ label: `Notch interval ${index + 1}`, measurement }))];
+            for (const { label, measurement } of measurements) cells(seams, [item.seam ?? "Unnamed seam", item.a, item.b, label,
+              metric(measurement?.residual_mm), metric(measurement?.tolerance_mm),
+              measurement?.within_tolerance === true ? "Within tolerance" :
+                measurement?.within_tolerance === false ? "Outside tolerance" : "Unknown"]);
+          }
         }
         if (row.constraint_violations?.length) {
           const limits = table(parent, `${design.key ?? "Unknown design"}: comparison-limit violations`,
@@ -8840,7 +8854,7 @@ function guidedDesignInput(number, inScenario) {
   return { ...common, mode, objective, maxEvaluations: number("guidedDesignEvaluations", "unique discovery trial allowance"),
     ...(domainRestarts === 0 ? {} : { domainRestarts }),
     ...($("guidedDesignJoint").checked ? { polling: "axis_and_joint" } : {}),
-    ...(objective !== "fit_band_violation_mm" && $("guidedDesignRestore").checked ? { constraintRestoration: "componentwise" } : {}),
+    ...($("guidedDesignRestore").checked ? { constraintRestoration: "componentwise" } : {}),
     ...(guidedDesignRestarts.length ? { restartPointsMm: guidedDesignRestarts.map(point => ({ ...point })) } : {}),
     ...(objective === "fit_band_violation_mm" ? {} : severalMaterials ? { materialKeys } : { materialKey }), ...(caseKey ? { caseKey } : {}) };
 }

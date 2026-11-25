@@ -10545,7 +10545,7 @@ test('joint polling results display native policy and preserve excluded trial de
   p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);
 });
 
-test('guided constraint restoration is explicit, requires limits and stays inactive in grid and fit-only modes',async()=>{
+test('guided seam restoration reaches fit-only discovery while consumer restoration requires limits and grid stays inactive',async()=>{
   const {p}=await adaptiveDesignSetup(false);
   guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
   guidedDesignField(p,'guidedDesignMaterial','baseline','change');
@@ -10560,9 +10560,14 @@ test('guided constraint restoration is explicit, requires limits and stays inact
   assert.deepEqual(request.comparison.constraints,[{metric:'stock_area_m2',maximum:0.25}]);
   assert.equal(request.design_adaptive.max_evaluations,24);p.emit(studyReport());
   guidedDesignField(p,'guidedDesignObjective','fit_band_violation_mm','change');
-  assert.equal(p.e.guidedDesignRestore.disabled,true);assert.equal(p.e.guidedDesignRestoreField.hidden,true);
-  await p.e.study.onclick();assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).studyRequest).design_adaptive,'constraint_restoration'),false);
+  guidedDesignField(p,'guidedAreaLimit','');
+  assert.equal(p.e.guidedDesignRestore.disabled,false);assert.equal(p.e.guidedDesignRestoreField.hidden,false);
+  await p.e.study.onclick();const fitOnly=JSON.parse(p.current().messages.at(-1).studyRequest);
+  assert.equal(fitOnly.design_adaptive.constraint_restoration,'componentwise');
+  assert.equal(fitOnly.design_adaptive.objective,'fit_band_violation_mm');
+  assert.equal(Object.hasOwn(fitOnly.design_adaptive,'material_key'),false);
   p.emit(studyReport());guidedDesignField(p,'guidedDesignMode','grid','change');
+  assert.equal(p.e.guidedDesignRestore.disabled,true);assert.equal(p.e.guidedDesignRestoreField.hidden,true);
   await p.e.study.onclick();const grid=JSON.parse(p.current().messages.at(-1).studyRequest);
   assert.equal(grid.design_adaptive,undefined);assert.equal(Object.hasOwn(grid.design_grid,'constraint_restoration'),false);
   p.emit(studyReport());p.select('patternFile',coupledDesignPattern);await p.e.patternFile.onchange();
@@ -10570,9 +10575,9 @@ test('guided constraint restoration is explicit, requires limits and stays inact
 });
 
 test('guided constraint restoration edits cancel stale reads while submitted policies retain their original snapshot',async()=>{
-  for(const notify of [true,false]) {
+  for(const objective of ['consumer_comparison','fit_band_violation_mm']) for(const notify of [true,false]) {
     const {p,fit}=await adaptiveDesignSetup(false),delay=deferred();
-    guidedDesignField(p,'guidedDesignObjective','consumer_comparison','change');
+    guidedDesignField(p,'guidedDesignObjective',objective,'change');
     guidedDesignField(p,'guidedDesignMaterial','baseline','change');guidedDesignField(p,'guidedAreaLimit','0.25');
     p.e.guidedDesignRestore.checked=true;p.e.guidedDesignRestore.handlers.change();
     p.e.fit.files[0].arrayBuffer=async()=>utf8Buffer(await delay.promise);
@@ -10585,6 +10590,33 @@ test('guided constraint restoration edits cancel stale reads while submitted pol
       old.emit({type:'result',request:2,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
     }else assert.equal(JSON.parse(old.messages.at(-1).studyRequest).design_adaptive.constraint_restoration,'componentwise');
   }
+});
+
+test('seam restoration results retain signed native residuals, canonical notch acceptance and excluded designs',async()=>{
+  const p=await pageModule();await p.load();p.select('studyRequest','{}');const report=designReport();
+  const seam={seam:'<side & cuff>',a:'front/right',b:'back/left',target_ratio:[1,1],notch_ratio:1,
+    length:{residual_mm:-8.125,tolerance_mm:3,within_tolerance:false},
+    notch_intervals:[{residual_mm:3.049,tolerance_mm:3,within_tolerance:true},
+      {residual_mm:-11.174,tolerance_mm:3,within_tolerance:false}]};
+  report.design_search={schema:'ftx-design-adaptive-search/1',request:{constraint_restoration:'componentwise'},
+    evaluations:2,qualified_designs:0,selected_designs:0,stop_reason:'evaluation_budget',
+    rows:[{selected:false,refusal:{message:'Original seam tolerance exceeded'},seam_violations:[seam],
+      design:{key:'approach',variables_mm:{length:5},validation:{passed:false},fit:outcome({passed:false})}},
+      {selected:false,refusal:{message:'Missing measurement'},design:{key:'unknown',validation:{passed:false}}}]};
+  const before=JSON.stringify(report);await p.e.study.onclick();p.emit(report);
+  assert.equal(JSON.stringify(report),before,'Review must not round, score or select native residuals');
+  const s=section(p,'Fixed-pattern manufacturing alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('approach: seam restoration measurements').children.slice(2).map(n=>n.children.map(c=>c.textContent))),[
+    ['<side & cuff>','front/right','back/left','Whole seam','-8.125','3','Outside tolerance'],
+    ['<side & cuff>','front/right','back/left','Notch interval 1','3.049','3','Within tolerance'],
+    ['<side & cuff>','front/right','back/left','Notch interval 2','-11.174','3','Outside tolerance']]);
+  assert.equal(table('unknown: seam restoration measurements'),undefined);
+  const trials=table('Adaptive alteration trials').children.slice(2);
+  assert.equal(trials[0].children[4].textContent,'Refused');assert.equal(trials[0].children[5].textContent,'Not selected');
+  assert.match(visibleText(s),/Constraint restoration is enabled/);assert.match(visibleText(s),/Intermediate designs remain excluded/);
+  assert.match(visibleText(s),/Missing measurement/);assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.studyRequest.handlers.change();assert.equal(s.hidden,true);
 });
 
 test('constraint restoration results keep native guard units and exclusions without browser scoring or selection',async()=>{

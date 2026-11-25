@@ -932,10 +932,11 @@ two or three variables together using each variable's declared step. These trial
 <option value="consumer_matrix_pareto">Exploring tradeoffs across all named cases</option>
 </select></label>
 <div id="guidedDesignRestoreField" hidden>
-<label><input id="guidedDesignRestore" type="checkbox">Approach declared comparison limits before optimizing</label>
-<p class="note">When the starting design fails a limit, allow steps that improve at least one limit without worsening any other.
-Every required result and source qualification must be available. Intermediate designs stay excluded until all limits pass;
-the search does not combine different units into a score or relax your declared limits.</p>
+<label><input id="guidedDesignRestore" type="checkbox">Approach seam tolerances and declared comparison limits</label>
+<p class="note">Allow several small corrections to mismatched seams or notch intervals, improving at least one constraint without
+worsening any other. Every structural, outline, truing and measurement check still applies. Seams and fit must pass before
+manufacturing or simulation runs. Comparison-guided discovery also requires explicit limits and complete qualified results;
+the search keeps each limit separate and never relaxes its tolerance.</p>
 </div>
 <label id="guidedDesignMultipleField" hidden><input id="guidedDesignMultiple" type="checkbox">Let several materials guide tradeoff discovery</label>
 <label id="guidedDesignMaterialField">Material whose outcomes guide discovery <select id="guidedDesignMaterial">
