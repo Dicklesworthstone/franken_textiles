@@ -246,7 +246,7 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
     assert!(
         std::fs::read_to_string(dir.join("bound.html"))
             .unwrap()
-            .contains("<title>Bound sleeve Fold-up</title>")
+            .contains("<title>Bound Sleeve Fold-up</title>")
     );
     let explicit = |path: &str, out: &str| {
         Command::new(env!("CARGO_BIN_EXE_ftx"))
@@ -267,6 +267,30 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
     let stale = rebuild("stale.html");
     assert_eq!(stale.status.code(), Some(3));
     assert!(!dir.join("stale.html").exists());
+
+    // Malformed JSON and structurally invalid snapshots must fail closed as InvalidDocument (3).
+    let broken_json = b"{not valid json";
+    std::fs::write(&saved, broken_json).unwrap();
+    save(
+        &dir.join("sim/sim_report.json"),
+        &json!({"pattern":"p.json", "effective_pattern_sha256":ftx_core::receipt::sha256_hex(broken_json)}),
+    );
+    let bad_snap = rebuild("bad-snap.html");
+    assert_eq!(bad_snap.status.code(), Some(3));
+    assert!(!dir.join("bad-snap.html").exists());
+    let bad_explicit = explicit("sim/effective_pattern.json", "bad-explicit.html");
+    assert_eq!(bad_explicit.status.code(), Some(3));
+    assert!(!dir.join("bad-explicit.html").exists());
+
+    let bad_pattern = serde_json::to_vec(&json!({"schema":"fabric-pattern/1"})).unwrap();
+    std::fs::write(&saved, &bad_pattern).unwrap();
+    save(
+        &dir.join("sim/sim_report.json"),
+        &json!({"pattern":"p.json", "effective_pattern_sha256":ftx_core::receipt::sha256_hex(&bad_pattern)}),
+    );
+    let invalid_snap = rebuild("invalid-snap.html");
+    assert_eq!(invalid_snap.status.code(), Some(3));
+    assert!(!dir.join("invalid-snap.html").exists());
 
     for arms in [
         Value::Null,
