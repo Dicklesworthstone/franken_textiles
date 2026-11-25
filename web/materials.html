@@ -558,6 +558,10 @@ an exhausted search retains a complete layout and does not establish a globally 
 to allow checked raised-tool detours. The positive offset places candidate waypoints around fixture bounds;
 the supplied tool envelopes still determine clearance. Previews and modeled travel times include the selected
 detours and return. A bounded search can refuse without proving that every possible route is blocked.</p>
+<p class="note">When a qualified cutting machine declares a fixed drill (<code>program.machine.drilling</code>),
+set <code>program.ordering: "nearest_drill_and_path"</code> to route all qualified drill holes before knife paths
+using the same bounded search budget. Every hole retains its exact source center, diameter and piece ownership;
+hole quality, global route optimality and machine execution remain outside this model.</p>
 <p class="note">Set <code>program.stock_loading: [{"marker":0,"lower_left_mm":[20,10]}]</code> to place a marker's
 whole stock bounding box at an explicit machine-bed location. Marker indices start at 0. The entire stock must fit the bed;
 cuts, fixtures and raised travel use the retained translation. Omit this option for the existing origin placement.</p>

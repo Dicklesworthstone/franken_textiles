@@ -2204,6 +2204,13 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
         state(result?.surface), metric(m.independent_surface_power_w), state(result?.coverage), metric(m.body_coverage_power_w)]);
       detail(parent, `${row.key}: simulation flags, identities and thermal refusals`, {
         refusal: outcome?.refusal, settled: result?.drape?.settled, flags: result?.drape?.flags,
+        ...(result?.drape?.start_repair ? { start_repair: result.drape.start_repair } : {}),
+        ...(Number.isInteger(result?.drape?.elastic_hold_window?.requested_steps) && result.drape.elastic_hold_window.requested_steps > 0
+          ? { elastic_hold_window: result.drape.elastic_hold_window } : {}),
+        ...(result?.drape?.numerical?.time_subdivision ? { time_subdivision: result.drape.numerical.time_subdivision } : {}),
+        ...(result?.drape?.membrane_history ? { membrane_history: result.drape.membrane_history } : {}),
+        ...(result?.drape?.bending_history ? { bending_history: result.drape.bending_history } : {}),
+        ...(result?.drape?.membrane_plasticity_history ? { membrane_plasticity_history: result.drape.membrane_plasticity_history } : {}),
         scenario_sha256: result?.scenario_sha256, body_geometry_sha256: result?.body_geometry_sha256,
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
@@ -5315,6 +5322,15 @@ function show(op, msg, request) {
         ...(r.numerical?.start_self_repulsion ? { start_self_repulsion: r.numerical.start_self_repulsion } : {}),
         ...(r.numerical?.authored_crease_hinges > 0 ? { authored_crease_hinges: r.numerical.authored_crease_hinges } : {}),
         settling: r.numerical?.settling,
+        ...(r.numerical?.time_subdivision ? { time_subdivision: r.numerical.time_subdivision } : {}),
+        ...(r.start_repair ? { start_repair: r.start_repair } : {}),
+        ...(Number.isInteger(r.elastic_hold_window?.requested_steps) && r.elastic_hold_window.requested_steps > 0 ? {
+          elastic_hold_window: {
+            requested_steps: r.elastic_hold_window.requested_steps,
+            status: typeof r.elastic_hold_window.status === "string" && r.elastic_hold_window.status
+              ? r.elastic_hold_window.status : "unknown",
+          },
+        } : {}),
         ...(r.static_equilibrium ? { static_equilibrium: {
           status: r.static_equilibrium.status,
           ...(r.static_equilibrium.result ? {
@@ -5323,6 +5339,16 @@ function show(op, msg, request) {
             iterations: r.static_equilibrium.result.solve?.iterations,
           } : {}),
           ...(r.static_equilibrium.refusal ? { refusal: r.static_equilibrium.refusal } : {}),
+        } } : {}),
+        ...(typeof r.bending_history?.model === "string" && r.bending_history.model ? { bending_plasticity: {
+          model: r.bending_history.model,
+          ...(Number.isFinite(r.bending_history.plastic_dissipation_j)
+            ? { plastic_dissipation_j: r.bending_history.plastic_dissipation_j } : {}),
+        } } : {}),
+        ...(typeof r.membrane_plasticity_history?.model === "string" && r.membrane_plasticity_history.model ? { membrane_plasticity: {
+          model: r.membrane_plasticity_history.model,
+          ...(Number.isFinite(r.membrane_plasticity_history.plastic_dissipation_j)
+            ? { plastic_dissipation_j: r.membrane_plasticity_history.plastic_dissipation_j } : {}),
         } } : {}),
         ...(r.membrane_plasticity_history?.damage_model ? { membrane_damage: {
           model: r.membrane_plasticity_history.damage_model,

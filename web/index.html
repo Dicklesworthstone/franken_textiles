@@ -1612,6 +1612,34 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         const tail = r.numerical.settling;
         $("foldSummary").innerHTML += `<br>Extra settling: ${esc(tail.steps)} / ${esc(tail.max_steps)} steps, ${esc(tail.duration_s)} s; ${esc(tail.stop_reason)}. Total gravity duration: ${esc(tail.gravity_duration_s)} s.`;
       }
+      if (r.numerical?.time_subdivision) {
+        const sub = r.numerical.time_subdivision;
+        if ([sub.subdivided_nominal_intervals, sub.nominal_intervals, sub.accepted_substeps, sub.trials].every((v) => Number.isInteger(v) && v >= 0)) {
+          $("foldSummary").innerHTML += `<br>Time subdivision: ${esc(sub.subdivided_nominal_intervals)}/${esc(sub.nominal_intervals)} intervals subdivided (${esc(sub.accepted_substeps)} substeps, ${esc(sub.trials)} trials).`;
+        }
+      }
+      if (r.start_repair && typeof r.start_repair === "object") {
+        const sr = r.start_repair, parts = [];
+        if (Number.isInteger(sr.rejected_relax_iters) && sr.rejected_relax_iters >= 0
+            && Number.isInteger(sr.accepted_relax_iters) && sr.accepted_relax_iters >= 0) {
+          parts.push(`earlier checkpoint (${sr.rejected_relax_iters} → ${sr.accepted_relax_iters} iters)`);
+        }
+        if (Number.isInteger(sr.moved_welded_vertices) && sr.moved_welded_vertices >= 0) {
+          const maxNote = Number.isFinite(sr.maximum_displacement_mm)
+            ? `, max ${Number(sr.maximum_displacement_mm.toFixed(2))} mm` : "";
+          parts.push(`opposing leg separation (${sr.moved_welded_vertices} vertices${maxNote})`);
+        }
+        if (parts.length) {
+          $("foldSummary").innerHTML += `<br>Start repair: ${esc(parts.join("; "))}.`;
+        } else if (typeof sr.basis === "string" && sr.basis) {
+          $("foldSummary").innerHTML += `<br>Start repair: ${esc(sr.basis)}.`;
+        }
+      }
+      if (r.elastic_hold_window && Number.isInteger(r.elastic_hold_window.requested_steps) && r.elastic_hold_window.requested_steps > 0) {
+        const hold = r.elastic_hold_window;
+        const holdStatus = typeof hold.status === "string" && hold.status ? hold.status : "unknown";
+        $("foldSummary").innerHTML += `<br>Elastic hold window: ${esc(hold.requested_steps)} step(s) (${esc(holdStatus)}).`;
+      }
       if (r.static_equilibrium) {
         const eq = r.static_equilibrium;
         if (eq.status === "available" && eq.result) {
@@ -1621,6 +1649,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         } else {
           $("foldSummary").innerHTML += `<br>Static equilibrium (frictionless comparison): ${esc(eq.status || "refused")}${eq.refusal?.message ? ` — ${esc(eq.refusal.message)}` : ""}.`;
         }
+      }
+      if (typeof r.bending_history?.model === "string" && r.bending_history.model) {
+        const bh = r.bending_history;
+        const jNote = Number.isFinite(bh.plastic_dissipation_j) ? ` (${bh.plastic_dissipation_j.toExponential(3)} J)` : "";
+        $("foldSummary").innerHTML += `<br>Bending plasticity: ${esc(bh.model)}${esc(jNote)}.`;
+      }
+      if (typeof r.membrane_plasticity_history?.model === "string" && r.membrane_plasticity_history.model) {
+        const mp = r.membrane_plasticity_history;
+        const jNote = Number.isFinite(mp.plastic_dissipation_j) ? ` (${mp.plastic_dissipation_j.toExponential(3)} J)` : "";
+        $("foldSummary").innerHTML += `<br>Membrane plasticity: ${esc(mp.model)}${esc(jNote)}.`;
       }
       if (r.membrane_plasticity_history?.damage_model) {
         const dmg = r.membrane_plasticity_history;

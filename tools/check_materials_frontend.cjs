@@ -24713,6 +24713,124 @@ test('static_equilibrium rejects mm-overflow tolerances, joint plasticity surfac
   assert.match(idx.e.foldSummary.innerHTML, /Membrane stiffness degradation \(isotropic_accumulated_damage\/1\): damage dissipation 2\.500e-3 J/);
 });
 
+test('fold and scenario drape summaries surface opt-in plasticity, time_subdivision, start_repair and elastic_hold_window cleanly', async () => {
+  // 1. Default Material Workbench fold omits all opt-in constitutive/repair/hold fields.
+  const fp = await pageModule(); await fp.load(); await fp.bind(); fp.select('measurements'); fp.select('fit');
+  fp.e.body.files = [new Blob([new Uint8Array([1])])];
+  await fp.e.fold.onclick();
+  fp.emit({ settled: true, flags: [], material: { basis: 'bound' }, body: { legs: 'standing' }, numerical: {},
+    elastic_hold_window: { requested_steps: 0, status: 'not_requested' } },
+    [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  const baseSummary = JSON.parse(section(fp, 'fold').children[1].textContent);
+  for (const key of ['time_subdivision', 'start_repair', 'elastic_hold_window', 'bending_plasticity', 'membrane_plasticity', 'membrane_damage']) {
+    assert.equal(Object.hasOwn(baseSummary, key), false, `default fold summary must omit ${key}`);
+  }
+
+  // 2. Rich Material Workbench fold preserves combined start_repair, time_subdivision, elastic_hold_window and separate plasticity/damage blocks.
+  const combinedRepair = {
+    basis: 'earlier_contact_clear_relaxation_and_opposing_leg_placement',
+    rejected_relax_iters: 600,
+    accepted_relax_iters: 400,
+    moved_welded_vertices: 14,
+    maximum_displacement_mm: 3.25,
+    steps: [
+      { basis: 'earlier_contact_clear_relaxation', rejected_relax_iters: 600, accepted_relax_iters: 400 },
+      { basis: 'opposing_leg_placement', moved_welded_vertices: 14, maximum_displacement_mm: 3.25 },
+    ],
+  };
+  await fp.e.fold.onclick();
+  fp.emit({
+    settled: true, flags: [], material: { basis: 'bound' }, body: { legs: 'standing' },
+    numerical: { time_subdivision: { subdivided_nominal_intervals: 3, nominal_intervals: 12, accepted_substeps: 18, trials: 21 } },
+    start_repair: combinedRepair,
+    elastic_hold_window: { requested_steps: 6, status: 'available' },
+    bending_history: { model: 'orthotropic_bending_plasticity/<1>', plastic_dissipation_j: 0.0025 },
+    membrane_plasticity_history: { model: 'hill48_membrane_plasticity/1', plastic_dissipation_j: 0.005,
+      damage_model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.00125 },
+  }, [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  const richSummary = JSON.parse(section(fp, 'fold').children[1].textContent);
+  assert.deepEqual(richSummary.time_subdivision, { subdivided_nominal_intervals: 3, nominal_intervals: 12, accepted_substeps: 18, trials: 21 });
+  assert.deepEqual(richSummary.start_repair, combinedRepair);
+  assert.deepEqual(richSummary.elastic_hold_window, { requested_steps: 6, status: 'available' });
+  assert.deepEqual(richSummary.bending_plasticity, { model: 'orthotropic_bending_plasticity/<1>', plastic_dissipation_j: 0.0025 });
+  assert.deepEqual(richSummary.membrane_plasticity, { model: 'hill48_membrane_plasticity/1', plastic_dissipation_j: 0.005 });
+  assert.deepEqual(richSummary.membrane_damage, { model: 'isotropic_accumulated_damage/1', damage_dissipation_j: 0.00125 });
+  assert.equal(descendants(section(fp, 'fold')).some(n => 'innerHTML' in n), false);
+
+  // 3. Pattern Workbench (index.html) omits by default and formats + escapes every opt-in block cleanly.
+  const idx = draftingPage();
+  idx.worker.onmessage({ data: { type: 'ready', info: { zouave_bolero: { title: 'Bolero', style: {} } }, sheetDictionaries: [], dxf: 'built in', version: 'wasm' } });
+  idx.e.bodyFile.files = [new Blob([new Uint8Array([1])])];
+  await idx.e.bodyFile.handlers.change();
+  idx.worker.onmessage({ data: { type: 'bodyReady', request: idx.messages.findLast(m => m.type === 'body').request } });
+  await idx.e.go.handlers.click();
+  idx.worker.onmessage({ data: { type: 'result', request: idx.messages.findLast(m => m.type === 'run').request,
+    res: { title: 'Bolero', status: 'CONVERGED', basis: {}, zip: 'r.zip' }, blobs: {}, foldable: true, bodyCheckable: true,
+    roundSources: { pattern: '{}', measurements: '{}', fit: '{}' } } });
+  const runFold = (rep) => {
+    idx.e.foldGo.handlers.click();
+    const req = idx.messages.findLast(m => m.type === 'fold').request;
+    idx.worker.onmessage({ data: { type: 'folded', request: req, report: rep, reportText: JSON.stringify(rep), viewer: '<html/>' } });
+    return idx.e.foldSummary.innerHTML;
+  };
+  const plainHtml = runFold({ settled: true, flags: [], elastic_hold_window: { requested_steps: 0, status: 'not_requested' } });
+  assert.doesNotMatch(plainHtml, /Time subdivision:|Start repair:|Elastic hold window:|Bending plasticity:|Membrane plasticity:/);
+
+  const richHtml = runFold({
+    settled: true, flags: [],
+    numerical: { time_subdivision: { subdivided_nominal_intervals: 3, nominal_intervals: 12, accepted_substeps: 18, trials: 21 } },
+    start_repair: combinedRepair,
+    elastic_hold_window: { requested_steps: 6, status: 'available' },
+    bending_history: { model: 'orthotropic_bending_plasticity/<1>', plastic_dissipation_j: 0.0025 },
+    membrane_plasticity_history: { model: 'hill48_membrane_plasticity/1', plastic_dissipation_j: 0.005 },
+  });
+  assert.match(richHtml, /Time subdivision: 3\/12 intervals subdivided \(18 substeps, 21 trials\)\./);
+  assert.match(richHtml, /Start repair: earlier checkpoint \(600 → 400 iters\); opposing leg separation \(14 vertices, max 3\.25 mm\)\./);
+  assert.match(richHtml, /Elastic hold window: 6 step\(s\) \(available\)\./);
+  assert.match(richHtml, /Bending plasticity: orthotropic_bending_plasticity\/&lt;1&gt; \(2\.500e-3 J\)\./);
+  assert.match(richHtml, /Membrane plasticity: hill48_membrane_plasticity\/1 \(5\.000e-3 J\)\./);
+
+  const basisHtml = runFold({ settled: true, flags: [], start_repair: { basis: 'custom_<repair>' },
+    elastic_hold_window: { requested_steps: 4, status: 'unavailable_no_elastic_casings' } });
+  assert.match(basisHtml, /Start repair: custom_&lt;repair&gt;\./);
+  assert.match(basisHtml, /Elastic hold window: 4 step\(s\) \(unavailable_no_elastic_casings\)\./);
+
+  // 4. Scenario initial static-drape details surface opt-in start_repair, elastic_hold_window and histories without adding noise when absent.
+  const sp = await pageModule(); await sp.load(); await sp.bind(); scenarioInputs(sp);
+  const scenarioBase = scenarioReport();
+  await sp.e.scenario.onclick();
+  sp.emit(scenarioBase);
+  const secScenBase = section(sp, 'Fresh drape and heat alternatives');
+  const baseDetail = descendants(secScenBase).find(n => n.tag === 'details' && n.children[0].textContent.includes('simulation flags, identities and thermal refusals'));
+  baseDetail.open = true; baseDetail.handlers.toggle();
+  const baseDetailObj = JSON.parse(baseDetail.children[1].textContent);
+  for (const key of ['start_repair', 'elastic_hold_window', 'time_subdivision', 'bending_history', 'membrane_plasticity_history']) {
+    assert.equal(Object.hasOwn(baseDetailObj, key), false, `default scenario detail must omit ${key}`);
+  }
+
+  const scenarioRich = scenarioReport();
+  scenarioRich.simulations.find(row => row.key === 'A').evaluation.result.drape = {
+    settled: true, flags: [],
+    start_repair: combinedRepair,
+    elastic_hold_window: { requested_steps: 4, status: 'available' },
+    numerical: { time_subdivision: { subdivided_nominal_intervals: 1, nominal_intervals: 4, accepted_substeps: 5, trials: 6 } },
+    bending_history: { model: 'orthotropic_bending_plasticity/1', plastic_dissipation_j: 0.001 },
+    membrane_plasticity_history: { model: 'hill48_membrane_plasticity/1', plastic_dissipation_j: 0.002 },
+  };
+  await sp.e.scenario.onclick();
+  sp.emit(scenarioRich);
+  const secScenRich = section(sp, 'Fresh drape and heat alternatives');
+  const richDetail = descendants(secScenRich).find(n => n.tag === 'details' && n.children[0].textContent === 'A: simulation flags, identities and thermal refusals');
+  richDetail.open = true; richDetail.handlers.toggle();
+  const richDetailObj = JSON.parse(richDetail.children[1].textContent);
+  assert.deepEqual(richDetailObj.start_repair, combinedRepair);
+  assert.deepEqual(richDetailObj.elastic_hold_window, { requested_steps: 4, status: 'available' });
+  assert.deepEqual(richDetailObj.time_subdivision, { subdivided_nominal_intervals: 1, nominal_intervals: 4, accepted_substeps: 5, trials: 6 });
+  assert.deepEqual(richDetailObj.bending_history, { model: 'orthotropic_bending_plasticity/1', plastic_dissipation_j: 0.001 });
+  assert.deepEqual(richDetailObj.membrane_plasticity_history, { model: 'hill48_membrane_plasticity/1', plastic_dissipation_j: 0.002 });
+  assert.equal(descendants(secScenRich).some(n => 'innerHTML' in n), false);
+});
+
 test('opt-in hand_collider wires fail-closed across both workbenches, workers and handoffs', async () => {
   // 1. Material workbench: wrist omits both keys. Opt-in colliders dispatch, render and invalidate.
   const p = await pageModule(); await p.load(); await p.bind(); p.select('measurements'); p.select('fit');
