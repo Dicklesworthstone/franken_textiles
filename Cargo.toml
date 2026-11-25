@@ -71,8 +71,9 @@ wasm-bindgen = { version = "=0.2.128" }
 # the solves split as finely as the factorization; the parallel Hessian gather and LDLT factorization
 # alone left the 6-thread sew where it was, 13.5 s before and 13.8 s after); the first 5-degree arm nudge
 # after a sew 5.2-5.9 s on 6 threads. The solve work outside subtrees of at least 2^16 entries of L
-# and the line search's per-pair CCD loop stay serial. Native CLI bolero drape on 4 threads: 25.1 to
-# 24.1 s (4 %), point cache identical.
+# stayed serial at that measurement. Native CLI bolero drape on 4 threads: 25.1 to 24.1 s (4 %),
+# point cache identical. Ordinary line-search CCD now also has bounded parallel candidate ranges;
+# motion chord CCD stays serial. The new range path has no completed timing measurement yet.
 rayon = { version = "=1.12.0" }
 # Rayon's pool on Web Workers, ftx-wasm's `threads` feature only and only for wasm32 (the posing room's
 # threaded engine, built with atomics and served cross-origin isolated). 1.3.0 with `no-bundler` (our

@@ -2525,11 +2525,44 @@ impl Contact {
     /// The largest fraction α ∈ [0, 1] of the step `p` that keeps every pair's gap positive (additive
     /// CCD: no gap closes below a tenth of its current value).
     pub(crate) fn step_bound(&self, x: &[Vec3], p: &[Vec3]) -> f64 {
-        let mut alpha: f64 = 1.0;
         let thickness = self.self_params.map_or(self.params.thickness, |s| {
             self.params.thickness.max(s.thickness)
         });
-        for pair in self.candidates(x, Some(p), thickness) {
+        let pairs = self.candidates(x, Some(p), thickness);
+        self.candidate_step_bound(&pairs, x, p)
+    }
+
+    fn candidate_step_bound(&self, pairs: &[Pair], x: &[Vec3], p: &[Vec3]) -> f64 {
+        #[cfg(feature = "parallel")]
+        if pairs.len() >= 2048 && rayon::current_num_threads() > 1 {
+            // Ordinary ACCD's probes do not depend on t_max: reducing that cap only stops the
+            // identical probe sequence earlier. Hence accd(pair, cap) = min(accd(pair, 1), cap),
+            // including zero for invalid input. This permits range-local running minima with
+            // exactly the serial answer. accd_chord deliberately lacks this property.
+            // A short serial prefix cheaply tightens every task's cap. Each task then retains
+            // ordinary early termination rather than probing all its pairs out to time 1.
+            let alpha = self.range_step_bound(&pairs[..256], x, p, 1.0);
+            if alpha == 0.0 {
+                return alpha;
+            }
+            let remaining = &pairs[256..];
+            let tasks = (4 * rayon::current_num_threads()).min(remaining.len().div_ceil(512));
+            let chunk = remaining.len().div_ceil(tasks);
+            let bounds = par::map_tasks(remaining.len().div_ceil(chunk), |i| {
+                self.range_step_bound(
+                    &remaining[i * chunk..remaining.len().min((i + 1) * chunk)],
+                    x,
+                    p,
+                    alpha,
+                )
+            });
+            return bounds.into_iter().fold(alpha, f64::min);
+        }
+        self.range_step_bound(pairs, x, p, 1.0)
+    }
+
+    fn range_step_bound(&self, pairs: &[Pair], x: &[Vec3], p: &[Vec3], mut alpha: f64) -> f64 {
+        for &pair in pairs {
             let st = stencil(pair, x, &self.body, &self.cloth);
             let dp: [Vec3; 4] = std::array::from_fn(|i| st.cloth[i].map_or(Vec3::ZERO, |v| p[v]));
             let bound = accd(pair, st.pts, dp, self.pair_params(pair).thickness, alpha);
@@ -3366,6 +3399,198 @@ mod tests {
         assert_eq!(accd(pair, clear, huge, 1e-3, 1.0), 0.0);
         assert_eq!(accd(pair, clear, down, -1e-3, 1.0), 0.0);
         assert_eq!(accd(pair, clear, down, 1e-3, f64::NAN), 0.0);
+    }
+
+    /// The parallel range reduction relies on this property of ordinary ACCD, including its
+    /// rounded probe boundaries. Chord CCD has a moving final probe and is intentionally excluded.
+    #[test]
+    fn accd_caps_truncate_the_same_probe_sequence() {
+        let pairs = [
+            Pair::VertexTri { cv: 0, bt: 0 },
+            Pair::TriVertex { ct: 0, bv: 0 },
+            Pair::EdgeEdge { ce: 0, be: 0 },
+            Pair::SelfVertexTri { cv: 0, ct: 0 },
+            Pair::SelfEdgeEdge { a: 0, b: 1 },
+        ];
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut unit = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1_u64 << 53) as f64 * 2.0 - 1.0
+        };
+        for pair in pairs {
+            for _ in 0..120 {
+                let pts = std::array::from_fn(|_| Vec3::new(unit(), unit(), unit()) * 0.02);
+                let dp = std::array::from_fn(|_| Vec3::new(unit(), unit(), unit()) * 0.04);
+                for thickness in [0.0, 5e-4] {
+                    let full = accd(pair, pts, dp, thickness, 1.0);
+                    for cap in [
+                        0.0,
+                        1e-5,
+                        0.01,
+                        0.3,
+                        full.next_down().max(0.0),
+                        full,
+                        full.next_up().min(1.0),
+                        1.0,
+                    ] {
+                        assert_eq!(
+                            accd(pair, pts, dp, thickness, cap).to_bits(),
+                            full.min(cap).to_bits(),
+                            "{pair:?}, thickness {thickness}, cap {cap}, full {full}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Two textile sheets above a curved body patch: all five candidate types, moving cloth on
+    // both sides of self-contact, and distinct body/self thicknesses. Dimensions are in metres.
+    fn ccd_layered_patch(n: usize) -> (Contact, Vec<Vec3>, Vec<Vec3>) {
+        let spacing = 0.4 / (n - 1) as f64;
+        let body_x: Vec<_> = (0..n * n)
+            .map(|i| {
+                let (u, v) = ((i % n) as f64 * spacing, (i / n) as f64 * spacing);
+                Vec3::new(u, v, 0.003 * (12.0 * u).sin() * (9.0 * v).cos())
+            })
+            .collect();
+        let triangles: Vec<_> = (0..(n - 1) * (n - 1))
+            .flat_map(|cell| {
+                let a = cell / (n - 1) * n + cell % (n - 1);
+                [[a, a + 1, a + n + 1], [a, a + n + 1, a + n]]
+            })
+            .collect();
+        let mut x = Vec::new();
+        let mut p = Vec::new();
+        let mut cloth_triangles = Vec::new();
+        for layer in 0..2 {
+            let offset = x.len();
+            for (i, at) in body_x.iter().enumerate() {
+                x.push(*at + Vec3::new(0.002, 0.003, 0.0045 + 0.006 * layer as f64));
+                p.push(Vec3::new(
+                    0.002 * (i as f64 * 0.13).sin(),
+                    0.001 * (i as f64 * 0.17).cos(),
+                    -0.014 - 0.009 * layer as f64,
+                ));
+            }
+            cloth_triangles.extend(triangles.iter().map(|t| t.map(|i| i + offset)));
+        }
+        let body = Body::new(body_x, triangles, spacing).unwrap();
+        let contact = Contact::new(body, params(), cloth_triangles, |a, b| (x[a] - x[b]).norm())
+            .with_self_contact(
+                &x,
+                ContactParams {
+                    thickness: 1e-3,
+                    ..params()
+                },
+            )
+            .unwrap();
+        (contact, x, p)
+    }
+
+    #[test]
+    fn ccd_candidate_ranges_keep_the_serial_bound_and_fail_closed() {
+        for n in [3, 17] {
+            let (contact, x, p) = ccd_layered_patch(n);
+            let pairs = contact.candidates(&x, Some(&p), 1e-3);
+            if n == 17 {
+                assert!(pairs.len() >= 2048);
+                for kind in 0..5 {
+                    assert!(pairs.iter().any(|pair| match kind {
+                        0 => matches!(pair, Pair::VertexTri { .. }),
+                        1 => matches!(pair, Pair::TriVertex { .. }),
+                        2 => matches!(pair, Pair::EdgeEdge { .. }),
+                        3 => matches!(pair, Pair::SelfVertexTri { .. }),
+                        _ => matches!(pair, Pair::SelfEdgeEdge { .. }),
+                    }));
+                }
+            }
+            let compare = |positions: &[Vec3], motion: &[Vec3]| {
+                let serial = contact.range_step_bound(&pairs, positions, motion, 1.0);
+                let run = || contact.candidate_step_bound(&pairs, positions, motion);
+                assert_eq!(run().to_bits(), serial.to_bits());
+                #[cfg(feature = "parallel")]
+                for threads in [1, 2, 4] {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap();
+                    for _ in 0..3 {
+                        assert_eq!(pool.install(run).to_bits(), serial.to_bits());
+                    }
+                }
+                serial
+            };
+            for scale in [0.0, 0.05, 1.0, 4.0] {
+                let motion: Vec<_> = p.iter().map(|p| *p * scale).collect();
+                let bound = compare(&x, &motion);
+                let swept = contact.candidates(&x, Some(&motion), 1e-3);
+                assert_eq!(
+                    contact.step_bound(&x, &motion).to_bits(),
+                    contact.range_step_bound(&swept, &x, &motion, 1.0).to_bits()
+                );
+                assert!(bound > 0.0 && bound <= 1.0);
+                if scale >= 1.0 {
+                    assert!(bound < 1.0);
+                }
+            }
+            // Refusals in the first serial prefix and in later tasks must have the same zero
+            // answer. Finite coordinates can still overflow the relative-velocity norm.
+            for vertex in [0, x.len() / 2, x.len() - 1] {
+                for invalid in [f64::NAN, f64::INFINITY, 1e308] {
+                    let mut motion = p.clone();
+                    motion[vertex].z = invalid;
+                    assert_eq!(compare(&x, &motion), 0.0);
+                }
+            }
+            let mut touching = x.clone();
+            for i in 0..n * n {
+                touching[i + n * n] = touching[i] + Vec3::new(0.0, 0.0, 5e-4);
+            }
+            assert_eq!(compare(&touching, &p), 0.0);
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    #[ignore = "manual CCD timing on a garment-scale layered patch; use --release --nocapture"]
+    fn ccd_candidate_ranges_timing() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let (contact, x, p) = ccd_layered_patch(49);
+        let pairs = contact.candidates(&x, Some(&p), 1e-3);
+        let serial = contact.range_step_bound(&pairs, &x, &p, 1.0);
+        let pools: Vec<_> = [1, 2, 4]
+            .into_iter()
+            .map(|threads| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        eprintln!(
+            "CCD layered patch: {} cloth vertices, {} candidates, bound={serial:?}",
+            x.len(),
+            pairs.len()
+        );
+        for trial in 0..5 {
+            for pool in &pools {
+                let start = Instant::now();
+                for _ in 0..10 {
+                    let bound = pool.install(|| contact.candidate_step_bound(&pairs, &x, &p));
+                    assert_eq!(black_box(bound).to_bits(), serial.to_bits());
+                }
+                eprintln!(
+                    "trial {trial}, threads {}, ms/call {:.3}",
+                    pool.current_num_threads(),
+                    start.elapsed().as_secs_f64() * 100.0
+                );
+            }
+        }
     }
 
     fn layers(z: f64) -> Vec<Vec3> {

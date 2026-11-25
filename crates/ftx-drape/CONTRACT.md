@@ -833,7 +833,18 @@ penetrating pair, the first smallest gap, a refusal) is the serial pass's, in it
 bit for bit the serial build's at any thread count. The serial parts bound the gain: in the posing room's
 browser sew (ftx-wasm `threads`, 8-core EPYC) 17.3 s became 12.1 s on 6 threads; the solve work
 outside subtrees of at least 2^16 entries of L (the supernodes near the root and the small subtrees)
-and the line search's per-pair CCD loop stay serial.
+stays serial. Those recorded timings predate the ordinary CCD extension below.
+
+Ordinary line-search CCD now also uses bounded contiguous ranges when `parallel` is enabled, at
+least 2048 candidate pairs are present and more than one worker is available. A 256-pair serial
+prefix tightens the cap, followed by at most four range tasks per worker. Each range keeps the
+original running-minimum loop; the final minimum is exactly the serial bound because ordinary
+ACCD probes do not depend on the cap. Invalid pairs retain the same zero bound. Small sets and
+single-worker/default builds keep the serial path. Motion chord CCD remains serial because its
+last probe does depend on the cap. New tests cover all five pair types, rounded cap boundaries,
+1/2/4-worker equality and invalid motion; a separate ignored timing case uses a layered patch.
+These new tests and timings remain unexecuted after compiler SIGKILL and executor loss. No
+incremental speedup or compiled-WASM verification is claimed for this extension.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
