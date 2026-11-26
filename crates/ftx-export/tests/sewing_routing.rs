@@ -430,6 +430,48 @@ fn routed_copy_deadlines_preserve_complete_capped_schedules_and_unresolved_searc
 }
 
 #[test]
+fn routed_deadline_search_recovers_an_urgent_last_garment_with_one_alternative_path() {
+    let (pattern, raw) = fixture(6);
+    let windows: Vec<_> = (0..6)
+        .rev()
+        .map(|copy| {
+            json!({"copy":copy,"available_at_milliseconds":0,
+                "complete_by_milliseconds":(copy == 5).then_some(8800)})
+        })
+        .collect();
+    let mut options = copy_windows(raw, json!(windows));
+    // Five two-stage jobs plus the first missed loading use eleven copy-major seed attempts.
+    // Only twelve further attempts remain, exactly enough for one complete six-garment dispatch.
+    options["production"]["routing"]["max_search_nodes"] = json!(23);
+    let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert!(route.baseline_replaced && route.budget_exhausted);
+    assert!(!route.search_complete && !route.optimality_proven);
+    assert_eq!(route.search_nodes, 23);
+    assert_eq!(route.selected.operations.len(), 12);
+    assert_eq!(route.selected.operations[0].copy, 5);
+    assert_eq!(
+        route.copy_windows.as_ref().unwrap().selected[5].deadline_slack_milliseconds,
+        Some(0)
+    );
+    assert_eq!(program.stitches.len(), 360);
+
+    options["production"]["routing"]["max_search_nodes"] = json!(22);
+    assert_eq!(
+        build(&pattern, options).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+}
+
+#[test]
 fn routed_copy_windows_require_complete_identities_and_explicit_waiting_evidence() {
     let (pattern, raw) = fixture(2);
     let options = copy_windows(
