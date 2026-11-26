@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { acquire, readSamples, replay, twistIndices } = require("./import_fabric101_cylinders.cjs");
+const { acquire, calibration, readSamples, replay, twistIndices } = require("./import_fabric101_cylinders.cjs");
 
 function template(warpAxis = [1, 0]) {
   return { schema: "ftx-cylinder-experiment/1", material: { id: "candidate" },
@@ -116,4 +116,93 @@ test("imports and replays distinct linen, jersey and rib recordings", { skip: !p
       assert.ok(receipt.max_rotation_error_deg <= 0.01);
     }
   }
+});
+
+
+function inverseInputs() {
+  // This synthetic baseline and these illustrative instrument conventions exercise transport only.
+  const base = require("../examples/cylinder-maxwell-calibration.json");
+  const material = structuredClone(base.material);
+  delete material.membrane_relaxation;
+  material.id = "synthetic/kn01-parameterization";
+  material.sources.convention = { reference: "synthetic:reader-convention",
+    accessed_on: "2026-11-25", note: "Assumed signs, residual scales, mounting and zero offsets for software testing" };
+  const policy = { ...base.policy, max_forward_solves: 1 };
+  delete policy.max_time_scaled;
+  const request = { ...base, material, policy, schema: "ftx-cylinder-calibration/1", experiments: [],
+    targets: [{ parameter: "shear_stiffness", bounds: [100, 400] }],
+    controls: { ...base.controls, max_step_s: 0.5, max_steps: 1024 }, replace_existing: true };
+  const recording = (direction, partition, axis) => ({ direction, partition, evidence: "estimate",
+    fixture: { ...template(axis).fixture, tare_force_n: 0.15, tare_torque_nm: -0.003 },
+    mounting: "named-direction-axial", mounting_source: "convention", angle_error_deg: 0.01,
+    rows: [1, 150, 367], channels: {
+      force_n: { sign: -1, offset: 0.2, scale: 0.5, source: "convention" },
+      torque_nm: { sign: 1, offset: -0.001, scale: 0.02, source: "convention" },
+    } });
+  return [request, { schema: "ftx-fabric101-twist-map/1", specimen: "KN01", candidate_material_id: material.id,
+    accessed_on: "2026-11-25", recordings: [recording("warp", "fit", [0, 1]), recording("weft", "check", [1, 0])] }];
+}
+
+test("refuses unsupported calibration templates and ambiguous acquisition identities", () => {
+  const [template, map] = inverseInputs();
+  const run = (t, m) => calibration(".", JSON.stringify(t), JSON.stringify(m));
+  assert.throws(() => run({ ...template, schema: "ftx-cylinder-calibration/2" }, map), /memoryless/);
+  assert.throws(() => run({ ...template, experiments: [{}] }, map), /empty experiments/);
+  assert.throws(() => run({ ...template, policy: { ...template.policy, sensitivity: "adjoint" } }, map), /finite differences/);
+  assert.throws(() => run(template, { ...map, candidate_material_id: "other" }), /exact candidate/);
+  assert.throws(() => run({ ...template, material: { ...template.material, id: "fabric101-2026/l01" } },
+    { ...map, candidate_material_id: "fabric101-2026/l01" }), /different catalog specimen/);
+  const recording = map.recordings[0];
+  const withRow = changes => ({ ...map, recordings: [{ ...recording, ...changes }] });
+  assert.throws(() => run(template, withRow({ partition: null })), /assignment/);
+  assert.throws(() => run(template, withRow({ rows: [2, 2] })), /distinct raw/);
+  assert.throws(() => run(template, withRow({ rows: Array.from({length: 65}, (_, i) => i) })), /64 total/);
+  assert.throws(() => run(template, withRow({ mounting_source: "unknown" })), /retained source/);
+  assert.throws(() => run({ ...template, allow_estimated_observations: false }, map), /admit estimates/);
+});
+
+test("emits signed sampled FIT and CHECK experiments directly from two pinned knit recordings",
+  { skip: !process.env.FABRIC101_COHORT_RELEASE }, t => {
+  const [template, map] = inverseInputs(), root = process.env.FABRIC101_COHORT_RELEASE;
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-inverse-"));
+  t.after(() => fs.rmSync(folder, { recursive: true }));
+  const paths = ["template.json", "map.json", "new.json"].map(p => path.join(folder, p));
+  fs.writeFileSync(paths[0], JSON.stringify(template)); fs.writeFileSync(paths[1], JSON.stringify(map));
+  const args = [__filename.replace("test_import", "import"), "--calibration", root, ...paths];
+  const run = () => require("node:child_process").spawnSync(process.execPath, args, {encoding: "utf8"});
+  const first = run(); assert.equal(first.status, 0, first.stderr);
+  const output = fs.readFileSync(paths[2]), request = JSON.parse(output), receipt = JSON.parse(first.stdout);
+  const digest = bytes => require("node:crypto").createHash("sha256").update(bytes).digest("hex");
+  assert.equal(receipt.request_sha256, digest(output));
+  assert.equal(receipt.template_sha256, digest(fs.readFileSync(paths[0])));
+  assert.equal(receipt.map_sha256, digest(fs.readFileSync(paths[1])));
+  assert.deepEqual(request.targets, template.targets);
+  assert.deepEqual(request.material.properties, template.material.properties);
+  assert.deepEqual(request.policy, template.policy);
+  assert.equal(request.material.id, template.material.id);
+  assert.equal(request.experiments.length, 2);
+  for (const [i, e] of request.experiments.entries()) {
+    const decl = map.recordings[i], record = receipt.recordings[i], a = acquire(root, decl.direction, "KN01");
+    assert.deepEqual(JSON.parse(request.material.sources[e.source].note), record);
+    assert.deepEqual(record.sources, a.sources);
+    assert.equal(e.fixture.rotating_holder, "lower"); assert.equal(record.material_id, a.material_id);
+    assert.equal(e.partition, decl.partition); assert.equal(e.evidence, "estimate");
+    assert.ok(record.max_rotation_error_deg <= 0.01);
+    for (const [j, obs] of e.observations.entries()) {
+      const raw = a.phases.twist[decl.rows[j]], w = e.loading[obs.waypoint_index];
+      assert.deepEqual(record.measured_rows[j].raw, raw);
+      assert.equal(record.sample_indices[obs.waypoint_index], decl.rows[j]);
+      assert.equal(w.time_s, raw[0] - a.phases.twist[0][0]); assert.equal(w.rotation_deg, raw[3]);
+      assert.deepEqual(obs.force_n, { value: -raw[2] + 0.2 - 0.15, scale: 0.5 });
+      assert.deepEqual(obs.torque_nm, { value: raw[4] - 0.001 + 0.003, scale: 0.02 });
+    }
+  }
+  assert.match(run().stderr, /EEXIST/);
+  const change = f => { const m = structuredClone(map); f(m.recordings); return () =>
+    calibration(root, JSON.stringify(template), JSON.stringify(m)); };
+  assert.throws(change(r => { r[1].direction = "warp"; }), /distinct explicit/);
+  assert.throws(change(r => { delete r[0].fixture.tare_force_n; }), /fixture tare/);
+  assert.throws(change(r => { r[0].channels.force_n.sign = 2; }), /sign/);
+  assert.throws(change(r => { r[0].channels.force_n.source = "missing"; }), /retained source/);
+  assert.throws(change(r => { r[0].rows = [99999]; }), /outside/);
 });

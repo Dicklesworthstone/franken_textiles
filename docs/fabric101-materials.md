@@ -177,6 +177,78 @@ FABRIC101_COHORT_RELEASE=/path/to/Fabric_101_for_Wrinkles \
 node --test scripts/test_import_fabric101_cylinders.cjs
 ```
 
+### Prepare initial-twist measurements for inverse calibration
+
+The importer can assemble an ordinary `ftx-cylinder-calibration/1` request from the original
+recordings and an explicit sensor interpretation. Supply a complete native calibration template
+containing the proposed material, its existing sources, target bounds, solver and search controls,
+and an empty `experiments` array. Use finite differences for timed acquisitions. Version 2 needs
+a pristine timed mounting history that the initial-twist recordings cannot supply.
+
+```sh
+node scripts/import_fabric101_cylinders.cjs --calibration /path/to/Fabric_101_for_Wrinkles \
+  candidate-calibration.json twist-map.json new-calibration.json > import-receipt.json
+ftx materials calibrate-cylinder new-calibration.json --json
+```
+
+The map below illustrates one FIT direction with **hypothetical instrument conventions for a
+software check**. The template must explicitly allow estimated observations for this example.
+Replace the conventions, source keys, accessed date, scales and row choices with evidence for
+the actual experiment. Each named source must already exist in the candidate material's
+`sources` with its reference, date and note.
+
+```json
+{
+  "schema": "ftx-fabric101-twist-map/1",
+  "specimen": "KN01",
+  "candidate_material_id": "synthetic/kn01-parameterization",
+  "accessed_on": "2026-11-25",
+  "recordings": [{
+    "direction": "warp",
+    "partition": "fit",
+    "evidence": "estimate",
+    "mounting": "named-direction-axial",
+    "mounting_source": "mounting_record",
+    "angle_error_deg": 0.01,
+    "rows": [1, 150, 367],
+    "fixture": {
+      "holder_radius_m": 0.04, "nominal_free_height_m": 0.05,
+      "specimen_width_m": 0.26, "specimen_height_m": 0.11,
+      "warp_axis": [0, 1], "cells": [6, 2],
+      "tare_force_n": 0.15, "tare_torque_nm": -0.003
+    },
+    "channels": {
+      "force_n": {"sign": -1, "offset": 0.2, "scale": 0.5, "source": "force_calibration"},
+      "torque_nm": {"sign": 1, "offset": -0.001, "scale": 0.02, "source": "torque_calibration"}
+    }
+  }]
+}
+```
+
+For each selected channel, the observed solver value is `sign × instrument reading + offset −
+fixture tare`. The sign and offset map the instrument reading to the **untared holder-on-cloth
+reaction**. The upper holder supplies force in N and the driven lower holder supplies torque
+in N·m. The residual scale is in the same unit. Applying the instrument's original tare twice
+would change the observations. The importer retains the original tare stages and requires the
+caller to declare the conversion and each selected channel's model tare, including explicit zeros.
+
+Row indices are zero-based indices in the measured twist stage. Every selected row becomes a
+waypoint at its actual source time relative to the stage clock origin. The fit uses force or torque
+at that row, with no interpolation of sensor values. Both ends of holds, reversals, the bound on
+angle interpolation, and the original per-path and doubled-mesh work limits still apply. Choose at
+most 64 observations across the two directions. Each direction may appear once. For held-out
+comparison, declare the other direction as `check` with its own fixture axis, mapping and rows.
+These two runs can test transfer across mountings of the same source specimen. Independent textile
+specimens, instrument calibration and constitutive qualification require additional evidence.
+
+The generated material preserves the candidate's ID and properties. A distinct source per direction
+binds the checked instrument files, selected raw rows, mounting, channel mappings, original stage
+clock, and SHA-256 identities of the template and map to the resulting experiment. The receipt
+also identifies the exact generated request. Changing a candidate's name or selecting a source
+recording cannot establish equivalence between physical textiles. The ordinary inverse solver
+checks excitation, held-out comparisons, numerical convergence and bounded replay before
+publishing any material.
+
 ## Cylindrical-holder forward experiment (`ftx-cylinder-experiment/1`)
 
 `ftx_drape::cylinder::evaluate` (`ftx materials cylinder-experiment REQUEST.json`, `ftx-materials

@@ -107,19 +107,23 @@ function acquire(root, direction, specimen = "L01") {
 }
 
 // Bound angle errors at sensor times; preserve both ends of every hold and every reversal.
-function twistIndices(rows, tolerance) {
+function twistIndices(rows, tolerance, observed = []) {
   if (!Number.isFinite(tolerance) || tolerance <= 0) throw Error("Positive rotation error tolerance required");
   if (rows[0][3] !== 0 || rows.some((r, i) => r[1] !== 0 || (i && r[0] <= rows[i - 1][0]))) {
     throw Error("Twist replay needs zero starting rotation, fixed axial position and distinct times");
   }
-  const indices = [0];
+  if (!Array.isArray(observed) || !observed.every(i => Number.isInteger(i) && i >= 0 && i < rows.length)) {
+    throw Error("Observation row is outside the pinned twist recording");
+  }
+  const breaks = new Set([0, ...observed]);
   let sign = Math.sign(rows[1][3] - rows[0][3]);
   for (let i = 1; i < rows.length - 1; i++) {
     const next = Math.sign(rows[i + 1][3] - rows[i][3]);
-    if (next !== sign) indices.push(i);
+    if (next !== sign) breaks.add(i);
     sign = next;
   }
-  indices.push(rows.length - 1);
+  breaks.add(rows.length - 1);
+  const indices = [...breaks].sort((a, b) => a - b);
   const segments = indices.slice(1).map((right, i) => [indices[i], right]);
   let maxError = 0;
   while (segments.length) {
@@ -140,7 +144,7 @@ function twistIndices(rows, tolerance) {
   return { indices: indices.sort((a, b) => a - b), maxError };
 }
 
-function replay(acquisition, template, tolerance, mounting) {
+function replay(acquisition, template, tolerance, mounting, observed = []) {
   if (template?.schema !== "ftx-cylinder-experiment/1" || !template.material || !template.fixture) {
     throw Error("Expected an ftx-cylinder-experiment/1 template with a material and fixture");
   }
@@ -160,7 +164,7 @@ function replay(acquisition, template, tolerance, mounting) {
     throw Error("Template warp_axis disagrees with the declared mounting for " + acquisition.direction);
   }
   const rows = acquisition.phases.twist;
-  const { indices, maxError } = twistIndices(rows, tolerance);
+  const { indices, maxError } = twistIndices(rows, tolerance, observed);
   const loading = indices.map(i => ({ time_s: rows[i][0] - rows[0][0], rotation_deg: rows[i][3],
     axial_displacement_m: 0, clamp_slip_m: 0 }));
   const step = template.controls?.max_step_s ?? 0.05, limit = template.controls?.max_steps ?? 1024;
@@ -181,7 +185,133 @@ function replay(acquisition, template, tolerance, mounting) {
   return { request, receipt };
 }
 
+const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
+
+function fields(value, allowed, context) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some(key => !allowed.includes(key))) {
+    throw Error("Invalid or unknown field in " + context);
+  }
+}
+
+function requireSource(sources, key) {
+  if (typeof key !== "string" || !Object.hasOwn(sources, key) ||
+      !["reference", "accessed_on", "note"].every(k => typeof sources[key]?.[k] === "string" && sources[key][k].trim())) {
+    throw Error("An explicit retained source for the mapping is required: " + key);
+  }
+}
+
+// Convert instrument readings to signed holder-on-cloth reactions, then subtract the
+// same fixture tare used by the forward model. No correction is inferred from a trace.
+function reactionChannel(raw, mapping, tare, sources) {
+  fields(mapping, ["sign", "offset", "scale", "source"], "reaction channel");
+  requireSource(sources, mapping.source);
+  if (![1, -1].includes(mapping.sign) || !Number.isFinite(mapping.offset) ||
+      !Number.isFinite(mapping.scale) || mapping.scale <= 0 || !Number.isFinite(tare)) {
+    throw Error("A reaction channel needs sign ±1, finite offset and fixture tare, and positive SI scale");
+  }
+  const value = mapping.sign * raw + mapping.offset - tare;
+  if (!Number.isFinite(value)) throw Error("Unrepresentable mapped reaction");
+  return { value, scale: mapping.scale };
+}
+
+function calibration(root, templateBytes, mapBytes) {
+  const template = JSON.parse(templateBytes), map = JSON.parse(mapBytes);
+  fields(map, ["schema", "specimen", "candidate_material_id", "accessed_on", "recordings"], "calibration map");
+  if (map.schema !== "ftx-fabric101-twist-map/1" || !Object.hasOwn(specimens, map.specimen) ||
+      typeof map.accessed_on !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(map.accessed_on)) {
+    throw Error("Expected a dated ftx-fabric101-twist-map/1 for a pinned specimen");
+  }
+  const material = template.material;
+  if (template.schema !== "ftx-cylinder-calibration/1" || !Array.isArray(template.experiments) ||
+      template.experiments.length || template.admit_cylindrical_shell_model !== true ||
+      !Array.isArray(template.targets) || !template.targets.length || template.targets.length > 5 || !material?.sources ||
+      material.membrane_relaxation || ["membrane_plasticity_model", "membrane_damage_model", "bending_plasticity_model"]
+        .some(key => Object.hasOwn(material.structure ?? {}, key)) || template.policy?.sensitivity === "adjoint") {
+    throw Error("Expected an admitted memoryless calibration/1 template with targets, empty experiments and timed finite differences");
+  }
+  const specimenId = "fabric101-2026/" + map.specimen.toLowerCase();
+  if (typeof material.id !== "string" || !material.id.trim() || material.id !== map.candidate_material_id ||
+      (material.id.startsWith("fabric101-2026/") && material.id !== specimenId)) {
+    throw Error("Name the exact candidate material; a different catalog specimen cannot own these observations");
+  }
+  const sources = { ...material.sources }, experiments = [], recordings = [], directions = new Set();
+  const template_sha256 = sha256(templateBytes), map_sha256 = sha256(mapBytes);
+  let total = 0, fitChannels = 0;
+  if (!Array.isArray(map.recordings) || !map.recordings.length || map.recordings.length > 2) {
+    throw Error("Choose one or both distinct twist recordings of this specimen");
+  }
+  for (const r of map.recordings) {
+    fields(r, ["direction", "partition", "evidence", "fixture", "mounting", "mounting_source",
+      "angle_error_deg", "rows", "channels"], "recording");
+    if (!["warp", "weft"].includes(r.direction) || directions.has(r.direction) ||
+        !["fit", "check"].includes(r.partition)) throw Error("Each source direction needs a distinct explicit FIT or CHECK assignment");
+    directions.add(r.direction);
+    requireSource(material.sources, r.mounting_source);
+    if (!["estimate", "published", "measured"].includes(r.evidence) ||
+        (r.evidence === "estimate" && template.allow_estimated_observations !== true)) {
+      throw Error("Declare evidence for the complete mapped observations and explicitly admit estimates");
+    }
+    fields(r.channels, ["force_n", "torque_nm"], "channels");
+    const channels = Object.keys(r.channels);
+    if (!channels.length || !Array.isArray(r.rows) || !r.rows.length ||
+        (total += r.rows.length) > 64 || new Set(r.rows).size !== r.rows.length) {
+      throw Error("Choose distinct raw observation rows, at least one channel and at most 64 total rows");
+    }
+    if (r.partition === "fit") fitChannels += channels.length * r.rows.length;
+    const a = acquire(root, r.direction, map.specimen);
+    if (!r.fixture || (Object.hasOwn(r.fixture, "rotating_holder") && r.fixture.rotating_holder !== "lower")) {
+      throw Error("Fabric-101 needs a lower-driven fixture");
+    }
+    const { request, receipt } = replay(a, { schema: "ftx-cylinder-experiment/1", material,
+      controls: template.controls, fixture: r.fixture }, r.angle_error_deg, r.mounting, r.rows);
+    const cells = request.fixture.cells;
+    if (!Array.isArray(cells) || cells.length !== 2 || !cells.every(n => Number.isInteger(n) && n % 2 === 0) ||
+        cells[0] < 6 || cells[0] > 32 || cells[1] < 2 || cells[1] > 16 || cells[0] * cells[1] > 256 ||
+        2 * cells[0] * (2 * cells[1] + 1) * (receipt.integration_steps + 1) > 524288) {
+      throw Error("Twist protocol exceeds the doubled calibration mesh or vertex-state budget");
+    }
+    const id = map.specimen + "-001-" + r.direction + "-s1-twist";
+    const twistPath = "data/" + map.specimen + "/001/" + r.direction + "/s1/twist/twist.dat";
+    const source = "fabric101-" + id;
+    if (Object.hasOwn(sources, source)) throw Error("An acquisition source would overwrite " + source);
+    const observations = r.rows.map(i => {
+      const obs = { id: id + "-row-" + i, waypoint_index: receipt.sample_indices.indexOf(i) };
+      const row = a.phases.twist[i];
+      for (const channel of channels) {
+        const force = channel === "force_n";
+        obs[channel] = reactionChannel(row[force ? 2 : 4], r.channels[channel],
+          request.fixture[force ? "tare_force_n" : "tare_torque_nm"], material.sources);
+      }
+      return obs;
+    });
+    const record = { source, release_commit: revision, template_sha256, map_sha256, material_id: a.material_id,
+      candidate_material_id: material.id, instrument_specimen: a.instrument_specimen, partition: r.partition,
+      evidence: r.evidence, columns: a.columns, sources: a.sources, tare_stages: a.tare_stages,
+      mounting_source: r.mounting_source, channel_mapping: r.channels, ...receipt,
+      measured_rows: r.rows.map((index, j) => ({ index, waypoint_index: observations[j].waypoint_index,
+        raw: a.phases.twist[index] })) };
+    sources[source] = { reference: "https://github.com/GongDeshan/Fabric_101_for_Wrinkles/blob/" + revision + "/" + twistPath,
+      accessed_on: map.accessed_on, note: JSON.stringify(record) };
+    experiments.push({ id, source, evidence: r.evidence, partition: r.partition,
+      fixture: request.fixture, loading: request.loading, observations });
+    recordings.push(record);
+  }
+  if (fitChannels < template.targets.length) throw Error("Need at least one FIT channel per target parameter");
+  return { request: { ...template, material: { ...material, sources }, experiments },
+    receipt: { schema: "ftx-fabric101-calibration-import/1", template_sha256, map_sha256, recordings } };
+}
+
 function main(args) {
+  if (args[0] === "--calibration") {
+    if (args.length !== 5) throw Error("Usage: --calibration RELEASE TEMPLATE.json TWIST_MAP.json NEW_REQUEST.json");
+    const [, root, template, map, output] = args;
+    const { request, receipt } = calibration(root, fs.readFileSync(template), fs.readFileSync(map));
+    const encoded = JSON.stringify(request, null, 2) + "\n";
+    fs.writeFileSync(output, encoded, { flag: "wx" });
+    process.stdout.write(JSON.stringify({ ...receipt, request_sha256: sha256(encoded) }) + "\n");
+    return;
+  }
   const explicitSpecimen = args[0] === "--specimen";
   const specimen = explicitSpecimen ? args[1] : "L01";
   const positional = explicitSpecimen ? args.slice(2) : args;
@@ -201,7 +331,7 @@ function main(args) {
   process.stdout.write(JSON.stringify(result) + "\n");
 }
 
-module.exports = { acquire, readSamples, replay, twistIndices };
+module.exports = { acquire, calibration, readSamples, replay, twistIndices };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(error.message + "\n"); process.exitCode = 1; }
