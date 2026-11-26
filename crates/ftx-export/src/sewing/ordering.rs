@@ -264,7 +264,7 @@ pub(super) struct ResourceHold {
 
 // Exact, allocation-free state for the admitted production graph. The fixed four words bound
 // every search frame and avoid native/wasm word-size differences at indices 63, 127, 191 and 255.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct OperationSet([u64; MAX_PRODUCTION_PASSES.div_ceil(64)]);
 
 impl OperationSet {

@@ -469,19 +469,28 @@ pub(super) struct Phase {
     release: [u32; MAX_POOLS],
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Pending {
     at: u64,
     release: [u32; MAX_POOLS],
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct State {
     occupied: [u32; MAX_POOLS],
     pending: Vec<Pending>,
 }
 
 impl State {
+    pub(super) fn continuation(&self, time: u64) -> Result<Self, Refusal> {
+        let mut state = self.clone();
+        state.advance(time)?;
+        // Dispatch history can insert simultaneous or independent pending releases in a different
+        // order. Only their exact times, pool identities and quantities affect future availability.
+        state.pending.sort_unstable();
+        Ok(state)
+    }
+
     fn advance(&mut self, time: u64) -> Result<(), Refusal> {
         for pending in &self.pending {
             if pending.at <= time {

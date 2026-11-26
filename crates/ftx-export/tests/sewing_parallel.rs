@@ -3063,7 +3063,13 @@ fn shared_operator_joint_order_cap_preserves_a_complete_feasible_seed() {
 // Enumerate every labeled copy/operation and dispatch, without symmetry pruning or production
 // helpers. Zero capacity means independent operations without fixtures; positive capacity means
 // each join acquires one fixture until that same copy's reinforcement has finished.
-fn labeled_operator_oracle(copies: usize, capacity: usize, transfer: u64, travel: u64) -> u64 {
+fn labeled_operator_oracle(
+    copies: usize,
+    capacity: usize,
+    transfer: u64,
+    travel: u64,
+    worker_windows: &[[u64; 2]],
+) -> u64 {
     #[derive(Clone)]
     struct State {
         done: [Vec<u8>; 2],
@@ -3073,7 +3079,13 @@ fn labeled_operator_oracle(copies: usize, capacity: usize, transfer: u64, travel
         worker: Option<usize>,
         unloaded: [bool; 2],
     }
-    fn visit(state: &State, capacity: usize, transfer: u64, travel: u64) -> u64 {
+    fn visit(
+        state: &State,
+        capacity: usize,
+        transfer: u64,
+        travel: u64,
+        worker_windows: &[[u64; 2]],
+    ) -> u64 {
         if state.unloaded.into_iter().all(|done| done) {
             return state.ready.into_iter().max().unwrap();
         }
@@ -3117,14 +3129,24 @@ fn labeled_operator_oracle(copies: usize, capacity: usize, transfer: u64, travel
                     };
                     (setup + handling, 4000)
                 });
-                let arrival = state.free
-                    + if state.worker.is_some_and(|from| from != cell) {
-                        travel
-                    } else {
-                        0
-                    };
+                let journey = if state.worker.is_some_and(|from| from != cell) {
+                    travel
+                } else {
+                    0
+                };
+                let release = if worker_windows.is_empty() {
+                    (state.free + journey).max(state.ready[cell]) + attended
+                } else if let Some(release) = worker_windows.iter().find_map(|&[start, end]| {
+                    let arrival = state.free.max(start) + journey;
+                    let release = arrival.max(state.ready[cell]) + attended;
+                    (release <= end).then_some(release)
+                }) {
+                    release
+                } else {
+                    continue;
+                };
                 let mut next = state.clone();
-                next.free = arrival.max(state.ready[cell]) + attended;
+                next.free = release;
                 next.ready[cell] = next.free + feed;
                 next.worker = Some(cell);
                 if let Some((copy, operation)) = choice {
@@ -3133,7 +3155,7 @@ fn labeled_operator_oracle(copies: usize, capacity: usize, transfer: u64, travel
                 } else {
                     next.unloaded[cell] = true;
                 }
-                best = best.min(visit(&next, capacity, transfer, travel));
+                best = best.min(visit(&next, capacity, transfer, travel, worker_windows));
             }
         }
         best
@@ -3152,6 +3174,7 @@ fn labeled_operator_oracle(copies: usize, capacity: usize, transfer: u64, travel
                 capacity,
                 transfer,
                 travel,
+                worker_windows,
             )
         })
         .min()
@@ -3196,7 +3219,7 @@ fn shared_operator_copy_symmetry_preserves_labeled_optima_and_started_fixture_ho
             {
                 row["milliseconds"] = json!(travel);
             }
-            let expected = labeled_operator_oracle(copies, capacity, transfer, travel);
+            let expected = labeled_operator_oracle(copies, capacity, transfer, travel, &[]);
             let typed: SewOptions = serde_json::from_value(options).unwrap();
             let program = SewProgram::build(&pattern, &typed).unwrap();
             let report = program
@@ -3301,6 +3324,61 @@ fn shared_operator_copy_symmetry_completes_a_twelve_garment_search_inside_its_ca
         serde_json::to_value(&program).unwrap(),
         serde_json::to_value(SewProgram::build(&pattern, &program.plan.options).unwrap()).unwrap()
     );
+}
+
+#[test]
+fn shared_operator_equivalent_prefixes_preserve_the_labeled_optimum_inside_a_small_cap() {
+    let copies = 4;
+    let (pattern, mut options) = fixture(copies);
+    options["passes"][1]["after"] = json!([]);
+    options["production"]["workholding"] = Value::Null;
+    for cell in options["production"]["parallel"]["cells"]
+        .as_array_mut()
+        .unwrap()
+    {
+        cell["workholding"] = Value::Null;
+        for row in cell["handling"]["transitions"].as_array_mut().unwrap() {
+            if row["relation"] == "different_copy" {
+                row["milliseconds"] = json!(0);
+            }
+        }
+    }
+    shared_operator(&mut options, 600);
+    let worker_windows = [[0, 1100], [6000, 100000]];
+    operator_calendars(
+        &mut options,
+        json!({"synthetic-person":windows(&worker_windows)}),
+    );
+    let expected = labeled_operator_oracle(copies, 0, 0, 0, &worker_windows);
+    let typed: SewOptions = serde_json::from_value(options).unwrap();
+    let program = SewProgram::build(&pattern, &typed).unwrap();
+    let report = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .parallel
+        .as_ref()
+        .unwrap();
+    let labor = report.shared_operator.as_ref().unwrap();
+    assert_eq!(report.selected.makespan_milliseconds, expected);
+    assert!(
+        labor.search_complete && !labor.budget_exhausted,
+        "{} nodes, selected {} ms, independent bound {} ms",
+        labor.search_nodes,
+        report.selected.makespan_milliseconds,
+        report.lower_bound_makespan_milliseconds
+    );
+    let actual: BTreeSet<_> = program
+        .stitches
+        .iter()
+        .map(|step| (step.copy.unwrap(), step.operation))
+        .collect();
+    let expected: BTreeSet<_> = (0..copies)
+        .flat_map(|copy| [(copy, 0), (copy, 1)])
+        .collect();
+    assert_eq!(actual, expected);
+    assert_eq!(program.stitches.len(), copies * 80);
 }
 
 #[test]

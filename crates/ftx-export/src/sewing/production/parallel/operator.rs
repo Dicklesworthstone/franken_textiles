@@ -18,6 +18,10 @@ use crate::sewing::{
     qualified_text, sha256_text,
 };
 
+// Keep memory bounded independently of the authored node allowance. Saturation only stops new
+// cache entries; ordinary exhaustive traversal and its original shared work cap remain authoritative.
+const MAX_CONTINUATIONS: usize = 4096;
+
 /// A separately qualified one-person operating protocol. Every operation is handled, set up and
 /// then fed; handling and setup form one nonpreemptive attended interval. Feed releases the person.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -678,6 +682,7 @@ struct Search<'a> {
     deadline: Option<u64>,
     cost: Option<super::CostSearch<'a>>,
     shared_workholding: Option<&'a shared_workholding::Policy>,
+    continuations: BTreeSet<Continuation>,
 }
 
 impl Search<'_> {
@@ -1065,6 +1070,13 @@ impl Search<'_> {
             self.retain(self.candidate(state, counts)?);
             return Ok(());
         }
+        let continuation = state.continuation()?;
+        if self.continuations.contains(&continuation) {
+            return Ok(());
+        }
+        if self.continuations.len() < MAX_CONTINUATIONS {
+            self.continuations.insert(continuation);
+        }
         for cell in choices {
             let phases =
                 self.local_orders[cell].next(state.done[cell], state.last[cell], counts[cell]);
@@ -1114,6 +1126,9 @@ impl Search<'_> {
         }
         if cell == counts.len() {
             if remaining == 0 {
+                // Counts fix recipe demand, source operation indices and every local graph.
+                // Cached prefixes never cross allocations or renew any of the work allowances.
+                self.continuations.clear();
                 self.interleave(&mut self.initial(), counts)?;
             }
             return Ok(());
@@ -1182,7 +1197,43 @@ struct State {
     shared_workholding: Option<shared_workholding::State>,
 }
 
+// Every future phase is determined by this state and the fixed count allocation. Historical
+// dispatches are retained on the first representative, but do not change subsequent eligibility,
+// setup/handling, fixture availability, feed, calendar admission or complete thread-order demand.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Continuation {
+    positions: Vec<usize>,
+    done: Vec<ordering::OperationSet>,
+    last: Vec<Option<usize>>,
+    ready: Vec<u64>,
+    previous: Option<usize>,
+    free: u64,
+    shared_workholding: Option<shared_workholding::State>,
+}
+
 impl State {
+    fn continuation(&self) -> Result<Continuation, Refusal> {
+        Ok(Continuation {
+            positions: self.positions.clone(),
+            done: self.done.clone(),
+            last: self.last.clone(),
+            // A phase cannot start before the worker is free. Earlier cell clocks no longer
+            // affect future starts, and complete-job makespan is never earlier than that clock.
+            ready: self
+                .ready
+                .iter()
+                .map(|&ready| ready.max(self.free))
+                .collect(),
+            previous: self.previous,
+            free: self.free,
+            shared_workholding: self
+                .shared_workholding
+                .as_ref()
+                .map(|state| state.continuation(self.free))
+                .transpose()?,
+        })
+    }
+
     fn push(&mut self, dispatch: Dispatch) {
         self.positions[dispatch.cell] += 1;
         self.ready[dispatch.cell] = dispatch.finish;
@@ -1282,6 +1333,7 @@ pub(super) fn evaluate(
             super::CostSearch::new(plan, cell_plans, cells, trials, policy, (0, &[]))
         }),
         shared_workholding: parallel.shared_workholding.as_ref(),
+        continuations: BTreeSet::new(),
     };
     let mut baseline_counts = vec![0; cells.len()];
     baseline_counts[0] = copies;
