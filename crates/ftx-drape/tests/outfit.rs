@@ -787,13 +787,33 @@ fn outfit_prepare_accepts_bound_drafted_patterns_with_descriptive_fabric_metadat
         ("name", json!(42)),
         ("kind", json!(false)),
         ("sim_note", json!([])),
+        ("notes", json!(99)),
+        ("notes", json!({"areal_g_m2": 380})),
         ("id", json!(123)),
+        ("role", json!("fill")),
+        ("role", json!("loose_fill")),
+        ("role", json!("bogus")),
+        ("role", json!(123)),
+        ("role", json!("laminate")),
     ] {
         let mut bad = outfit.clone();
-        bad.garments[0].pattern["fabric"][key] = value;
+        bad.garments[0].pattern["fabric"][key] = value.clone();
         assert!(
             prepare(&bad, &options()).is_err(),
-            "fabric.{key} should be refused"
+            "fabric.{key} = {value} should be refused"
+        );
+        // Even when every piece explicitly overrides piece.fabric, invalid root fabric.role or
+        // metadata must still fail closed rather than being silently dropped.
+        let mut override_all = bad;
+        for piece in override_all.garments[0].pattern["pieces"]
+            .as_array_mut()
+            .unwrap()
+        {
+            piece["fabric"] = json!({"material": sheet()});
+        }
+        assert!(
+            prepare(&override_all, &options()).is_err(),
+            "fabric.{key} = {value} should still be refused when every piece overrides piece.fabric"
         );
     }
 }

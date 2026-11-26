@@ -276,14 +276,36 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
                 "outfit fabric.width_mm must be finite and positive",
             ));
         }
-        for key in ["id", "name", "kind", "sim_note"] {
+        for key in ["id", "name", "kind", "sim_note", "notes"] {
             if fabric.get(key).is_some_and(|value| !value.is_string()) {
                 return Err(invalid(format!("outfit fabric.{key} must be a string")));
             }
         }
-        let frozen_default = textile_import::resolve_fabric(&original["fabric"])?
-            .ok_or_else(|| invalid("each garment needs a characterized fabric default"))?
-            .frozen_selection();
+        let resolved_default = textile_import::resolve_fabric(&original["fabric"])?
+            .ok_or_else(|| invalid("each garment needs a characterized fabric default"))?;
+        if let Some(role) = fabric.get("role") {
+            match role.as_str() {
+                Some("shell" | "lining") => {}
+                Some("laminate") => {
+                    if resolved_default.material().form != ftx_pattern::materials::Form::Laminate {
+                        return Err(invalid(
+                            "outfit fabric.role \"laminate\" requires a material with form \"laminate\"",
+                        ));
+                    }
+                }
+                Some("fill" | "loose_fill") => {
+                    return Err(invalid(
+                        "loose fill cannot be assigned as a load-bearing shell fabric",
+                    ));
+                }
+                _ => {
+                    return Err(invalid(
+                        "outfit fabric.role must be \"shell\", \"lining\", or \"laminate\"",
+                    ));
+                }
+            }
+        }
+        let frozen_default = resolved_default.frozen_selection();
         if default.is_none() {
             default = Some(frozen_default);
         }
