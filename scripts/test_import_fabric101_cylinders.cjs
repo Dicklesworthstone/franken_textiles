@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { acquire, calibration, listRecordings, readSamples, replay, twistIndices } = require("./import_fabric101_cylinders.cjs");
+const { acquire, calibration, listRecordings, readSamples, readTares, replay, twistIndices } = require("./import_fabric101_cylinders.cjs");
 
 function template(warpAxis = [1, 0]) {
   return { schema: "ftx-cylinder-experiment/1", material: { id: "candidate" },
@@ -30,6 +30,11 @@ test("rejects modified acquisition bytes before returning measurements", t => {
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, "head.dat"), "some other specimen");
   assert.throws(() => acquire(root, "warp"), /pinned Git blob/);
+  const target = path.join(root, "real-head.dat");
+  fs.writeFileSync(target, "some other specimen");
+  fs.unlinkSync(path.join(folder, "head.dat"));
+  fs.symlinkSync(target, path.join(folder, "head.dat"));
+  assert.throws(() => acquire(root, "warp"), /regular file/);
 });
 
 test("native replay retains holds, reversals, mounting displacement and the template material", () => {
@@ -58,6 +63,10 @@ test("native replay retains holds, reversals, mounting displacement and the temp
   assert.throws(() => replay(source, { ...input, controls: { max_steps: 1 } }, 0.1, "named-direction-axial"), /budget/);
   assert.throws(() => replay(source, input, 0.1, undefined), /convention/);
   assert.throws(() => replay(source, input, 0.1, "named-direction-circumferential"), /warp_axis/);
+  assert.throws(() => replay(source, { ...input, fixture: { ...input.fixture, rotating_holder: "upper" } },
+    0.1, "named-direction-axial"), /lower-driven/);
+  assert.equal(replay(source, { ...input, fixture: { ...input.fixture, rotating_holder: "lower" } },
+    0.1, "named-direction-axial").request.fixture.rotating_holder, "lower");
   assert.deepEqual(receipt.warp_axis, [1, 0]);
   assert.equal(receipt.axial_grip_slip_assumption_m, 0);
   assert.equal(request.fixture.rotating_holder, "lower");
@@ -67,10 +76,24 @@ test("native replay retains holds, reversals, mounting displacement and the temp
 });
 
 test("refuses to silently omit axial movement or excessive rotation reversals", () => {
+  assert.throws(() => twistIndices([], 2), /multiple instrument samples/);
+  assert.throws(() => twistIndices([[0, 0, 0, 0, 0]], 2), /multiple instrument samples/);
   const rows = Array.from({ length: 130 }, (_, i) => [i, 0, 0, i % 2, 0]);
   assert.throws(() => twistIndices(rows, 2), /129/);
   rows[4][1] = 1;
   assert.throws(() => twistIndices(rows, 2), /fixed axial/);
+});
+
+test("readTares rejects blank values, blank names and extra columns", () => {
+  const valid = "**After Pretension**\npret_moved,-1.25,mm\n";
+  assert.equal(readTares(valid)["After Pretension"].pret_moved.value, -1.25);
+  for (const bad of [
+    "**After Pretension**\npret_moved,   ,mm\n",
+    "**After Pretension**\n ,-1.25,mm\n",
+    "**After Pretension**\npret_moved,-1.25,mm,extra\n",
+  ]) {
+    assert.throws(() => readTares(bad), /Invalid tare measurement/);
+  }
 });
 
 test("replays complete pinned linen recordings in both directions", { skip: !process.env.FABRIC101_RELEASE }, () => {

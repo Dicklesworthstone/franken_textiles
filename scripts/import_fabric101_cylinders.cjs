@@ -12,7 +12,9 @@ const stages = ["twist", "compression", "friction"];
 
 function loadPinned(root, base, pins, name, sources) {
   const file = path.join(root, base, name);
-  if (fs.statSync(file).size > 5_000_000) throw Error("Recording exceeds pinned file size limit: " + name);
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile()) throw Error("Recording must be a regular file: " + name);
+  if (stat.size > 5_000_000) throw Error("Recording exceeds pinned file size limit: " + name);
   const raw = fs.readFileSync(file);
   const blob = createHash("sha1").update("blob " + raw.length + "\0").update(raw).digest("hex");
   if (blob !== pins[name]) throw Error("Recording differs from the pinned Git blob: " + name);
@@ -55,8 +57,11 @@ function readTares(text) {
       stage = {};
       result[title[1]] = stage;
     } else {
-      const [name, value, unit] = line.split(",");
-      if (!stage || !value || !Number.isFinite(Number(value))) throw Error("Invalid tare measurement");
+      const parts = line.split(",");
+      const [name, value, unit] = parts;
+      if (!stage || parts.length < 2 || parts.length > 3 || !name.trim() || !value.trim() || !Number.isFinite(Number(value))) {
+        throw Error("Invalid tare measurement");
+      }
       stage[name] = { value: Number(value), unit: unit ?? null };
     }
   }
@@ -156,6 +161,7 @@ function acquire(root, direction, name = "L01", selectedRepeat) {
 // Bound angle errors at sensor times; preserve both ends of every hold and every reversal.
 function twistIndices(rows, tolerance, observed = []) {
   if (!Number.isFinite(tolerance) || tolerance <= 0) throw Error("Positive rotation error tolerance required");
+  if (!Array.isArray(rows) || rows.length < 2) throw Error("Expected multiple instrument samples");
   if (rows[0][3] !== 0 || rows.some((r, i) => r[1] !== 0 || (i && r[0] <= rows[i - 1][0]))) {
     throw Error("Twist replay needs zero starting rotation, fixed axial position and distinct times");
   }
@@ -202,6 +208,9 @@ function replay(acquisition, template, tolerance, mounting, observed = []) {
     throw Error("Unresolved twist clock: the source header says seconds but the integer ticks disagree with the recorded protocol; timed replay needs independent clock evidence");
   }
   const fixture = template.fixture;
+  if (Object.hasOwn(fixture, "rotating_holder") && fixture.rotating_holder !== "lower") {
+    throw Error("Fabric-101 needs a lower-driven fixture");
+  }
   if (fixture.holder_radius_m !== 0.04 || fixture.nominal_free_height_m !== 0.05 ||
       fixture.specimen_width_m !== 0.26 || fixture.specimen_height_m !== 0.11) {
     throw Error("Template must match the 40 mm radius, 50 mm gauge, 260 by 110 mm specimen");
@@ -313,7 +322,8 @@ function calibration(root, templateBytes, mapBytes) {
     const id = [specimen, a.run, r.direction, a.repeat, "twist"].join("-");
     if (used.has(id)) throw Error("Each original source recording needs a distinct explicit FIT or CHECK assignment");
     used.add(id);
-    if (!r.fixture || (Object.hasOwn(r.fixture, "rotating_holder") && r.fixture.rotating_holder !== "lower")) {
+    if (!r.fixture || typeof r.fixture !== "object" || Array.isArray(r.fixture) ||
+        (Object.hasOwn(r.fixture, "rotating_holder") && r.fixture.rotating_holder !== "lower")) {
       throw Error("Fabric-101 needs a lower-driven fixture");
     }
     const { request, receipt } = replay(a, { schema: "ftx-cylinder-experiment/1", material,
@@ -393,7 +403,7 @@ function main(args) {
   process.stdout.write(JSON.stringify(result) + "\n");
 }
 
-module.exports = { acquire, calibration, listRecordings, readSamples, replay, twistIndices };
+module.exports = { acquire, calibration, listRecordings, readSamples, readTares, replay, twistIndices };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(error.message + "\n"); process.exitCode = 1; }
