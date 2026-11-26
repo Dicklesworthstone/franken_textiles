@@ -642,21 +642,33 @@ impl ReplayContact {
         }
         let before = display_points(before)?;
         let after = display_points(after)?;
+        for face in faces {
+            for &vertex in face {
+                if vertex >= before.len() {
+                    return Err(Refusal::new(
+                        RefusalCode::DegenerateGeometry,
+                        "display triangle index out of range",
+                    ));
+                }
+            }
+        }
         let mut seen = vec![false; before.len()];
         for (cloth_face, face) in faces.iter().enumerate() {
             for &vertex in face {
-                let visited = seen.get_mut(vertex).ok_or_else(|| {
-                    Refusal::new(RefusalCode::DegenerateGeometry, "display triangle index out of range")
-                })?;
-                if std::mem::replace(visited, true) || before[vertex] == after[vertex] {
+                if std::mem::replace(&mut seen[vertex], true) || before[vertex] == after[vertex] {
                     continue;
                 }
                 let (p, q) = (before[vertex], after[vertex]);
                 let bounds = crate::contact::aabb(&[p, q]);
                 self.index.query(bounds, &mut self.candidates);
-                *remaining = remaining.checked_sub(self.candidates.len()).ok_or_else(|| {
-                    Refusal::new(RefusalCode::BudgetExceeded, "display sweep candidate budget exhausted")
-                })?;
+                *remaining = remaining
+                    .checked_sub(self.candidates.len())
+                    .ok_or_else(|| {
+                        Refusal::new(
+                            RefusalCode::BudgetExceeded,
+                            "display sweep candidate budget exhausted",
+                        )
+                    })?;
                 for &body_face in &self.candidates {
                     let triangle = self.triangles[body_face];
                     if !crate::bvh::overlaps(bounds, self.boxes[body_face])
@@ -669,9 +681,17 @@ impl ReplayContact {
                     let [a, b, c] = triangle.map(|v| [v.x, v.y, v.z]);
                     let u = orient3d_determinant(a, b, c, [p.x, p.y, p.z]).abs();
                     let v = orient3d_determinant(a, b, c, [q.x, q.y, q.z]).abs();
-                    let fraction = u / (u + v);
-                    let positions = before.iter().zip(&after)
-                        .map(|(&p, &q)| p * (1.0 - fraction) + q * fraction).collect();
+                    let denom = u + v;
+                    let fraction = if denom.is_finite() && denom > 0.0 {
+                        (u / denom).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    };
+                    let positions = before
+                        .iter()
+                        .zip(&after)
+                        .map(|(&p, &q)| p * (1.0 - fraction) + q * fraction)
+                        .collect();
                     return Ok(Some(DisplayPiercing {
                         positions,
                         fraction,
@@ -921,14 +941,26 @@ mod tests {
         let body = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
         let mut contact = ReplayContact::new(&body, &[[0, 1, 2]]).unwrap();
         let face = [[0, 1, 2]];
-        let sweep = |x, y, z| [Vec3::new(x, y, z), Vec3::new(2., 0., z), Vec3::new(0., 2., z)];
+        let sweep = |x, y, z| {
+            [
+                Vec3::new(x, y, z),
+                Vec3::new(2., 0., z),
+                Vec3::new(0., 2., z),
+            ]
+        };
         let start = sweep(0.25, 0.25, -1.);
         let end = sweep(0.25, 0.25, 3.);
-        let hit = contact.vertex_piercing(&start, &end, &face, &mut 1).unwrap().unwrap();
+        let hit = contact
+            .vertex_piercing(&start, &end, &face, &mut 1)
+            .unwrap()
+            .unwrap();
         assert_eq!((hit.vertex, hit.cloth_face, hit.body_face), (0, 0, 0));
         assert_eq!(hit.fraction, 0.25);
         assert_eq!(hit.positions[0], Vec3::new(0.25, 0.25, 0.));
-        let error = contact.vertex_piercing(&start, &end, &face, &mut 0).err().unwrap();
+        let error = contact
+            .vertex_piercing(&start, &end, &face, &mut 0)
+            .err()
+            .unwrap();
         assert_eq!(error.code, RefusalCode::BudgetExceeded);
         for (p, q) in [
             (start, start),
@@ -936,8 +968,60 @@ mod tests {
             (sweep(0.25, 0., -1.), sweep(0.25, 0., 1.)),
             (sweep(0.125, 0.25, 0.), sweep(0.25, 0.25, 0.)),
         ] {
-            assert!(contact.vertex_piercing(&p, &q, &face, &mut 32).unwrap().is_none());
+            assert!(
+                contact
+                    .vertex_piercing(&p, &q, &face, &mut 32)
+                    .unwrap()
+                    .is_none()
+            );
         }
+    }
+
+    #[test]
+    fn swept_vertex_clamps_extreme_asymmetry_and_refuses_malformed_inputs() {
+        let body = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
+        let mut contact = ReplayContact::new(&body, &[[0, 1, 2]]).unwrap();
+        let face = [[0, 1, 2]];
+        let sweep = |z| {
+            [
+                Vec3::new(0.25, 0.25, z),
+                Vec3::new(2., 0., z),
+                Vec3::new(0., 2., z),
+            ]
+        };
+        for (z0, z1) in [(-1e-6, 1e4), (-1e4, 1e-6)] {
+            let hit = contact
+                .vertex_piercing(&sweep(z0), &sweep(z1), &face, &mut 8)
+                .unwrap()
+                .unwrap();
+            assert!(hit.fraction.is_finite() && (0.0..=1.0).contains(&hit.fraction));
+            assert!(hit.positions.iter().all(|p| p.is_finite()));
+            assert!(hit.positions[0].z.abs() < 1e-9);
+        }
+        assert_eq!(
+            contact
+                .vertex_piercing(&sweep(-1.)[..2], &sweep(1.), &face, &mut 8)
+                .err()
+                .unwrap()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            contact
+                .vertex_piercing(&sweep(-1.), &sweep(1.), &[[0, 1, 9]], &mut 8)
+                .err()
+                .unwrap()
+                .code,
+            RefusalCode::DegenerateGeometry
+        );
+        assert_eq!(
+            contact
+                .vertex_piercing(&sweep(f64::NAN), &sweep(1.), &face, &mut 8)
+                .err()
+                .unwrap()
+                .code,
+            RefusalCode::NonFinite
+        );
     }
 
     #[test]
