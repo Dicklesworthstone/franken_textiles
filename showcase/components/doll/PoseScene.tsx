@@ -76,9 +76,12 @@ const FIT = "/exhibits/poses/fit-spec.json";
 const SETTINGS = { spacing_mm: 16, sew_steps: 12, drape_steps: 36, max_settle_steps: 48, time_subdivision: true, self_contact_mm: 0,
   motion_carry_mm: 20, motion_step_s: 0.05, motion_intermediate_tol_m_s: 5e-3 };
 // A change of pose up to 10° (the arm is sampled every 10-15°) moves the arm under the sewn jacket with the
-// solver's checked moving-body step; a larger one sews the jacket on again in the nearest sampled pose, the
-// faster of the two there (measured in Node on one thread, 2026-11-25: a 5° move at 20°/s 4.4-5.3 s; a 10°
-// move 14.7 s; a fresh sew about 16 s).
+// solver's checked moving-body step; a larger one sews the jacket on again in the nearest sampled pose (timed in
+// Node on one thread, 2026-11-25: a 5° move at 20°/s 4.4-5.3 s; a 10° move 14.7 s; a fresh sew about 16 s).
+// Just past the limit a move is still the quicker. In Chrome (2026-11-25, one run each from 35°, load 1.5-3.3)
+// a 12° move took 9.4 s against 12.0 s for the sew at 35° on six threads (13.5 against 18.1 s on one); a 15°
+// move took 12.6 against 11.1 s (19.3 against 18.1 s). The limit stays at 10° until larger moves are timed
+// from more poses and against the sew they would replace.
 const MOVE_LIMIT_DEG = 10;
 const ARM_SPEED_DEG_S = 20;
 const same = (a?: [number, number] | null, b?: [number, number] | null) => !!a && !!b && a[0] === b[0] && a[1] === b[1];
@@ -420,7 +423,7 @@ export default function PoseScene({ onStatus, command }: {
       publish();
     });
 
-    // Dragging an arm moves the form at once; letting go sews the jacket on in the nearest sampled pose.
+    // Dragging an arm moves the form at once; letting go moves the jacket there or sews it on again (`up`).
     const pointer = new THREE.Vector2(), ray = new THREE.Raycaster(), plane = new THREE.Plane(), hit = new THREE.Vector3();
     let dragging = 0, dragFrom = { y: 0, angle: 0 }, hover = 0;
     const aim = (event: PointerEvent) => {
@@ -504,6 +507,14 @@ export default function PoseScene({ onStatus, command }: {
       const released: [number, number] = [status.shown[0], status.shown[1]];
       if (canMove(released)) {
         moveTo(released);
+        return;
+      }
+      // Let go (within half a degree) where the jacket already is, as a click does: the arm goes back under
+      // it. After a move the jacket can sit between sampled poses, where the nearest one would sew it again.
+      const at = status.sewn;
+      if (at && !sewing && Math.max(Math.abs(released[0] - at[0]), Math.abs(released[1] - at[1])) < 0.5) {
+        setBody(at[0], at[1]);
+        sew([at[0], at[1]]);
         return;
       }
       const pose: [number, number] = [nearest(form.angles, released[0]), nearest(form.angles, released[1])];
