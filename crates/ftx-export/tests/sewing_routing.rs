@@ -4861,3 +4861,94 @@ fn authored_routes_and_eligible_assignments_share_exact_winners_and_full_search_
         }
     }
 }
+
+#[test]
+fn routed_untouched_copy_symmetry_proves_multi_copy_batches() {
+    // Eight copies on a single cell-retained fixture have 8! = 40,320 untouched copy-start
+    // permutations without symmetry breaking, exceeding a 500-node budget immediately.
+    let (pattern, mut raw) = retained_fixtures(1, None);
+    raw["production"]["production_copies"] = json!(8);
+    raw["production"]["routing"]["staging_capacity"] = json!(8);
+    raw["production"]["routing"]["max_search_nodes"] = json!(500);
+    let plan = build(&pattern, raw).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.search_complete && !route.budget_exhausted);
+    assert!(route.search_nodes < 100);
+    assert_eq!(route.selected.operations.len(), 24);
+    assert_eq!(route.selected.transfers.len(), 16);
+    assert_eq!(
+        route
+            .workholding
+            .as_ref()
+            .unwrap()
+            .selected
+            .local_peak_occupancy["cell-a"]["jig"],
+        1
+    );
+    let starts: Vec<usize> = route
+        .selected
+        .operations
+        .iter()
+        .filter(|op| op.route_index == 0)
+        .map(|op| op.copy)
+        .collect();
+    assert_eq!(starts, (0..8).collect::<Vec<_>>());
+}
+
+#[test]
+fn routed_copy_windows_group_only_identical_untouched_copies() {
+    // Copies 0, 1 and 3 share identical (0, None) windows, while copy 2 carries an urgent
+    // deadline. Symmetry pruning must collapse identical untouched copies without suppressing
+    // the distinct-window copy 2 at a higher index.
+    let (pattern, raw) = fixture(4);
+    let options = copy_windows(
+        raw,
+        json!([
+            {"copy":0,"available_at_milliseconds":0},
+            {"copy":1,"available_at_milliseconds":0},
+            {"copy":2,"available_at_milliseconds":0,"complete_by_milliseconds":8800},
+            {"copy":3,"available_at_milliseconds":0}
+        ]),
+    );
+    let plan = build(&pattern, options).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.baseline_replaced && route.search_complete && !route.budget_exhausted);
+    let windows = route.copy_windows.as_ref().unwrap();
+    assert_eq!(windows.selected[2].finish_milliseconds, 8800);
+    let unconstrained_starts: Vec<usize> = route
+        .selected
+        .operations
+        .iter()
+        .filter(|op| op.route_index == 0 && op.copy != 2)
+        .map(|op| op.copy)
+        .collect();
+    assert_eq!(unconstrained_starts, vec![0, 1, 3]);
+
+    // Non-contiguous identical windows: {0, 2} share (0, None) while {1, 3} share (0, Some(13100)).
+    let (pattern, raw) = fixture(4);
+    let non_contiguous = copy_windows(
+        raw,
+        json!([
+            {"copy":0,"available_at_milliseconds":0},
+            {"copy":1,"available_at_milliseconds":0,"complete_by_milliseconds":13100},
+            {"copy":2,"available_at_milliseconds":0},
+            {"copy":3,"available_at_milliseconds":0,"complete_by_milliseconds":13100}
+        ]),
+    );
+    let plan = build(&pattern, non_contiguous).unwrap();
+    let route = plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    assert!(route.baseline_replaced && route.search_complete && !route.budget_exhausted);
+    let windows = route.copy_windows.as_ref().unwrap();
+    assert!(windows.selected[1].finish_milliseconds <= 13100);
+    assert!(windows.selected[3].finish_milliseconds <= 13100);
+    let starts: Vec<usize> = route
+        .selected
+        .operations
+        .iter()
+        .filter(|op| op.route_index == 0)
+        .map(|op| op.copy)
+        .collect();
+    let pos = |copy| starts.iter().position(|&c| c == copy).unwrap();
+    assert!(pos(0) < pos(2));
+    assert!(pos(1) < pos(3));
+}

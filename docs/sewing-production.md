@@ -1203,7 +1203,10 @@ selected cell's fixture obligations.
 
 The bounded search appends a copy's next handoff and cell operation at their earliest admitted
 times. It considers copy dispatch permutations for the fixed route; it does not enumerate arbitrary
-prestaging and later cell reordering. The baseline executes each copy's route in copy order, while
+prestaging and later cell reordering. Untouched copies with identical declared release and deadline
+bounds (or all untouched copies when `copy_windows` is absent) are interchangeable, so search
+branches only on the smallest untouched copy in each equivalence class while keeping all started
+copies independently interleavable. The baseline executes each copy's route in copy order, while
 independent cell clocks still permit overlap. A source-window failure of that seed allows a complete
 feasible searched replacement. A work limit retains a complete incumbent; if none has been found,
 the result is `not_converged`, not proof that the factory job is impossible.

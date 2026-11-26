@@ -119,6 +119,9 @@ impl Policy {
 pub(super) struct Compiled {
     policy: Policy,
     windows: Vec<Window>,
+    /// Dense symmetry-class index (`0..copies <= MAX_OPERATIONS`) grouping copies with identical
+    /// `(available_at_milliseconds, complete_by_milliseconds)`.
+    symmetry_class: Vec<usize>,
     /// Minimum load/feed/unload work still needed from each route position, ignoring all setup,
     /// handoffs, cell availability and contention. Independent stage choices only relax the route.
     minimum_remaining: Vec<u64>,
@@ -132,6 +135,19 @@ impl Compiled {
     ) -> Result<Self, Refusal> {
         let mut windows = policy.copies.clone();
         windows.sort_by_key(|window| window.copy);
+        let mut class_ids = BTreeMap::new();
+        let symmetry_class = windows
+            .iter()
+            .map(|window| {
+                let next_id = class_ids.len();
+                *class_ids
+                    .entry((
+                        window.available_at_milliseconds,
+                        window.complete_by_milliseconds,
+                    ))
+                    .or_insert(next_id)
+            })
+            .collect();
         let mut minimum_remaining = vec![0; choices.len() + 1];
         for route in (0..choices.len()).rev() {
             let minimum = choices[route]
@@ -149,8 +165,13 @@ impl Compiled {
         Ok(Self {
             policy: policy.clone(),
             windows,
+            symmetry_class,
             minimum_remaining,
         })
+    }
+
+    pub(super) fn symmetry_class(&self, copy: usize) -> usize {
+        self.symmetry_class[copy]
     }
 
     pub(super) fn initial_ready(&self) -> Vec<u64> {

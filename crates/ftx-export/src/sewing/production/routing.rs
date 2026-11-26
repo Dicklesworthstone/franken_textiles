@@ -1616,9 +1616,28 @@ impl Search<'_, '_> {
         {
             return Ok(());
         }
+        // Untouched copies (`next == 0`) hold no active cell, fixture or staging reservations.
+        // Without `copy_windows` all untouched copies are interchangeable; with `copy_windows`
+        // untouched copies sharing identical `(available_at_milliseconds, complete_by_milliseconds)`
+        // are interchangeable. Swapping two interchangeable untouched copy IDs preserves every
+        // phase timestamp, constraint, makespan, feed sum and routed thread cost while visiting
+        // the lower copy ID first, so branching only on the smallest untouched copy per class is
+        // exact.
+        let mut seen_untouched = ordering::OperationSet::default();
         for copy in 0..self.prepared.copies {
             if state.next[copy] == self.prepared.choices.len() {
                 continue;
+            }
+            if state.next[copy] == 0 {
+                let class = self
+                    .prepared
+                    .copy_windows
+                    .as_ref()
+                    .map_or(0, |windows| windows.symmetry_class(copy));
+                if seen_untouched.contains(class) {
+                    continue;
+                }
+                seen_untouched.insert(class);
             }
             for &task in &self.prepared.choices[state.next[copy]] {
                 let cell = self.prepared.tasks[task].cell;
