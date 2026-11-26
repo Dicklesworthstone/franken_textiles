@@ -700,7 +700,11 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
         _ => (args.options.get("piece").map(String::as_str), None),
     };
     let body = ftx_trace::alter_py(&ordered, &result, op, piece, item).dumps(Some(1)) + "\n";
-    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+    if !out.as_os_str().is_empty()
+        && !round::has_trailing_dir_syntax(&out)
+        && out.file_name().is_some()
+        && let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty())
+    {
         make_dir(parent)?;
     }
     let mut file = std::fs::OpenOptions::new()

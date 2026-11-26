@@ -13,17 +13,28 @@ use serde_json::{Value, json};
 pub(super) fn read<T: DeserializeOwned>(path: &str) -> Result<T, Refusal> {
     const MAX: u64 = 64 * 1024 * 1024;
     let io = |error| Refusal::new(RefusalCode::Io, format!("{path}: {error}"));
-    let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(io)?
-        .take(MAX + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io)?;
-    if bytes.len() as u64 > MAX {
+    let budget = || Refusal::new(RefusalCode::BudgetExceeded, "material input exceeds 64 MiB");
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
         return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "material input exceeds 64 MiB",
+            RefusalCode::InvalidDocument,
+            format!("{path}: material input must be a regular file"),
         ));
+    }
+    if meta.len() > MAX {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    if !file.metadata().map_err(io)?.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{path}: material input must be a regular file"),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > MAX {
+        return Err(budget());
     }
     serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))
@@ -34,10 +45,11 @@ pub(super) fn read<T: DeserializeOwned>(path: &str) -> Result<T, Refusal> {
 pub(super) fn write_new_file(path: &str, bytes: &[u8]) -> Result<(), Refusal> {
     let io = |error| Refusal::new(RefusalCode::Io, format!("{path}: {error}"));
     let out = Path::new(path);
-    let has_trailing_sep =
-        path.ends_with(std::path::MAIN_SEPARATOR) || (cfg!(windows) && path.ends_with('/'));
+    let has_trailing_dir_syntax = path.ends_with('/')
+        || path.ends_with("/.")
+        || (cfg!(windows) && (path.ends_with('\\') || path.ends_with("\\.")));
     if !path.is_empty()
-        && !has_trailing_sep
+        && !has_trailing_dir_syntax
         && out.file_name().is_some()
         && let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty())
     {

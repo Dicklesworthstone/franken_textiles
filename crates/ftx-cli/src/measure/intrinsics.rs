@@ -14,17 +14,24 @@ pub(super) use ftx_measure::photo::intrinsics::checked_calibration;
 pub(super) fn read_document(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
     const LIMIT: u64 = 16 * 1024 * 1024;
     let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
-    let file = File::open(path).map_err(io)?;
-    let metadata = file.metadata().map_err(io)?;
-    if !metadata.is_file() {
-        return Err(bad_input("camera calibration input must be a regular file"));
-    }
     let budget = || {
         Refusal::new(
             RefusalCode::BudgetExceeded,
             "camera calibration JSON exceeds 16 MiB",
         )
     };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(bad_input("camera calibration input must be a regular file"));
+    }
+    if meta.len() > LIMIT {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    let metadata = file.metadata().map_err(io)?;
+    if !metadata.is_file() {
+        return Err(bad_input("camera calibration input must be a regular file"));
+    }
     if metadata.len() > LIMIT {
         return Err(budget());
     }

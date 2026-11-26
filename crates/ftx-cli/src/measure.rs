@@ -96,26 +96,23 @@ fn io_error(path: &Path, e: std::io::Error) -> Refusal {
     Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()))
 }
 fn write_json(path: &str, value: &Value) -> Result<(), Refusal> {
-    // Serialize and compute completely before touching the destination. Rename a private same-dir
-    // file so an in-place `add` cannot truncate the original evidence on validation/write failure.
+    // Serialize and validate the destination before touching the filesystem. Rename a private
+    // same-dir file so an in-place `add` cannot truncate the original evidence on failure, while
+    // refusing symlinks, directories and trailing directory syntax without leaking temp files.
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let path = Path::new(path);
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|e| bad_input(e.to_string()))?;
     bytes.push(b'\n');
-    std::fs::create_dir_all(parent).map_err(|e| io_error(parent, e))?;
+    crate::round::regular(path, false)?;
     let name = path
         .file_name()
         .ok_or_else(|| bad_input("output must name a file"))?
         .to_string_lossy();
-    let temp = parent.join(format!(
-        ".{name}.ftx-{}-{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|e| io_error(parent, e))?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -123,13 +120,24 @@ fn write_json(path: &str, value: &Value) -> Result<(), Refusal> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&temp).map_err(|e| io_error(&temp, e))?;
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|e| io_error(&temp, e))?;
-    drop(file);
-    std::fs::rename(&temp, path).map_err(|e| io_error(path, e))?;
-    Ok(())
+    loop {
+        let temp = parent.join(format!(
+            ".{name}.ftx-{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut file = match options.open(&temp) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(io_error(&temp, e)),
+        };
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| io_error(&temp, e))?;
+        drop(file);
+        std::fs::rename(&temp, path).map_err(|e| io_error(path, e))?;
+        return Ok(());
+    }
 }
 fn checked(value: &Value) -> Result<(), Refusal> {
     let errors = validate(value);
@@ -504,4 +512,91 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         eprintln!("wrote {path}");
     }
     Ok((value, code, text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-measure-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn write_json_supports_in_place_regular_files_and_refuses_dirs_trailing_sep_and_symlinks() {
+        let root = scratch("write-json");
+        let file = root.join("nested/measurements.json");
+        write_json(file.to_str().unwrap(), &json!({"round": 1})).unwrap();
+        write_json(file.to_str().unwrap(), &json!({"round": 2})).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["round"], 2);
+
+        // Existing directory must be refused without leaking temp files.
+        let existing_dir = root.join("existing");
+        std::fs::create_dir(&existing_dir).unwrap();
+        let dir_err = write_json(existing_dir.to_str().unwrap(), &json!({})).unwrap_err();
+        assert_eq!(dir_err.code, RefusalCode::InvalidDocument);
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+
+        // Trailing directory syntax must refuse without creating parent directories.
+        let stray_slash = root.join("stray-slash");
+        let err =
+            write_json(&format!("{}/out.json/", stray_slash.display()), &json!({})).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(!stray_slash.exists());
+
+        let stray_dot = root.join("stray-dot");
+        let err =
+            write_json(&format!("{}/out.json/.", stray_dot.display()), &json!({})).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(!stray_dot.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let target = root.join("target.json");
+            std::fs::write(&target, b"{\"original\":true}\n").unwrap();
+            let link = root.join("link.json");
+            symlink(&target, &link).unwrap();
+            let link_err =
+                write_json(link.to_str().unwrap(), &json!({"replaced": true})).unwrap_err();
+            assert_eq!(link_err.code, RefusalCode::InvalidDocument);
+            assert!(
+                std::fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), b"{\"original\":true}\n");
+
+            let dangling = root.join("dangling.json");
+            let never = root.join("never.json");
+            symlink(&never, &dangling).unwrap();
+            let dang_err = write_json(dangling.to_str().unwrap(), &json!({})).unwrap_err();
+            assert_eq!(dang_err.code, RefusalCode::InvalidDocument);
+            assert!(!never.exists());
+            assert!(std::fs::read_dir(&root).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            }));
+        }
+    }
 }

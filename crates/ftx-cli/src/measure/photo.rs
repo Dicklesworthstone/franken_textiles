@@ -69,17 +69,24 @@ fn read_lens(args: &Args) -> Result<Option<LensSource>, Refusal> {
 pub(super) fn load_image(path: &str, max_pixels: usize) -> Result<(Bgr, Value), Refusal> {
     const MAX_BYTES: u64 = 64 * 1024 * 1024;
     let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
-    let file = std::fs::File::open(path).map_err(io)?;
-    let metadata = file.metadata().map_err(io)?;
-    if !metadata.is_file() {
-        return Err(bad_input("photo input must be a regular file"));
-    }
     let budget = || {
         Refusal::new(
             RefusalCode::BudgetExceeded,
             "photo exceeds 64 MiB encoded input",
         )
     };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(bad_input("photo input must be a regular file"));
+    }
+    if meta.len() > MAX_BYTES {
+        return Err(budget());
+    }
+    let file = std::fs::File::open(path).map_err(io)?;
+    let metadata = file.metadata().map_err(io)?;
+    if !metadata.is_file() {
+        return Err(bad_input("photo input must be a regular file"));
+    }
     if metadata.len() > MAX_BYTES {
         return Err(budget());
     }
@@ -282,10 +289,51 @@ pub(super) fn save(path: &str, value: &Value) -> Result<(), Refusal> {
     // coordinates, landmark clicks or an earlier measurement, including a symlink/hard-link alias.
     let bytes = workspace::json_bytes(value)?;
     let path = Path::new(path);
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent {
+    if !path.as_os_str().is_empty()
+        && !crate::round::has_trailing_dir_syntax(path)
+        && path.file_name().is_some()
+        && let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+    {
         std::fs::create_dir_all(parent)
             .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", parent.display())))?;
     }
     workspace::write_new(path, &bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_refuses_trailing_dir_syntax_without_creating_parent_dirs_and_never_clobbers() {
+        let root = std::env::temp_dir().join(format!(
+            "ftx-photo-save-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let stray_slash = root.join("stray-slash");
+        let err = save(&format!("{}/out.json/", stray_slash.display()), &json!({})).unwrap_err();
+        assert_eq!(err.code, RefusalCode::Io);
+        assert!(!stray_slash.exists());
+
+        let stray_dot = root.join("stray-dot");
+        let err = save(&format!("{}/out.json/.", stray_dot.display()), &json!({})).unwrap_err();
+        assert_eq!(err.code, RefusalCode::Io);
+        assert!(!stray_dot.exists());
+
+        let nested = root.join("nested/report.json");
+        save(nested.to_str().unwrap(), &json!({"ok": true})).unwrap();
+        assert!(nested.is_file());
+        assert_eq!(
+            save(nested.to_str().unwrap(), &json!({"ok": false}))
+                .unwrap_err()
+                .code,
+            RefusalCode::Io
+        );
+    }
 }

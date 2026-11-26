@@ -10,23 +10,57 @@ const MAX_LOCAL_MODEL_INPUT: usize = 16 * 1024 * 1024;
 
 fn read(path: &str, remaining: usize) -> Result<String, Refusal> {
     let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "combined thermal input exceeds 64 MiB",
+        )
+    };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{path}: thermal input must be a regular file"),
+        ));
+    }
+    if meta.len() > remaining as u64 {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    if !file.metadata().map_err(io)?.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{path}: thermal input must be a regular file"),
+        ));
+    }
     let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(io)?
-        .take(remaining as u64 + 1)
+    file.take(remaining as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(io)?;
     if bytes.len() > remaining {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "combined thermal input exceeds 64 MiB",
-        ));
+        return Err(budget());
     }
     String::from_utf8(bytes).map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
 }
 
 fn read_bounded_regular(path: &str, max_bytes: usize, label: &str) -> Result<String, Refusal> {
     let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{label} input exceeds {max_bytes} bytes"),
+        )
+    };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{path}: {label} input must be a regular file"),
+        ));
+    }
+    if meta.len() > max_bytes as u64 {
+        return Err(budget());
+    }
     let file = File::open(path).map_err(io)?;
     if !file.metadata().map_err(io)?.is_file() {
         return Err(Refusal::new(
@@ -39,10 +73,7 @@ fn read_bounded_regular(path: &str, max_bytes: usize, label: &str) -> Result<Str
         .read_to_end(&mut bytes)
         .map_err(io)?;
     if bytes.len() > max_bytes {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            format!("{label} input exceeds {max_bytes} bytes"),
-        ));
+        return Err(budget());
     }
     String::from_utf8(bytes).map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
 }
@@ -164,5 +195,18 @@ mod tests {
         let utf8_err =
             read_bounded_regular(invalid_utf8.to_str().unwrap(), 16, "microclimate").unwrap_err();
         assert_eq!(utf8_err.code, RefusalCode::InvalidDocument);
+
+        // Shared thermal reader enforces the same regular-file and budget bounds.
+        let thermal_dir_err = read(dir.to_str().unwrap(), 1024).unwrap_err();
+        assert_eq!(thermal_dir_err.code, RefusalCode::InvalidDocument);
+        assert!(thermal_dir_err.message.contains("regular file"));
+        assert_eq!(
+            read(oversized.to_str().unwrap(), 16).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+        assert_eq!(
+            read(exact.to_str().unwrap(), 16).unwrap(),
+            "0123456789abcdef"
+        );
     }
 }

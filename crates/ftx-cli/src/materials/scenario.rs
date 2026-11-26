@@ -18,15 +18,29 @@ fn invalid(e: impl std::fmt::Display) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, e.to_string())
 }
 fn bytes(path: &str, remaining: &mut u64) -> Result<Vec<u8>, Refusal> {
+    let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
+    let budget = || Refusal::new(RefusalCode::BudgetExceeded, "scenario file budget exceeded");
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(invalid(format!(
+            "{path}: scenario input must be a regular file"
+        )));
+    }
+    if meta.len() > *remaining {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    if !file.metadata().map_err(io)?.is_file() {
+        return Err(invalid(format!(
+            "{path}: scenario input must be a regular file"
+        )));
+    }
     let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(*remaining + 1).read_to_end(&mut bytes))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+    file.take(*remaining + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
     if bytes.len() as u64 > *remaining {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "scenario file budget exceeded",
-        ));
+        return Err(budget());
     }
     *remaining -= bytes.len() as u64;
     Ok(bytes)
@@ -319,4 +333,41 @@ fn run_matrix(
         },
     )?;
     serde_json::to_value(report).map_err(invalid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_refuses_directories_and_oversized_files_without_consuming_budget() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-scenario-bytes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut remaining = 16;
+        let dir_err = bytes(dir.to_str().unwrap(), &mut remaining).unwrap_err();
+        assert_eq!(dir_err.code, RefusalCode::InvalidDocument);
+        assert_eq!(remaining, 16);
+
+        let oversized = dir.join("oversized.json");
+        std::fs::write(&oversized, b"0123456789abcdef0").unwrap();
+        let budget_err = bytes(oversized.to_str().unwrap(), &mut remaining).unwrap_err();
+        assert_eq!(budget_err.code, RefusalCode::BudgetExceeded);
+        assert_eq!(remaining, 16);
+
+        let exact = dir.join("exact.json");
+        std::fs::write(&exact, b"0123456789abcdef").unwrap();
+        assert_eq!(
+            bytes(exact.to_str().unwrap(), &mut remaining).unwrap(),
+            b"0123456789abcdef"
+        );
+        assert_eq!(remaining, 0);
+    }
 }

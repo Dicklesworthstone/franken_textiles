@@ -241,7 +241,10 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
     let budget = || {
         Refusal::new(
             RefusalCode::BudgetExceeded,
-            format!("{} exceeds its {limit}-byte body-model budget", path.display()),
+            format!(
+                "{} exceeds its {limit}-byte body-model budget",
+                path.display()
+            ),
         )
     };
     // Inspect metadata before opening so a FIFO cannot block on File::open, then re-check the

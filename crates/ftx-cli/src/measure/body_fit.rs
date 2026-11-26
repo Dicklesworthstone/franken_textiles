@@ -88,7 +88,10 @@ fn read_model_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
     let budget = || {
         Refusal::new(
             RefusalCode::BudgetExceeded,
-            format!("{} exceeds its {limit}-byte body-model budget", path.display()),
+            format!(
+                "{} exceeds its {limit}-byte body-model budget",
+                path.display()
+            ),
         )
     };
     let meta = std::fs::metadata(path).map_err(io)?;

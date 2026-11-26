@@ -918,12 +918,22 @@ mod tests {
             changes_rep["pattern_sha256"].as_str().unwrap()
         );
 
-        // Trailing separator refuses without creating stray parent directories.
+        // Trailing directory syntax refuses without creating stray parent directories.
         let stray_parent = root.join("stray");
         let trailing = format!("{}/sub/", stray_parent.display());
         let trailing_err = write_new_file(&trailing, b"data").unwrap_err();
         assert_eq!(trailing_err.code, RefusalCode::Io);
         assert!(!stray_parent.exists());
+
+        let trailing_dot = format!("{}/sub/.", stray_parent.display());
+        let dot_err = write_new_file(&trailing_dot, b"data").unwrap_err();
+        assert_eq!(dot_err.code, RefusalCode::Io);
+        assert!(!stray_parent.exists());
+
+        // Calibration reader refuses non-regular inputs (directories/FIFOs) with InvalidDocument.
+        let dir_read_err = calibration::read::<Value>(root.to_str().unwrap()).unwrap_err();
+        assert_eq!(dir_read_err.code, RefusalCode::InvalidDocument);
+        assert!(dir_read_err.message.contains("regular file"));
 
         #[cfg(unix)]
         {

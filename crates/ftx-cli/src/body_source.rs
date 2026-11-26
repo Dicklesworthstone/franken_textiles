@@ -22,6 +22,19 @@ pub(super) struct PreparedBody {
 }
 
 fn bytes(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{} exceeds its {limit}-byte input budget", path.display()),
+        )
+    };
+    let meta = fs::metadata(path).map_err(|e| workspace::io_error(path, e))?;
+    if !meta.is_file() {
+        return Err(bad_input("body-fit inputs must be regular files"));
+    }
+    if meta.len() > limit {
+        return Err(budget());
+    }
     let file = File::open(path).map_err(|e| workspace::io_error(path, e))?;
     if !file
         .metadata()
@@ -35,10 +48,7 @@ fn bytes(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
         .read_to_end(&mut out)
         .map_err(|e| workspace::io_error(path, e))?;
     if out.len() as u64 > limit {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            format!("{} exceeds its {limit}-byte input budget", path.display()),
-        ));
+        return Err(budget());
     }
     Ok(out)
 }
