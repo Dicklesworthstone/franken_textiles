@@ -1,8 +1,8 @@
 # Immutable fabric substitutions
 
-`ftx draft`, `ftx round` and `ftx drape` accept `--fabric FILE.json` as an explicit
-whole-fabric replacement. The supplied object replaces the pattern's effective `fabric` block;
-it is never merged with a second physical law.
+`ftx draft`, `ftx round`, `ftx drape`, `ftx qualify` and `ftx place` accept `--fabric FILE.json`
+as an explicit whole-fabric replacement. The supplied object replaces the pattern's effective
+`fabric` block; it is never merged with a second physical law.
 
 A source-backed `material_id` or `material` selection is resolved through the shared textile
 catalog and evidence policy before body fitting or output reservation. The resolved authored
@@ -27,8 +27,8 @@ therefore cannot silently fall back to default cloth because a body model happen
 
 ## Assign separate materials to one garment
 
-Pass an `ftx-material-bindings/1` file with `--material-bindings` to draft, round, drape or
-qualify. It uses the same binding operation as `ftx materials bind-changes`. For example, on the
+Pass an `ftx-material-bindings/1` file with `--material-bindings` to draft, round, drape,
+qualify or place. It uses the same binding operation as `ftx materials bind-changes`. For example, on the
 zouave bolero draft, this assigns the default linen selection to inherited panels and a different
 source record to the sleeve:
 
@@ -53,6 +53,8 @@ for per-piece qualification. Joint outfit requests take their materials from the
 The example exercises flat drafting and export. Running a drape also requires applicable mechanical
 and contact properties. Each saved override includes the original input bytes and its digest.
 The binding receipt records the source and bound pattern digests and the effective material hash
-for every piece. A successful standalone drape also saves `effective_pattern.json` alongside its
-receipt. The viewer checks that snapshot's digest when rebuilding from the simulation directory.
-An explicit replacement pattern must reproduce the same canonical pattern, including its materials.
+for every piece. A successful standalone drape or `ftx place` also saves `effective_pattern.json`
+alongside its receipt (recording `fabric_override` and `effective_pattern_sha256` in
+`sim_report.json` or `placement.json`). The viewer checks that snapshot's digest when rebuilding
+from the simulation directory. An explicit replacement pattern must reproduce the same canonical
+pattern, including its materials.

@@ -1046,6 +1046,8 @@ pub(super) struct Staging<'a> {
     pub arm_pose: Option<ftx_body::drape::ArmPose>,
     pub thumbs: Option<ThumbPose>,
     pub thumb_audit: Option<&'a Result<SurfaceAudit, Refusal>>,
+    /// Optional fabric/material-bindings override and its frozen effective-pattern snapshot bytes.
+    pub fabric_override: Option<(&'a super::fabric::Override, &'a [u8])>,
 }
 
 fn body_surface_report(surface: (&[Vec3], &[[usize; 3]])) -> Value {
@@ -1078,6 +1080,7 @@ fn stages(
         arm_pose,
         thumbs,
         thumb_audit,
+        fabric_override,
     } = *staging;
     // The same scope rule as a drape: an unplaced attachment refuses instead of vanishing.
     let scope = ftx_drape::garment::simulation_scope(source)?;
@@ -1250,6 +1253,12 @@ fn stages(
     if shading != Shading::Standard {
         report["shading"] = json!(shading.name());
     }
+    if let Some((selected, snapshot)) = fabric_override {
+        selected.save(out)?;
+        workspace::write_new(&out.join("effective_pattern.json"), snapshot)?;
+        report["fabric_override"] = selected.receipt().clone();
+        report["effective_pattern_sha256"] = json!(ftx_core::receipt::sha256_hex(snapshot));
+    }
     workspace::write_json(&out.join("placement.json"), &report)?;
     Ok((report, mesh))
 }
@@ -1263,6 +1272,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "out",
             "model",
             "body-fit",
+            "fabric",
+            "material-bindings",
+            "elastic-ea",
             "spacing-mm",
             "min-spacing-mm",
             "cvt-iters",
@@ -1296,7 +1308,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         return Err(bad_input("ftx place needs exactly one pattern file"));
     }
     let pattern_path = &args.positional[1];
-    let (raw, _) = super::read_json(pattern_path)?;
+    let (mut raw, _) = super::read_json(pattern_path)?;
+    let fabric_override = super::fabric::load(args)?
+        .map(|input| input.apply(&mut raw))
+        .transpose()?;
+    let snapshot = fabric_override
+        .as_ref()
+        .map(|_| super::fabric::snapshot_bytes(&raw, "effective placement pattern"))
+        .transpose()?;
     let source = Pattern::new(raw);
     // Refuse an unplaced attachment before the body is fitted; the stages apply the same rule.
     ftx_drape::garment::simulation_scope(&source)?;
@@ -1332,6 +1351,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             arm_pose: pose.arm_pose,
             thumbs,
             thumb_audit: thumb_audit.as_ref(),
+            fabric_override: fabric_override.as_ref().zip(snapshot.as_deref()),
         },
         size,
         shading,
@@ -2233,6 +2253,7 @@ mod tests {
             arm_pose: None,
             thumbs: None,
             thumb_audit: None,
+            fabric_override: None,
         };
         let refusal = || {
             Refusal::new(
@@ -2616,7 +2637,7 @@ mod tests {
         use ftx_body::{HandCollider, SkinningMode};
         use ftx_drape::{MeshOptions, render::Shading, scene::PartFrames, start::PartFrame};
         use ftx_pattern::Pattern;
-        use serde_json::json;
+        use serde_json::{Value, json};
 
         struct BoxFrames;
         impl PartFrames for BoxFrames {
@@ -2676,6 +2697,7 @@ mod tests {
             arm_pose: None,
             thumbs: None,
             thumb_audit: None,
+            fabric_override: None,
         };
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2712,5 +2734,56 @@ mod tests {
             assert_eq!(&b[..8], b"\x89PNG\r\n\x1a\n");
             assert_ne!(a, b);
         }
+        assert!(std_rep.get("fabric_override").is_none());
+        assert!(std_rep.get("effective_pattern_sha256").is_none());
+        assert!(!std_dir.join("effective_pattern.json").exists());
+
+        // With an explicit fabric override, stages saves fabric.source.json, fabric_override.json,
+        // and effective_pattern.json, and records the receipt + snapshot digest in placement.json.
+        let fabric_path = root.join("override_fabric.json");
+        let fabric_bytes = br#"{"areal_g_m2":210,"tensile_N_m":1100,"bending_Nm":1.5e-5}"#.to_vec();
+        std::fs::write(&fabric_path, &fabric_bytes).unwrap();
+        let argv = vec![
+            "place".to_string(),
+            "--fabric".to_string(),
+            fabric_path.to_string_lossy().into_owned(),
+        ];
+        let parsed = crate::parse(&argv).unwrap();
+        let mut overridden_raw = pattern.raw().clone();
+        let ov = crate::fabric::load(&parsed)
+            .unwrap()
+            .unwrap()
+            .apply(&mut overridden_raw)
+            .unwrap();
+        let snapshot =
+            crate::fabric::snapshot_bytes(&overridden_raw, "effective placement pattern").unwrap();
+        let overridden_pattern = Pattern::new(overridden_raw);
+        let ov_dir = root.join("override");
+        std::fs::create_dir_all(&ov_dir).unwrap();
+        let ov_staging = Staging {
+            pattern: &overridden_pattern,
+            fabric_override: Some((&ov, snapshot.as_slice())),
+            ..staging
+        };
+        let (ov_rep, _) = super::stages(&ov_staging, (32, 24), Shading::Standard, &ov_dir).unwrap();
+        let expected_sha = ftx_core::receipt::sha256_hex(&snapshot);
+        assert_eq!(ov_rep["fabric_override"], *ov.receipt());
+        assert_eq!(ov_rep["effective_pattern_sha256"], expected_sha);
+        assert_eq!(
+            std::fs::read(ov_dir.join("fabric.source.json")).unwrap(),
+            fabric_bytes
+        );
+        assert_eq!(
+            std::fs::read(ov_dir.join("effective_pattern.json")).unwrap(),
+            snapshot
+        );
+        let saved_receipt: Value =
+            serde_json::from_slice(&std::fs::read(ov_dir.join("fabric_override.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved_receipt, *ov.receipt());
+        let saved_placement: Value =
+            serde_json::from_slice(&std::fs::read(ov_dir.join("placement.json")).unwrap()).unwrap();
+        assert_eq!(saved_placement["fabric_override"], *ov.receipt());
+        assert_eq!(saved_placement["effective_pattern_sha256"], expected_sha);
     }
 }

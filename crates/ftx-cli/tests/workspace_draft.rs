@@ -417,3 +417,105 @@ fn fused_cache_is_recomputed_and_a_busy_workspace_refuses_writes() {
         0,
     );
 }
+
+#[test]
+fn place_preflights_fabric_overrides_material_bindings_and_elastic_ea_before_output() {
+    let dir = setup();
+    run(
+        &dir,
+        &[
+            "draft",
+            "zouave_bolero",
+            "--measurements",
+            "m.json",
+            "--out",
+            "d",
+        ],
+        0,
+    );
+    fs::write(
+        dir.join("whole.json"),
+        serde_json::to_vec(&json!({"material_id": "fs_il019_natural"})).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("stale_bindings.json"),
+        serde_json::to_vec(&json!({
+            "schema": "ftx-material-bindings/1",
+            "default": {"id": "fs_il019_natural", "expected_sha256": "stale"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Conflicting --fabric and --material-bindings must refuse before reserving --out.
+    let conflict = run(
+        &dir,
+        &[
+            "place",
+            "d/pattern.json",
+            "--measurements",
+            "m.json",
+            "--out",
+            "placed_conflict",
+            "--fabric",
+            "whole.json",
+            "--material-bindings",
+            "stale_bindings.json",
+        ],
+        3,
+    );
+    assert!(
+        conflict["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("choose --fabric or --material-bindings")
+    );
+    assert!(!dir.join("placed_conflict").exists());
+
+    // Invalid --elastic-ea must be accepted as a known option and refused on value validation.
+    let bad_ea = run(
+        &dir,
+        &[
+            "place",
+            "d/pattern.json",
+            "--measurements",
+            "m.json",
+            "--out",
+            "placed_ea",
+            "--elastic-ea",
+            "-5",
+        ],
+        3,
+    );
+    assert!(
+        !bad_ea["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("has no option")
+    );
+    assert!(!dir.join("placed_ea").exists());
+
+    // Stale expected_sha256 in --material-bindings must fail closed before body fitting or output.
+    let stale = run(
+        &dir,
+        &[
+            "place",
+            "d/pattern.json",
+            "--measurements",
+            "m.json",
+            "--out",
+            "placed_stale",
+            "--material-bindings",
+            "stale_bindings.json",
+        ],
+        3,
+    );
+    assert!(
+        !stale["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("has no option")
+    );
+    assert!(!dir.join("placed_stale").exists());
+}

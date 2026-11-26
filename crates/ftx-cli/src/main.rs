@@ -67,7 +67,7 @@ const USAGE: &str = "usage:
             [--sim|--stills] [--model PATH] [--body-fit REPORT] [--flat-body] [--spacing-mm MM] [--compression F] [--arm-deg DEG] [--legs standing|seated|squat] [--leg-fraction F] [--skinning lbs|dqs] [--hands wrist|palm|knuckle|full] [--max-settle-steps N] [--res WIDTHxHEIGHT] [--shading standard|legible|both]
             [--thumb-pose JSON] [--static-equilibrium] [--static-tol-mm 0.001] [--static-max-newton 300]
             [--left-arm-deg DEG --right-arm-deg DEG] (independent initial arms; overrides --arm-deg)
-            [--time-step-s SECONDS] [--sew N] [--drape N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
+            [--time-step-s SECONDS] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--time-subdivision] [--subdivision-max-halvings 8] [--subdivision-max-trials 4096]
             [--newton-strategy projected|adaptive-ilu|trust-region] [--newton-tol-m-s M/S] [--integrator implicit-euler|generalized-alpha] [--rho-inf 0.0]
             [--bending-model quadratic|discrete-shells] [--compression-model axis-aligned|principal] [--air-drag] [--air-cn F] [--air-ct F] [--air-rho F] [--air-velocity VX,VY,VZ] [--rayleigh-membrane-s S] [--rayleigh-bending-s S]
             [--adaptive-barrier] [--stick-slip-mus F --stick-slip-muk F [--stick-slip-v F]] [--self-stick-slip-mus F --self-stick-slip-muk F [--self-stick-slip-v F]]
@@ -100,7 +100,7 @@ const USAGE: &str = "usage:
               [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--skinning lbs|dqs] [--thumb-pose JSON] [--model PATH] [--json]
-  ftx place PATTERN --measurements M --out NEW_DIR [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
+  ftx place PATTERN --measurements M --out NEW_DIR [--fabric F.json | --material-bindings B.json] [--elastic-ea N] [--model PATH] [--body-fit REPORT] [--spacing-mm MM] [--arm-deg DEG]
             [--left-arm-deg DEG --right-arm-deg DEG]
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
@@ -1452,17 +1452,8 @@ fn cmd_drape_bound(
         .transpose()?;
     let snapshot = fabric_override
         .as_ref()
-        .map(|_| serde_json::to_vec(&pat).map_err(|e| bad_input(e.to_string())))
+        .map(|_| fabric::snapshot_bytes(&pat, "effective drape pattern"))
         .transpose()?;
-    if snapshot
-        .as_ref()
-        .is_some_and(|bytes| bytes.len() > fabric::MAX_SNAPSHOT_BYTES)
-    {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "effective drape pattern exceeds the 64 MiB replay budget",
-        ));
-    }
     let material_probe = Pattern::new(pat.clone());
     ftx_drape::garment::simulation_scope(&material_probe)?;
     let material = ftx_drape::material::resolve(&material_probe, &opts)?;
@@ -1556,6 +1547,7 @@ fn cmd_drape_bound(
                 arm_pose: pose.arm_pose,
                 thumbs,
                 thumb_audit: thumb_audit.as_ref(),
+                fabric_override: None,
             },
             &out,
             refusal_size,
