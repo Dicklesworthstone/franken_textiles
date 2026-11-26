@@ -227,9 +227,10 @@ export default function PoseScene({ onStatus, command }: {
       bodyGeometry.computeVertexNormals();
       bodyGeometry.computeBoundingSphere();
       status.shown = [left, right];
-      // The jacket on show belongs to one pose; in any other it would cut through the arms.
-      // (During a move the jacket is the solver's own state at the form's shown pose, so it stays.)
-      if (garment) garment.mesh.visible = same(status.shown, status.sewn ?? null) || !!replay || !!carry || !!moving;
+      // The jacket on show belongs to one pose; in any other it would cut through the arms, a sew's replay
+      // included (an arm dragged during it). During a move the jacket is the solver's own state at the form's
+      // shown pose, so it stays.
+      if (garment) garment.mesh.visible = same(status.shown, status.sewn ?? null) || !!carry || !!moving;
       paint();
     }
 
