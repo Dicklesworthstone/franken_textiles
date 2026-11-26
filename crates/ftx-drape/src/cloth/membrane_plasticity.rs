@@ -362,6 +362,16 @@ impl Solver {
         ))
     }
 
+    pub(crate) fn has_membrane_damage(&self) -> bool {
+        self.membrane_plasticity.as_ref().is_some_and(|field| {
+            field
+                .entries
+                .iter()
+                .flatten()
+                .any(|b| b.law.damage().is_some())
+        })
+    }
+
     /// Cumulative accepted stiffness-degradation dissipation in joules, in retained triangle order.
     /// Unselected and undamaged triangles contribute zero; absence means no permanent membrane law
     /// is bound. This read never advances memory or changes the caller's state.

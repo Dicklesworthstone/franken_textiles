@@ -35,7 +35,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     Controls, Fixture, NominalProtocol, ProtocolAudit, State, Waypoint, assemble_solver,
     audit_protocol, budget, build_cylinder_mesh, holder_separation_m, invalid, out_of_range,
-    record_state, set_ring_positions, set_ring_velocities, validate_history_start,
+    record_state, record_state_with_step, set_ring_positions, set_ring_velocities,
+    validate_history_start,
 };
 use crate::{Membrane, Solver};
 
@@ -806,14 +807,16 @@ impl Budget<'_> {
                 }
                 .map_err(map_trial)?;
                 set_ring_velocities(&mut solver, fixture, omega_rad_s, vz_m_s);
-                let st = record_state(
+                let st = record_state_with_step(
                     fixture,
                     &controls,
                     &solver,
+                    None,
                     &waypoint,
                     h,
                     &old_velocity,
                     Some(numerical),
+                    step == count,
                 )
                 .map_err(map_trial)?;
                 merge_strain_range(&mut path_strain_range, st.green_strain_range);

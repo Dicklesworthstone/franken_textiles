@@ -1093,11 +1093,7 @@ fn record_state_with_step(
     let membrane_plastic_dissipation_j = solver
         .membrane_plastic_dissipation_j()?
         .map_or(0.0, |v| v.iter().sum());
-    let membrane_plasticity = solver.membrane_plasticity_report()?;
-    let membrane_damage_dissipation_j = if membrane_plasticity
-        .as_ref()
-        .is_some_and(|report| report.get("damage_model").is_some())
-    {
+    let membrane_damage_dissipation_j = if solver.has_membrane_damage() {
         let damage: f64 = solver
             .membrane_damage_dissipation_j()?
             .map_or(0.0, |v| v.iter().sum());
@@ -1164,11 +1160,21 @@ fn record_state_with_step(
         bending_plastic_dissipation_j,
         positions_m: snapshot_vectors(&solver.x, retain_snapshot),
         velocities_m_s: snapshot_vectors(&solver.v, retain_snapshot),
-        relaxation: solver.relaxation_report()?.filter(|_| retain_snapshot),
-        membrane_plasticity: membrane_plasticity.filter(|_| retain_snapshot),
-        bending_plasticity: solver
-            .bending_plasticity_report()?
-            .filter(|_| retain_snapshot),
+        relaxation: if retain_snapshot {
+            solver.relaxation_report()?
+        } else {
+            None
+        },
+        membrane_plasticity: if retain_snapshot {
+            solver.membrane_plasticity_report()?
+        } else {
+            None
+        },
+        bending_plasticity: if retain_snapshot {
+            solver.bending_plasticity_report()?
+        } else {
+            None
+        },
         solve,
     })
 }
@@ -2567,5 +2573,29 @@ mod tests {
             serde_json::to_string(&damaged).unwrap(),
             serde_json::to_string(&replayed).unwrap()
         );
+
+        let mut compact_req = replay_req;
+        compact_req.geometry_output = GeometryOutput::Waypoints;
+        let compact = evaluate(&compact_req).unwrap();
+        assert_eq!(compact.states.len(), damaged.states.len());
+        assert!(compact.states.len() > compact_req.loading.len());
+        for (expected, actual) in damaged.states.iter().zip(&compact.states) {
+            let sampled = compact_req
+                .loading
+                .iter()
+                .any(|p| p.time_s == actual.time_s);
+            assert_eq!(
+                actual.membrane_damage_dissipation_j,
+                expected.membrane_damage_dissipation_j
+            );
+            assert_eq!(actual.membrane_plasticity.is_some(), sampled);
+            assert_eq!(!actual.positions_m.is_empty(), sampled);
+            if sampled {
+                assert_eq!(
+                    serde_json::to_value(actual).unwrap(),
+                    serde_json::to_value(expected).unwrap()
+                );
+            }
+        }
     }
 }
