@@ -1422,7 +1422,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams','guidedDesignMaterials'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';e.elasticHoldSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.drapeArmLeft.value='35';e.drapeArmRight.value='35';
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
@@ -1437,6 +1437,7 @@ async function pageModule({roundToken=null,traceToken=null}={}) {
   e.drapeHemWidthMm.value='20';e.drapeHemMassMult.value='2.5';e.drapeHemBendMult.value='5';
   e.drapeSeamWidthMm.value='10';e.drapeSeamMassMult.value='2';e.drapeSeamBendMult.value='3';
   e.drapeRepulsionMm.value='4';e.drapeRepulsionStiffness.value='0.5';e.drapeRepulsionPeriod.value='5';e.drapeRepulsionMaxChecks.value='32000000';
+  e.guidedScenarioElasticHold.value='0';
   e.guidedScenarioSubdivisionHalvings.value='8';e.guidedScenarioSubdivisionTrials.value='4096';
   e.guidedScenarioNewtonStrategy.value='projected';e.guidedScenarioIntegrator.value='implicit_euler';e.guidedScenarioRhoInf.value='0';
   e.guidedScenarioStaticTolMm.value='0.001';e.guidedScenarioStaticMaxNewton.value='300';
@@ -5954,7 +5955,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
 function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyToken=null,initialize=true,audit=false}={}) {
   const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
-  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';
+  e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';e.elasticHoldSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.drapeArmLeft.value='35';e.drapeArmRight.value='35';
   e.timeMaxHalvings.value='8';e.timeMaxTrials.value='4096';
@@ -27046,3 +27047,191 @@ test('compiled WASM shared-operator thread orders replay native purchasing and d
     assert.equal(study.result.alternatives[0].sewing.result.production.parallel.thread_order_search.optimality_proven,true);
     assert.equal(study.result.alternatives[0].sewing_selection.result.optimality_proven,true);
   });
+
+test('elastic_hold_steps routes end-to-end across both workers, both workbenches, bidirectional handoffs and guided scenarios with fail-closed validation', async () => {
+  // 1. materials-worker.js: default/0 stays legacy; positive forces configured engine; out-of-range refuses before model load.
+  {
+    const calls=[],freed=[],fold=()=>({report:()=>'{"gating":[]}',viewer:()=>'<html/>',free(){freed.push('fold');}});
+    const w=await workerModule({bindings:{default:async()=>{},
+      WebBody:class{constructor(){calls.push('body');}free(){freed.push('body');}},
+      fold_up:()=>{calls.push('legacy');return fold();},
+      fold_up_configured:(_body,_pattern,_measurements,_fit,raw,source)=>{calls.push({settings:JSON.parse(raw),source});return fold();}}});
+    const base={type:'fold',bytes:new ArrayBuffer(1),pattern:'{}',measurements:'{}',fit:'{}',selfContactMm:2};
+    const zero=await w.send({...base,elasticHoldSteps:0});
+    assert.equal(zero.type,'result',zero.message);assert.equal(calls.at(-1),'legacy');
+    const hold6=await w.send({...base,elasticHoldSteps:6});
+    assert.equal(hold6.type,'result',hold6.message);assert.equal(calls.at(-1).settings.elastic_hold_steps,6);
+    assert.equal(JSON.parse(hold6.files.find(f=>f.name==='fold-settings.json').text).elastic_hold_steps,6);
+    const custom=await w.send({...base,schedule:{step_s:0.02,sew_steps:12,drape_steps:48,newton_tol_m_s:0.001},elasticHoldSteps:40});
+    assert.equal(custom.type,'result',custom.message);assert.equal(calls.at(-1).settings.elastic_hold_steps,40);
+    const before=calls.length;
+    for(const bad of [-1,1.5,NaN,'6',null,37]) {
+      assert.match((await w.send({...base,elasticHoldSteps:bad})).message,/Elastic hold window/);
+      assert.equal(calls.length,before);
+    }
+    assert.match((await w.send({...base,schedule:{step_s:0.02,sew_steps:12,drape_steps:12,newton_tol_m_s:0.001},elasticHoldSteps:13})).message,/Elastic hold window/);
+    assert.equal(calls.length,before);
+    // Missing configured engine refuses instead of silently dropping elasticHoldSteps onto legacy fold_up.
+    const legacyOnly=await workerModule();
+    assert.match((await legacyOnly.send({...base,elasticHoldSteps:4})).message,/missing configured pose and settling/);
+  }
+
+  // 2. worker.js (Pattern Workbench): identical default omission, configured routing and fail-closed checks.
+  {
+    const sent=[],calls=[];
+    const values={default:async()=>{},program_info:()=> '{}',calibration_dictionaries:()=> '["DICT_4X4_50"]',
+      run:()=>({page:()=>'{"status":"CONVERGED","zip":"round.zip"}',zip:()=>new Uint8Array([1]),
+        file:n=>new TextEncoder().encode(n==='pattern.json'?'{"pieces":[{"placement":{"part":"torso"}}]}':'{}'),free(){}}),
+      WebBody:class{free(){}},
+      fold_up:()=>{calls.push('legacy');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free(){}};},
+      fold_up_configured:(_body,_pattern,_measurements,_fit,raw,source)=>{
+        calls.push({settings:JSON.parse(raw),source});
+        return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free(){}};
+      }};
+    const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
+    const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const[n,v]of Object.entries(values))this.setExport(n,v);},{context});
+    await imports.link(()=>{});await imports.evaluate();
+    const module=new vm.SourceTextModule(read('worker.js'),{context,importModuleDynamically:()=>imports});
+    await module.link(()=>{});await module.evaluate();
+    const send=async data=>{await context.onmessage({data});return sent.at(-1);};
+    assert.equal((await send({type:'init',pkg:'./pkg/'})).type,'ready');
+    await send({type:'body',request:2,bytes:new Uint8Array([1]).buffer});
+    await send({type:'run',request:3,req:{}});
+    const fold=extra=>send({type:'fold',request:4,round:3,body:2,...extra});
+    assert.equal((await fold({elasticHoldSteps:0})).type,'folded');assert.equal(calls.at(-1),'legacy');
+    const ok=await fold({elasticHoldSteps:6});assert.equal(ok.type,'folded',ok.message);
+    assert.equal(calls.at(-1).settings.elastic_hold_steps,6);
+    assert.equal(JSON.parse(ok.settingsText).elastic_hold_steps,6);
+    const custom=await fold({schedule:{step_s:0.02,sew_steps:12,drape_steps:48,newton_tol_m_s:0.001},elasticHoldSteps:40});
+    assert.equal(custom.type,'folded',custom.message);assert.equal(calls.at(-1).settings.elastic_hold_steps,40);
+    const before=calls.length;
+    for(const bad of [-1,1.5,NaN,'6',null,37]) {
+      assert.match((await fold({elasticHoldSteps:bad})).message,/Elastic hold window/);
+      assert.equal(calls.length,before);
+    }
+    assert.match((await fold({schedule:{step_s:0.02,sew_steps:12,drape_steps:12,newton_tol_m_s:0.001},elasticHoldSteps:13})).message,/Elastic hold window/);
+    assert.equal(calls.length,before);
+  }
+
+  // 3. index.html -> materials.html handoff + fold dispatch + invalidation + fail-closed refusals.
+  {
+    const p=draftingPage();await p.e.go.handlers.click();
+    p.result(undefined,{roundSources:{pattern:'{"pieces":[{"placement":{"part":"torso"}}]}',measurements:'{}',fit:'{}'}});
+    p.e.bodyFile.files=[new Blob([new Uint8Array([1,2,3])])];await p.e.bodyFile.handlers.change();
+    p.emit({type:'bodyReady',request:p.last('body').request});
+    // Default 0 omits elasticHoldSteps from fold message and handoff drapeSettings.
+    const baseUrls=p.live.size;
+    await p.e.foldGo.handlers.click();
+    assert.equal(Object.hasOwn(p.last('fold'),'elasticHoldSteps'),false);
+    p.emit({type:'folded',request:p.last('fold').request,report:{gating:[]},reportText:'{"gating":[]}',viewer:'<html/>'});
+    assert.ok(p.live.size>baseUrls);
+    // Changing elasticHoldSteps invalidates stale fold output immediately without revoking round URLs.
+    p.e.elasticHoldSteps.value='6';await p.e.elasticHoldSteps.handlers.input();
+    assert.equal(p.live.size,baseUrls);
+    assert.equal(p.e.foldSummary.textContent,'');
+    await p.e.foldGo.handlers.click();
+    assert.equal(p.last('fold').elasticHoldSteps,6);
+    p.emit({type:'folded',request:p.last('fold').request,report:{gating:[]},reportText:'{"gating":[]}',viewer:'<html/>'});
+    // Invalid values refuse without dispatching a worker message.
+    const countBefore=p.messages.length;
+    for(const bad of ['','-1','1.5','37']) {
+      p.e.elasticHoldSteps.value=bad;await p.e.foldGo.handlers.click();
+      assert.equal(p.messages.length,countBefore,`index.html foldGo must refuse ${JSON.stringify(bad)}`);
+    }
+    // Custom drape_steps=48 permits elasticHoldSteps=40; drape_steps=12 refuses 13.
+    p.e.customDrapeSchedule.checked=true;p.e.drapeDrapeSteps.value='48';p.e.elasticHoldSteps.value='40';
+    await p.e.foldGo.handlers.click();
+    assert.equal(p.last('fold').elasticHoldSteps,40);
+    p.emit({type:'folded',request:p.last('fold').request,report:{gating:[]},reportText:'{"gating":[]}',viewer:'<html/>'});
+    p.e.drapeDrapeSteps.value='12';p.e.elasticHoldSteps.value='13';
+    const customBefore=p.messages.length;await p.e.foldGo.handlers.click();
+    assert.equal(p.messages.length,customBefore);
+    // Handoff to materials.html carries elastic_hold_steps when > 0 and refuses invalid values.
+    p.e.drapeDrapeSteps.value='48';p.e.elasticHoldSteps.value='40';
+    await p.e.chooseMaterials.handlers.click();
+    const popup=p.popups.at(-1),token=new URL(popup.url).searchParams.get('roundImport');
+    await p.windowEvents.message({origin:'https://unit.invalid',source:popup,data:{type:'ftx-round-sources-ready',token}});
+    const handoff=popup.messages[0].data;
+    assert.equal(handoff.drapeSettings.elastic_hold_steps,40);
+    assert.equal(handoff.drapeSettings.drape_steps,48);
+
+    // Receive that handoff in materials.html and verify control restoration + invalidation + fold dispatch.
+    const mp=await pageModule({roundToken:token});
+    await mp.windowEvents.message({origin:'https://unit.invalid',source:mp.opener,data:handoff});
+    assert.equal(mp.e.elasticHoldSteps.value,'40');
+    assert.equal(mp.e.drapeDrapeSteps.value,'48');
+
+    // Malformed incoming handoff (elastic_hold_steps > drape_steps) refuses fail-closed without mutating controls.
+    const badToken='e'.repeat(32),mpBad=await pageModule({roundToken:badToken});
+    const badHandoff={...handoff,token:badToken,drapeSettings:{...handoff.drapeSettings,drape_steps:12,elastic_hold_steps:13}};
+    await mpBad.windowEvents.message({origin:'https://unit.invalid',source:mpBad.opener,data:badHandoff});
+    assert.match(mpBad.e.roundImportText.textContent,/refused/i);
+    assert.equal(mpBad.e.elasticHoldSteps.value,'0');
+  }
+
+  // 4. materials.html -> index.html checked garment handoff + fold dispatch + fail-closed refusals.
+  {
+    const p=await pageModule();await p.load();
+    await p.e.bind.onclick();p.emit({pattern:{pieces:[{id:'front'}]},pattern_json:checkedPattern,pieces:[],pattern_sha256:'ac'.repeat(32)});
+    p.select('measurements',checkedPrimary);p.e.measurements.handlers.change();p.select('fit',checkedFit);p.e.fit.handlers.change();
+    p.e.body.files=[new Blob([new Uint8Array([1,3,5])])];p.e.body.handlers.change();
+    // Invalid values refuse before calling worker.
+    const countBefore=p.current().messages.length;
+    for(const bad of ['','-1','1.5','37']) {
+      p.e.elasticHoldSteps.value=bad;await p.e.fold.onclick();
+      assert.equal(p.current().messages.length,countBefore,`materials fold must refuse ${JSON.stringify(bad)}`);
+    }
+    p.e.elasticHoldSteps.value='8';
+    await p.e.fold.onclick();
+    const foldMsg=p.current().messages.at(-1);
+    assert.equal(foldMsg.type,'fold');assert.equal(foldMsg.elasticHoldSteps,8);
+    p.current().emit({type:'result',request:foldMsg.request,result:{status:'REVIEW'},files:[],reportText:'{}',
+      evaluatedInputs:{pattern:foldMsg.pattern,fit:foldMsg.fit,measurements:checkedEffective}});
+    const btn=checkedAction(p);assert.ok(btn);btn.onclick();
+    const popup=p.popups.at(-1),token=new URL(popup.url).searchParams.get('materialImport');
+    await p.windowEvents.message({origin:'https://unit.invalid',source:popup.target,data:{type:'ftx-material-pattern-ready',token}});
+    const ret=popup.messages[0].data;
+    assert.equal(ret.evaluatedInputs.drapeSettings.elastic_hold_steps,8);
+    // Changing elasticHoldSteps invalidates stale fold section.
+    p.e.elasticHoldSteps.value='0';p.e.elasticHoldSteps.handlers.input();
+    assert.equal(section(p,'fold').hidden,true);
+    // Receive return handoff in index.html.
+    const dp=draftingPage({materialToken:token});
+    await dp.windowEvents.message({origin:'https://unit.invalid',source:dp.opener,data:ret});
+    assert.equal(dp.e.elasticHoldSteps.value,'8');
+    // Malformed return handoff refuses fail-closed without mutating index.html controls.
+    const badToken='f'.repeat(32),dpBad=draftingPage({materialToken:badToken});
+    const badRet={...ret,token:badToken,evaluatedInputs:{...ret.evaluatedInputs,drapeSettings:{...ret.evaluatedInputs.drapeSettings,elastic_hold_steps:37}}};
+    await dpBad.windowEvents.message({origin:'https://unit.invalid',source:dpBad.opener,data:badRet});
+    assert.match(dpBad.e.traceImportText.textContent,/refused/i);
+    assert.equal(dpBad.e.elasticHoldSteps.value,'0');
+  }
+
+  // 5. Guided scenario UI (materials.html + materials-page.js): default omitted, positive emitted + displayed + invalidated, invalid refused.
+  {
+    const {p}=await guidedScenarioSetup();
+    p.e.guidedScenarioSewSteps.value='12';p.e.guidedScenarioDrapeSteps.value='12';p.e.guidedScenarioElasticHold.value='0';
+    await p.e.scenario.onclick();
+    const defaultReq=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+    assert.equal(Object.hasOwn(defaultReq.options,'elastic_hold_steps'),false);
+    p.emit(scenarioReport());assert.equal(section(p,'Fresh drape and heat alternatives').hidden,false);
+    // Editing guidedScenarioElasticHold invalidates stale scenario output.
+    p.e.guidedScenarioElasticHold.value='6';p.e.guidedScenarioElasticHold.handlers.input();
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+    await p.e.scenario.onclick();
+    const holdReq=JSON.parse(p.current().messages.at(-1).scenarioRequest);
+    assert.equal(holdReq.options.elastic_hold_steps,6);
+    p.emit(scenarioReport());
+    // Named scenario matrix displays elastic hold summary.
+    guidedNamedCases(p);
+    await saveGuidedCase(p,'hold-case');
+    assert.match(visibleText(p.e.guidedScenarioCases),/elastic hold 6 steps/);
+    // Invalid values refuse fail-closed before calling worker.
+    p.e.scenarioMode.value='guided';p.e.scenarioMode.handlers.change();
+    const before=p.current().messages.length;
+    for(const bad of ['','-1','1.5','13']) {
+      p.e.guidedScenarioElasticHold.value=bad;await p.e.scenario.onclick();
+      assert.equal(p.current().messages.length,before,`guided scenario must refuse ${JSON.stringify(bad)}`);
+    }
+  }
+});

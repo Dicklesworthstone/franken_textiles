@@ -655,6 +655,13 @@ self.onmessage = async ({ data: msg }) => {
             throw Error("Configured fold exceeds the 512-step browser work budget per sewing path (sew + drape + settle).");
           }
         }
+        if (msg.elasticHoldSteps !== undefined) {
+          const effDrape = settings.drape_steps ?? 36;
+          if (!Number.isSafeInteger(msg.elasticHoldSteps) || msg.elasticHoldSteps < 0 || msg.elasticHoldSteps > effDrape) {
+            throw Error(`Elastic hold window must be a whole number from 0 to the declared gravity steps (${effDrape}).`);
+          }
+          if (msg.elasticHoldSteps > 0) settings.elastic_hold_steps = msg.elasticHoldSteps;
+        }
         if (msg.staticEquilibrium !== undefined) {
           const value = msg.staticEquilibrium;
           if (!value || typeof value !== "object" || Array.isArray(value) ||
@@ -855,7 +862,7 @@ self.onmessage = async ({ data: msg }) => {
         const configured = (!imported && settings.arm_abduction_deg !== 35) ||
           settings.legs !== "standing" || settings.leg_fraction !== 1 || skinning !== "lbs" ||
           handCollider !== "wrist" || settings.thumb_pose !== undefined || settings.arm_pose !== undefined ||
-          settings.max_settle_steps !== 0 || settings.time_subdivision !== undefined ||
+          settings.max_settle_steps !== 0 || settings.elastic_hold_steps !== undefined || settings.time_subdivision !== undefined ||
           settings.newton_strategy !== undefined || settings.integrator !== undefined ||
           settings.step_s !== undefined || settings.sew_steps !== undefined ||
           settings.drape_steps !== undefined || settings.newton_tol_m_s !== undefined ||

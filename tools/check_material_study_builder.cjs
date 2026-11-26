@@ -5319,3 +5319,27 @@ test('regional comparison objectives retain distinct region identities, enforce 
     {key:'b',surface:false,motion:true,materialStrain:true,comparison:{basis:'nominal',objectives:[{metric:'max_warp_green_strain',region:'  ',direction:'minimize'}]}}]}};
   assert.throws(()=>build({...state(),design:adaptiveDesign,objectives:cuffPolicy.objectives},badRegionMatrix),/explicit metric\/direction objectives/);
 });
+
+test('guided scenario options admit opt-in elastic_hold_steps up to drape_steps, omit zero without mutating inputs, and fail closed outside bounds', async () => {
+  const {buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const base=scenarioState();
+  const ordinary=JSON.parse(single(base));
+  assert.equal(Object.hasOwn(ordinary.options,'elastic_hold_steps'),false,'default scenario omits elastic_hold_steps');
+
+  const zeroInput={...base,options:{...base.options,elastic_hold_steps:0}};
+  const zeroOut=JSON.parse(single(zeroInput));
+  assert.equal(Object.hasOwn(zeroOut.options,'elastic_hold_steps'),false,'explicit zero omits elastic_hold_steps');
+  assert.equal(zeroInput.options.elastic_hold_steps,0,'builder must not mutate caller options');
+
+  const positive=single({...base,options:{...base.options,drape_steps:12,elastic_hold_steps:6}});
+  assert.equal(JSON.parse(positive).options.elastic_hold_steps,6);
+  const boundary=single({...base,options:{...base.options,drape_steps:12,elastic_hold_steps:12}});
+  assert.equal(JSON.parse(boundary).options.elastic_hold_steps,12);
+  const named=matrix({maxEvaluations:2,cases:[{key:'hold',scenario:positive}]});
+  assert.equal(JSON.parse(named).cases[0].scenario.options.elastic_hold_steps,6);
+
+  for(const bad of [-1,1.5,NaN,Infinity,null,'6',13]) {
+    assert.throws(()=>single({...base,options:{...base.options,drape_steps:12,elastic_hold_steps:bad}}),/Elastic hold window/);
+  }
+  assert.throws(()=>single({...base,options:{...base.options,sew_steps:6,drape_steps:0,elastic_hold_steps:1}}),/Elastic hold window/);
+});

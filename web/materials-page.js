@@ -5926,6 +5926,21 @@ function setDrapeSchedule(settings) {
   $("drapeNewtonTol").value = String(schedule?.newton_tol_m_s ?? 0.001);
   for (const id of ["drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol"]) $(id).disabled = schedule === undefined;
 }
+function checkedElasticHoldSteps(value, drapeSteps = 36) {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || value < 0 || value > drapeSteps) {
+    throw Error(`Elastic hold window must be a whole number from 0 to the declared gravity steps (${drapeSteps}).`);
+  }
+  return value;
+}
+function drapeElasticHoldSteps(drapeSteps = 36) {
+  const raw = $("elasticHoldSteps").value.trim();
+  if (!raw) throw Error("Supply a whole elastic hold window (0 disables).");
+  return checkedElasticHoldSteps(Number(raw), drapeSteps);
+}
+function setElasticHoldSteps(value, drapeSteps = 36) {
+  $("elasticHoldSteps").value = String(checkedElasticHoldSteps(value, drapeSteps));
+}
 function checkedStaticEquilibrium(value) {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value) ||
@@ -7494,6 +7509,8 @@ async function guidedScenarioInput(includeCasePolicy = false) {
     max_settle_steps: number("guidedScenarioSettle", "maximum additional settling steps"),
   }, maxMeshPoints: number("guidedScenarioMeshBudget", "mesh budget"),
     maxVertexFrames: number("guidedScenarioFrameBudget", "total vertex-frame budget") };
+  const elasticHold = number("guidedScenarioElasticHold", "elastic hold window");
+  if (elasticHold !== 0) input.options.elastic_hold_steps = elasticHold;
   if ($("guidedScenarioSelfContact").checked) {
     input.options.self_contact = { dhat: 0.001, thickness: 0.002, kappa: 100, mu: 0.4, eps_v: 0.001 };
   }
@@ -7631,6 +7648,7 @@ function showGuidedScenarioDrafts() {
     if (value.motion) motionTrials += value.max_motion_trials;
     const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
     label.textContent = `${item.key}: ${value.options.sew_steps} sewing + ${value.options.drape_steps} gravity steps, ` +
+      (value.options.elastic_hold_steps > 0 ? `elastic hold ${value.options.elastic_hold_steps} steps; ` : "") +
       (value.options.time_subdivision ? `${value.options.time_subdivision.max_trials} drape attempts per alternative, ` +
         `up to ${value.options.time_subdivision.max_halvings} halvings; ` : "") +
       (value.options.newton_strategy ? `Newton solver ${value.options.newton_strategy.kind}; ` : "") +
@@ -8016,6 +8034,8 @@ async function execute(op, studio = null) {
         msg.twoStart = $("twoStart").checked;
         const schedule = drapeSchedule(msg.twoStart, msg.maxSettleSteps);
         if (schedule !== undefined) msg.schedule = schedule;
+        const elasticHold = drapeElasticHoldSteps(schedule ? schedule.drape_steps : 36);
+        if (elasticHold > 0) msg.elasticHoldSteps = elasticHold;
         const staticEq = drapeStaticEquilibrium();
         if (staticEq !== undefined) msg.staticEquilibrium = staticEq;
         const realism = readRealismControls("drape", 12);
@@ -8078,6 +8098,7 @@ async function execute(op, studio = null) {
       ...(op === "fold" ? { model: new Blob([msg.bytes]), bodyFit: msg.bodyFit ?? null,
         drapeSettings: { self_contact_mm: msg.selfContactMm, two_start: msg.twoStart,
           arm_abduction_deg: msg.armDeg, legs: msg.legs, leg_fraction: msg.legFraction, max_settle_steps: msg.maxSettleSteps,
+          ...(msg.elasticHoldSteps !== undefined ? { elastic_hold_steps: msg.elasticHoldSteps } : {}),
           ...(msg.skinning !== "lbs" ? { skinning: msg.skinning } : {}),
           ...(msg.handCollider !== undefined ? { hand_collider: msg.handCollider } : {}),
           ...(msg.thumbPose !== undefined ? { thumb_pose: msg.thumbPose } : {}),
@@ -8416,7 +8437,7 @@ for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "gu
 }
 for (const id of ["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact",
   "guidedScenarioSpacing", "guidedScenarioSewSteps", "guidedScenarioDrapeSteps", "guidedScenarioStep",
-  "guidedScenarioSettle", "guidedScenarioMeshBudget", "guidedScenarioFrameBudget"]) {
+  "guidedScenarioSettle", "guidedScenarioElasticHold", "guidedScenarioMeshBudget", "guidedScenarioFrameBudget"]) {
   const changed = () => {
     if (id === "scenarioMode") refreshGuidedDesignCases();
     invalidate(id === "scenarioMode" ? ["scenario", "scenarioDraft"] : [guidedMatrixMode() ? "scenarioDraft" : "scenario"], true);
@@ -9247,7 +9268,7 @@ for (const suffix of viscoFields) for (const event of ["input", "change"]) {
 for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","fold","heat","vaporSurface","coverage"], fit:["exports","fold","heat","vaporSurface","coverage"],
   body:["bodyCheck","fold","heat","vaporSurface","coverage"], selfContact:["fold","heat","vaporSurface","coverage"], twoStart:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   drapeLegs:["fold","heat","vaporSurface","coverage"], drapeLegFraction:["fold","heat","vaporSurface","coverage"], drapeSkinning:["fold","heat","vaporSurface","coverage"], drapeHands:["fold","heat","vaporSurface","coverage"], drapeThumbPose:["fold","heat","vaporSurface","coverage"],
-  drapeNewtonStrategy:["fold","heat","vaporSurface","coverage"], drapeIntegrator:["fold","heat","vaporSurface","coverage"], drapeRhoInf:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"],
+  drapeNewtonStrategy:["fold","heat","vaporSurface","coverage"], drapeIntegrator:["fold","heat","vaporSurface","coverage"], drapeRhoInf:["fold","heat","vaporSurface","coverage"], maxSettleSteps:["fold","heat","vaporSurface","coverage"], elasticHoldSteps:["fold","heat","vaporSurface","coverage"],
   splitTimeSteps:["fold","heat","vaporSurface","coverage"], timeMaxHalvings:["fold","heat","vaporSurface","coverage"], timeMaxTrials:["fold","heat","vaporSurface","coverage"],
   customDrapeSchedule:["fold","heat","vaporSurface","coverage"], drapeStepS:["fold","heat","vaporSurface","coverage"], drapeSewSteps:["fold","heat","vaporSurface","coverage"], drapeDrapeSteps:["fold","heat","vaporSurface","coverage"], drapeNewtonTol:["fold","heat","vaporSurface","coverage"],
   staticEquilibrium:["fold","heat","vaporSurface","coverage"], staticTolMm:["fold","heat","vaporSurface","coverage"], staticMaxNewton:["fold","heat","vaporSurface","coverage"],
@@ -9276,7 +9297,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     if (id === "fit") { clearImportFit(); $("fitSource").value = "file"; }
     if (id === "measurements") $("supplementalConsent").checked = false;
     if (id === "measurements" || id === "body") $("bodyFitConsent").checked = false;
-    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps",
+    if (["measurements", "fit", "body", "selfContact", "twoStart", "drapeLegs", "drapeLegFraction", "drapeSkinning", "drapeHands", "drapeThumbPose", "drapeNewtonStrategy", "drapeIntegrator", "drapeRhoInf", "maxSettleSteps", "elasticHoldSteps",
       "splitTimeSteps", "timeMaxHalvings", "timeMaxTrials", "customDrapeSchedule", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol",
       "staticEquilibrium", "staticTolMm", "staticMaxNewton", ...REALISM_SUFFIXES.map(suffix => "drape" + suffix)].includes(id)) {
       ++roundRead; roundToken = null; window.opener = null; roundFiles.delete(id);
@@ -9292,7 +9313,7 @@ for (const [id, keys] of Object.entries({ measurements:["bodyCheck","exports","f
     return scenarioCasesLoading;
   });
 }
-for (const id of ["drapeLegFraction", "drapeThumbPose", "drapeRhoInf", "maxSettleSteps", "timeMaxHalvings", "timeMaxTrials", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticTolMm", "staticMaxNewton", ...REALISM_NUM_SUFFIXES.map(suffix => "drape" + suffix)]) {
+for (const id of ["drapeLegFraction", "drapeThumbPose", "drapeRhoInf", "maxSettleSteps", "elasticHoldSteps", "timeMaxHalvings", "timeMaxTrials", "drapeStepS", "drapeSewSteps", "drapeDrapeSteps", "drapeNewtonTol", "staticTolMm", "staticMaxNewton", ...REALISM_NUM_SUFFIXES.map(suffix => "drape" + suffix)]) {
   $(id).addEventListener("input", () => {
     ++roundRead; roundToken = null; window.opener = null;
     invalidate(["fold", "heat", "vaporSurface", "coverage", ...bodyDependentStudies(id)], true);
@@ -9434,7 +9455,8 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
       checkedTimeSubdivision(settings?.time_subdivision);
       checkedNewtonStrategy(settings?.newton_strategy);
       checkedIntegrator(settings?.integrator);
-      checkedDrapeSchedule(settings);
+      const checkedSchedule = checkedDrapeSchedule(settings);
+      checkedElasticHoldSteps(settings?.elastic_hold_steps, checkedSchedule?.drape_steps ?? 36);
       checkedStaticEquilibrium(settings?.static_equilibrium);
       checkedThumbPose(settings?.thumb_pose);
       checkedArmPose(settings?.arm_pose);
@@ -9491,6 +9513,7 @@ if (roundToken && /^[0-9a-f]{32}$/.test(roundToken) && roundOrigin !== "null" &&
         setNewtonStrategy(settings.newton_strategy);
         setIntegrator(settings.integrator);
         setDrapeSchedule(settings);
+        setElasticHoldSteps(settings.elastic_hold_steps, settings.drape_steps ?? 36);
         setStaticEquilibrium(settings.static_equilibrium);
         setThumbPose(settings.thumb_pose);
         setRealismOptions(settings);

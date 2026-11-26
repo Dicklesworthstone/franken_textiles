@@ -526,6 +526,7 @@ on the wearer's left and right. Select the preview or accepted body source below
 <label>Max checks <input id="drapeRepulsionMaxChecks" type="number" min="1" max="128000000" step="1" value="32000000" disabled></label>
 </details>
 <label>Maximum extra settling steps <input id="maxSettleSteps" type="number" min="0" max="256" step="1" value="0"></label>
+<label>Elastic hold window (steps) <input id="elasticHoldSteps" type="number" min="0" max="512" step="1" value="0"></label>
 <label><input id="splitTimeSteps" type="checkbox"> Split stalled time steps</label>
 <label>Maximum halvings <input id="timeMaxHalvings" type="number" min="0" max="16" step="1" value="8" disabled></label>
 <label>Maximum step trials <input id="timeMaxTrials" type="number" min="1" max="65535" step="1" value="4096" disabled></label>
@@ -543,7 +544,8 @@ on the wearer's left and right. Select the preview or accepted body source below
 <label><input id="twoStart" type="checkbox"> Compare a second sewing path (18 versus 12 sewing steps; runs a second full solve)</label>
 <p class="note">Leg fraction moves from standing (0) to the full selected posture (1), keeping the fitted shape and arm angle.
 Extra settling continues the sewn garment until its quiet window or the step limit; 0 keeps the fixed schedule.
-History-dependent materials require a fixed-duration run and refuse automatic settling.</p>
+History-dependent materials require a fixed-duration run and refuse automatic settling.
+Elastic hold window is report-only over the last N accepted gravity steps on the static body (0 disables); it does not alter cloth motion or establish physical fit.</p>
 <button id="fold" data-command="fold" disabled>Re-drape on this body</button>
 </div><div>
 <h3>Cutting, purchasing and sewing</h3>
@@ -1320,6 +1322,7 @@ section-3 contract for their separate design-fit screening even when this scenar
 <label>Sewing steps, without gravity <input id="guidedScenarioSewSteps" type="number" min="0" max="256" step="1" value="12"></label>
 <label>Gravity steps <input id="guidedScenarioDrapeSteps" type="number" min="0" max="256" step="1" value="36"></label>
 <label>Maximum extra settling steps <input id="guidedScenarioSettle" type="number" min="0" max="256" step="1" value="0"></label>
+<label>Elastic hold window (steps) <input id="guidedScenarioElasticHold" type="number" min="0" max="256" step="1" value="0"></label>
 <label>Mesh candidate budget per alternative <input id="guidedScenarioMeshBudget" type="number" min="3" max="32768" step="1" value="32768"></label>
 <label>Total vertex-frame work budget <input id="guidedScenarioFrameBudget" type="number" min="1" max="64000000" step="1" value="64000000"></label>
 </div>
@@ -2586,7 +2589,8 @@ current-geometry heat evaluation. Without a <code>motion</code> request this rem
 with posture <code>seated</code> or <code>squat</code> and a fraction from 0 to 1.
 Each endpoint keeps the fitted shape and continues the sewn cloth. Omitted <code>leg_pose</code> selects standing at that endpoint.
 Use short pose increments: the checked path follows vertex chords between endpoints and can refuse intersecting geometry.
-Scenario <code>options.max_settle_steps</code> reserves a bounded optional tail for the initial drape, before motion begins.</p>
+Scenario <code>options.max_settle_steps</code> reserves a bounded optional tail for the initial drape, before motion begins.
+Optional <code>options.elastic_hold_steps</code> requests a report-only casing hold window over the last N accepted gravity steps (0 disables).</p>
 <p class="note">Optional scenario <code>vapor_coverage</code> computes layer paths from each new drape, using explicit
 body-triangle IDs, instance-to-layer names, geometric projection settings and vapor-pressure boundaries.
 The result reports covered-region potential transfer separately from uncovered body area and unassigned cloth.

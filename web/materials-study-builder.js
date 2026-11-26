@@ -1285,7 +1285,7 @@ export function buildMaterialScenarioRequest(state) {
     sourceObject(state.fitSpec, "Fit contract"); fitSpec = state.fitSpec;
   } else if (!state.allowNoFit) throw Error("Choose a fit contract or explicitly allow a numerical-only study without one.");
   const fields = ["spacing", "sew_steps", "drape_steps", "step", "max_settle_steps"];
-  const options = object(state.options, [...fields, "self_contact", "time_subdivision", "newton_strategy", "integrator", "static_equilibrium",
+  const options = object(state.options, [...fields, "elastic_hold_steps", "self_contact", "time_subdivision", "newton_strategy", "integrator", "static_equilibrium",
     "bending_model", "compression_model", "damping", "adaptive_barrier", "stick_slip", "self_stick_slip", "mesh", "construction", "start_self_repulsion"],
     fields, "Drape options");
   for (const key of ["spacing", "step"]) {
@@ -1304,6 +1304,11 @@ export function buildMaterialScenarioRequest(state) {
   }
   if (options.max_settle_steps > 0 && !Number.isFinite((options.drape_steps + options.max_settle_steps) * options.step)) {
     throw Error("The declared gravity and settling duration must be finite.");
+  }
+  if (own(options, "elastic_hold_steps")) {
+    if (!Number.isSafeInteger(options.elastic_hold_steps) || options.elastic_hold_steps < 0 || options.elastic_hold_steps > options.drape_steps) {
+      throw Error(`Elastic hold window must be a whole number from 0 to the declared gravity steps (${options.drape_steps}).`);
+    }
   }
   if (own(options, "time_subdivision") && options.time_subdivision !== null) {
     const keys = ["max_halvings", "max_trials"];
@@ -1551,7 +1556,10 @@ export function buildMaterialScenarioRequest(state) {
   }
   if (own(state, "materialStrain")) materialStrainPolicy(sourceObject(state.materialStrain, "Material strain"));
   if (own(state, "contactLoads")) contactLoadsPolicy(sourceObject(state.contactLoads, "Body contact loads"));
-  const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(options), ',"fit_spec":', fitSpec,
+  const serializedOptions = own(options, "elastic_hold_steps") && options.elastic_hold_steps === 0
+    ? Object.fromEntries(Object.entries(options).filter(([key]) => key !== "elastic_hold_steps"))
+    : options;
+  const parts = ['{"schema":"ftx-drape-scenario/1","options":', JSON.stringify(serializedOptions), ',"fit_spec":', fitSpec,
     ',"max_mesh_points":', String(state.maxMeshPoints), ',"max_vertex_frames":', String(state.maxVertexFrames),
     ...(own(state, "surface") ? [',"surface":', state.surface] : []),
     ...(motion === undefined ? [] : [',"motion":', motion, ',"max_motion_trials":', String(state.maxMotionTrials)]),
