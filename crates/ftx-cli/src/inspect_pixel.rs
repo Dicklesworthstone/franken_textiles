@@ -36,7 +36,9 @@ fn garment_hit(
         }
     }
     let (id, range) = owner.ok_or_else(|| bad_input("triangle has no panel in mesh_map"))?;
-    let (raw, _) = fold::document(&dir.join("pattern.json"))?;
+    let pattern_path = dir.join("pattern.json");
+    crate::round::regular(&pattern_path, false)?;
+    let (raw, _) = fold::pattern_document(&pattern_path)?;
     let pattern = Pattern::new(raw);
     let inst = pattern
         .instance(id)
@@ -109,7 +111,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .map_err(|_| bad_input("pixel coordinates must be non-negative integers"))
     };
     let pixel = [coordinate(x)?, coordinate(y)?];
-    let (round, _) = fold::document(&dir.join("round.json"))?;
+    let round_path = dir.join("round.json");
+    crate::round::regular(&round_path, false)?;
+    let (round, _) = fold::document(&round_path)?;
     let n = round["round"]
         .as_u64()
         .ok_or_else(|| bad_input("missing round number"))?;
@@ -284,4 +288,63 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ));
     }
     Ok((result, 0, text))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use ftx_core::RefusalCode;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn inspect_pixel_refuses_symlinked_round_json_and_pattern_json() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ftx-inspect-pixel-symlink-{}-{stamp}",
+            std::process::id()
+        ));
+        let round_dir = root.join("rounds/000");
+        fs::create_dir_all(&round_dir).unwrap();
+        let outside = root.join("outside.json");
+        fs::write(&outside, r#"{"round":0}"#).unwrap();
+        symlink(&outside, round_dir.join("round.json")).unwrap();
+
+        let argv: Vec<String> = [
+            "inspect-pixel",
+            round_dir.to_str().unwrap(),
+            "--view",
+            "front",
+            "--pixel",
+            "0,0",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let err = run(&crate::parse(&argv).unwrap()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular file"), "{err}");
+
+        // Garment hit must also refuse a symlinked pattern.json.
+        let pat_dir = root.join("rounds/001");
+        fs::create_dir_all(&pat_dir).unwrap();
+        symlink(&outside, pat_dir.join("pattern.json")).unwrap();
+        let cloth = ColouredMesh {
+            vertices: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ],
+            triangles: vec![[0, 1, 2]],
+            colours: vec![[0.5, 0.5, 0.5]; 3],
+        };
+        let map = json!({"vertices": 3, "inst_range": {"panel": [0, 3]}});
+        let pat_err = garment_hit(&pat_dir, &map, &cloth, [0, 1, 2], Vec3::ZERO).unwrap_err();
+        assert_eq!(pat_err.code, RefusalCode::InvalidDocument);
+        assert!(pat_err.message.contains("regular file"), "{pat_err}");
+        let _ = fs::remove_dir_all(&root);
+    }
 }
