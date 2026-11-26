@@ -100,7 +100,7 @@ impl Solver {
         duration_s: f64,
         options: SubdivisionOptions,
     ) -> Result<SubdividedStep, Refusal> {
-        self.step_subdivided_with(duration_s, options, |_| ())
+        self.step_subdivided_with(duration_s, options, |_, _| Ok(()))
             .map(|(report, _)| report)
     }
 
@@ -110,7 +110,7 @@ impl Solver {
         &mut self,
         duration_s: f64,
         options: SubdivisionOptions,
-        mut observe: impl FnMut(&Self) -> T,
+        mut observe: impl FnMut(&Self, f64) -> Result<T, Refusal>,
     ) -> Result<(SubdividedStep, Vec<T>), Refusal> {
         options.validate(duration_s)?;
         if self.x.len() != self.model.rest.len()
@@ -171,7 +171,8 @@ impl Solver {
                         ));
                     }
                     state = candidate;
-                    observations.push(observe(&state));
+                    let end_s = duration_s * (end as f64 / ticks as f64);
+                    observations.push(observe(&state, end_s)?);
                     // Adapt barrier stiffness only between internal bisected substeps so an
                     // unsubdivided interval never double-adapts with `scene::run_phase_with_subdivision`.
                     if !pending.is_empty()
@@ -180,7 +181,7 @@ impl Solver {
                         contact.adapt_barrier_stiffness(&state.x);
                     }
                     result.accepted.push(AcceptedSubstep {
-                        end_s: duration_s * (end as f64 / ticks as f64),
+                        end_s,
                         step_s,
                         depth,
                         solve,
