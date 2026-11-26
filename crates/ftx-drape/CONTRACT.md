@@ -1,5 +1,15 @@
 # ftx-drape contract
 
+The ordinary self-contact drape audits paths of garment vertices against the static displayed
+body between solved endpoints. The path is linear between PC2-precision endpoints of each
+accepted physical step, including internal bisections. The body's BVH supplies candidate faces;
+an exact segment/face predicate rejects only a transverse piercing of a face interior.
+Touching an edge, arriving on a face and sliding in its plane remain legal. Four million
+candidate checks are shared by all substeps of one nominal interval. The refusal identifies the
+source cloth vertex, incident cloth face and body face, and retains a pose interpolated at the
+volume-ratio crossing time. Existing endpoint checks still cover cloth faces and self-crossings.
+A clean vertex sweep does not certify moving cloth edges, face interiors or swept cloth self-contact.
+
 **FrankenSim-lifted solver, integrator, geometry, adjoint, and microclimate extensions.**
 Five deterministic, `#![forbid(unsafe_code)]`, zero-`libm`, zero-`mul_add` modules adapted from
 FrankenSim (`source_root` `f6c2ec6714e374fa3253654042d5ce3aed56e19dffc166f7e212617b226751b3`)

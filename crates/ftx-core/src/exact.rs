@@ -101,7 +101,21 @@ pub fn orient3d(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> Sign 
         return Sign::of(det);
     }
 
-    // Exact: the same determinant over exact two-component differences.
+    Sign::of_i32(expansion_sign(&orient3d_expansion(pa, pb, pc, pd)))
+}
+
+/// Expansion estimate of the 3D orientation determinant, retaining small volumes after cancellation.
+/// Two such volumes interpolate the time of an already established segment–plane crossing.
+/// The orientation convention and certified arithmetic domain are those of [`orient3d`].
+///
+/// # Panics
+/// On a non-finite coordinate or when the arithmetic leaves the finite range.
+#[must_use]
+pub fn orient3d_determinant(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> f64 {
+    orient3d_expansion(pa, pb, pc, pd).iter().sum()
+}
+
+fn orient3d_expansion(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> Vec<f64> {
     let ax = diff_expansion(pa[0], pd[0]);
     let bx = diff_expansion(pb[0], pd[0]);
     let cx = diff_expansion(pc[0], pd[0]);
@@ -117,8 +131,7 @@ pub fn orient3d(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> Sign 
     let m_c = expansion_diff(&expansion_product(&ax, &by), &expansion_product(&bx, &ay));
     let t =
         fast_expansion_sum_zeroelim(&expansion_product(&az, &m_a), &expansion_product(&bz, &m_b));
-    let det_e = fast_expansion_sum_zeroelim(&t, &expansion_product(&cz, &m_c));
-    Sign::of_i32(expansion_sign(&det_e))
+    fast_expansion_sum_zeroelim(&t, &expansion_product(&cz, &m_c))
 }
 
 const CCWERRBOUND_A: f64 = (3.0 + 16.0 * EPS) * EPS;

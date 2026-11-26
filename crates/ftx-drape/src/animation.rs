@@ -596,6 +596,14 @@ pub struct ReplayContact {
     candidates: Vec<usize>,
 }
 
+pub(crate) struct DisplayPiercing {
+    pub positions: Vec<Vec3>,
+    pub fraction: f64,
+    pub vertex: usize,
+    pub cloth_face: usize,
+    pub body_face: usize,
+}
+
 impl ReplayContact {
     /// Build the static body index. Malformed vertex indices or unrepresentable coordinates refuse.
     pub fn new(vertices: &[Vec3], faces: &[[usize; 3]]) -> Result<Self, Refusal> {
@@ -612,6 +620,69 @@ impl ReplayContact {
             index,
             candidates: Vec::new(),
         })
+    }
+
+    /// A cloth vertex crossing the open interior of a static body face along the accepted
+    /// step's chord. A coplanar slide, boundary touch or zero-length path is admissible.
+    /// Source face order determines which witness is retained. Shared vertices are tested once.
+    pub(crate) fn vertex_piercing(
+        &mut self,
+        before: &[Vec3],
+        after: &[Vec3],
+        faces: &[[usize; 3]],
+        remaining: &mut usize,
+    ) -> Result<Option<DisplayPiercing>, Refusal> {
+        use ftx_core::exact::orient3d_determinant;
+        use ftx_core::intersection::{IntersectionKind, segment_triangle};
+        if before.len() != after.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "display sweep requires corresponding garment vertices",
+            ));
+        }
+        let before = display_points(before)?;
+        let after = display_points(after)?;
+        let mut seen = vec![false; before.len()];
+        for (cloth_face, face) in faces.iter().enumerate() {
+            for &vertex in face {
+                let visited = seen.get_mut(vertex).ok_or_else(|| {
+                    Refusal::new(RefusalCode::DegenerateGeometry, "display triangle index out of range")
+                })?;
+                if std::mem::replace(visited, true) || before[vertex] == after[vertex] {
+                    continue;
+                }
+                let (p, q) = (before[vertex], after[vertex]);
+                let bounds = crate::contact::aabb(&[p, q]);
+                self.index.query(bounds, &mut self.candidates);
+                *remaining = remaining.checked_sub(self.candidates.len()).ok_or_else(|| {
+                    Refusal::new(RefusalCode::BudgetExceeded, "display sweep candidate budget exhausted")
+                })?;
+                for &body_face in &self.candidates {
+                    let triangle = self.triangles[body_face];
+                    if !crate::bvh::overlaps(bounds, self.boxes[body_face])
+                        || segment_triangle(p, q, triangle) != Some(IntersectionKind::Crossing)
+                    {
+                        continue;
+                    }
+                    // The exact signs already establish opposite sides and an interior hit.
+                    // Signed volumes yield its interpolation time even near cancellation.
+                    let [a, b, c] = triangle.map(|v| [v.x, v.y, v.z]);
+                    let u = orient3d_determinant(a, b, c, [p.x, p.y, p.z]).abs();
+                    let v = orient3d_determinant(a, b, c, [q.x, q.y, q.z]).abs();
+                    let fraction = u / (u + v);
+                    let positions = before.iter().zip(&after)
+                        .map(|(&p, &q)| p * (1.0 - fraction) + q * fraction).collect();
+                    return Ok(Some(DisplayPiercing {
+                        positions,
+                        fraction,
+                        vertex,
+                        cloth_face,
+                        body_face,
+                    }));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Return the first proper crossing in face order, with its native frame and both face IDs.
@@ -843,6 +914,30 @@ mod tests {
         assert_eq!(refusal.code, RefusalCode::IntersectingTrajectory);
         assert!(refusal.message.contains("frame 88"));
         body.check(&raised, &[[0, 1, 2]], 89).unwrap();
+    }
+
+    #[test]
+    fn swept_vertex_requires_strict_piercing_and_spends_the_candidate_allowance() {
+        let body = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
+        let mut contact = ReplayContact::new(&body, &[[0, 1, 2]]).unwrap();
+        let face = [[0, 1, 2]];
+        let sweep = |x, y, z| [Vec3::new(x, y, z), Vec3::new(2., 0., z), Vec3::new(0., 2., z)];
+        let start = sweep(0.25, 0.25, -1.);
+        let end = sweep(0.25, 0.25, 3.);
+        let hit = contact.vertex_piercing(&start, &end, &face, &mut 1).unwrap().unwrap();
+        assert_eq!((hit.vertex, hit.cloth_face, hit.body_face), (0, 0, 0));
+        assert_eq!(hit.fraction, 0.25);
+        assert_eq!(hit.positions[0], Vec3::new(0.25, 0.25, 0.));
+        let error = contact.vertex_piercing(&start, &end, &face, &mut 0).err().unwrap();
+        assert_eq!(error.code, RefusalCode::BudgetExceeded);
+        for (p, q) in [
+            (start, start),
+            (start, sweep(0.25, 0.25, 0.)),
+            (sweep(0.25, 0., -1.), sweep(0.25, 0., 1.)),
+            (sweep(0.125, 0.25, 0.), sweep(0.25, 0.25, 0.)),
+        ] {
+            assert!(contact.vertex_piercing(&p, &q, &face, &mut 32).unwrap().is_none());
+        }
     }
 
     #[test]

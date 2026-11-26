@@ -725,11 +725,9 @@ pub fn drape_observed(
     let mut subdivision_trials = 0;
     let mut advance = |scene: &mut Scene, name, steps, gravity, completed| {
         let first_frame = frames.len();
-        let mut audit = display_contact.as_mut().map(|display| PhaseAudit {
-            display,
-            first_frame,
-            rejected: None,
-        });
+        let mut audit = display_contact
+            .as_mut()
+            .map(|display| PhaseAudit::new(display, first_frame, scene.positions()));
         let report = run_phase_audited(
             scene,
             steps,

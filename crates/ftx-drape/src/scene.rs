@@ -1973,7 +1973,7 @@ pub(crate) fn run_phase_with_subdivision(
     run_phase_audited(scene, steps, h, gravity, policy, trials_used, None, frame)
 }
 
-/// Location of a rejected interior endpoint within its nominal interval, in seconds.
+/// Location of a rejected interior pose within its nominal interval, in seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct RefusedSubstep {
     /// Time from the start of the nominal interval to the captured positions.
@@ -1992,12 +1992,33 @@ pub(crate) struct RejectedEndpoint {
 /// solved endpoint while its exact positions are still available, including a bisected interval's
 /// interior endpoints that have no animation frame. Keep only the first rejected geometry.
 pub(crate) struct PhaseAudit<'a> {
-    pub display: &'a mut crate::animation::ReplayContact,
-    pub first_frame: usize,
+    display: &'a mut crate::animation::ReplayContact,
+    first_frame: usize,
     pub rejected: Option<RejectedEndpoint>,
+    previous: Vec<Vec3>,
+    previous_s: f64,
+    remaining: usize,
 }
 
-impl PhaseAudit<'_> {
+// Charge candidate leaves across every accepted subdivision of a nominal interval.
+const DISPLAY_SWEEP_BUDGET: usize = 4_000_000;
+
+impl<'a> PhaseAudit<'a> {
+    pub(crate) fn new(
+        display: &'a mut crate::animation::ReplayContact,
+        first_frame: usize,
+        previous: Vec<Vec3>,
+    ) -> Self {
+        Self {
+            display,
+            first_frame,
+            previous,
+            previous_s: 0.0,
+            remaining: DISPLAY_SWEEP_BUDGET,
+            rejected: None,
+        }
+    }
+
     fn check(
         &mut self,
         k: usize,
@@ -2020,6 +2041,28 @@ impl PhaseAudit<'_> {
                 substep: (end_s < duration_s).then_some(RefusedSubstep { end_s, duration_s }),
             });
             return Err(refusal);
+        }
+        if let Some(hit) = self.display.vertex_piercing(
+            &self.previous, positions, faces, &mut self.remaining,
+        )? {
+            let at = self.previous_s + (end_s - self.previous_s) * hit.fraction;
+            self.rejected = Some(RejectedEndpoint {
+                positions: hit.positions,
+                steps: k,
+                substep: Some(RefusedSubstep { end_s: at, duration_s }),
+            });
+            return Err(Refusal::new(
+                RefusalCode::IntersectingTrajectory,
+                format!("swept vertex {} of cloth triangle {} crosses displayed body triangle {} at {at} s into the {duration_s} s interval leading to physical frame {frame} (interpolated display witness)",
+                    hit.vertex, hit.cloth_face, hit.body_face),
+            ).repair("inspect the interpolated crossing pose and revise the hand, foot or panel placement"));
+        }
+        self.previous.clone_from_slice(positions);
+        if end_s == duration_s {
+            self.previous_s = 0.0;
+            self.remaining = DISPLAY_SWEEP_BUDGET;
+        } else {
+            self.previous_s = end_s;
         }
         Ok(())
     }
@@ -2321,11 +2364,7 @@ mod grain_tests {
 
         scene.solver = solver;
         let original = format!("{:?}", scene.solver);
-        let mut audit = PhaseAudit {
-            display: &mut display,
-            first_frame: 11,
-            rejected: None,
-        };
+        let mut audit = PhaseAudit::new(&mut display, 11, scene.positions());
         let error = run_phase_audited(
             &mut scene,
             1,
@@ -2355,6 +2394,51 @@ mod grain_tests {
             })
         );
         assert_eq!(format!("{:?}", scene.solver), original);
+    }
+
+    #[test]
+    fn display_vertex_pierces_between_clear_solved_endpoints() {
+        // Uniform translation of a horizontal cloth panel through a tiny horizontal skin face.
+        // Neither solved endpoint intersects it. Only a swept material point witnesses passage.
+        let mut scene = subdivision_scene();
+        let initial = scene.positions();
+        let mut solver = Solver::new(
+            scene.solver.model.clone(), initial.clone(), &[[true, true, false]; 3], Vec3::ZERO,
+        );
+        solver.v.fill(Vec3::new(0., 0., 1.));
+        let h = 0.03125;
+        let z = h / 4.;
+        let finger = [Vec3::new(-0.01, -0.01, z), Vec3::new(0.02, -0.01, z), Vec3::new(-0.01, 0.02, z)];
+        let mut display = crate::animation::ReplayContact::new(&finger, &[[0, 1, 2]]).unwrap();
+        let mut control = solver.clone();
+        assert!(control.step(h).unwrap().converged);
+        display.check(&initial, &scene.mesh.faces, 0).unwrap();
+        display.check(&control.x, &scene.mesh.faces, 1).unwrap();
+        // Enter the second substep with an accepted, still-clear first eighth of the interval.
+        let between: Vec<_> = initial.iter().map(|&p| p + Vec3::new(0., 0., h / 8.)).collect();
+        let mut audit = PhaseAudit::new(&mut display, 1, initial.clone());
+        audit.check(0, h / 8., h, &between, &scene.mesh.faces).unwrap();
+        let err = audit.check(0, h, h, &control.x, &scene.mesh.faces).unwrap_err();
+        assert_eq!(err.code, RefusalCode::IntersectingTrajectory);
+        let refused = audit.rejected.unwrap();
+        assert_eq!(refused.steps, 0);
+        assert!((refused.substep.unwrap().end_s - z).abs() < 1e-12);
+        assert!((refused.positions[0].z - z).abs() < 1e-12);
+
+        for policy in [None, Some(SubdivisionOptions::default())] {
+            scene.solver = solver.clone();
+            let mut audit = PhaseAudit::new(&mut display, 1, initial.clone());
+            let err = run_phase_audited(&mut scene, 1, h, 0., policy, &mut 0, Some(&mut audit),
+                |_, _| panic!("piercing emitted a nominal frame")).unwrap_err();
+            assert_eq!(err.code, RefusalCode::IntersectingTrajectory);
+            assert!(err.message.contains("swept vertex 0 of cloth triangle 0 crosses displayed body triangle 0"));
+            let rejected = audit.rejected.unwrap();
+            assert_eq!(rejected.steps, 0);
+            assert!((rejected.positions[0].z - z).abs() < 1e-12);
+            if policy.is_some() {
+                assert_eq!(scene.solver.x, initial);
+            }
+        }
     }
 
     #[test]
