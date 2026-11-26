@@ -52,6 +52,8 @@ type Sewn = {
 type Arm = { indices: Uint32Array; offsets: Float32Array[] };
 type Form = {
   base: Float32Array; triangles: Uint32Array; angles: number[]; arms: [Arm, Arm];
+  /** Native-order pose accumulation, reused before one final conversion to displayed f32 coordinates. */
+  poseScratch: Float64Array;
   shoulders: [THREE.Vector3, THREE.Vector3]; floorMm: number; cutMm: number | null; baseDeg: number;
   /** Side-neck point above the floor (mm): the form ends a little above it, under a cap, like the films' forms. */
   neckMm: number;
@@ -106,6 +108,7 @@ async function readForm(): Promise<Form> {
     return entry.dtype === "u32" ? new Uint32Array(bytes, entry.offset, entry.count) : new Float32Array(bytes, entry.offset, entry.count);
   };
   const angles: number[] = header.arm_angles_deg;
+  const base = array("display_vertices") as Float32Array;
   const arm = (side: string): Arm => {
     const indices = array(`${side}_display_indices`) as Uint32Array, all = array(`${side}_display_offsets`) as Float32Array;
     const stride = indices.length * 3;
@@ -113,7 +116,7 @@ async function readForm(): Promise<Form> {
   };
   const shoulder = (part: string) => { const o = header.frames[part].origin; return new THREE.Vector3(o[0] / 1000, o[2] / 1000, -o[1] / 1000); };
   return {
-    base: array("display_vertices") as Float32Array, triangles: array("display_triangles") as Uint32Array, angles,
+    base, poseScratch: new Float64Array(base.length), triangles: array("display_triangles") as Uint32Array, angles,
     arms: [arm("left"), arm("right")], shoulders: [shoulder("arm_L"), shoulder("arm_R")],
     floorMm: header.floor_mm, cutMm: header.trunk_cut_above_floor_mm ?? null, baseDeg: header.base_arm_deg,
     neckMm: header.landmarks.torso.snp,
@@ -122,8 +125,8 @@ async function readForm(): Promise<Form> {
 
 /** The form's displayed surface with the arms at these angles, as the session interpolates its samples. */
 function posed(form: Form, left: number, right: number, out = new Float32Array(form.base.length)) {
-  out.set(form.base);
-  const { angles } = form;
+  const { angles, poseScratch } = form;
+  poseScratch.set(form.base);
   for (const [arm, angle] of [[form.arms[0], left], [form.arms[1], right]] as const) {
     const a = THREE.MathUtils.clamp(angle, angles[0], angles[angles.length - 1]);
     let upper = angles.findIndex(x => x >= a);
@@ -132,9 +135,10 @@ function posed(form: Form, left: number, right: number, out = new Float32Array(f
     const from = arm.offsets[upper - 1], to = arm.offsets[upper];
     for (let k = 0; k < arm.indices.length; k++) {
       const v = arm.indices[k] * 3;
-      for (let c = 0; c < 3; c++) out[v + c] += from[k * 3 + c] * (1 - t) + to[k * 3 + c] * t;
+      for (let c = 0; c < 3; c++) poseScratch[v + c] = poseScratch[v + c] + from[k * 3 + c] * (1 - t) + to[k * 3 + c] * t;
     }
   }
+  out.set(poseScratch);
   return out;
 }
 
@@ -236,8 +240,16 @@ export default function PoseScene({ onStatus, command }: {
 
     function sew(pose: [number, number]) {
       if (same(pose, sewing)) return;
-      if (same(pose, status.sewn ?? null) && !sewing && !moving) {
-        if (garment) garment.mesh.visible = true;
+      if (same(pose, status.sewn ?? null) && !sewing && !moving && clothNow) {
+        // The worker has already accepted this endpoint; finish any replay before reporting it ready.
+        if (carry) clothNow = carry.samples.slice(carry.samples.length - carry.start.length);
+        carry = null;
+        replay = null;
+        setBody(pose[0], pose[1]);
+        if (garment) {
+          garment.update(toThree(clothNow));
+          garment.mesh.visible = true;
+        }
         status.phase = "ready";
         publish();
         return;
