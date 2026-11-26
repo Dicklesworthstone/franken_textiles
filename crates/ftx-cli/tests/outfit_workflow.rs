@@ -479,3 +479,71 @@ fn outfit_legible_shading_renders_distinct_pngs_and_refuses_unknown_shading() {
     run(&dir, &["--out", "bad_out", "--shading", "glossy"], 3);
     assert!(!dir.join("bad_out").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn outfit_refuses_symlinked_simdir_and_core_simulation_files() {
+    use std::os::unix::fs::symlink;
+
+    let dir = setup();
+    let alias = dir.join("jacket_alias");
+    symlink(dir.join("jacket"), &alias).unwrap();
+    for sim_arg in ["jacket_alias", "jacket_alias/"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args([
+                "outfit",
+                "--measurements",
+                "measurements.json",
+                "--sim",
+                sim_arg,
+                "--out",
+                "bad_alias",
+                "--res",
+                "40x48",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3), "{sim_arg}");
+        let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(body["refusal"]["code"], "invalid_document", "{sim_arg}");
+        assert!(!dir.join("bad_alias").exists());
+    }
+
+    for (idx, linked) in ["sim_report.json", "body.obj", "garment.obj", "fold.pc2"]
+        .into_iter()
+        .enumerate()
+    {
+        let case_dir = dir.join(format!("case_{idx}"));
+        std::fs::create_dir(&case_dir).unwrap();
+        for name in ["sim_report.json", "body.obj", "garment.obj", "fold.pc2"] {
+            if name == linked {
+                symlink(dir.join("jacket").join(name), case_dir.join(name)).unwrap();
+            } else {
+                std::fs::copy(dir.join("jacket").join(name), case_dir.join(name)).unwrap();
+            }
+        }
+        let out_name = format!("bad_case_{idx}");
+        let output = Command::new(env!("CARGO_BIN_EXE_ftx"))
+            .current_dir(&dir)
+            .args([
+                "outfit",
+                "--measurements",
+                "measurements.json",
+                "--sim",
+                case_dir.to_str().unwrap(),
+                "--out",
+                &out_name,
+                "--res",
+                "40x48",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3), "{linked}");
+        let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(body["refusal"]["code"], "invalid_document", "{linked}");
+        assert!(!dir.join(&out_name).exists());
+    }
+}

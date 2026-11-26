@@ -156,6 +156,12 @@ fn text_list(report: &Value, key: &str) -> bool {
         .is_some_and(|a| a.iter().all(Value::is_string))
 }
 
+fn sim_entry(dir: &Path, name: &str) -> Result<PathBuf, Refusal> {
+    let path = dir.join(name);
+    crate::round::regular(&path, false)?;
+    Ok(path)
+}
+
 fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Result<Outfit, Refusal> {
     if paths.is_empty() || paths.len() > 16 {
         return Err(bad_input(
@@ -171,13 +177,14 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
     let (mut vertices, mut faces) = (0, 0);
     for name in paths {
         let dir = Path::new(name);
+        crate::round::regular(dir, true)?;
         let canonical = fs::canonicalize(dir).map_err(|e| workspace::io_error(dir, e))?;
         if !seen.insert(canonical) {
             return Err(bad_input(
                 "the same drape directory was supplied more than once",
             ));
         }
-        let report_path = dir.join("sim_report.json");
+        let report_path = sim_entry(dir, "sim_report.json")?;
         let bytes = read_bytes(&report_path)?;
         let report: Value = serde_json::from_slice(&bytes)
             .map_err(|e| bad_input(format!("{}: {e}", report_path.display())))?;
@@ -213,7 +220,7 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
                 right_abduction_deg: common,
             })
         };
-        let (next_body, body_hash) = read_mesh(&dir.join("body.obj"))?;
+        let (next_body, body_hash) = read_mesh(&sim_entry(dir, "body.obj")?)?;
         if let Some(first) = &body {
             if actual_arms(angle.unwrap(), requested_arms) != actual_arms(arm_deg, arm_pose)
                 || first.triangles != next_body.triangles
@@ -234,8 +241,8 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
             faces += next_body.triangles.len();
             body = Some(next_body);
         }
-        let (mut mesh, mesh_hash) = read_mesh(&dir.join("garment.obj"))?;
-        let cache = final_frame(&dir.join("fold.pc2"), &mut mesh, &report)?;
+        let (mut mesh, mesh_hash) = read_mesh(&sim_entry(dir, "garment.obj")?)?;
+        let cache = final_frame(&sim_entry(dir, "fold.pc2")?, &mut mesh, &report)?;
         vertices += mesh.vertices.len();
         faces += mesh.triangles.len();
         if vertices > MAX_VERTICES || faces > MAX_FACES {
