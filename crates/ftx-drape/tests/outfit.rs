@@ -731,6 +731,74 @@ fn drafted_trousers_keep_their_original_casing_in_a_jacket_outfit() {
 }
 
 #[test]
+fn outfit_prepare_accepts_bound_drafted_patterns_with_descriptive_fabric_metadata() {
+    let drafts: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/oracle/pattern/drafts.json"
+    ))
+    .unwrap();
+    let selection: ftx_pattern::material_catalog::Selection =
+        serde_json::from_value(sheet()).unwrap();
+    let changes = ftx_pattern::material_binding::Changes {
+        schema: "ftx-material-bindings/1".into(),
+        default: Some(selection),
+        ..Default::default()
+    };
+    let mut outfit = input();
+    for (garment, id) in outfit
+        .garments
+        .iter_mut()
+        .zip(["zouave_bolero-920", "zouave_trousers-920"])
+    {
+        let case = drafts["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap();
+        let bound = changes
+            .apply(&ftx_pattern::Pattern::new(case["input"]["pattern"].clone()))
+            .unwrap();
+        garment.pattern = bound["pattern"].clone();
+    }
+    // Real drafted patterns bound via `Changes::apply` retain standard descriptive metadata
+    // (`id`, `name`, `kind`, `width_mm`, `sim_note`) alongside `material`.
+    assert!(outfit.garments[0].pattern["fabric"]["name"].is_string());
+    assert!(outfit.garments[0].pattern["fabric"]["kind"].is_string());
+    assert!(outfit.garments[0].pattern["fabric"]["width_mm"].is_number());
+    assert!(outfit.garments[0].pattern["fabric"]["sim_note"].is_string());
+    outfit.garments[1].pattern["fabric"]["notes"] = json!("descriptive garment note");
+
+    let prepared = prepare(&outfit, &options()).unwrap();
+    let casings = ftx_drape::scene::elastic_casings(prepared.pattern(), 15.0).unwrap();
+    assert_eq!(casings.len(), 1);
+    assert!(casings[0].instance.starts_with("outer::"));
+
+    // Legacy physics coefficients, inferred layers, unknown extensions and invalid metadata types
+    // must remain refused fail-closed.
+    for (key, value) in [
+        ("areal_g_m2", json!(380)),
+        ("tensile_N_m", json!(10000.0)),
+        ("bending_Nm", json!(1.2e-4)),
+        ("layers", json!(["shell", "lining"])),
+        ("custom_ext", json!(true)),
+        ("width_mm", json!(0.0)),
+        ("width_mm", json!(-1500.0)),
+        ("width_mm", json!("1500")),
+        ("name", json!(42)),
+        ("kind", json!(false)),
+        ("sim_note", json!([])),
+        ("id", json!(123)),
+    ] {
+        let mut bad = outfit.clone();
+        bad.garments[0].pattern["fabric"][key] = value;
+        assert!(
+            prepare(&bad, &options()).is_err(),
+            "fabric.{key} should be refused"
+        );
+    }
+}
+
+#[test]
 fn two_sewn_bands_weld_independently_and_continue_on_the_same_moving_body() {
     let input = bands();
     let opts = DrapeOptions {

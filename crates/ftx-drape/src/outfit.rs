@@ -248,13 +248,38 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
         let fabric = original["fabric"].as_object().ok_or_else(|| {
             invalid("each garment needs an explicit characterized fabric default")
         })?;
-        if fabric
-            .keys()
-            .any(|k| !["material", "material_id", "interfaces", "role", "id"].contains(&k.as_str()))
-        {
+        if fabric.keys().any(|k| {
+            ![
+                "material",
+                "material_id",
+                "interfaces",
+                "role",
+                "id",
+                "name",
+                "kind",
+                "width_mm",
+                "sim_note",
+                "notes",
+            ]
+            .contains(&k.as_str())
+        }) {
             return Err(invalid(
                 "outfit fabric cannot contain legacy coefficients, inferred layers or unsupported extensions",
             ));
+        }
+        if let Some(width) = fabric.get("width_mm")
+            && width
+                .as_f64()
+                .is_none_or(|value| !value.is_finite() || value <= 0.0)
+        {
+            return Err(invalid(
+                "outfit fabric.width_mm must be finite and positive",
+            ));
+        }
+        for key in ["id", "name", "kind", "sim_note"] {
+            if fabric.get(key).is_some_and(|value| !value.is_string()) {
+                return Err(invalid(format!("outfit fabric.{key} must be a string")));
+            }
         }
         let frozen_default = textile_import::resolve_fabric(&original["fabric"])?
             .ok_or_else(|| invalid("each garment needs a characterized fabric default"))?
