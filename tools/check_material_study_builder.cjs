@@ -4144,6 +4144,47 @@ test('guided and original motion require both independent arm angles in their fi
   }
 });
 
+test('independent elbow flexion retains absolute pairs original bytes and frozen named cases', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
+  const legacy=motion(motionState()),frames=[
+    {time_s:0.25,arm_abduction_deg:35,elbow_pose:{left_flexion_deg:90,right_flexion_deg:20},
+      arm_pose:{left_abduction_deg:40,right_abduction_deg:35},leg_pose:{posture:'seated',fraction:0.1}},
+    {time_s:0.5,arm_abduction_deg:40},{time_s:0.75,arm_abduction_deg:30,elbow_pose:null}];
+  const input={...motionState(),keyframes:frames},before=JSON.stringify(input),authored=motion(input);
+  assert.deepEqual(JSON.parse(authored).keyframes,frames);assert.equal(JSON.stringify(input),before);
+  const first=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  input.keyframes[0].elbow_pose.left_flexion_deg=120;
+  const second=single({...scenarioState(),motion:input,maxMotionTrials:1024,maxVertexFrames:32000000});
+  const saved=matrix({maxEvaluations:4,cases:[{key:'bend',scenario:first},{key:'further',scenario:second}]});
+  assert.deepEqual(JSON.parse(saved).cases.map(item=>item.scenario.motion.keyframes[0].elbow_pose.left_flexion_deg),[90,120]);
+  assert.ok(saved.includes(first));assert.ok(saved.includes(second));
+  const original=' {\r\n"schema":"ftx-drape-motion/1","keyframes":[{"time_s":0.25,"arm_abduction_deg":35.0,'+
+    '"elbow_pose":{"left_flexion_deg":-0.0,"right_flexion_deg":1.80e2}}],'+
+    '"max_step_s":0.125,"max_trials":128,"max_pairs":100000,"max_sample_vertices":500000}\r\n';
+  const retained=single({...scenarioState(),motion:original,maxMotionTrials:1024});
+  assert.ok(retained.includes(original));assert.match(retained,/"left_flexion_deg":-0\.0,"right_flexion_deg":1\.80e2/);
+  assert.equal(motion(motionState()),legacy);
+});
+
+test('guided and original motion require both bounded elbow angles without dropping malformed controls', async () => {
+  const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single}=await modulePromise;
+  const valid={left_flexion_deg:90,right_flexion_deg:0};
+  for(const elbow_pose of [undefined,false,1,'90,0',[],[90,0],{},
+    {left_flexion_deg:90},{right_flexion_deg:0},{...valid,extra:true},
+    ...['left_flexion_deg','right_flexion_deg'].flatMap(side=>[-0.01,180.01,NaN,Infinity,-Infinity,null,'35']
+      .map(value=>({...valid,[side]:value})))]) {
+    const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:35,elbow_pose}]};
+    assert.throws(()=>motion(input),/elbow pose/i);
+    assert.throws(()=>single({...scenarioState(),motion:input,maxMotionTrials:1024}),/elbow pose/i);
+    if(elbow_pose!==undefined) assert.throws(()=>single({...scenarioState(),
+      motion:JSON.stringify({schema:'ftx-drape-motion/1',...input}),maxMotionTrials:1024}),/elbow pose/i);
+  }
+  for(const elbows of [{left_flexion_deg:0,right_flexion_deg:180},{left_flexion_deg:180,right_flexion_deg:0},null]) {
+    const input={...motionState(),keyframes:[{time_s:0.25,arm_abduction_deg:35,elbow_pose:elbows}]};
+    assert.deepEqual(JSON.parse(motion(input)).keyframes[0].elbow_pose,elbows);
+  }
+});
+
 test('guided root rotations retain exact absolute controls through source files and frozen cases', async () => {
   const {buildMaterialMotionRequest:motion,buildMaterialScenarioRequest:single,buildMaterialScenarioMatrixRequest:matrix}=await modulePromise;
   const legacy=motion(motionState());
