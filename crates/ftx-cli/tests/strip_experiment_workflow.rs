@@ -187,6 +187,7 @@ fn history_cylinder_calibration_recovers_relaxation_and_replays_through_both_com
         material: selection,
         fixture,
         loading: check.loading.clone(),
+        geometry_output: ftx_drape::cylinder::GeometryOutput::EveryStep,
         nominal_protocol: None,
         controls: input.controls,
     };
