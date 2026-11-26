@@ -1,6 +1,6 @@
 //! Explicit Anny correspondences for articulated multi-frame fitting; no detector or guessed anatomy.
 
-use std::{collections::BTreeSet, path::Path};
+use std::{collections::BTreeSet, fs::File, io::Read, path::Path};
 
 use ftx_body::{
     AnnyData, AnnyModel,
@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{option, photo, single};
-use crate::{Args, bad_input, known_options, read_json, required};
+use crate::{Args, bad_input, known_options, required};
 
 mod capture;
 mod review;
@@ -83,8 +83,35 @@ struct MaskManifest {
     frames: Vec<MaskFrame>,
 }
 
+fn read_model_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
+    let io = |e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()));
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{} exceeds its {limit}-byte body-model budget", path.display()),
+        )
+    };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(bad_input("body model input must be a regular file"));
+    }
+    if meta.len() > limit {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    if !file.metadata().map_err(io)?.is_file() {
+        return Err(bad_input("body model input must be a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > limit {
+        return Err(budget());
+    }
+    Ok(bytes)
+}
+
 fn import_masks(path: &str, fit: &mut BodyFitInput) -> Result<Value, Refusal> {
-    let (value, bytes) = read_json(path)?;
+    let (value, bytes) = super::intrinsics::read_document(path)?;
     let manifest: MaskManifest = serde_json::from_value(value.clone())
         .map_err(|e| bad_input(format!("invalid silhouette mask manifest: {e}")))?;
     if manifest.schema != "ftx-body-silhouettes/1"
@@ -280,8 +307,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         return Err(bad_input("--max-evaluations must be 1..1000000"));
     }
     let path = Path::new(required(args, "model")?);
-    let bytes = std::fs::read(path)
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))?;
+    let bytes = read_model_bytes(path, 512 * 1024 * 1024)?;
     let hash = sha256_hex(&bytes);
     if hash != request.model.model_sha256 {
         return Err(bad_input("model SHA-256 mismatch; no fit was run"));
@@ -357,4 +383,35 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         eprintln!("wrote {path}");
     }
     Ok((value, code, text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_model_bytes_refuses_directories_and_oversized_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-body-fit-model-read-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let dir_err = read_model_bytes(&dir, 16).unwrap_err();
+        assert_eq!(dir_err.code, RefusalCode::InvalidDocument);
+        assert!(dir_err.message.contains("regular file"));
+
+        let oversized = dir.join("oversized.ftxbody");
+        std::fs::write(&oversized, b"0123456789abcdef0").unwrap();
+        let budget_err = read_model_bytes(&oversized, 16).unwrap_err();
+        assert_eq!(budget_err.code, RefusalCode::BudgetExceeded);
+
+        let exact = dir.join("exact.ftxbody");
+        std::fs::write(&exact, b"0123456789abcdef").unwrap();
+        assert_eq!(read_model_bytes(&exact, 16).unwrap(), b"0123456789abcdef");
+    }
 }

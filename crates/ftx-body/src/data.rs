@@ -7,6 +7,8 @@
 //! array's SHA-256. Anything wrong is a refusal, never a panic.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use ftx_core::receipt::Sha256;
@@ -229,18 +231,50 @@ impl Reader<'_> {
     }
 }
 
+const MAX_MODEL_BYTES: u64 = 512 * 1024 * 1024;
+
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
+    let io = |e: std::io::Error| {
+        Refusal::new(RefusalCode::Io, format!("cannot read {}: {e}", path.display()))
+            .repair("run tools/body-model/convert_anny.py (it writes the default path), or set FTX_ANNY_MODEL")
+    };
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{} exceeds its {limit}-byte body-model budget", path.display()),
+        )
+    };
+    // Inspect metadata before opening so a FIFO cannot block on File::open, then re-check the
+    // opened file descriptor against concurrent path replacement.
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(bad(format!("{} must be a regular file", path.display())));
+    }
+    if meta.len() > limit {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    if !file.metadata().map_err(io)?.is_file() {
+        return Err(bad(format!("{} must be a regular file", path.display())));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > limit {
+        return Err(budget());
+    }
+    Ok(bytes)
+}
+
 impl AnnyData {
     /// Reads and checks a `.ftxbody` file. With `verify`, every array's SHA-256 is checked too
     /// (about 150 MB of hashing).
     ///
     /// # Errors
-    /// [`RefusalCode::Io`] if the file cannot be read; [`RefusalCode::InvalidDocument`] for anything
+    /// [`RefusalCode::Io`] if the file cannot be read; [`RefusalCode::BudgetExceeded`] if it
+    /// exceeds 512 MiB; [`RefusalCode::InvalidDocument`] for non-regular paths or anything
     /// malformed or inconsistent.
     pub fn read(path: &Path, verify: bool) -> Result<Self, Refusal> {
-        let bytes = std::fs::read(path).map_err(|e| {
-            Refusal::new(RefusalCode::Io, format!("cannot read {}: {e}", path.display()))
-                .repair("run tools/body-model/convert_anny.py (it writes the default path), or set FTX_ANNY_MODEL")
-        })?;
+        let bytes = read_bounded(path, MAX_MODEL_BYTES)?;
         Self::from_bytes(&bytes, verify)
     }
 
@@ -757,5 +791,34 @@ mod tests {
                 .code,
             RefusalCode::InvalidDocument
         );
+    }
+
+    #[test]
+    fn read_bounded_refuses_directories_oversized_files_and_missing_paths() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-body-read-bounded-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let missing_err = read_bounded(&dir.join("absent.ftxbody"), 16).unwrap_err();
+        assert_eq!(missing_err.code, RefusalCode::Io);
+
+        let dir_err = read_bounded(&dir, 16).unwrap_err();
+        assert_eq!(dir_err.code, RefusalCode::InvalidDocument);
+        assert!(dir_err.message.contains("regular file"));
+
+        let oversized = dir.join("oversized.ftxbody");
+        std::fs::write(&oversized, b"0123456789abcdef0").unwrap();
+        let budget_err = read_bounded(&oversized, 16).unwrap_err();
+        assert_eq!(budget_err.code, RefusalCode::BudgetExceeded);
+
+        let exact = dir.join("exact.ftxbody");
+        std::fs::write(&exact, b"0123456789abcdef").unwrap();
+        assert_eq!(read_bounded(&exact, 16).unwrap(), b"0123456789abcdef");
     }
 }
