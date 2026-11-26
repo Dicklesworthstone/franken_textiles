@@ -2047,6 +2047,10 @@ fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
 }
 
 fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8> {
+    model_bytes_with_elbows(articulated, local_changes, false)
+}
+
+fn model_bytes_with_elbows(articulated: bool, local_changes: &[&str], elbows: bool) -> Vec<u8> {
     // The placement case is an articulated closed prism; the original image-fit case is a box.
     // Both are synthetic analytic geometry, never a stand-in for anatomical acceptance.
     let synthetic_head = local_changes.contains(&"synthetic-head-radius");
@@ -2079,7 +2083,8 @@ fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8>
                 let x = sign * (0.12 + 0.05 * f64::from(j));
                 let z = 0.9 - 0.06 * f64::from(j);
                 heads.extend([x, 0.0, z]);
-                tails.extend([x + sign * 0.05, 0.0, z - 0.06]);
+                let bend_y = if elbows && j == 2 { -0.00001 } else { 0.0 };
+                tails.extend([x + sign * 0.05, bend_y, z - 0.06]);
             }
         }
         for sign in [1.0, -1.0] {
@@ -2119,9 +2124,9 @@ fn model_bytes_with_locals(articulated: bool, local_changes: &[&str]) -> Vec<u8>
                 let (s, c) = ftx_core::det::sin_cos(f64::from(i) * std::f64::consts::TAU / 16.0);
                 vertices.extend([0.1 * c, 0.1 * s, z]);
                 influences.push(if r == arm_ring && [15, 0, 1].contains(&i) {
-                    1
+                    if elbows { 3 } else { 1 }
                 } else if r == arm_ring && [7, 8, 9].contains(&i) {
-                    5
+                    if elbows { 7 } else { 5 }
                 } else if r == 0 && c > 0.5 {
                     9
                 } else if r == 0 && c < -0.5 {
@@ -3652,6 +3657,123 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
             }
         }
     }
+}
+
+#[test]
+fn independent_elbow_motion_replays_native_and_portable_on_the_selected_body() {
+    use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+    use ftx_drape::study::motion;
+    use ftx_wasm::materials::scenario::on_model;
+
+    let dir = setup();
+    let bytes = model_bytes_with_elbows(true, &[], true);
+    let digest = sha256_hex(&bytes);
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let accepted = receipt(&digest);
+    let body = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":accepted,
+        "arm_abduction_deg":35.0});
+    let fitted = FittedBody::prepare(&model, &digest, &BodyRequest::read(&body).unwrap()).unwrap();
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = std::f64::consts::TAU * 180.0;
+    pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+    pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    let study = json!({"schema":"ftx-material-study/1","variants":[{"key":"baseline",
+        "changes":{"schema":"ftx-material-bindings/1","default":pattern["fabric"]["material"]}}],
+        "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0}});
+    let scenario = json!({"schema":"ftx-drape-scenario/1",
+        "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+        "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000,
+        "motion":{"schema":"ftx-drape-motion/1","keyframes":[
+            {"time_s":0.002,"arm_abduction_deg":35.0,
+                "elbow_pose":{"left_flexion_deg":0.003,"right_flexion_deg":0.001}},
+            {"time_s":0.004,"arm_abduction_deg":35.0}],
+            "source_pose_sampling":{"max_step_s":0.001,"max_segments":4},
+            "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}});
+    let portable: Value = serde_json::from_str(
+        &on_model(
+            &model,
+            &digest,
+            &pattern.to_string(),
+            &study.to_string(),
+            &scenario.to_string(),
+            &body.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let result = &portable["simulations"][0]["evaluation"]["result"]["motion"];
+    assert_eq!(result["status"], "available", "{result}");
+    let result = &result["result"];
+    let request: motion::Request = serde_json::from_value(scenario["motion"].clone()).unwrap();
+    assert_eq!(
+        result["path_sha256"],
+        fitted.motion_path(&model, &digest, &request).unwrap().sha256()
+    );
+    assert_eq!(result["source_pose_sampling"]["generated_segments"], 4);
+    assert_eq!(
+        result["keyframes"][0]["elbow_pose"],
+        scenario["motion"]["keyframes"][0]["elbow_pose"]
+    );
+    assert!(result["keyframes"][1].get("elbow_pose").is_none());
+    let samples = result["samples"].as_array().unwrap();
+    let bent = result["keyframes"][0]["sample_index"].as_u64().unwrap() as usize;
+    let straight = result["keyframes"][1]["sample_index"].as_u64().unwrap() as usize;
+    assert_ne!(
+        samples[bent]["body_positions_m"],
+        result["initial_sample"]["body_positions_m"]
+    );
+    assert_eq!(
+        samples[straight]["body_positions_m"],
+        result["initial_sample"]["body_positions_m"]
+    );
+    assert_eq!(portable["scenario"]["body_fit"]["source_fit"], accepted);
+    assert_eq!(result["continuous_contact_checked"], true);
+    assert_eq!(result["fit_claim"], false);
+
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    for (name, value) in [
+        ("pattern.json", &pattern),
+        ("study.json", &study),
+        ("scenario.json", &scenario),
+        ("body-input.json", &body),
+    ] {
+        save(&dir.join(name), value);
+    }
+    for (binary, prefix) in [
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            vec!["--json", "materials", "scenario-study"],
+        ),
+        (env!("CARGO_BIN_EXE_ftx-materials"), vec!["scenario-study"]),
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args([
+                "pattern.json",
+                "study.json",
+                "scenario.json",
+                "body-input.json",
+                "model.ftxbody",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(native.get("result").unwrap_or(&native), &portable);
+    }
+    assert_eq!(read(&dir.join("body-input.json")), body);
 }
 
 #[test]

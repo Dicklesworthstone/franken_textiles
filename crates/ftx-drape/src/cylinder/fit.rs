@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     Controls, Fixture, NominalProtocol, ProtocolAudit, State, Waypoint, assemble_solver,
     audit_protocol, budget, build_cylinder_mesh, holder_separation_m, invalid, out_of_range,
-    record_state, set_upper_ring, validate_history_start,
+    record_state, set_ring_positions, set_ring_velocities, validate_history_start,
 };
 use crate::{Membrane, Solver};
 
@@ -177,7 +177,7 @@ pub struct Observation {
     /// Optional tare-adjusted upper axial force reading (`tare_adjusted_force_n`, `N`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force_n: Option<Channel>,
-    /// Optional tare-adjusted upper axial torque reading (`tare_adjusted_torque_nm`, `N*m`).
+    /// Optional tare-adjusted driven-ring axial torque reading (`tare_adjusted_torque_nm`, `N*m`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torque_nm: Option<Channel>,
     /// Optional mid-height mean cylinder radius reading (`mid_radius_range_m[2]`, `m`).
@@ -201,7 +201,7 @@ pub struct Experiment {
     pub id: String,
     /// Cylindrical holder dimensions, pretension, tare, grain axis and coarse mesh cells.
     pub fixture: Fixture,
-    /// Prescribed upper-holder kinematic waypoints (`1..=129`).
+    /// Prescribed holder kinematic waypoints (`1..=129`).
     pub loading: Vec<Waypoint>,
     /// Optional declared nominal rates/travel for protocol-discrepancy auditing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -384,7 +384,7 @@ pub struct Prediction {
     /// Predicted minus observed tare-adjusted upper axial force (`N`), when observed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force_residual_n: Option<f64>,
-    /// Predicted minus observed tare-adjusted upper axial torque (`N*m`), when observed.
+    /// Predicted minus observed tare-adjusted driven-ring axial torque (`N*m`), when observed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub torque_residual_nm: Option<f64>,
     /// Predicted minus observed mid-height mean cylinder radius (`m`), when observed.
@@ -746,7 +746,6 @@ impl Budget<'_> {
         let mut waypoint_states = Vec::with_capacity(experiment.loading.len());
         waypoint_states.push(first_state);
 
-        let [n_theta, n_z] = fixture.cells;
         let mut current_time = 0.0_f64;
         let mut prev_sep = holder_separation_m(fixture, &experiment.loading[0])?;
         let mut prev_rot_rad = experiment.loading[0].rotation_deg.to_radians();
@@ -785,17 +784,15 @@ impl Budget<'_> {
                 let guess = self_contact.is_none().then(|| {
                     super::affine_cylinder_guess(
                         &solver.x,
-                        n_theta,
-                        n_z,
+                        fixture,
                         curr_sep - prev_sep,
                         curr_rot_rad - prev_rot_rad,
                     )
                 });
                 let accepted_positions = guess.as_ref().map(|_| solver.x.clone());
-                set_upper_ring(
+                set_ring_positions(
                     &mut solver.x,
-                    n_theta,
-                    n_z,
+                    fixture,
                     mesh.mesh_radius_m,
                     curr_sep,
                     waypoint.rotation_deg,
@@ -808,11 +805,7 @@ impl Budget<'_> {
                     solver.step_with_guess(h, None)
                 }
                 .map_err(map_trial)?;
-                for i in 0..n_theta {
-                    let idx = n_z * n_theta + i;
-                    let p = solver.x[idx];
-                    solver.v[idx] = Vec3::new(-omega_rad_s * p.y, omega_rad_s * p.x, vz_m_s);
-                }
+                set_ring_velocities(&mut solver, fixture, omega_rad_s, vz_m_s);
                 let st = record_state(
                     fixture,
                     &controls,
@@ -1566,8 +1559,9 @@ fn adjoint_jacobian<const N: usize>(
                 let weights = torque_weights.get_or_insert_with(|| {
                     let mut w = vec![Vec3::ZERO; n_verts];
                     for i in 0..n_theta {
-                        let pos = solver.x[upper_start + i];
-                        w[upper_start + i] = Vec3::new(-pos.y, pos.x, 0.0);
+                        let idx = experiment.fixture.rotating_holder.index() * upper_start + i;
+                        let pos = solver.x[idx];
+                        w[idx] = Vec3::new(-pos.y, pos.x, 0.0);
                     }
                     w
                 });
@@ -2479,7 +2473,12 @@ mod tests {
 
     #[test]
     fn history_calibration_forward_replays_source_law() {
-        let input = history_input();
+        let mut input = history_input();
+        for exp in &mut input.experiments {
+            if exp.observations.iter().any(|obs| obs.torque_nm.is_some()) {
+                exp.fixture.rotating_holder = cylinder::RotatingHolder::Lower;
+            }
+        }
         let parameters = [0.6, 0.15];
         let mut budget = history_budget(&input);
         let mut material = input.material.clone();
@@ -2890,6 +2889,7 @@ mod tests {
 
     fn base_fixture(warp_axis: [f64; 2]) -> Fixture {
         Fixture {
+            rotating_holder: Default::default(),
             holder_radius_m: 0.040,
             specimen_width_m: 0.260,
             specimen_height_m: 0.110,
@@ -3834,6 +3834,9 @@ mod tests {
          -> Experiment {
             let mut fixture = base_fixture(warp_axis);
             fixture.cells = [16, 6];
+            if warp_axis == [1.0, 0.0] {
+                fixture.rotating_holder = cylinder::RotatingHolder::Lower;
+            }
             let loading = vec![Waypoint {
                 time_s: 0.0,
                 axial_displacement_m: axial_m,

@@ -25,8 +25,8 @@ use crate::integrator::TimeIntegrator;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
-    Fabric, PartFrames, PhaseReport, Scene, SceneBuildOptions, casings_at_cut_length,
-    elastic_casings, run_phase_with_subdivision,
+    Fabric, PartFrames, PhaseAudit, PhaseReport, RefusedSubstep, RejectedEndpoint, Scene,
+    SceneBuildOptions, casings_at_cut_length, elastic_casings, run_phase_audited,
 };
 use crate::start::{SelfRepulsionOptions, edge_strain, face_edges};
 use crate::stepping::SubdivisionOptions;
@@ -437,6 +437,8 @@ pub struct RefusedRun {
     pub phase: &'static str,
     /// Nominal steps of that phase accepted when the state was reached.
     pub accepted_steps: usize,
+    /// Present when the retained geometry lies inside the next nominal interval.
+    pub substep: Option<RefusedSubstep>,
     /// The first rejected pair at start admission, as source garment face indices before welding.
     pub start_crossing_faces: Option<[usize; 2]>,
     /// Set when the run began from an earlier relaxation checkpoint because its fully relaxed start
@@ -463,21 +465,23 @@ fn start_unrelaxed_p95(scene: &Scene) -> Option<f64> {
 
 fn refused_run(
     scene: &Scene,
-    frames: &[Vec<Vec3>],
+    positions: Vec<Vec3>,
     phase: &'static str,
-    frames_before_phase: usize,
-) -> Option<RefusedRun> {
-    frames.last().map(|positions| RefusedRun {
+    accepted_steps: usize,
+    substep: Option<RefusedSubstep>,
+) -> RefusedRun {
+    RefusedRun {
         mesh: scene.mesh.clone(),
-        positions: positions.clone(),
+        positions,
         phase,
-        accepted_steps: frames.len() - frames_before_phase,
+        accepted_steps,
+        substep,
         start_crossing_faces: None,
         start_fallback: scene
             .start_backtracked_from
             .map(|rejected| (scene.start.relax_iterations, rejected)),
         start_unrelaxed_p95: start_unrelaxed_p95(scene),
-    })
+    }
 }
 
 /// Drapes `pattern` on `body`, calling `progress` with a line per stage.
@@ -620,6 +624,7 @@ pub fn drape_observed(
                     mesh: scene.mesh,
                     phase: "start",
                     accepted_steps: 0,
+                    substep: None,
                     start_crossing_faces: crossing_faces,
                     start_fallback,
                     start_unrelaxed_p95,
@@ -695,7 +700,7 @@ pub fn drape_observed(
         // The collider may omit fingers or feet retained by the displayed wearer. Check the exact
         // welded start before spending any work on a trajectory that must already be refused.
         if let Err(refusal) = display.check(&initial_positions, &scene.mesh.faces, first_sewn - 1) {
-            *refused = refused_run(&scene, std::slice::from_ref(&initial_positions), "sew", 1);
+            *refused = Some(refused_run(&scene, initial_positions, "sew", 0, None));
             return Err(refusal);
         }
     }
@@ -718,27 +723,47 @@ pub fn drape_observed(
         .map(|c| c.accepted_sample(&scene.solver.x));
     let mut phases = Vec::new();
     let mut subdivision_trials = 0;
+    let mut advance = |scene: &mut Scene, name, steps, gravity, completed| {
+        let first_frame = frames.len();
+        let mut audit = display_contact.as_mut().map(|display| PhaseAudit {
+            display,
+            first_frame,
+            rejected: None,
+        });
+        let report = run_phase_audited(
+            scene,
+            steps,
+            opts.step,
+            gravity,
+            opts.time_subdivision,
+            &mut subdivision_trials,
+            audit.as_mut(),
+            |_, x| frames.push(x.to_vec()),
+        );
+        if report.is_err() {
+            let endpoint = audit
+                .and_then(|a| a.rejected)
+                .unwrap_or_else(|| RejectedEndpoint {
+                    positions: frames.last().expect("admitted start").clone(),
+                    steps: frames.len() - first_frame,
+                    substep: None,
+                });
+            *refused = Some(refused_run(
+                scene,
+                endpoint.positions,
+                name,
+                completed + endpoint.steps,
+                endpoint.substep,
+            ));
+        }
+        report
+    };
     for (name, steps, g, lag) in [
         ("sew", opts.sew_steps, 0.0, opts.lag_rounds[0]),
         ("drape", opts.drape_steps, GRAVITY, opts.lag_rounds[1]),
     ] {
         scene.solver.friction_rounds = lag;
-        let frames_before_phase = frames.len();
-        let rep = match run_phase_with_subdivision(
-            &mut scene,
-            steps,
-            opts.step,
-            g,
-            opts.time_subdivision,
-            &mut subdivision_trials,
-            |_, x| frames.push(x.to_vec()),
-        ) {
-            Ok(rep) => rep,
-            Err(refusal) => {
-                *refused = refused_run(&scene, &frames, name, frames_before_phase);
-                return Err(refusal);
-            }
-        };
+        let rep = advance(&mut scene, name, steps, g, 0)?;
         progress(&format!(
             "{name}: {} steps, {} Newton iterations ({} unconverged), max speed {:.4} m/s",
             rep.steps, rep.iterations, rep.unconverged, rep.max_speed
@@ -747,7 +772,6 @@ pub fn drape_observed(
     }
     let (sew, mut drape) = (phases[0].clone(), phases[1].clone());
     if opts.max_settle_steps > 0 {
-        let frames_before_settling = frames.len();
         for _ in 0..opts.max_settle_steps {
             if consecutive_quiet_steps(&drape) >= SETTLE_QUIET_STEPS
                 && scene
@@ -758,21 +782,13 @@ pub fn drape_observed(
             {
                 break;
             }
-            let step = match run_phase_with_subdivision(
+            let step = advance(
                 &mut scene,
+                "settle",
                 1,
-                opts.step,
                 GRAVITY,
-                opts.time_subdivision,
-                &mut subdivision_trials,
-                |_, x| frames.push(x.to_vec()),
-            ) {
-                Ok(step) => step,
-                Err(refusal) => {
-                    *refused = refused_run(&scene, &frames, "settle", frames_before_settling);
-                    return Err(refusal);
-                }
-            };
+                drape.steps - opts.drape_steps,
+            )?;
             drape.append(step);
         }
         progress(&format!(
@@ -781,24 +797,6 @@ pub fn drape_observed(
             consecutive_quiet_steps(&drape),
             drape.max_speed
         ));
-    }
-    if let Some(display) = &mut display_contact {
-        // The start was checked before the physical schedule; every accepted endpoint still needs
-        // the same full-display and cloth crossing audit, without repeating the initial frame.
-        for (index, frame) in frames.iter().enumerate().skip(first_sewn) {
-            if let Err(refusal) = display.check(frame, &scene.mesh.faces, index) {
-                // The frame that crosses the wearer is the one to look at: hand it back as the state after
-                // that many accepted steps of its phase (settling steps count as draping).
-                let first_draped = first_sewn + opts.sew_steps;
-                let (phase, phase_start) = if index < first_draped {
-                    ("sew", first_sewn)
-                } else {
-                    ("drape", first_draped)
-                };
-                *refused = refused_run(&scene, &frames[..=index], phase, phase_start);
-                return Err(refusal);
-            }
-        }
     }
     let fold = FoldUp {
         frames,

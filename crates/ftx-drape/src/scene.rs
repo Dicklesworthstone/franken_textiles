@@ -1968,6 +1968,72 @@ pub(crate) fn run_phase_with_subdivision(
     gravity: f64,
     policy: Option<SubdivisionOptions>,
     trials_used: &mut usize,
+    frame: impl FnMut(usize, &[Vec3]),
+) -> Result<PhaseReport, Refusal> {
+    run_phase_audited(scene, steps, h, gravity, policy, trials_used, None, frame)
+}
+
+/// Location of a rejected interior endpoint within its nominal interval, in seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RefusedSubstep {
+    /// Time from the start of the nominal interval to the captured positions.
+    pub end_s: f64,
+    /// Full nominal interval duration.
+    pub duration_s: f64,
+}
+
+pub(crate) struct RejectedEndpoint {
+    pub positions: Vec<Vec3>,
+    pub steps: usize,
+    pub substep: Option<RefusedSubstep>,
+}
+
+/// The display skin may include fingers or feet absent from the physical collider. Audit every
+/// solved endpoint while its exact positions are still available, including a bisected interval's
+/// interior endpoints that have no animation frame. Keep only the first rejected geometry.
+pub(crate) struct PhaseAudit<'a> {
+    pub display: &'a mut crate::animation::ReplayContact,
+    pub first_frame: usize,
+    pub rejected: Option<RejectedEndpoint>,
+}
+
+impl PhaseAudit<'_> {
+    fn check(
+        &mut self,
+        k: usize,
+        end_s: f64,
+        duration_s: f64,
+        positions: &[Vec3],
+        faces: &[[usize; 3]],
+    ) -> Result<(), Refusal> {
+        let frame = self.first_frame + k;
+        if let Err(mut refusal) = self.display.check(positions, faces, frame) {
+            if end_s < duration_s {
+                refusal.message = format!(
+                    "substep ending {end_s} s into the {duration_s} s interval leading to {}",
+                    refusal.message
+                );
+            }
+            self.rejected = Some(RejectedEndpoint {
+                positions: positions.to_vec(),
+                steps: k + usize::from(end_s == duration_s),
+                substep: (end_s < duration_s).then_some(RefusedSubstep { end_s, duration_s }),
+            });
+            return Err(refusal);
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_phase_audited(
+    scene: &mut Scene,
+    steps: usize,
+    h: f64,
+    gravity: f64,
+    policy: Option<SubdivisionOptions>,
+    trials_used: &mut usize,
+    mut audit: Option<&mut PhaseAudit<'_>>,
     mut frame: impl FnMut(usize, &[Vec3]),
 ) -> Result<PhaseReport, Refusal> {
     if let Some(policy) = policy {
@@ -2005,14 +2071,18 @@ pub(crate) fn run_phase_with_subdivision(
                     max_trials: remaining,
                     ..policy
                 },
-                |solver| {
-                    (
+                |solver, end_s| {
+                    if let Some(audit) = audit.as_deref_mut() {
+                        let positions: Vec<_> = scene.weld.iter().map(|&w| solver.x[w]).collect();
+                        audit.check(k, end_s, h, &positions, &scene.mesh.faces)?;
+                    }
+                    Ok((
                         max_speed_or_nan(&solver.v),
                         solver
                             .contact
                             .as_ref()
                             .map(|c| c.accepted_sample(&solver.x)),
-                    )
+                    ))
                 },
             )?;
             *trials_used += partition.trials;
@@ -2110,7 +2180,11 @@ pub(crate) fn run_phase_with_subdivision(
                 .map(|c| c.accepted_sample(&scene.solver.x)),
             time_subdivision: None,
         });
-        frame(k, &scene.positions());
+        let positions = scene.positions();
+        if let Some(audit) = audit.as_deref_mut() {
+            audit.check(k, h, h, &positions, &scene.mesh.faces)?;
+        }
+        frame(k, &positions);
     }
     let final_speed = max_speed_or_nan(&scene.solver.v);
     if !final_speed.is_finite() {
@@ -2201,6 +2275,86 @@ mod grain_tests {
             construction_field: None,
             authored_crease_hinges: 0,
         }
+    }
+
+    #[test]
+    fn display_crossing_between_nominal_frames_refuses_and_retains_the_substep() {
+        // A stretched panel needs bisection in X while translating uniformly in Z. The narrow
+        // display obstacle intersects it only at an internal substep, outside the solver collider.
+        let mut scene = subdivision_scene();
+        let mut solver = Solver::new(
+            scene.solver.model.clone(),
+            scene.positions(),
+            &[
+                [true, true, false],
+                [false, true, false],
+                [true, true, false],
+            ],
+            Vec3::ZERO,
+        );
+        solver.v.fill(Vec3::new(0., 0., 1.));
+        solver.max_newton = 3;
+        solver.pcg_iters = 10;
+        let duration = 0.04;
+        let policy = SubdivisionOptions {
+            max_halvings: 12,
+            max_trials: 4096,
+        };
+        let mut clear = solver.clone();
+        let partition = clear.step_subdivided(duration, policy).unwrap();
+        assert!(partition.accepted.len() > 1);
+        let t = partition.accepted[0].end_s;
+        let dz = t.min(duration - t) / 4.;
+        let obstacle = [
+            Vec3::new(0.02, 0.02, t - dz),
+            Vec3::new(0.02, 0.03, t + dz),
+            Vec3::new(0.02, 0.01, t + dz),
+        ];
+        let mut display = crate::animation::ReplayContact::new(&obstacle, &[[0, 1, 2]]).unwrap();
+        display.check(&solver.x, &scene.mesh.faces, 10).unwrap();
+        display.check(&clear.x, &scene.mesh.faces, 11).unwrap();
+        let mut expected = solver.clone();
+        expected.step(partition.accepted[0].step_s).unwrap();
+        display
+            .check(&expected.x, &scene.mesh.faces, 11)
+            .unwrap_err();
+
+        scene.solver = solver;
+        let original = format!("{:?}", scene.solver);
+        let mut audit = PhaseAudit {
+            display: &mut display,
+            first_frame: 11,
+            rejected: None,
+        };
+        let error = run_phase_audited(
+            &mut scene,
+            1,
+            duration,
+            0.,
+            Some(policy),
+            &mut 0,
+            Some(&mut audit),
+            |_, _| panic!("a refused substep emitted an animation frame"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, RefusalCode::IntersectingTrajectory);
+        assert!(error.message.contains(&format!("substep ending {t} s")));
+        assert!(
+            error
+                .message
+                .contains("physical frame 11: cloth triangle 0 crosses displayed body triangle 0")
+        );
+        let rejected = audit.rejected.unwrap();
+        assert_eq!(rejected.positions, expected.x);
+        assert_eq!(rejected.steps, 0);
+        assert_eq!(
+            rejected.substep,
+            Some(RefusedSubstep {
+                end_s: t,
+                duration_s: duration
+            })
+        );
+        assert_eq!(format!("{:?}", scene.solver), original);
     }
 
     #[test]

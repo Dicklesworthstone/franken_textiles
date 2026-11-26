@@ -1616,6 +1616,16 @@ impl Search<'_, '_> {
         {
             return Ok(());
         }
+        let order = if let Some(windows) = &self.prepared.copy_windows
+            && windows.has_deadlines
+        {
+            let Some(order) = windows.by_urgency(self.prepared, state) else {
+                return Ok(());
+            };
+            Some(order)
+        } else {
+            None
+        };
         // Untouched copies (`next == 0`) hold no active cell, fixture or staging reservations.
         // Without `copy_windows` all untouched copies are interchangeable; with `copy_windows`
         // untouched copies sharing identical `(available_at_milliseconds, complete_by_milliseconds)`
@@ -1624,7 +1634,8 @@ impl Search<'_, '_> {
         // the lower copy ID first, so branching only on the smallest untouched copy per class is
         // exact.
         let mut seen_untouched = ordering::OperationSet::default();
-        for copy in 0..self.prepared.copies {
+        for position in 0..order.as_ref().map_or(self.prepared.copies, Vec::len) {
+            let copy = order.as_ref().map_or(position, |rows| rows[position].1);
             if state.next[copy] == self.prepared.choices.len() {
                 continue;
             }
@@ -2012,7 +2023,7 @@ pub(in crate::sewing) fn build(
     let copy_windows = policy
         .copy_windows
         .as_ref()
-        .map(|windows| copy_windows::Compiled::new(windows, &tasks, &choices))
+        .map(|windows| copy_windows::Compiled::new(windows, &tasks, &choices, &handoffs))
         .transpose()?;
     let prepared = Prepared {
         policy,

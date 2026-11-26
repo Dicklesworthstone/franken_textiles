@@ -7,7 +7,7 @@ use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
-use super::{MAX_EXACT_MILLISECONDS, Task, Timeline, add, source_valid};
+use super::{MAX_EXACT_MILLISECONDS, Prepared, State, Task, Timeline, add, source_valid};
 use crate::sewing::bad;
 
 /// One physical copy's unloaded availability and optional authored completion requirement.
@@ -125,6 +125,10 @@ pub(super) struct Compiled {
     /// Minimum load/feed/unload work still needed from each route position, ignoring all setup,
     /// handoffs, cell availability and contention. Independent stage choices only relax the route.
     minimum_remaining: Vec<u64>,
+    /// Mandatory work from each exact next task through final unloading, allowing every eligible
+    /// continuation and relaxing all future contention, setup and availability.
+    task_remaining: Vec<u64>,
+    pub(super) has_deadlines: bool,
 }
 
 impl Compiled {
@@ -132,6 +136,7 @@ impl Compiled {
         policy: &Policy,
         tasks: &[Task],
         choices: &[Vec<usize>],
+        handoffs: &[Vec<Option<u64>>],
     ) -> Result<Self, Refusal> {
         let mut windows = policy.copies.clone();
         windows.sort_by_key(|window| window.copy);
@@ -162,16 +167,75 @@ impl Compiled {
                 .expect("admitted nonempty route domain");
             minimum_remaining[route] = add(minimum, minimum_remaining[route + 1])?;
         }
+        let mut task_remaining = vec![0; tasks.len()];
+        for (route, alternatives) in choices.iter().enumerate().rev() {
+            for &index in alternatives {
+                let task = &tasks[index];
+                let continuation = choices.get(route + 1).map_or(0, |next| {
+                    next.iter()
+                        .map(|&to| {
+                            handoffs[task.cell][tasks[to].cell].unwrap_or(0) + task_remaining[to]
+                        })
+                        .min()
+                        .expect("admitted nonempty route domain")
+                });
+                // Even a full 256-stage route with MAX_EXACT_MILLISECONDS in each feed fits u64.
+                // An individually too-long alternative must not invalidate a shorter eligible one.
+                task_remaining[index] = task.load + task.feed + task.unload + continuation;
+            }
+        }
+        let has_deadlines = windows
+            .iter()
+            .any(|window| window.complete_by_milliseconds.is_some());
         Ok(Self {
             policy: policy.clone(),
             windows,
             symmetry_class,
             minimum_remaining,
+            task_remaining,
+            has_deadlines,
         })
     }
 
     pub(super) fn symmetry_class(&self, copy: usize) -> usize {
         self.symmetry_class[copy]
+    }
+
+    /// Check *every* unfinished garment against the current append-only cell clocks. A newly
+    /// dispatched operation can strand a different copy on the same bottleneck. The smallest
+    /// nonnegative slack goes first in search; equal slacks retain the physical copy ID order.
+    pub(super) fn by_urgency(
+        &self,
+        prepared: &Prepared<'_>,
+        state: &State,
+    ) -> Option<Vec<(u64, usize)>> {
+        let mut order = Vec::with_capacity(self.windows.len());
+        for window in &self.windows {
+            let copy = window.copy;
+            let Some(choices) = prepared.choices.get(state.next[copy]) else {
+                continue;
+            };
+            let slack = if let Some(deadline) = window.complete_by_milliseconds {
+                let earliest_finish = choices
+                    .iter()
+                    .map(|&index| {
+                        let cell = prepared.tasks[index].cell;
+                        let handoff = state.copy_cell[copy]
+                            .and_then(|from| prepared.handoffs[from][cell])
+                            .unwrap_or(0);
+                        (state.copy_ready[copy] + handoff).max(state.cell_ready[cell])
+                            + self.task_remaining[index]
+                    })
+                    .min()
+                    .expect("admitted nonempty route domain");
+                deadline.checked_sub(earliest_finish)?
+            } else {
+                u64::MAX
+            };
+            order.push((slack, copy));
+        }
+        order.sort_unstable();
+        Some(order)
     }
 
     pub(super) fn initial_ready(&self) -> Vec<u64> {

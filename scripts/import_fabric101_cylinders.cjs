@@ -1,29 +1,18 @@
 #!/usr/bin/env node
 "use strict";
 
-// Offline reader for the authors' Fabric-101 L01 release. All channels keep instrument signs.
+// Offline reader for pinned Fabric-101 cylinder recordings. All channels keep instrument signs.
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 
 const revision = "510519be0657a341a1a84fdb5c24be156ac83c9f";
-const base = "data/L01/001/";
+const specimens = require("./fabric101-cylinders.json");
 const stages = ["twist", "compression", "friction"];
-const pins = {
-  "head.dat": "02872ba3be75fd3e3f3a01367289b8314ecba93b",
-  "warp/s1/tarevalues.csv": "207edb65aaf011a24b9169eaae1857d0cbc5515a",
-  "warp/s1/twist/twist.dat": "8e386b5b9473fc021db8af50cc12893c57852c92",
-  "warp/s1/compression/compression.dat": "24e40d5af41e0709510f41911878c310bb166414",
-  "warp/s1/friction/friction.dat": "fdac4c9fa64304790e58f06deff77344b869562a",
-  "weft/s1/tarevalues.csv": "300552a673e0788ff2019b8806bf7c7e4fc842b6",
-  "weft/s1/twist/twist.dat": "28f956e1c8e3cd52fb41768b36acc7dce80e3d69",
-  "weft/s1/compression/compression.dat": "fee8a6c940b5f5acc98987c457892e39ca0bab9d",
-  "weft/s1/friction/friction.dat": "992a622f03cb840aa4e473351f467d268e247228",
-};
 
-function loadPinned(root, name, sources) {
+function loadPinned(root, base, pins, name, sources) {
   const file = path.join(root, base, name);
-  if (fs.statSync(file).size > 4_000_000) throw Error("Recording exceeds pinned file size limit: " + name);
+  if (fs.statSync(file).size > 4_500_000) throw Error("Recording exceeds pinned file size limit: " + name);
   const raw = fs.readFileSync(file);
   const blob = createHash("sha1").update("blob " + raw.length + "\0").update(raw).digest("hex");
   if (blob !== pins[name]) throw Error("Recording differs from the pinned Git blob: " + name);
@@ -87,18 +76,23 @@ function medianPositiveRate(rows, axis) {
   return rates.length % 2 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2;
 }
 
-function acquire(root, direction) {
+function acquire(root, direction, specimen = "L01") {
+  if (!Object.hasOwn(specimens, specimen)) throw Error("Unknown Fabric-101 specimen: " + specimen);
+  const { instrument_specimen, pins } = specimens[specimen];
+  const base = "data/" + specimen + "/001/";
   if (!["warp", "weft"].includes(direction)) throw Error("Choose warp or weft");
   const sources = {}, prefix = direction + "/s1/";
-  loadPinned(root, "head.dat", sources);
-  const tares = readTares(loadPinned(root, prefix + "tarevalues.csv", sources));
+  const read = name => loadPinned(root, base, pins, name, sources);
+  read("head.dat");
+  const tares = readTares(read(prefix + "tarevalues.csv"));
   const phases = {};
   for (const stage of stages) {
-    phases[stage] = readSamples(loadPinned(root, prefix + stage + "/" + stage + ".dat", sources));
+    phases[stage] = readSamples(read(prefix + stage + "/" + stage + ".dat"));
   }
   return {
-    schema: "ftx-fabric101-l01-acquisition/1", release_commit: revision,
-    material_id: "fabric101-2026/l01", instrument_specimen: "200_L01_001", direction, repeat: "s1",
+    schema: specimen === "L01" ? "ftx-fabric101-l01-acquisition/1" : "ftx-fabric101-acquisition/1",
+    release_commit: revision, material_id: "fabric101-2026/" + specimen.toLowerCase(),
+    instrument_specimen, direction, repeat: "s1",
     sources, tare_stages: tares,
     columns: ["stage_time_s", "instrument_load_position_mm", "instrument_load_n",
       "instrument_rotation_deg", "instrument_torque_nm"],
@@ -167,7 +161,7 @@ function replay(acquisition, template, tolerance, mounting) {
   }
   const rows = acquisition.phases.twist;
   const { indices, maxError } = twistIndices(rows, tolerance);
-  const loading = indices.map(i => ({ time_s: rows[i][0] - rows[0][0], rotation_deg: -rows[i][3],
+  const loading = indices.map(i => ({ time_s: rows[i][0] - rows[0][0], rotation_deg: rows[i][3],
     axial_displacement_m: 0, clamp_slip_m: 0 }));
   const step = template.controls?.max_step_s ?? 0.05, limit = template.controls?.max_steps ?? 1024;
   if (!Number.isFinite(step) || step <= 0 || !Number.isInteger(limit) || limit < 1 || limit > 2048) {
@@ -176,23 +170,26 @@ function replay(acquisition, template, tolerance, mounting) {
   const steps = loading.slice(1).reduce((n, p, i) => n + Math.ceil((p.time_s - loading[i].time_s) / step), 0);
   if (steps > limit) throw Error("Template integration budget cannot cover the measured twist");
   const travel = acquisition.protocol.measured_pretension_travel_mm * 0.001;
-  const request = { ...template, fixture: { ...fixture, pretension_displacement_m: travel }, loading };
-  // The native positive-angle rate would describe the return stroke in this reversed frame.
+  const request = { ...template, fixture: { ...fixture, rotating_holder: "lower", pretension_displacement_m: travel }, loading };
+  // Only this recorded twist stage is replayed; the template may describe a different protocol.
   delete request.nominal_protocol;
   const receipt = { sample_indices: indices, mounting_convention: mounting, warp_axis: [...axis],
-    source_rotating_holder: "lower", model_rotating_holder: "upper",
-    rotation_scope: "relative_holder_angle_only", rotation_sign: -1,
+    source_rotating_holder: "lower", model_rotating_holder: "lower",
+    rotation_scope: "physical_driven_holder", rotation_sign: 1,
     axial_grip_slip_assumption_m: 0, stage_clock_origin_s: rows[0][0],
     tolerance_deg: tolerance, max_rotation_error_deg: maxError, integration_steps: steps };
   return { request, receipt };
 }
 
 function main(args) {
-  const [root, direction, templatePath, requestPath, angleError, mounting] = args;
-  if (args.length !== 2 && args.length !== 6) {
-    throw Error("Usage: node scripts/import_fabric101_cylinders.cjs RELEASE warp|weft [TEMPLATE.json NEW_REQUEST.json ANGLE_ERROR_DEG named-direction-axial|named-direction-circumferential]");
+  const explicitSpecimen = args[0] === "--specimen";
+  const specimen = explicitSpecimen ? args[1] : "L01";
+  const positional = explicitSpecimen ? args.slice(2) : args;
+  const [root, direction, templatePath, requestPath, angleError, mounting] = positional;
+  if (positional.length !== 2 && positional.length !== 6) {
+    throw Error("Usage: node scripts/import_fabric101_cylinders.cjs [--specimen L01|L02|KN01|KN02] RELEASE warp|weft [TEMPLATE.json NEW_REQUEST.json ANGLE_ERROR_DEG named-direction-axial|named-direction-circumferential]");
   }
-  const result = acquire(root, direction);
+  const result = acquire(root, direction, specimen);
   if (templatePath) {
     const template = JSON.parse(fs.readFileSync(templatePath, "utf8"));
     const { request, receipt } = replay(result, template, Number(angleError), mounting);

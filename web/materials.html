@@ -1794,6 +1794,14 @@ The engine checks exact retained ownership and each material's thermal domain.</
 </div>
 <p class="note">These absolute angles override the common angle for this endpoint. Left and right follow the body's own sides.
 An unchecked endpoint uses its common angle for both arms. Use Add or Replace to save the pair; editing these fields leaves saved endpoints unchanged.</p>
+<label><input id="guidedMotionElbows" type="checkbox"> Bend the elbows at this endpoint</label>
+<div class="study-fields">
+<label>Left elbow flexion (° from straight) <input id="guidedMotionElbowLeft" type="number" min="0" max="180" step="any" placeholder="0–180" disabled></label>
+<label>Right elbow flexion (° from straight) <input id="guidedMotionElbowRight" type="number" min="0" max="180" step="any" placeholder="0–180" disabled></label>
+</div>
+<p class="note">Zero is straight; positive flexion follows each arm's source bend plane. These are absolute angles, independent of shoulder abduction.
+An unchecked endpoint returns both elbows to straight. Use Add or Replace to save the pair; editing the fields leaves saved endpoints unchanged.
+The source model and collision checks determine whether a requested movement can run.</p>
 <label><input id="guidedMotionTranslate" type="checkbox"> Move the whole body at this endpoint</label>
 <div class="study-fields">
 <label>World X displacement (m) <input id="guidedMotionRootX" type="number" step="any" value="0" disabled></label>
@@ -2588,6 +2596,8 @@ current-geometry heat evaluation. Without a <code>motion</code> request this rem
 <p class="note">Motion keyframes accept an arm angle and optional <code>leg_pose: {"posture":"seated","fraction":0.5}</code>
 with posture <code>seated</code> or <code>squat</code> and a fraction from 0 to 1.
 Each endpoint keeps the fitted shape and continues the sewn cloth. Omitted <code>leg_pose</code> selects standing at that endpoint.
+Optional <code>elbow_pose: {"left_flexion_deg":90,"right_flexion_deg":0}</code> sets each elbow from straight in its source bend plane.
+Both values must be finite and from 0 to 180 degrees; omitted or null <code>elbow_pose</code> returns both elbows to straight at that endpoint.
 Use short pose increments: the checked path follows vertex chords between endpoints and can refuse intersecting geometry.
 Scenario <code>options.max_settle_steps</code> reserves a bounded optional tail for the initial drape, before motion begins.
 Optional <code>options.elastic_hold_steps</code> requests a report-only casing hold window over the last N accepted gravity steps (0 disables).</p>

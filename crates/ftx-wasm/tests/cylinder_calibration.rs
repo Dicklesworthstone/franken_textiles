@@ -115,6 +115,7 @@ fn truth_material(warp_n_m: f64, bending_nm: f64) -> Material {
 
 fn small_fixture(warp_axis: [f64; 2]) -> Fixture {
     Fixture {
+        rotating_holder: Default::default(),
         holder_radius_m: 0.040,
         specimen_width_m: 0.260,
         specimen_height_m: 0.110,

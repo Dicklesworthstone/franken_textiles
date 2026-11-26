@@ -381,6 +381,7 @@ function controls() {
   for (const axis of ["X", "Y", "Z"]) $("guidedMotionWind" + axis).disabled = !source || !guidedScenarioMode() || !motionWind;
   for (const side of ["Left", "Right"]) {
     $("guidedMotionArm" + side).disabled = motionMode !== "form" || !$("guidedMotionIndependentArms").checked;
+    $("guidedMotionElbow" + side).disabled = motionMode !== "form" || !$("guidedMotionElbows").checked;
   }
   for (const axis of ["X", "Y", "Z"]) {
     $("guidedMotionRoot" + axis).disabled = motionMode !== "form" || !$("guidedMotionTranslate").checked;
@@ -2083,6 +2084,13 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     const translated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_translation_m));
     const rotated = result.keyframes.some(endpoint => Array.isArray(endpoint.root_rotation_rad));
     const independentArms = result.keyframes.some(endpoint => endpoint.arm_pose != null);
+    const elbows = result.keyframes.some(endpoint => endpoint.elbow_pose != null);
+    if (elbows) {
+      const info = document.createElement("p");
+      info.textContent = `${row.key}: elbow flexion is measured from straight in each arm's source bend plane. ` +
+        "Each endpoint is absolute; an omitted elbow pose returns both elbows to straight.";
+      parent.append(info);
+    }
     const wind = Array.isArray(result.air_velocity_schedule_m_s) || result.keyframes.some(endpoint => Object.hasOwn(endpoint, "air_velocity_m_s"));
     if (wind) {
       const info = document.createElement("p");
@@ -2091,7 +2099,8 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
       parent.append(info);
     }
     const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)",
-      ...(independentArms ? ["Left arm angle (degrees)", "Right arm angle (degrees)"] : ["Arm angle (degrees)"]), "Leg posture", "Leg fraction",
+      ...(independentArms ? ["Left arm angle (degrees)", "Right arm angle (degrees)"] : ["Arm angle (degrees)"]),
+      ...(elbows ? ["Left elbow flexion (degrees)", "Right elbow flexion (degrees)"] : []), "Leg posture", "Leg fraction",
       ...(translated ? ["Root X (m)", "Root Y (m)", "Root Z (m)"] : []),
       ...(rotated ? ["Root rotation X (rad)", "Root rotation Y (rad)", "Root rotation Z (rad)"] : []),
       ...(wind ? ["World wind X (m/s)", "World wind Y (m/s)", "World wind Z (m/s)"] : []),
@@ -2100,6 +2109,8 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
       cells(endpoints, [metric(endpoint.time_s),
         ...(independentArms ? [endpoint.arm_pose?.left_abduction_deg ?? endpoint.arm_abduction_deg,
           endpoint.arm_pose?.right_abduction_deg ?? endpoint.arm_abduction_deg].map(value => metric(value)) : [metric(endpoint.arm_abduction_deg)]),
+        ...(elbows ? [endpoint.elbow_pose?.left_flexion_deg ?? 0,
+          endpoint.elbow_pose?.right_flexion_deg ?? 0].map(value => metric(value)) : []),
         endpoint.leg_pose?.posture || "standing", endpoint.leg_pose ? metric(endpoint.leg_pose.fraction) : "—",
         ...(translated ? (endpoint.root_translation_m ?? [0, 0, 0]).map(value => metric(value)) : []),
         ...(rotated ? (endpoint.root_rotation_rad ?? [0, 0, 0]).map(value => metric(value)) : []),
@@ -7113,6 +7124,7 @@ function guidedMotionInput(keyframes = guidedMotionKeyframes, includeHeat = true
     keyframes: keyframes.map(({ heat_boundary, heat_exterior, coverage_boundary, coverage_exterior,
       coverage_bare_boundary, coverage_exposed_boundary, coverage_exposed_exterior, air_velocity_m_s, ...frame }) =>
       ({ ...frame, ...(frame.arm_pose ? { arm_pose: { ...frame.arm_pose } } : {}),
+        ...(frame.elbow_pose ? { elbow_pose: { ...frame.elbow_pose } } : {}),
         ...(frame.leg_pose ? { leg_pose: { ...frame.leg_pose } } : {}),
         ...(frame.root_translation_m ? { root_translation_m: frame.root_translation_m.slice() } : {}),
         ...(frame.root_rotation_rad ? { root_rotation_rad: frame.root_rotation_rad.slice() } : {}) })),
@@ -7285,6 +7297,7 @@ function showGuidedMotionKeyframes() {
     label.textContent = `${index + 1}: ${frame.time_s} s; ` +
       (frame.arm_pose ? `left arm ${frame.arm_pose.left_abduction_deg}°, right arm ${frame.arm_pose.right_abduction_deg}°; ` :
         `arms ${frame.arm_abduction_deg}°; `) +
+      (frame.elbow_pose ? `left elbow ${frame.elbow_pose.left_flexion_deg}°, right elbow ${frame.elbow_pose.right_flexion_deg}° from straight; ` : "elbows straight; ") +
       (frame.leg_pose ? `${frame.leg_pose.posture} at fraction ${frame.leg_pose.fraction}.` : "standing legs.");
     if (frame.root_translation_m) label.textContent += ` World offset (m): ${frame.root_translation_m.join(", ")}.`;
     if (frame.root_rotation_rad) label.textContent += ` Root rotation vector (rad): ${frame.root_rotation_rad.join(", ")}.`;
@@ -7440,6 +7453,10 @@ function saveGuidedMotionKeyframe(replacing = null) {
     if ($("guidedMotionIndependentArms").checked) frame.arm_pose = {
       left_abduction_deg: number("guidedMotionArmLeft", "left arm angle in degrees"),
       right_abduction_deg: number("guidedMotionArmRight", "right arm angle in degrees"),
+    };
+    if ($("guidedMotionElbows").checked) frame.elbow_pose = {
+      left_flexion_deg: number("guidedMotionElbowLeft", "left elbow flexion in degrees"),
+      right_flexion_deg: number("guidedMotionElbowRight", "right elbow flexion in degrees"),
     };
     if ($("guidedMotionTranslate").checked) frame.root_translation_m = ["X", "Y", "Z"]
       .map(axis => number("guidedMotionRoot" + axis, `world ${axis} displacement in metres`));
@@ -8438,6 +8455,7 @@ for (const id of ["guidedMotionPoseSampling", "guidedMotionPoseStep", "guidedMot
 }
 for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "guidedMotionLegFraction",
   "guidedMotionIndependentArms", "guidedMotionArmLeft", "guidedMotionArmRight",
+  "guidedMotionElbows", "guidedMotionElbowLeft", "guidedMotionElbowRight",
   "guidedMotionTranslate", "guidedMotionRootX", "guidedMotionRootY", "guidedMotionRootZ",
   "guidedMotionRotate", "guidedMotionRotationX", "guidedMotionRotationY", "guidedMotionRotationZ",
   "guidedMotionWindX", "guidedMotionWindY", "guidedMotionWindZ",
@@ -8448,7 +8466,7 @@ for (const id of ["guidedMotionTime", "guidedMotionArm", "guidedMotionLegs", "gu
   ...motionExteriorPrefixes.flatMap(prefix => exteriorSuffixes.map(suffix => prefix + suffix)),
   "guidedMotionExposedMode"]) {
   $(id).addEventListener("change", controls);
-  if (!["guidedMotionLegs", "guidedMotionExposedMode", "guidedMotionIndependentArms", "guidedMotionTranslate", "guidedMotionRotate"].includes(id)) $(id).addEventListener("input", controls);
+  if (!["guidedMotionLegs", "guidedMotionExposedMode", "guidedMotionIndependentArms", "guidedMotionElbows", "guidedMotionTranslate", "guidedMotionRotate"].includes(id)) $(id).addEventListener("input", controls);
 }
 for (const id of ["scenarioMode", "guidedScenarioFitSource", "guidedScenarioHeat", "guidedScenarioSelfContact",
   "guidedScenarioSpacing", "guidedScenarioSewSteps", "guidedScenarioDrapeSteps", "guidedScenarioStep",
@@ -8976,6 +8994,8 @@ function resetGuidedScenarios() {
   $("guidedMotionTime").value = ""; $("guidedMotionArm").value = "";
   $("guidedMotionIndependentArms").checked = false;
   $("guidedMotionArmLeft").value = ""; $("guidedMotionArmRight").value = "";
+  $("guidedMotionElbows").checked = false;
+  $("guidedMotionElbowLeft").value = ""; $("guidedMotionElbowRight").value = "";
   $("guidedMotionTranslate").checked = false; $("guidedMotionRotate").checked = false;
   for (const axis of ["X", "Y", "Z"]) {
     $("guidedMotionRoot" + axis).value = "0"; $("guidedMotionRotation" + axis).value = "0";

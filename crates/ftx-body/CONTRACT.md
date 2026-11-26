@@ -151,6 +151,19 @@ rotations. Omission retains the existing joint order, arithmetic and geometry. I
 requests and garment placement retain their symmetric angle; material-study motion opts into
 independent sides after the initial drape.
 
+`Pose.elbow_pose: Option<ElbowPose>` authors independent `left_flexion_deg` and
+`right_flexion_deg`, finite in the inclusive geometric range 0..180, from the straightened arm.
+It retains upper-arm alignment and turns each `lowerarm01` in the plane of its actual source
+rest axis and `upperarm02`'s axis. The original lower-arm straightening angle is reduced by the
+requested bend; each bone still has one local delta. Nonzero flexion without a defined rest bend
+plane refuses, as does an antiparallel alignment under an explicit elbow control. Omission
+preserves existing poses; explicit zero preserves straight-arm deltas bit for bit. Shoulder
+abduction, thumb controls, FK and LBS/DQS retain their existing authorities. The geometric
+range is not a measured or safe anatomical range. Ordinary sleeve placement still uses straight
+arms; motion may then reach independently authored bends under the existing collision checks.
+Analytic synthetic hinge/descendant controls qualify the coordinate composition only, not
+anatomical fidelity, physical clearance or garment fit. Exact convention: spec 05 §5.1.
+
 The independent `Pose.leg_fraction` (finite, inclusive 0..1; default 1) scales only the selected
 seated/squat hip, knee and ankle rotations. Arms retain their specified abduction and straightening,
 so small explicit flexion endpoints do not inadvertently move the arms back toward rest. Zero is

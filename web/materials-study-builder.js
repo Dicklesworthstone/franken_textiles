@@ -727,6 +727,16 @@ function motionArmPose(frame) {
   }
 }
 
+function motionElbowPose(frame) {
+  if (!own(frame, "elbow_pose") || frame.elbow_pose === null) return;
+  const fields = ["left_flexion_deg", "right_flexion_deg"];
+  const elbows = object(frame.elbow_pose, fields, fields, "Motion elbow pose");
+  if (fields.some(side => typeof elbows[side] !== "number" || !Number.isFinite(elbows[side]) ||
+      elbows[side] < 0 || elbows[side] > 180)) {
+    throw Error("Motion elbow pose needs finite absolute left and right flexion from 0 to 180 degrees; zero is straight.");
+  }
+}
+
 function motionRootTranslation(frame) {
   if (!own(frame, "root_translation_m") || frame.root_translation_m === null) return;
   const offset = frame.root_translation_m;
@@ -939,8 +949,9 @@ export function buildMaterialMotionRequest(state, liquid = undefined, compressio
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of state.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "arm_pose", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
+    object(frame, ["time_s", "arm_abduction_deg", "arm_pose", "elbow_pose", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion endpoint");
     motionArmPose(frame);
+    motionElbowPose(frame);
     motionRootTranslation(frame);
     motionRootRotation(frame);
     if (typeof frame.time_s !== "number" || !Number.isFinite(frame.time_s) || frame.time_s > 60 ||
@@ -1161,8 +1172,9 @@ function motionPolicy(value) {
   }
   let previous = 0, minimumTrials = 0;
   for (const frame of value.keyframes) {
-    object(frame, ["time_s", "arm_abduction_deg", "arm_pose", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
+    object(frame, ["time_s", "arm_abduction_deg", "arm_pose", "elbow_pose", "leg_pose", "root_translation_m", "root_rotation_rad"], ["time_s", "arm_abduction_deg"], "Motion keyframe");
     motionArmPose(frame);
+    motionElbowPose(frame);
     motionRootTranslation(frame);
     motionRootRotation(frame);
     if (!Number.isFinite(frame.time_s) || frame.time_s > 60 || frame.time_s - previous < 1e-9 ||

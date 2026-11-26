@@ -2027,10 +2027,14 @@ requirements, not measured material properties or predictions of physical factor
 First loading cannot precede release. Final unloading must finish on or before the individual
 deadline, in addition to any whole-batch deadline. Existing cell, worker, fixture, carrier, finite
 staging and calendar constraints remain in force; a late copy-major seed can be replaced by a
-complete feasible dispatch. The planner may reject a partial copy when its remaining mandatory
-loading, feed and unloading alone cannot fit its deadline. This bound ignores setup, transfer and
-resource waits, so it cannot exclude a feasible schedule. Search and replay use the same admission;
-an exhausted search without a complete incumbent remains unresolved.
+complete feasible dispatch. After the copy-major seed, the bounded search tries the garment with
+the least remaining deadline slack first. It estimates the earliest finish of each unfinished
+garment using its release or current location, the next eligible cell's current availability, and
+the minimum loading, feed, unloading and handoff time along a connected eligible route to completion.
+A dispatch that leaves another garment past its deadline even under this optimistic estimate ends
+that search branch. Setup and future contention can delay the actual finish. Every selected
+operation still passes the complete timing checks and replay. Equal slack retains physical copy ID
+order. A search that exhausts its allowance before finding a complete schedule remains unresolved.
 
 The routing report retains the exact policy plus baseline and selected rows for each copy: its
 actual first cell, release, first loading, pre-loading wait, final unloading, optional deadline and

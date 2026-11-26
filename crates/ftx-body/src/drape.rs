@@ -15,6 +15,9 @@
 //!   contains the arm. `upperarm02` turns onto `upperarm01`'s rest direction and `lowerarm01` onto
 //!   `upperarm02`'s (each the minimal rotation, `a = normalize(d × d′)`, φ = acos(d·d′)); composed, the
 //!   whole arm lies along `upperarm01`.
+//! - **Elbows** (optional; [`ElbowPose`]): independent flexion β from straight, in the source rest
+//!   bend plane. Keep the upper-arm alignment and change the lower-arm turn from φ to φ − β.
+//!   This authors a kinematic angle, not a measured anatomical range of motion.
 //! - **Legs** (about the world +X axis, the body's left): seated = hips (`upperleg01.L/R`) −90°, knees
 //!   (`lowerleg01.L/R`) +90°; squat (upright trunk) = hips −100°, knees +110°, feet (`foot.L/R`) −10° so
 //!   the soles stay level.
@@ -99,6 +102,40 @@ impl ArmPose {
     }
 }
 
+/// Independent elbow flexion from straight in each arm's source rest bend plane.
+///
+/// The geometric range is 0–180 degrees; it does not establish an anatomical or contact-safe pose.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElbowPose {
+    /// Left elbow flexion from straight, in degrees, 0..=180.
+    pub left_flexion_deg: f64,
+    /// Right elbow flexion from straight, in degrees, 0..=180.
+    pub right_flexion_deg: f64,
+}
+
+impl ElbowPose {
+    /// Check both authored elbow angles before evaluating a model.
+    ///
+    /// # Errors
+    /// Non-finite flexion or a geometric angle outside the inclusive 0–180 degree range.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        for (side, deg) in [
+            ("left", self.left_flexion_deg),
+            ("right", self.right_flexion_deg),
+        ] {
+            Refusal::finite(&format!("{side} elbow flexion"), deg)?;
+            if !(0.0..=180.0).contains(&deg) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("{side} elbow flexion {deg}° is outside 0–180°"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Authored rotations of the two thumb roots in their source bones' rest frames.
 ///
 /// Each vector is an axis multiplied by an angle in radians, with magnitude at most π.
@@ -156,6 +193,9 @@ pub struct Pose {
     pub arm_abduction_deg: Option<f64>,
     /// Optional absolute left/right angles overriding the common arm abduction.
     pub arm_pose: Option<ArmPose>,
+    /// Optional absolute flexion from straight in each source rest bend plane. This retains
+    /// upper-arm alignment and overrides the lower-arm part of `straight_arms`.
+    pub elbow_pose: Option<ElbowPose>,
     /// Leg posture.
     pub legs: Legs,
     /// Fraction of the selected leg rotations, 0..=1. Arms are not scaled by this control.
@@ -178,6 +218,7 @@ impl Pose {
         Self {
             arm_abduction_deg: None,
             arm_pose: None,
+            elbow_pose: None,
             legs: Legs::Standing,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -190,6 +231,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(deg),
             arm_pose: None,
+            elbow_pose: None,
             legs: Legs::Standing,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -208,6 +250,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
             arm_pose: None,
+            elbow_pose: None,
             legs: Legs::Seated,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -220,6 +263,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
             arm_pose: None,
+            elbow_pose: None,
             legs: Legs::Squat,
             leg_fraction: 1.0,
             straight_arms: false,
@@ -235,10 +279,10 @@ impl Pose {
         }
     }
 
-    /// Check authored angles and independent leg flexion before evaluating a model.
+    /// Check authored arm/elbow angles and independent leg flexion before evaluating a model.
     ///
     /// # Errors
-    /// Non-finite or out-of-range arm abduction or leg fraction.
+    /// Non-finite or out-of-range arm abduction, elbow flexion or leg fraction.
     pub fn validate(&self) -> Result<(), Refusal> {
         if let Some(deg) = self.arm_abduction_deg
             && !(0.0..=180.0).contains(&deg)
@@ -250,6 +294,9 @@ impl Pose {
         }
         if let Some(arms) = self.arm_pose {
             arms.validate()?;
+        }
+        if let Some(elbows) = self.elbow_pose {
+            elbows.validate()?;
         }
         if !(0.0..=1.0).contains(&self.leg_fraction) {
             return Err(Refusal::new(
@@ -331,14 +378,14 @@ fn rest_bone_dir(rest: &RestBody, bone_idx: usize, label: &str) -> Result<Vec3, 
     Ok(raw / norm)
 }
 
-/// The joint rotations of `pose` on this rest body, in a fixed order (arms L, R; straightening L,
-/// R; then legs).
+/// The joint rotations of `pose` on this rest body, in a fixed order (arms L, R; upper-arm alignment
+/// and elbow controls L, R; then legs).
 ///
 /// # Errors
 /// [`RefusalCode::OutOfRange`] for an abduction outside 0–180°; [`RefusalCode::InvalidDocument`] when
 /// the model lacks a posed bone or `rest.bone_frames` disagrees with the model;
 /// [`RefusalCode::NonFinite`] for non-finite rest frames; [`RefusalCode::DegenerateGeometry`] for a
-/// degenerate arm bone axis or undefined abduction plane.
+/// degenerate arm bone axis, undefined abduction plane or an authored bend without a rest plane.
 pub fn joint_rotations(
     model: &AnnyModel,
     rest: &RestBody,
@@ -376,8 +423,11 @@ pub fn joint_rotations(
             angle,
         });
     }
-    if pose.straight_arms {
-        for side in ["L", "R"] {
+    if pose.straight_arms || pose.elbow_pose.is_some() {
+        let flexion = pose.elbow_pose.map_or([None; 2], |elbows| {
+            [Some(elbows.left_flexion_deg), Some(elbows.right_flexion_deg)]
+        });
+        for (side, flexion) in ["L", "R"].into_iter().zip(flexion) {
             let dir = |label: &str| -> Result<(usize, Vec3), Refusal> {
                 let full = format!("{label}.{side}");
                 let b = bone(model, &full)?;
@@ -385,14 +435,27 @@ pub fn joint_rotations(
             };
             let ((_, d1), (b2, d2), (b3, d3)) =
                 (dir("upperarm01")?, dir("upperarm02")?, dir("lowerarm01")?);
-            for (b, from, to) in [(b2, d2, d1), (b3, d3, d2)] {
+            for (b, from, to, flexion) in [(b2, d2, d1, None), (b3, d3, d2, flexion)] {
                 let axis = from.cross(to);
                 if axis.norm() > 1e-12 {
+                    let rest_angle = det::acos(from.dot(to).clamp(-1.0, 1.0));
+                    // Explicit zero keeps the legacy straightening arithmetic and signed zeros.
+                    let angle = match flexion {
+                        Some(deg) if deg != 0.0 => rest_angle - deg.to_radians(),
+                        _ => rest_angle,
+                    };
                     out.push(JointRotation {
                         bone: b,
                         axis: axis.normalized(),
-                        angle: det::acos(from.dot(to).clamp(-1.0, 1.0)),
+                        angle,
                     });
+                } else if pose.elbow_pose.is_some()
+                    && (from.dot(to) < 0.0 || flexion.is_some_and(|deg| deg != 0.0))
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::DegenerateGeometry,
+                        format!("{side} arm has no unique source rest plane for the authored elbow pose"),
+                    ));
                 }
             }
         }
@@ -1651,6 +1714,19 @@ mod tests {
         (model, rest)
     }
 
+    /// Each source elbow bends 45 degrees, with opposite handedness. The upper-arm twist
+    /// segment also needs 10 degrees of alignment; all rotations share a known world X axis.
+    fn elbow_fixture() -> (AnnyModel, RestBody) {
+        let (model, mut rest) = thumb_fixture();
+        for (bone, degrees) in [(2, -10.0_f64), (3, -55.0), (9, 10.0), (10, 55.0)] {
+            rest.bone_frames[bone].m =
+                ftx_core::Mat3::rotation(Vec3::new(1.0, 0.0, 0.0), degrees.to_radians());
+            rest.bone_tails[bone] =
+                rest.bone_heads[bone] + rest.bone_frames[bone].m.col(1);
+        }
+        (model, rest)
+    }
+
     fn assert_delta_bits(got: &[Affine], expected: &[Affine]) {
         assert_eq!(got.len(), expected.len());
         for (a, b) in got.iter().zip(expected) {
@@ -1659,6 +1735,256 @@ mod tests {
                 b.to_rows4().map(|row| row.map(f64::to_bits))
             );
         }
+    }
+
+    #[test]
+    fn zero_elbow_controls_preserve_straight_pose_and_thumb_bits() {
+        let (model, rest) = elbow_fixture();
+        let thumbs = ThumbPose {
+            left_rotation_vector_rad: [0.2, -0.1, 0.05],
+            right_rotation_vector_rad: [-0.1, 0.2, -0.05],
+        };
+        for original in [
+            Pose::drape(),
+            Pose {
+                arm_pose: Some(ArmPose {
+                    left_abduction_deg: 20.0,
+                    right_abduction_deg: 80.0,
+                }),
+                ..Pose::drape()
+            },
+        ] {
+            for zero in [0.0, -0.0] {
+                let authored = Pose {
+                    elbow_pose: Some(ElbowPose {
+                        left_flexion_deg: zero,
+                        right_flexion_deg: zero,
+                    }),
+                    ..original
+                };
+                assert_eq!(
+                    joint_rotations(&model, &rest, &authored).unwrap(),
+                    joint_rotations(&model, &rest, &original).unwrap()
+                );
+                for t in [0.0, 0.37, 1.0] {
+                    assert_delta_bits(
+                        &pose_deltas(&model, &rest, &authored, t).unwrap(),
+                        &pose_deltas(&model, &rest, &original, t).unwrap(),
+                    );
+                    assert_delta_bits(
+                        &pose_deltas_with_thumbs(&model, &rest, &authored, t, &thumbs)
+                            .unwrap(),
+                        &pose_deltas_with_thumbs(&model, &rest, &original, t, &thumbs)
+                            .unwrap(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn elbow_flexion_uses_absolute_independent_source_planes() {
+        let (model, rest) = elbow_fixture();
+        let pose = Pose {
+            elbow_pose: Some(ElbowPose {
+                left_flexion_deg: 90.0,
+                right_flexion_deg: 30.0,
+            }),
+            ..Pose::rest()
+        };
+        let joints = joint_rotations(&model, &rest, &pose).unwrap();
+        assert_eq!(joints.len(), 4);
+        assert_eq!(
+            joints
+                .iter()
+                .map(|joint| joint.bone)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            joints.len(),
+            "each bone must have one delta, not a discarded additional elbow turn"
+        );
+        let deltas = pose_deltas(&model, &rest, &pose, 1.0).unwrap();
+        for mode in [
+            crate::SkinningMode::LinearBlend,
+            crate::SkinningMode::DualQuaternion,
+        ] {
+            let posed = model.pose_with_skinning(&rest, &deltas, mode).unwrap();
+            for (upper, lower, expected) in [
+                (1, 3, Vec3::new(0.0, 0.0, -1.0)),
+                (8, 10, Vec3::new(0.0, 3.0_f64.sqrt() * 0.5, 0.5)),
+            ] {
+                assert!(
+                    (posed.bone_poses[upper].m.col(1) - Vec3::new(0.0, 1.0, 0.0))
+                        .norm()
+                        < 1e-14
+                );
+                assert!(
+                    (posed.bone_poses[lower].m.col(1) - expected).norm() < 1e-14,
+                    "{mode:?} lower-arm direction"
+                );
+            }
+        }
+        let mut folded = pose;
+        folded.elbow_pose = Some(ElbowPose {
+            left_flexion_deg: 180.0,
+            right_flexion_deg: 0.0,
+        });
+        let folded = model
+            .pose(&rest, &pose_deltas(&model, &rest, &folded, 1.0).unwrap())
+            .unwrap();
+        assert!(
+            (folded.bone_poses[3].m.col(1) - Vec3::new(0.0, -1.0, 0.0)).norm()
+                < 1e-14
+        );
+        assert!(
+            (folded.bone_poses[10].m.col(1) - Vec3::new(0.0, 1.0, 0.0)).norm()
+                < 1e-14
+        );
+    }
+
+    #[test]
+    fn elbow_flexion_moves_the_complete_forearm_and_thumb_descendants() {
+        let (model, rest) = elbow_fixture();
+        let thumbs = ThumbPose {
+            left_rotation_vector_rad: [0.2, 0.1, -0.1],
+            right_rotation_vector_rad: [-0.1, 0.2, 0.1],
+        };
+        let straight = Pose {
+            elbow_pose: Some(ElbowPose::default()),
+            ..Pose::rest()
+        };
+        let flexed = Pose {
+            elbow_pose: Some(ElbowPose {
+                left_flexion_deg: 90.0,
+                right_flexion_deg: 0.0,
+            }),
+            ..straight
+        };
+        let turn = Affine::from_rotvec(
+            Vec3::new(-std::f64::consts::FRAC_PI_2, 0.0, 0.0),
+            Vec3::ZERO,
+        );
+        for mode in [
+            crate::SkinningMode::LinearBlend,
+            crate::SkinningMode::DualQuaternion,
+        ] {
+            let reference = model
+                .pose_with_skinning(
+                    &rest,
+                    &pose_deltas_with_thumbs(&model, &rest, &straight, 1.0, &thumbs)
+                        .unwrap(),
+                    mode,
+                )
+                .unwrap();
+            let actual = model
+                .pose_with_skinning(
+                    &rest,
+                    &pose_deltas_with_thumbs(&model, &rest, &flexed, 1.0, &thumbs)
+                        .unwrap(),
+                    mode,
+                )
+                .unwrap();
+            let pivot = reference.bone_poses[3].t;
+            assert_eq!(actual.vertices.len(), reference.vertices.len());
+            for (index, (&got, &before)) in
+                actual.vertices.iter().zip(&reference.vertices).enumerate()
+            {
+                let expected = if (3..=7).contains(&index) {
+                    pivot + turn.apply(before - pivot)
+                } else {
+                    before
+                };
+                assert!((got - expected).norm() < 2e-14, "{mode:?} vertex {index}");
+            }
+            let expected_wrist = pivot + turn.apply(reference.bone_poses[4].t - pivot);
+            assert!((actual.bone_poses[4].t - expected_wrist).norm() < 2e-14);
+        }
+        let from =
+            pose_rotation_vectors_with_thumbs(&model, &rest, &straight, &thumbs).unwrap();
+        let to =
+            pose_rotation_vectors_with_thumbs(&model, &rest, &flexed, &thumbs).unwrap();
+        let halfway = Pose {
+            elbow_pose: Some(ElbowPose {
+                left_flexion_deg: 45.0,
+                right_flexion_deg: 0.0,
+            }),
+            ..straight
+        };
+        let midpoint =
+            pose_rotation_vectors_with_thumbs(&model, &rest, &halfway, &thumbs).unwrap();
+        for ((from, to), mid) in from.iter().zip(&to).zip(&midpoint) {
+            assert!((*mid - (*from + *to) * 0.5).norm() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn elbow_controls_refuse_invalid_inputs_and_undefined_source_planes() {
+        let (model, rest) = elbow_fixture();
+        for value in [-1.0, 180.000001, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for left in [true, false] {
+                let mut elbows = ElbowPose::default();
+                if left {
+                    elbows.left_flexion_deg = value;
+                } else {
+                    elbows.right_flexion_deg = value;
+                }
+                assert!(elbows.validate().is_err());
+                let pose = Pose {
+                    elbow_pose: Some(elbows),
+                    ..Pose::drape()
+                };
+                assert!(pose_deltas(&model, &rest, &pose, 0.0).is_err());
+            }
+        }
+        for malformed in [
+            serde_json::json!({}),
+            serde_json::json!({"left_flexion_deg": 30.0}),
+            serde_json::json!({"left_flexion_deg": null, "right_flexion_deg": 0.0}),
+            serde_json::json!({"left_flexion_deg": 30.0, "right_flexion_deg": 0.0,
+                "axis": [1.0, 0.0, 0.0]}),
+        ] {
+            assert!(serde_json::from_value::<ElbowPose>(malformed).is_err());
+        }
+        let authored = ElbowPose {
+            left_flexion_deg: 90.0,
+            right_flexion_deg: 30.0,
+        };
+        assert_eq!(
+            serde_json::from_value::<ElbowPose>(serde_json::to_value(authored).unwrap())
+                .unwrap(),
+            authored
+        );
+
+        let (_, mut parallel) = thumb_fixture();
+        let mut pose = Pose {
+            elbow_pose: Some(ElbowPose::default()),
+            ..Pose::drape()
+        };
+        assert_delta_bits(
+            &pose_deltas(&model, &parallel, &pose, 1.0).unwrap(),
+            &pose_deltas(&model, &parallel, &Pose::drape(), 1.0).unwrap(),
+        );
+        pose.elbow_pose.as_mut().unwrap().left_flexion_deg = 1.0;
+        assert_eq!(
+            joint_rotations(&model, &parallel, &pose).unwrap_err().code,
+            RefusalCode::DegenerateGeometry
+        );
+        parallel.bone_frames[3].m = ftx_core::Mat3::rotation(
+            Vec3::new(1.0, 0.0, 0.0),
+            std::f64::consts::PI,
+        );
+        pose.elbow_pose = Some(ElbowPose::default());
+        assert_eq!(
+            joint_rotations(&model, &parallel, &pose).unwrap_err().code,
+            RefusalCode::DegenerateGeometry
+        );
+        let mut data = model.data().clone();
+        data.header.labels.bones[3] = "other.L".into();
+        let missing = AnnyModel::from_data(data).unwrap();
+        assert_eq!(
+            joint_rotations(&missing, &rest, &pose).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
     }
 
     #[test]
@@ -1877,6 +2203,7 @@ mod tests {
                         left_abduction_deg: 0.0,
                         right_abduction_deg: 35.0,
                     }),
+                    elbow_pose: None,
                     legs: Legs::Standing,
                     leg_fraction: 1.0,
                     straight_arms: false,

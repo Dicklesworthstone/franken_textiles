@@ -366,6 +366,27 @@ Meaning under `local-bone`: Δ_0 is the **world pose of the root bone** (identit
 with world-aligned axes); Δ_j for j > 0 is a rigid motion of bone j about its own head, expressed in its own rest
 frame (§4.3), applied after the rest pose.
 
+#### Authored garment elbow flexion
+
+This is an explicit FrankenTextiles kinematic control, not an anatomical angle supplied or qualified by Anny.
+`ElbowPose` specifies independent `left_flexion_deg` and `right_flexion_deg` in the inclusive geometric range
+0–180°. Zero means the existing straightened arm. Let `d2` and `d3` be the normalized rest-frame +Y axes of
+`upperarm02` and `lowerarm01` on the selected side (§4.3). The source rest bend plane supplies
+`a = normalize(d3 × d2)` and `θ0 = acos(clamp(d3 · d2, −1, 1))`. Retain the existing alignment of
+`upperarm02` onto `upperarm01`, and replace the lower-arm straightening rotation by `θ0 − β` about `a`,
+where `β` is the authored flexion in radians. This is one delta for `lowerarm01`, not an additional
+same-bone entry. The existing local-bone conversion and forward kinematics move the forearm, wrist,
+hand and fingers together. Shoulder abduction and authored thumb rotations remain independent.
+
+An omitted elbow control preserves the old pose arithmetic. Explicit zero flexion preserves the existing
+straight-arm deltas exactly; nonzero flexion requires a defined rest bend plane. Parallel or antiparallel
+source directions cannot supply that plane for a nonzero request, and an antiparallel alignment also
+refuses an explicit zero request. Missing named bones, nonfinite input and degenerate axes refuse.
+The controls do not authorize an intersecting body or garment. Ordinary garment motion starts from its
+admitted straight-arm drape and reaches the authored bends through the existing source-pose sampling and
+continuous-contact checks. No measured range of motion, anatomical safety, skin-volume conservation or
+physical garment fit is established by the geometric angle.
+
 ### 5.2 Forward kinematics (`get_bone_transforms` → `parallel_forward_kinematic`)
 
 The reference poses equal the rest poses (no `reference_bone_orientations` in this configuration). With

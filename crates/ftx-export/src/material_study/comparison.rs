@@ -4543,6 +4543,7 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
             || finite(&endpoint["arm_abduction_deg"]).is_none()
             || finite(&endpoint["arm_abduction_deg"]) != finite(&frame["arm_abduction_deg"])
             || !same_opt_arm_pose(&endpoint["arm_pose"], &frame["arm_pose"])
+            || !same_opt_elbow_pose(&endpoint["elbow_pose"], &frame["elbow_pose"])
             || !same_opt_leg_pose(&endpoint["leg_pose"], &frame["leg_pose"])
             || !same_opt_vec3(
                 &endpoint["root_translation_m"],
@@ -4597,6 +4598,20 @@ fn same_opt_arm_pose(a: &Value, b: &Value) -> bool {
             finite(obj.get("left_abduction_deg")?)?,
             finite(obj.get("right_abduction_deg")?)?,
         ])
+    };
+    matches!((parse(a), parse(b)), (Some(pa), Some(pb)) if pa == pb)
+}
+
+fn same_opt_elbow_pose(a: &Value, b: &Value) -> bool {
+    if a.is_null() && b.is_null() {
+        return true;
+    }
+    let parse = |value: &Value| -> Option<[f64; 2]> {
+        let obj = value.as_object().filter(|o| o.len() == 2)?;
+        let left = finite(obj.get("left_flexion_deg")?)?;
+        let right = finite(obj.get("right_flexion_deg")?)?;
+        ((0.0..=180.0).contains(&left) && (0.0..=180.0).contains(&right))
+            .then_some([left, right])
     };
     matches!((parse(a), parse(b)), (Some(pa), Some(pb)) if pa == pb)
 }

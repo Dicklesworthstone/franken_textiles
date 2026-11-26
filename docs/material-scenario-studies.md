@@ -375,6 +375,36 @@ pair with its endpoint; unsaved field edits leave saved endpoints and named case
 Result tables show each side's recorded angle, including symmetric returns. These controls add
 prescribed one-arm movement without qualifying anatomical reach, sleeve clearance or physical fit.
 
+For independent elbow bends after the accepted straight-arm drape, add a complete
+`elbow_pose` to each desired endpoint:
+
+```json
+"keyframes": [
+  {"time_s": 0.2, "arm_abduction_deg": 35.0,
+   "elbow_pose": {"left_flexion_deg": 30.0, "right_flexion_deg": 60.0}},
+  {"time_s": 0.4, "arm_abduction_deg": 35.0}
+]
+```
+
+Each finite angle is absolute flexion from straight, within the numerical domain `0..180`
+degrees. Positive flexion bends toward that side's original source forearm direction. The
+hinge comes from the source upper/lower-arm rest directions; an undefined bend plane refuses
+a requested nonzero bend instead of guessing an axis. These bounds do not establish an
+anatomically valid pose. Omission or `null` returns to straight elbows at that endpoint, so
+a bent hold must repeat the pair. Partial pairs, extra fields and invalid angles refuse.
+
+The initial garment placement stays straight. Only the already sewn garment continues through
+the requested bends, sharing the same body shape, material histories, collision checks and
+whole-path rollback. Optional source-pose sampling interpolates the fixed-axis elbow rotations
+alongside independent arm abduction, legs and root transforms. Use small source-pose intervals:
+continuous contact still checks chords between sampled surfaces, not exact curved joint sweeps.
+Actual sleeve ride-up, a feasible full-model path and physical garment fit require their own
+evidence; the example angles and times are illustrative.
+
+The guided motion form saves both elbow angles with Add or Replace. Named cases and request
+downloads retain the exact pair, while unsaved field edits leave saved endpoints unchanged.
+The result table displays the recorded left/right flexion and the straight default.
+
 Each keyframe may also supply `"leg_pose":{"posture":"seated","fraction":0.25}` or the
 same object with `"posture":"squat"`. The finite fraction must be in `0..1`; zero retains
 the standing legs and one applies the existing model's complete posture. Intermediate fractions
@@ -424,9 +454,9 @@ their exact requested transforms, and endpoint tables display the recorded rotat
 Use short turn increments: the solver still checks linear vertex chords, not circular rotation arcs.
 
 The same scenario JSON reaches both native material-study commands and the browser's scenario
-input. Reports retain each requested `arm_pose`, `leg_pose`, `root_translation_m` and `root_rotation_rad` beside
-its endpoint time, arm angle and exact collision geometry; motion comparisons reject a missing or
-changed requested arm pair, posture, translation or rotation. Existing symmetric-arm and translation-only inputs
+input. Reports retain each requested `arm_pose`, `elbow_pose`, `leg_pose`, `root_translation_m` and
+`root_rotation_rad` beside its endpoint time, arm angle and exact collision geometry; motion
+comparisons reject a missing or changed requested arm pair, elbow pair, posture, translation or rotation. Existing symmetric-arm and translation-only inputs
 keep their previous behavior and serialized source identities. Calibrated nappy
 occupancy follows the same fixed occupied shape through every endpoint without recalibration.
 

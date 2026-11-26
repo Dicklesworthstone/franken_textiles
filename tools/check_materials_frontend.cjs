@@ -22789,6 +22789,83 @@ test('guided independent arm named cases freeze their sides after later draft re
   assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
 });
 
+function guidedElbowDraft(p,left,right,enabled=true) {
+  p.e.guidedMotionElbows.checked=enabled;p.e.guidedMotionElbows.handlers.change();
+  for(const [side,angle] of [['Left',left],['Right',right]]) {
+    p.e['guidedMotionElbow'+side].value=String(angle);p.e['guidedMotionElbow'+side].handlers.input();
+  }
+}
+
+test('guided elbow flexion preserves saved endpoints and displays absolute angles with straight returns',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  assert.equal(p.e.guidedMotionElbows.checked,false);
+  assert.ok(p.e.guidedMotionElbowLeft.disabled&&p.e.guidedMotionElbowRight.disabled);
+  guidedIndependentArmsDraft(p,40,35);guidedElbowDraft(p,90,20);await addGuidedMotion(p,0.002,35,'seated',0.1);
+  guidedIndependentArmsDraft(p,40,35,false);guidedElbowDraft(p,120,80,false);await addGuidedMotion(p,0.004,40);
+  guidedElbowDraft(p,0,180);await addGuidedMotion(p,0.006,35);
+  const expected=[{time_s:0.002,arm_abduction_deg:35,leg_pose:{posture:'seated',fraction:0.1},
+    arm_pose:{left_abduction_deg:40,right_abduction_deg:35},elbow_pose:{left_flexion_deg:90,right_flexion_deg:20}},
+    {time_s:0.004,arm_abduction_deg:40},
+    {time_s:0.006,arm_abduction_deg:35,elbow_pose:{left_flexion_deg:0,right_flexion_deg:180}}];
+  assert.match(visibleText(p.e.guidedMotionKeyframes),/left elbow 90°, right elbow 20° from straight/);
+  assert.match(visibleText(p.e.guidedMotionKeyframes),/elbows straight/);
+  await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).motion.keyframes,expected);
+  const report=scenarioReport();report.scenario.scenario=JSON.parse(sent.scenarioRequest);
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({duration_s:0.006,
+    samples:[{},{},{}],trials:6,path_sha256:'independent-source-elbows',metrics:{max_absolute_edge_strain_pct:1.25},
+    keyframes:expected.map(frame=>({...frame,surface:omitted(),coverage:omitted()}))});
+  guidedElbowDraft(p,10,30);
+  p.emit(report,[{name:'scenario-request.json',text:sent.scenarioRequest}]);
+  const result=section(p,'Fresh drape and heat alternatives');
+  const table=descendants(result).find(node=>node.tag==='table'&&node.children[0].textContent.startsWith('A: endpoint'));
+  assert.ok(table);assert.deepEqual(table.children[1].children.slice(3,5).map(node=>node.textContent),
+    ['Left elbow flexion (degrees)','Right elbow flexion (degrees)']);
+  assert.deepEqual(table.children.slice(2).map(row=>row.children.slice(3,5).map(node=>node.textContent)),
+    [['90','20'],['0','0'],['0','180']]);
+  const download=descendants(result).find(node=>node.download==='scenario-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),sent.scenarioRequest);
+});
+
+test('guided elbow flexion refuses invalid replacements preserves active results and resets with the source',async()=>{
+  const {p}=await guidedScenarioSetup();guidedMotionControls(p);
+  guidedElbowDraft(p,90,20);await addGuidedMotion(p,0.002,35);
+  await p.e.scenario.onclick();const old=p.current(),original=old.messages.at(-1).scenarioRequest;
+  for(const [left,right] of [['',20],[90,''],[-0.01,20],[90,180.01],['Infinity',20]]) {
+    guidedElbowDraft(p,left,right);assert.equal(old.dead,false);
+    await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+    assert.equal(old.dead,false);assert.equal(p.e.guidedMotionKeyframes.children.length,1);
+    assert.match(p.e.error.textContent,/elbow (pose|flexion)/i);
+  }
+  guidedElbowDraft(p,100,30);assert.equal(old.dead,false);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');
+  assert.equal(old.dead,true);p.ready();await p.e.scenario.onclick();
+  assert.deepEqual(JSON.parse(p.current().messages.at(-1).scenarioRequest).motion.keyframes[0].elbow_pose,
+    {left_flexion_deg:100,right_flexion_deg:30});
+  assert.deepEqual(JSON.parse(original).motion.keyframes[0].elbow_pose,{left_flexion_deg:90,right_flexion_deg:20});
+  p.emit(scenarioReport());await p.load();
+  assert.equal(p.e.guidedMotionElbows.checked,false);
+  assert.equal(p.e.guidedMotionElbowLeft.value,'');assert.equal(p.e.guidedMotionElbowRight.value,'');
+  assert.ok(p.e.guidedMotionElbowLeft.disabled&&p.e.guidedMotionElbowRight.disabled);
+});
+
+test('guided elbow named cases freeze saved flexion through replacement removal and later drafts',async()=>{
+  const {p}=await guidedScenarioSetup();guidedNamedCases(p);guidedMotionControls(p);
+  guidedElbowDraft(p,90,20);await addGuidedMotion(p,0.002,35);await saveGuidedCase(p,'left-bend');
+  guidedElbowDraft(p,20,90);guidedMotionDraft(p,0.004,36,'squat',0.2);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');await saveGuidedCase(p,'right-bend');
+  guidedElbowDraft(p,120,120);await p.e.scenario.onclick();const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'scenario',p.e.error.textContent);
+  assert.deepEqual(JSON.parse(sent.scenarioRequest).cases.map(item=>[item.key,item.scenario.motion.keyframes[0].elbow_pose]),
+    [['left-bend',{left_flexion_deg:90,right_flexion_deg:20}],['right-bend',{left_flexion_deg:20,right_flexion_deg:90}]]);
+  const worker=p.current();guidedElbowDraft(p,0,0,false);
+  await guidedMotionAction(p,'Replace keyframe 1 from current controls');p.e.clearMotionKeyframes.onclick();
+  assert.equal(worker.dead,false);
+  p.emit(scenarioReport());await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest,sent.scenarioRequest);
+});
+
 function guidedRootRotationDraft(p,rotation,enabled=true) {
   p.e.guidedMotionRotate.checked=enabled;p.e.guidedMotionRotate.handlers.change();
   for(const [index,axis] of ['X','Y','Z'].entries()) {

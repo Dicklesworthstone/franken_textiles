@@ -613,16 +613,13 @@ fn write_refused_map(
     refusal: &mut Refusal,
     dir: &Path,
     mesh: &GarmentMesh,
-    phase: &str,
-    accepted_steps: usize,
-    crossing_faces: Option<[usize; 2]>,
+    mut pose: Value,
     (width, height): (usize, usize),
 ) {
     let mut map = ftx_drape::animation::pattern_mesh_map(mesh);
-    map["refused_pose"] = json!({ "phase": phase, "accepted_steps": accepted_steps, "width": width, "height": height });
-    if let Some(faces) = crossing_faces {
-        map["refused_pose"]["crossing_faces"] = json!(faces);
-    }
+    pose["width"] = json!(width);
+    pose["height"] = json!(height);
+    map["refused_pose"] = pose;
     if let Err(error) = workspace::write_json(&dir.join("mesh_map.json"), &map) {
         refusal.repairs.push(format!(
             "The diagnostic source-edge map could not be saved: {}",
@@ -712,6 +709,11 @@ pub(super) fn refused_stills(
     let (strain, summaries) = start_strain(&state.mesh, &state.positions);
     let description = if state.phase == "start" {
         "the untangled start rejected at cloth contact admission".to_string()
+    } else if let Some(substep) = state.substep {
+        format!(
+            "the cloth {} s into the {} s interval after {} completed {} step(s)",
+            substep.end_s, substep.duration_s, state.accepted_steps, state.phase
+        )
     } else {
         format!(
             "the cloth after {} accepted {} step(s)",
@@ -728,15 +730,14 @@ pub(super) fn refused_stills(
         (size, Shading::Standard),
     ) {
         Ok(_) => {
-            write_refused_map(
-                &mut refusal,
-                &dir,
-                &state.mesh,
-                state.phase,
-                state.accepted_steps,
-                valid_start_crossing,
-                size,
-            );
+            let mut pose = json!({"phase": state.phase, "accepted_steps": state.accepted_steps});
+            if let Some(substep) = state.substep {
+                pose["substep"] = json!(substep);
+            }
+            if let Some(faces) = valid_start_crossing {
+                pose["crossing_faces"] = json!(faces);
+            }
+            write_refused_map(&mut refusal, &dir, &state.mesh, pose, size);
             refusal.repairs.insert(
                 0,
                 format!(
@@ -769,7 +770,10 @@ pub(super) fn refused_stills(
     // Only the start itself or the state before any sewing step. Later states are stretched by seams
     // that are still closing, which says nothing about the size of a piece. It is text, so it does not
     // depend on the pictures having been written.
-    if (state.phase == "sew" || state.phase == "start") && state.accepted_steps == 0 {
+    if (state.phase == "sew" || state.phase == "start")
+        && state.accepted_steps == 0
+        && state.substep.is_none()
+    {
         let tight = tight_instances(
             state
                 .mesh
@@ -1009,9 +1013,7 @@ pub(super) fn start_stills(
             &mut refusal,
             &dir.join("start"),
             &mesh,
-            "placement",
-            0,
-            None,
+            json!({"phase":"placement", "accepted_steps":0}),
             size,
         );
         refusal.repairs.insert(0, start_repair(&dir, &placement));
@@ -1691,6 +1693,7 @@ mod tests {
             positions,
             phase: "sew",
             accepted_steps: 2,
+            substep: None,
             start_crossing_faces: None,
             start_fallback: None,
             start_unrelaxed_p95: None,
@@ -1947,6 +1950,7 @@ mod tests {
             positions: positions.clone(),
             phase: "start",
             accepted_steps: 0,
+            substep: None,
             start_crossing_faces: Some([0, 1]),
             start_fallback: None,
             start_unrelaxed_p95: Some(0.08),
@@ -2003,6 +2007,7 @@ mod tests {
             positions: positions.clone(),
             phase: "start",
             accepted_steps: 0,
+            substep: None,
             start_crossing_faces: Some([1, 0]),
             start_fallback: None,
             start_unrelaxed_p95: None,
@@ -2035,6 +2040,7 @@ mod tests {
             positions,
             phase: "start",
             accepted_steps: 0,
+            substep: None,
             start_crossing_faces: Some([9999, 9998]),
             start_fallback: None,
             start_unrelaxed_p95: None,
@@ -2111,7 +2117,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let out = std::env::temp_dir().join(format!("ftx-tight-{}-{time}", std::process::id()));
-        let shown = |name: &str, widen: f64, accepted_steps: usize, start_fallback| {
+        let shown = |name: &str, widen: f64, accepted_steps: usize, start_fallback, substep| {
             let dir = out.join(name);
             std::fs::create_dir_all(&dir).unwrap();
             let state = ftx_drape::run::RefusedRun {
@@ -2119,6 +2125,7 @@ mod tests {
                 positions: standing(widen),
                 phase: "sew",
                 accepted_steps,
+                substep,
                 start_crossing_faces: None,
                 start_fallback,
                 // The relaxation reached its target, so the diagnosis carries no caveat about it.
@@ -2129,7 +2136,7 @@ mod tests {
 
         // Refused before any sewing step, with the hem stretched: the piece and its edge come right after
         // where to look, ahead of the solver's own advice.
-        let tight = shown("tight", 1.5, 0, None);
+        let tight = shown("tight", 1.5, 0, None, None);
         assert_eq!(tight.repairs.len(), 3, "{:?}", tight.repairs);
         assert!(tight.repairs[0].contains("still_*.png"));
         assert!(
@@ -2143,14 +2150,14 @@ mod tests {
         );
         assert_eq!(tight.repairs[2], "increase the Newton iteration budget");
         // The diagnosis is text, so it survives pictures that cannot be written (`refused/` now exists).
-        let unwritten = shown("tight", 1.5, 0, None);
+        let unwritten = shown("tight", 1.5, 0, None, None);
         assert_eq!(unwritten.repairs.len(), 3, "{:?}", unwritten.repairs);
         assert!(unwritten.repairs[0].contains("could not be written: "));
         assert_eq!(unwritten.repairs[1], tight.repairs[1]);
 
         // A start that is an earlier checkpoint says so, with both iteration counts and where the fully
         // relaxed one can be seen, whether or not anything is red.
-        let fallback = shown("fallback", 1.0, 0, Some((400, 600)));
+        let fallback = shown("fallback", 1.0, 0, Some((400, 600)), None);
         assert_eq!(fallback.repairs.len(), 3, "{:?}", fallback.repairs);
         assert!(
             fallback.repairs[1].starts_with(
@@ -2161,7 +2168,7 @@ mod tests {
             "{}",
             fallback.repairs[1]
         );
-        let both = shown("both", 1.5, 0, Some((400, 600)));
+        let both = shown("both", 1.5, 0, Some((400, 600)), None);
         assert!(
             both.repairs[1].contains("checkpoint at 400 iterations")
                 && both.repairs[1].contains("nearest its edge bottom)"),
@@ -2171,8 +2178,31 @@ mod tests {
 
         // Cloth as it was cut says nothing about size, and neither does a state reached after a step:
         // seams that are still closing stretch cloth too.
-        assert_eq!(shown("loose", 1.0, 0, None).repairs.len(), 2);
-        assert_eq!(shown("later", 1.5, 1, Some((400, 600))).repairs.len(), 2);
+        assert_eq!(shown("loose", 1.0, 0, None, None).repairs.len(), 2);
+        assert_eq!(
+            shown("later", 1.5, 1, Some((400, 600)), None).repairs.len(),
+            2
+        );
+
+        let substep = ftx_drape::scene::RefusedSubstep {
+            end_s: 0.01,
+            duration_s: 0.04,
+        };
+        let moving = shown("interior", 1.5, 0, Some((400, 600)), Some(substep));
+        assert_eq!(moving.repairs.len(), 2, "{:?}", moving.repairs);
+        assert!(
+            moving.repairs[0]
+                .contains("0.01 s into the 0.04 s interval after 0 completed sew step(s)")
+        );
+        let map: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(out.join("interior/refused/mesh_map.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(map["refused_pose"]["accepted_steps"], 0);
+        assert_eq!(
+            map["refused_pose"]["substep"],
+            json!({"end_s":0.01,"duration_s":0.04})
+        );
     }
 
     #[test]
