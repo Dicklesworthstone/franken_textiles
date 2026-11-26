@@ -208,6 +208,7 @@ pub fn load_photo_with_limit(bytes: &[u8], max_pixels: usize) -> Result<(Bgr, Va
         ));
     }
     let mut pos = 8usize;
+    let mut ended = false;
     while bytes.len() - pos >= 12 {
         let len = u32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
         let end = pos
@@ -243,18 +244,32 @@ pub fn load_photo_with_limit(bytes: &[u8], max_pixels: usize) -> Result<(Bgr, Va
                     "transparent PNG pixels cannot supply photo evidence; export opaque RGB",
                 ));
             }
-            b"acTL" => {
+            b"acTL" | b"fcTL" | b"fdAT" => {
                 return Err(bad(
                     "animated PNG is not one identified photo; export the selected frame",
                 ));
             }
-            b"IEND" => break,
+            b"IEND" => {
+                if len != 0 || end != bytes.len() {
+                    return Err(bad("PNG must end with an empty IEND and no trailing data"));
+                }
+                ended = true;
+            }
             _ => {}
         }
         pos = end;
     }
-    let image = load_png_with_limit(bytes, max_pixels)
-        .map_err(|message| Refusal::new(RefusalCode::InvalidDocument, message))?;
+    if !ended {
+        return Err(bad("PNG has no complete IEND"));
+    }
+    let image = load_png_with_limit(bytes, max_pixels).map_err(|message| {
+        let code = if message.contains("pixel decoding budget") {
+            RefusalCode::BudgetExceeded
+        } else {
+            RefusalCode::InvalidDocument
+        };
+        Refusal::new(code, message)
+    })?;
     let receipt = json!({"sha256":sha256_hex(bytes),
         "image_size_px":[image.w,image.h], "orientation":"stored_pixels_without_exif",
         "encoding":"opaque_8_bit_png"});
@@ -927,6 +942,45 @@ mod decode_budget_tests {
             );
         }
         assert!(load_binary_mask_with_limit(&mask_png(16, 0, None, &[], &[0; 10]), 4).is_err());
+    }
+
+    #[test]
+    fn photo_png_refuses_apng_chunks_trailing_bytes_and_incomplete_iend() {
+        let rgb_raw = [0, 10, 20, 30, 40, 50, 60, 0, 70, 80, 90, 100, 110, 120];
+        let valid = mask_png(8, 2, None, &[], &rgb_raw);
+        let (img, _) = load_photo_with_limit(&valid, 4).unwrap();
+        assert_eq!((img.w, img.h), (2, 2));
+        assert_eq!(
+            load_photo_with_limit(&valid, 3).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+        for kind in [b"eXIf", b"tRNS", b"acTL", b"fcTL", b"fdAT"] {
+            let with_chunk = mask_png(8, 2, None, &[(kind, &[0, 0, 0, 1])], &rgb_raw);
+            assert_eq!(
+                load_photo_with_limit(&with_chunk, 4).unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+        }
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        assert_eq!(
+            load_photo_with_limit(&trailing, 4).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        let without_iend = &valid[..valid.len() - 12];
+        assert_eq!(
+            load_photo_with_limit(without_iend, 4).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        let mut nonempty_iend = without_iend.to_vec();
+        nonempty_iend.extend(1u32.to_be_bytes());
+        nonempty_iend.extend(b"IEND");
+        nonempty_iend.push(0);
+        nonempty_iend.extend(crc32(&[b"IEND", &[0]]).to_be_bytes());
+        assert_eq!(
+            load_photo_with_limit(&nonempty_iend, 4).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
     }
 
     #[test]
