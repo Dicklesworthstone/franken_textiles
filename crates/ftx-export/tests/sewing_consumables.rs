@@ -1341,6 +1341,8 @@ fn split_thread_identical_segment_symmetry_proves_multi_copy_three_offer_optimum
         allocated.optimality_proven && allocated.search_complete && !allocated.budget_exhausted
     );
     assert!(allocated.search_nodes + allocated.quote_evaluations < 1000);
+    // Twelve identical 0.8 m segments produce at most 12 distinct (requirement, longest) scopes.
+    assert!(allocated.quote_evaluations <= 12);
     let orders = allocated.selected_orders.as_ref().unwrap();
     assert_eq!(orders.len(), 3);
     let counts: Vec<(&str, usize)> = orders

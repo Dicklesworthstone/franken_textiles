@@ -28,7 +28,8 @@ pub struct Policy {
     /// `ftx-cut-order-allocation/1` for markers or `ftx-thread-order-allocation/1` for thread.
     pub schema: String,
     /// Shared limit across all materials, 1..200000. Each attempted assignment and each uncached
-    /// canonical quote evaluation consumes one unit; cached subsets do not re-evaluate quotes.
+    /// canonical quote evaluation consumes one unit; identical `(quantity, longest)` scopes reuse
+    /// cached quote results without re-evaluating quotes.
     pub max_search_nodes: usize,
 }
 
@@ -324,7 +325,7 @@ struct Search<'a> {
     ids: Vec<String>,
     stock_components: Vec<usize>,
     costs_monotone: bool,
-    cache: BTreeMap<u64, Vec<Option<Offer>>>,
+    cache: BTreeMap<(u64, u64), Vec<Option<Offer>>>,
     masks: Vec<u64>,
     active: Vec<Option<Offer>>,
     visit_order: Vec<usize>,
@@ -333,25 +334,30 @@ struct Search<'a> {
     exhausted: bool,
 }
 
+fn scope_key(scope: &Scope) -> (u64, u64) {
+    (
+        scope.requirement.to_bits(),
+        scope
+            .continuous_length_m
+            .expect("allocation scope continuous length")
+            .to_bits(),
+    )
+}
+
 impl Search<'_> {
     fn scope(&self, mask: u64) -> Result<(Scope, f64, Vec<usize>), Refusal> {
         scope(self.demand, self.market, mask)
     }
 
-    fn sample(&mut self, mask: u64) -> Result<Option<PriceSample>, Refusal> {
-        if !self.work.charge(true) {
-            self.exhausted = true;
-            return Ok(None);
-        }
-        let (scope, _, _) = self.scope(mask)?;
-        self.book.evaluate(self.demand.material, &scope).map(Some)
-    }
-
     fn priced(&mut self, mask: u64, candidate: usize) -> Result<Option<Offer>, Refusal> {
-        if !self.cache.contains_key(&mask) {
-            let Some(sample) = self.sample(mask)? else {
+        let (scope, _, _) = self.scope(mask)?;
+        let key = scope_key(&scope);
+        if !self.cache.contains_key(&key) {
+            if !self.work.charge(true) {
+                self.exhausted = true;
                 return Ok(None);
-            };
+            }
+            let sample = self.book.evaluate(self.demand.material, &scope)?;
             let offers = self
                 .ids
                 .iter()
@@ -363,9 +369,9 @@ impl Search<'_> {
                         .cloned()
                 })
                 .collect();
-            self.cache.insert(mask, offers);
+            self.cache.insert(key, offers);
         }
-        Ok(self.cache[&mask][candidate].clone())
+        Ok(self.cache[&key][candidate].clone())
     }
 
     fn visit(&mut self, depth: usize, prev_candidate: usize) -> Result<(), Refusal> {
@@ -540,7 +546,8 @@ fn group(
                 offers: active,
             });
         }
-        search.cache.insert(full, offers);
+        let (full_scope, _, _) = search.scope(full)?;
+        search.cache.insert(scope_key(&full_scope), offers);
         // With at most one possible offer the whole-order sample already exhausts every option.
         if search.ids.len() > 1 {
             search.visit(0, 0)?;
