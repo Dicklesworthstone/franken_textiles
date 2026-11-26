@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use ftx_core::Vec3;
-use ftx_drape::motion::{MotionOptions, advance_body, advance_body_carried};
+use ftx_drape::motion::{MotionOptions, MotionReport, advance_body, advance_body_carried};
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape};
 use ftx_drape::scene::{PartFrames, Scene};
 use ftx_drape::stepping::SubdivisionOptions;
@@ -439,6 +439,26 @@ impl PosableBody {
         points
     }
 
+    // Angles vary linearly in time, but the baked surface is only linear between its samples.
+    // The union of both arms' sample crossings partitions the displayed path into the exact
+    // vertex chords the moving-body solver checks. Include the final endpoint exactly once.
+    fn motion_fractions(&self, from: [f64; 2], to: [f64; 2]) -> Vec<f64> {
+        let mut fractions = vec![1.0];
+        for (from, to) in from.into_iter().zip(to) {
+            if from == to {
+                continue;
+            }
+            for &angle in &self.angles {
+                if angle > from.min(to) && angle < from.max(to) {
+                    fractions.push((angle - from) / (to - from));
+                }
+            }
+        }
+        fractions.sort_unstable_by(f64::total_cmp);
+        fractions.dedup();
+        fractions
+    }
+
     /// The collision surface with the arms at these angles (m), clamped to the sampled range.
     #[must_use]
     pub fn collision_at(&self, left: f64, right: f64) -> Vec<Vec3> {
@@ -843,7 +863,8 @@ impl Session {
 
     /// The last accepted move's work: `trials` and `substeps`, and per accepted substep its solver
     /// report's `newton_iterations`, `ccd_limited`, `halvings`, `line_search_failures`, `factorizations`
-    /// and `pcg_iterations`; null before the first.
+    /// and `pcg_iterations`; null before the first. Moves crossing baked samples additionally retain
+    /// their shared path boundaries in `body_sample_times_s`.
     #[must_use]
     pub fn last_move(&self) -> &Value {
         &self.last_move
@@ -852,6 +873,8 @@ impl Session {
     /// Moves the arms to these angles over `seconds` of cloth time and returns every substep the solver
     /// accepted: for each, its time since the move began (s) and then the cloth's mesh-vertex xyz (m).
     /// Angles are clamped to the body's sampled range. The same angles as now let the cloth settle.
+    /// Crossing either arm's baked samples follows those samples in order, with one shared trial and
+    /// output budget. Every segment must succeed before the session or its last-move receipt changes.
     ///
     /// # Errors
     /// Non-finite angles, a duration outside (0, 2] s, and every refusal of the moving-body step. On any
@@ -872,18 +895,26 @@ impl Session {
         }
         let (low, high) = self.body.arm_range();
         let (left, right) = (left_deg.clamp(low, high), right_deg.clamp(low, high));
-        let target = self.body.collision_at(left, right);
-        let report = match self.carry_m {
-            Some(radius) => advance_body_carried(
-                &mut self.scene.solver,
-                &target,
-                seconds,
-                self.motion,
-                radius,
-            ),
-            None => advance_body(&mut self.scene.solver, &target, seconds, self.motion),
-        }
-        .map_err(|refusal| refusal.to_string())?;
+        let fractions = self.body.motion_fractions(self.arms, [left, right]);
+        let report = if fractions.len() == 1 {
+            // Retain the established arithmetic, tolerances and receipts within one sampled cell.
+            let target = self.body.collision_at(left, right);
+            match self.carry_m {
+                Some(radius) => advance_body_carried(
+                    &mut self.scene.solver,
+                    &target,
+                    seconds,
+                    self.motion,
+                    radius,
+                ),
+                None => advance_body(&mut self.scene.solver, &target, seconds, self.motion),
+            }
+            .map_err(|refusal| refusal.to_string())?
+        } else {
+            let (solver, report) = self.advance_sampled([left, right], seconds, &fractions)?;
+            self.scene.solver = solver;
+            report
+        };
         self.arms = [left, right];
         let per_substep = |field: fn(&ftx_drape::SolveReport) -> usize| {
             report
@@ -906,6 +937,10 @@ impl Session {
             "factorizations": per_substep(|r| r.factorizations),
             "pcg_iterations": per_substep(|r| r.pcg_iterations),
         });
+        if fractions.len() > 1 {
+            self.last_move["body_sample_times_s"] =
+                json!(fractions.iter().map(|f| seconds * f).collect::<Vec<_>>());
+        }
         let mut samples =
             Vec::with_capacity(report.samples.len() * (1 + 3 * self.scene.weld.len()));
         for sample in &report.samples {
@@ -916,6 +951,118 @@ impl Session {
             }
         }
         Ok(samples)
+    }
+
+    fn advance_sampled(
+        &self,
+        to: [f64; 2],
+        seconds: f64,
+        fractions: &[f64],
+    ) -> Result<(ftx_drape::Solver, MotionReport), String> {
+        let count = self
+            .body
+            .collision
+            .base
+            .len()
+            .checked_add(self.scene.solver.x.len())
+            .ok_or("body motion sample size overflow")?;
+        // Every sampled chord needs at least one trial and one complete retained sample. Refuse
+        // before cloning the solver when even that lower bound exceeds the original allowance.
+        if fractions.len() > self.motion.max_trials {
+            return Err(
+                "body motion trial budget exceeded by sampled path; state unchanged".into(),
+            );
+        }
+        if count == 0 || fractions.len() > self.motion.max_sample_vertices / count {
+            return Err(
+                "body motion sample budget exceeded by sampled path; state unchanged".into(),
+            );
+        }
+        let mut work = self.scene.solver.clone();
+        let mut report = MotionReport {
+            trials: 0,
+            pairs_tested: 0,
+            samples: Vec::new(),
+            rejected_before_solve: 0,
+            rejected_unsolved: 0,
+            rejected_after_solve: 0,
+            rejected_newton_iterations: 0,
+        };
+        let mut time = 0.0;
+        let mut replay_time = 0.0_f32;
+        for &fraction in fractions {
+            let end = seconds * fraction;
+            let duration = end - time;
+            if !duration.is_finite() || duration <= 0.0 {
+                return Err(
+                    "body sample crossings require distinct positive times; state unchanged".into(),
+                );
+            }
+            if report.trials >= self.motion.max_trials {
+                return Err(
+                    "body motion trial budget exceeded across sampled path; state unchanged".into(),
+                );
+            }
+            let used = report.samples.len() * count;
+            if used >= self.motion.max_sample_vertices {
+                return Err(
+                    "body motion sample budget exceeded across sampled path; state unchanged"
+                        .into(),
+                );
+            }
+            let angles = if fraction == 1.0 {
+                to
+            } else {
+                std::array::from_fn(|side| {
+                    self.arms[side] + (to[side] - self.arms[side]) * fraction
+                })
+            };
+            let target = self.body.collision_at(angles[0], angles[1]);
+            let options = MotionOptions {
+                max_trials: self.motion.max_trials - report.trials,
+                max_sample_vertices: self.motion.max_sample_vertices - used,
+                ..self.motion
+            };
+            // A crossed source sample is still an intermediate point of this move. Preserve
+            // the caller's intermediate tolerance there; only the requested endpoint uses
+            // the session's final tolerance.
+            let final_tolerance = work.tol;
+            if fraction < 1.0
+                && let Some(tolerance) = options.intermediate_tol
+            {
+                work.tol = tolerance;
+            }
+            let segment = match self.carry_m {
+                Some(radius) => advance_body_carried(&mut work, &target, duration, options, radius),
+                None => advance_body(&mut work, &target, duration, options),
+            };
+            work.tol = final_tolerance;
+            let mut segment = segment.map_err(|refusal| refusal.to_string())?;
+            for sample in &mut segment.samples {
+                sample.time_s = if sample.time_s == duration {
+                    end
+                } else {
+                    time + sample.time_s
+                };
+                let visible_time = sample.time_s as f32;
+                if !visible_time.is_finite() || visible_time <= replay_time {
+                    return Err(
+                        "body motion samples have indistinguishable replay times; state unchanged"
+                            .into(),
+                    );
+                }
+                replay_time = visible_time;
+            }
+            report.trials += segment.trials;
+            report.pairs_tested += segment.pairs_tested;
+            report.rejected_before_solve += segment.rejected_before_solve;
+            report.rejected_unsolved += segment.rejected_unsolved;
+            report.rejected_after_solve += segment.rejected_after_solve;
+            report.rejected_newton_iterations += segment.rejected_newton_iterations;
+            report.samples.append(&mut segment.samples);
+            time = end;
+        }
+        Ok((work, report))
     }
 }
 
@@ -1002,6 +1149,190 @@ mod tests {
         let mut session = Session::start(body, &pattern, &json!({}), settings, |_| {}).unwrap();
         session.scene.solver.gravity = Vec3::ZERO;
         session
+    }
+
+    // An L-shaped sampled path: the cylinder first pushes right, then moves forward. A direct
+    // endpoint chord misses the intermediate 15 mm excursion and cannot describe the same cloth.
+    fn turning_session() -> Session {
+        let mut session = session(0.015);
+        session.body.angles = vec![35.0, 40.0, 45.0];
+        for surface in [&mut session.body.collision, &mut session.body.display] {
+            surface
+                .left
+                .offsets
+                .push(vec![Vec3::new(0.0, 0.015, 0.0); 2 * RING]);
+            surface.right.offsets.push(Vec::new());
+        }
+        session.motion.max_step_s = 0.025;
+        session
+    }
+
+    #[test]
+    fn motion_partitions_both_arms_at_every_crossed_sample_in_either_direction() {
+        let (header, data) = baked(0.0);
+        let mut body = PosableBody::parse(&header, &data).unwrap();
+        body.angles = vec![0.0, 10.0, 20.0, 30.0];
+        assert_eq!(
+            body.motion_fractions([0.0, 30.0], [30.0, 10.0]),
+            vec![1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0]
+        );
+        assert_eq!(
+            body.motion_fractions([30.0, 30.0], [0.0, 0.0]),
+            vec![1.0 / 3.0, 2.0 / 3.0, 1.0],
+            "shared crossings do not create zero-duration segments"
+        );
+        assert_eq!(body.motion_fractions([10.0, 20.0], [20.0, 10.0]), vec![1.0]);
+        assert_eq!(body.motion_fractions([15.0, 15.0], [15.0, 15.0]), vec![1.0]);
+    }
+
+    #[test]
+    fn a_sampled_move_checks_the_rendered_path_and_matches_separate_checked_segments() {
+        for (carry, tolerance) in [(None, None), (Some(0.03), None), (Some(0.03), Some(5e-3))] {
+            let mut session = turning_session();
+            session.carry_m = carry;
+            session.motion.intermediate_tol = tolerance;
+            let original = session.scene.solver.clone();
+            let fractions = session.body.motion_fractions(session.arms, [45.0, 35.0]);
+            let (expected, report) = session
+                .advance_sampled([45.0, 35.0], 0.25, &fractions)
+                .unwrap();
+            assert!(report.samples.iter().any(|sample| sample.time_s == 0.125));
+            for sample in &report.samples {
+                let displayed = session
+                    .body
+                    .collision_at(35.0 + 10.0 * sample.time_s / 0.25, 35.0);
+                assert!(
+                    sample
+                        .body
+                        .iter()
+                        .zip(displayed)
+                        .all(|(a, b)| (*a - b).norm() < 1e-14)
+                );
+            }
+            let mut independent = original.clone();
+            let mut trials = 0;
+            let mut samples = 0;
+            let count = original.x.len() + session.body.collision.base.len();
+            for angle in [40.0, 45.0] {
+                let target = session.body.collision_at(angle, 35.0);
+                let options = MotionOptions {
+                    max_trials: session.motion.max_trials - trials,
+                    max_sample_vertices: session.motion.max_sample_vertices - samples * count,
+                    ..session.motion
+                };
+                independent.tol = if angle == 40.0 {
+                    tolerance.unwrap_or(original.tol)
+                } else {
+                    original.tol
+                };
+                let segment = match carry {
+                    Some(radius) => {
+                        advance_body_carried(&mut independent, &target, 0.125, options, radius)
+                    }
+                    None => advance_body(&mut independent, &target, 0.125, options),
+                }
+                .unwrap();
+                independent.tol = original.tol;
+                trials += segment.trials;
+                samples += segment.samples.len();
+            }
+            assert_eq!(format!("{expected:?}"), format!("{independent:?}"));
+            assert_eq!(report.trials, trials);
+            assert_eq!(report.samples.len(), samples);
+            let actual = session.advance(45.0, 35.0, 0.25).unwrap();
+            let stride = 1 + session.cloth().len();
+            let times: Vec<f32> = actual
+                .chunks_exact(stride)
+                .map(|sample| sample[0])
+                .collect();
+            assert_eq!(
+                times,
+                report
+                    .samples
+                    .iter()
+                    .map(|sample| sample.time_s as f32)
+                    .collect::<Vec<_>>()
+            );
+            assert!(times.windows(2).all(|pair| pair[0] < pair[1]));
+            assert_eq!(times.last(), Some(&0.25));
+            assert_eq!(
+                session.last_move()["body_sample_times_s"],
+                json!([0.125, 0.25])
+            );
+            assert_eq!(session.last_move()["trials"], json!(trials));
+            assert_eq!(
+                format!("{:?}", session.scene.solver),
+                format!("{independent:?}")
+            );
+            assert_eq!(session.arms(), [45.0, 35.0]);
+            assert_eq!(
+                &actual[actual.len() - stride + 1..],
+                session.cloth().as_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn late_sampled_move_budget_failures_restore_the_entire_session_and_can_be_replayed() {
+        let mut session = turning_session();
+        session.carry_m = Some(0.03);
+        session.advance(35.0, 35.0, 0.01).unwrap();
+        let original = session.scene.solver.clone();
+        let before_receipt = session.last_move().clone();
+        let before_replay = session.replay().to_vec();
+        let before_summary = session.summary().clone();
+        let original_options = session.motion;
+        let count = original.x.len() + session.body.collision.base.len();
+        let mut first = original.clone();
+        let first_report = advance_body_carried(
+            &mut first,
+            &session.body.collision_at(40.0, 35.0),
+            0.125,
+            session.motion,
+            0.03,
+        )
+        .unwrap();
+        assert!(first_report.samples.len() > 1 && first_report.trials > 1);
+        for trial_budget in [true, false] {
+            session.motion = if trial_budget {
+                MotionOptions {
+                    max_trials: first_report.trials + 1,
+                    ..original_options
+                }
+            } else {
+                MotionOptions {
+                    max_sample_vertices: (first_report.samples.len() + 1) * count,
+                    ..original_options
+                }
+            };
+            let error = session.advance(45.0, 35.0, 0.25).unwrap_err();
+            assert!(
+                error.contains(if trial_budget {
+                    "trial budget"
+                } else {
+                    "sample budget"
+                }),
+                "{error}"
+            );
+            assert_eq!(
+                format!("{:?}", session.scene.solver),
+                format!("{original:?}")
+            );
+            assert_eq!(session.arms(), [35.0, 35.0]);
+            assert_eq!(session.last_move(), &before_receipt);
+            assert_eq!(session.replay(), before_replay);
+            assert_eq!(session.summary(), &before_summary);
+        }
+        session.motion = original_options;
+        let fractions = session.body.motion_fractions(session.arms, [45.0, 35.0]);
+        let (expected, _) = session
+            .advance_sampled([45.0, 35.0], 0.25, &fractions)
+            .unwrap();
+        session.advance(45.0, 35.0, 0.25).unwrap();
+        assert_eq!(
+            format!("{:?}", session.scene.solver),
+            format!("{expected:?}")
+        );
     }
 
     #[test]

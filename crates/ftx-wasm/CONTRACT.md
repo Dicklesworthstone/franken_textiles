@@ -1,5 +1,17 @@
 # ftx-wasm
 
+**Continuous baked-body posing.** A live session splits an arm move at every crossed
+baked sample of either arm. Each resulting body-vertex chord is the same piecewise
+path displayed by the posing room; crossing a sample no longer shortcuts that path.
+All segments share one trial and retained-geometry allowance. The complete move
+publishes atomically, including solver history, final arms and diagnostics; a late
+refusal leaves the previous session intact. `last_move.body_sample_times_s` records
+crossed segment endpoints, while ordinary accepted sample times remain relative
+to the whole move. Moves confined to one sample interval retain their original
+arithmetic and report format. Carried starts and intermediate tolerances keep
+their existing roles. This is consistency with the baked approximation, not new
+anatomical accuracy or empirical garment fit.
+
 **Independent initial arm poses.** Optional `FoldSettings.arm_pose` contains finite
 `left_abduction_deg` and `right_abduction_deg` in 0..=180, overriding the common angle.
 It uses the existing body kinematics and actual per-side placement frames when unequal;
