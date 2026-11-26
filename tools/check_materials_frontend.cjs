@@ -3575,6 +3575,19 @@ test('routed specialist cells show actual operations, serialized garment transfe
     const copyDownload=descendants(s).find(n=>n.download==='copy-windows-report.json');
     assert.equal(await p.blobs.get(copyDownload.href).text(),copyRaw);
     assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    assert.equal(table('worst garment delivery delay'),undefined);
+    copyPolicy.copies[1].due_at_milliseconds=8000;
+    Object.assign(copyTimings[0],{due_at_milliseconds:8000,tardiness_milliseconds:800});
+    routing.copy_windows.schema='ftx-sewing-copy-windows/2';
+    routing.maximum_tardiness={baseline_milliseconds:800,selected_milliseconds:800,
+      lower_bound_milliseconds:0,lower_bound_attained:false,optimality_proven:false};
+    await p.e[op].onclick();p.emit(report,[]);
+    assert.deepEqual(plain(table('worst garment delivery delay').children[2].children.map(n=>n.textContent)),
+      ['800','800','0','No']);
+    assert.deepEqual(plain(table('garment arrivals and completion deadlines').children.slice(2)
+      .map(row=>row.children.slice(-2).map(n=>n.textContent))),
+      [['8000','800'],['None declared','No due time'],['8000','800'],['None declared','No due time']]);
+    delete routing.maximum_tardiness;
     delete routing.copy_windows;
     const localPeak={straight:{fixture:1},finish:{fixture:1}}, localFinal={straight:{fixture:0},finish:{fixture:0}};
     routing.workholding={schema:'ftx-sewing-routed-workholding/1',
@@ -16222,13 +16235,14 @@ test('cylindrical-holder page renders reaction force/torque, protocol discrepanc
   await p.e.cylinderExperiment.onclick();
   assert.equal(p.current().messages.at(-1).type,'cylinderExperiment');
   assert.equal(p.current().messages.at(-1).stripRequest,input);
-  p.emit({schema:'ftx-cylinder-experiment-report/1',input_sha256:'cyl-sha',active_gauge_mass_kg:0.002,
+  const report={schema:'ftx-cylinder-experiment-report/1',input_sha256:'cyl-sha',active_gauge_mass_kg:0.002,
     newton_iterations:12,mechanics_readiness_promoted:false,model_scope:'synthetic cylinder scope',
     protocol_audit:{wrapped_circumference_m:0.251,seam_overlap_width_m:0.009,mounted_free_height_m:0.055,
       discrepancies:['twist rate 0.095 deg/s vs nominal 0.100 deg/s']},
     input:{material:{id:'test'}},states:[{time_s:2,axial_displacement_m:-0.005,true_axial_extension_fraction:0.0,
       rotation_deg:15,tare_adjusted_force_n:1.25,tare_adjusted_torque_nm:0.042,mid_radius_range_m:[0.039,0.041,0.04],
-      momentum_balance_residual_n:1e-10,stored_membrane_energy_j:0.015,stored_bending_energy_j:0.0004}]});
+      momentum_balance_residual_n:1e-10,stored_membrane_energy_j:0.015,stored_bending_energy_j:0.0004}]};
+  p.emit(report);
   const s=section(p,'Cylindrical-holder forward experiment');
   assert.match(visibleText(s),/Protocol discrepancies \(1\)/);
   assert.match(visibleText(s),/Tare torque/);
@@ -16236,6 +16250,15 @@ test('cylindrical-holder page renders reaction force/torque, protocol discrepanc
   assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
     ['2','-0.005','0','15','1.25','0.042','0.04','1e-10','0.015','0.0004']);
   assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  assert.doesNotMatch(visibleText(s),/Mesh snapshots at/);
+  const sample=report.states[0], geometry={positions_m:[[0,0,0]],velocities_m_s:[[0,0,0]]};
+  report.input.geometry_output='waypoints';
+  report.states=[{...sample,...geometry,time_s:0},{...sample,time_s:1},{...sample,...geometry}];
+  await p.e.cylinderExperiment.onclick(); p.emit(report);
+  assert.match(visibleText(s),/Mesh snapshots at 2 loading waypoints. Reactions and energy cover all 3 reported states/);
+  const compact=descendants(s).find(n=>n.tag==='table');
+  assert.deepEqual(plain(compact.children.slice(2).map(row=>row.children.at(-1).textContent)),
+    ['Available','','Available']);
   p.e.cylinderExperimentRequest.handlers.change(); assert.equal(s.hidden,true);
 });
 

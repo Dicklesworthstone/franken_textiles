@@ -2496,6 +2496,7 @@ mod tests {
             let fitted = budget.solve(experiment, &fixture, &parameters).unwrap();
             let ordinary = cylinder::evaluate(&cylinder::Request {
                 schema: cylinder::REQUEST_SCHEMA.into(),
+                geometry_output: cylinder::GeometryOutput::EveryStep,
                 material: Selection {
                     id: material.id.clone(),
                     record: Some(material.clone()),
@@ -3103,6 +3104,7 @@ mod tests {
                         .unwrap();
                     let forward = cylinder::evaluate(&cylinder::Request {
                         schema: cylinder::REQUEST_SCHEMA.into(),
+                        geometry_output: cylinder::GeometryOutput::EveryStep,
                         material: Selection {
                             id: published.id.clone(),
                             record: Some(published.clone()),
@@ -3265,6 +3267,7 @@ mod tests {
         .unwrap();
         let req = cylinder::Request {
             schema: cylinder::REQUEST_SCHEMA.into(),
+            geometry_output: cylinder::GeometryOutput::EveryStep,
             material: Selection {
                 id: mat.id.clone(),
                 record: Some(mat),

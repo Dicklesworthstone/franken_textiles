@@ -293,6 +293,8 @@ The complete report separates stored energy, free-vertex motion and physical dis
 <button id="cylinderExperiment" data-command="cylinderExperiment" disabled>Simulate cylindrical-holder cycles</button>
 <p class="note">Wrap a source-qualified fabric around rigid cylindrical holders with explicit pretension offset,
 tare subtraction, grain orientation and timestamped twist, compression or stretch-slip waypoints.
+For long traces, set <code>geometry_output</code> to <code>"waypoints"</code> to retain mesh snapshots at
+the authored times and force and torque readings at every accepted step.
 Reports upper/lower reaction force (N), axial reaction torque (N·m), protocol rate discrepancies and frozen replay JSON;
 never promotes uncalibrated catalog specimens to garment mechanics readiness.</p>
 <label>Inverse strip request JSON (<code>ftx-strip-calibration/1</code>) <input id="stripFitRequest" type="file" accept=".json,application/json"></label>

@@ -14,6 +14,11 @@
 //! [`BendingTensor`] patches and [`PlasticBending`] permanent-wrinkle memory bind without jumping
 //! the seam.
 //!
+//! Set `geometry_output` to `"waypoints"` for long instrument traces. The report retains full mesh
+//! positions, velocities and per-element material histories at the authored waypoints. Reactions,
+//! energy, strain ranges, residuals, slip detection and solver diagnostics still cover every
+//! accepted step. Both output modes use identical integration and convergence checks.
+//!
 //! Units: metres, kilograms, seconds, newtons, newton-metres; cylinder axis along `+z`.
 //! Forward experiment only: does not promote raw Fabric-101 release metadata to garment readiness,
 //! fabricate contact thickness from presser-foot `reported_thickness`, or claim empirical fit.
@@ -332,6 +337,23 @@ impl Controls {
     }
 }
 
+/// Select when the report retains mesh and per-element material snapshots.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometryOutput {
+    /// Retain the complete state at every accepted integration step.
+    #[default]
+    EveryStep,
+    /// Retain snapshots at the initial state and each authored loading waypoint.
+    Waypoints,
+}
+
+impl GeometryOutput {
+    fn is_every_step(&self) -> bool {
+        *self == Self::EveryStep
+    }
+}
+
 /// Source-locked cylindrical-holder forward experiment request.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -344,6 +366,9 @@ pub struct Request {
     pub fixture: Fixture,
     /// `1..=129` waypoints (`1` allowed only for memoryless static equilibrium at `time_s == 0`).
     pub loading: Vec<Waypoint>,
+    /// Snapshot cadence. Scalar reactions, energy and balance diagnostics always cover every step.
+    #[serde(default, skip_serializing_if = "GeometryOutput::is_every_step")]
+    pub geometry_output: GeometryOutput,
     /// Optional nominal protocol rates/travel for automatic timestamp/pretension discrepancy auditing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nominal_protocol: Option<NominalProtocol>,
@@ -442,16 +467,20 @@ pub struct State {
     /// Cumulative permanent bending-curvature dissipation (J).
     pub bending_plastic_dissipation_j: f64,
     /// Solver vertex positions `[x, y, z]` (m) in row-major `(j, i)` order (`n_theta * (n_z + 1)` vertices).
+    /// Omitted between loading waypoints when `geometry_output` is `waypoints`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub positions_m: Vec<[f64; 3]>,
     /// Solver vertex velocities `[vx, vy, vz]` (m/s).
+    /// Retained at the same times as `positions_m`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub velocities_m_s: Vec<[f64; 3]>,
-    /// Production Maxwell relaxation state when bound.
+    /// Production Maxwell relaxation state when bound and a mesh snapshot is retained.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relaxation: Option<Value>,
-    /// Production permanent membrane-strain state when bound.
+    /// Production permanent membrane-strain state when bound and a mesh snapshot is retained.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub membrane_plasticity: Option<Value>,
-    /// Production permanent panel-bending state when bound.
+    /// Production permanent panel-bending state when bound and a mesh snapshot is retained.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bending_plasticity: Option<Value>,
     /// Production Newton diagnostics; `None` only when `t = 0` starts from a history-bearing unrelaxed wrap.
@@ -874,9 +903,13 @@ fn subdivisions(input: &Request, has_history: bool) -> Result<Vec<usize>, Refusa
         counts.push(count);
     }
     let [n_theta, n_z] = input.fixture.cells;
-    if n_theta * (n_z + 1) * (total_steps + 1) > 524_288 {
+    let snapshots = match input.geometry_output {
+        GeometryOutput::EveryStep => total_steps + 1,
+        GeometryOutput::Waypoints => input.loading.len(),
+    };
+    if n_theta * (n_z + 1) * snapshots > 524_288 {
         return Err(budget(
-            "cylinder experiment exceeds 524288 retained vertex states; coarsen cells or shorten path",
+            "cylinder experiment exceeds 524288 retained vertex states; select waypoint geometry, coarsen cells or shorten path",
         ));
     }
     Ok(counts)
@@ -900,7 +933,16 @@ fn record_state(
         h,
         old_velocity,
         solve,
+        true,
     )
+}
+
+fn snapshot_vectors(values: &[Vec3], retain: bool) -> Vec<[f64; 3]> {
+    if retain {
+        values.iter().copied().map(vec3_array).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -913,6 +955,7 @@ fn record_state_with_step(
     h: f64,
     old_velocity: &[Vec3],
     solve: Option<SolveReport>,
+    retain_snapshot: bool,
 ) -> Result<State, Refusal> {
     let [n_theta, n_z] = fixture.cells;
     let sep_m = holder_separation_m(fixture, waypoint)?;
@@ -1119,11 +1162,13 @@ fn record_state_with_step(
         membrane_plastic_dissipation_j,
         membrane_damage_dissipation_j,
         bending_plastic_dissipation_j,
-        positions_m: solver.x.iter().copied().map(vec3_array).collect(),
-        velocities_m_s: solver.v.iter().copied().map(vec3_array).collect(),
-        relaxation: solver.relaxation_report()?,
-        membrane_plasticity,
-        bending_plasticity: solver.bending_plasticity_report()?,
+        positions_m: snapshot_vectors(&solver.x, retain_snapshot),
+        velocities_m_s: snapshot_vectors(&solver.v, retain_snapshot),
+        relaxation: solver.relaxation_report()?.filter(|_| retain_snapshot),
+        membrane_plasticity: membrane_plasticity.filter(|_| retain_snapshot),
+        bending_plasticity: solver
+            .bending_plasticity_report()?
+            .filter(|_| retain_snapshot),
         solve,
     })
 }
@@ -1514,6 +1559,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
                 h,
                 &old_velocity,
                 Some(numerical),
+                step == count || input.geometry_output.is_every_step(),
             )?;
             if st.slip_limit_exceeded && first_slip_time_s.is_none() {
                 first_slip_time_s = Some(st.time_s);
@@ -1646,6 +1692,68 @@ mod tests {
     }
 
     #[test]
+    fn waypoint_snapshots_preserve_instrument_trace_and_solver_budgets() {
+        let mut input = Request {
+            schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
+            material: synthetic_sheet_selection(1e-4, false),
+            fixture: fabric101_fixture([0.0, 1.0], 6, 2),
+            loading: [(0.0, 0.0), (0.125, 0.0001), (0.375, 0.0)]
+                .map(|(time_s, axial_displacement_m)| Waypoint {
+                    time_s,
+                    axial_displacement_m,
+                    rotation_deg: 0.0,
+                    clamp_slip_m: 0.0,
+                })
+                .to_vec(),
+            nominal_protocol: None,
+            controls: Controls {
+                max_step_s: 0.0625,
+                ..Controls::default()
+            },
+        };
+        input.fixture.grip_slip_force_limit_n = Some(0.01);
+        let full = evaluate(&input).unwrap();
+        assert!(!full.replay_request_json.contains("geometry_output"));
+        input.geometry_output = GeometryOutput::Waypoints;
+        let compact = evaluate(&input).unwrap();
+        assert_eq!(compact.states.len(), 7);
+        assert_eq!(full.states.len(), compact.states.len());
+        assert_eq!(full.newton_iterations, compact.newton_iterations);
+        assert_eq!(full.first_slip_time_s, Some(0.0625));
+        assert_eq!(full.first_slip_time_s, compact.first_slip_time_s);
+        let replay: Request = serde_json::from_str(&compact.replay_request_json).unwrap();
+        assert_eq!(replay.geometry_output, GeometryOutput::Waypoints);
+        assert_ne!(full.input_sha256, compact.input_sha256);
+        for (step, (expected, actual)) in full.states.iter().zip(&compact.states).enumerate() {
+            let mut expected = serde_json::to_value(expected).unwrap();
+            if ![0, 2, 6].contains(&step) {
+                let fields = expected.as_object_mut().unwrap();
+                assert!(fields.remove("positions_m").is_some());
+                assert!(fields.remove("velocities_m_s").is_some());
+            }
+            assert_eq!(serde_json::to_value(actual).unwrap(), expected);
+        }
+
+        // 1024 accepted steps on a 544-vertex mesh would retain 557600 vertex states.
+        input.fixture.cells = [32, 16];
+        input.loading.truncate(2);
+        input.loading[1].time_s = 64.0;
+        assert_eq!(subdivisions(&input, false).unwrap(), vec![1024]);
+        input.geometry_output = GeometryOutput::EveryStep;
+        assert_eq!(
+            subdivisions(&input, false).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+        input.geometry_output = GeometryOutput::Waypoints;
+        input.controls.max_steps = 1023;
+        assert_eq!(
+            subdivisions(&input, false).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+    }
+
+    #[test]
     fn lower_drive_prescribes_real_ring_motion_and_reads_its_own_torque() {
         let mut fixture = fabric101_fixture([0.0, 1.0], 6, 2);
         assert!(
@@ -1663,6 +1771,7 @@ mod tests {
         };
         let input = Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
             material: synthetic_sheet_selection(1e-4, false),
             fixture,
             loading: [(0.0, 1.0, 0.0), (0.02, 2.0, 0.0001), (0.04, -1.0, 0.0)]
@@ -1737,6 +1846,7 @@ mod tests {
         // contact parameters or changes to the requested physics.
         let request = Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
             material: synthetic_sheet_selection(1e-4, true),
             fixture,
             loading: vec![Waypoint {
@@ -1931,6 +2041,7 @@ mod tests {
         // 1. Raw Fabric-101 release record has density + presser-foot reported_thickness only; must refuse.
         let uncalibrated = Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
             material: Selection {
                 id: "fabric101-2026/l01".into(),
                 ..Selection::default()
@@ -2033,6 +2144,7 @@ mod tests {
         };
         let l01_req = Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
             material: std::mem::take(&mut with_overrides),
             fixture: l01_fixture,
             loading: vec![
@@ -2125,6 +2237,7 @@ mod tests {
     fn zero_bending_compression_and_unmodeled_slip_are_refused() {
         let req = Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
             material: synthetic_sheet_selection(0.0, false),
             fixture: fabric101_fixture([0.0, 1.0], 12, 4),
             loading: vec![
@@ -2198,6 +2311,7 @@ mod tests {
         denied_sel.allow_estimates = false;
         let denied_req = Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
             material: denied_sel,
             fixture: Fixture {
                 pretension_displacement_m: 0.001,
@@ -2242,6 +2356,7 @@ mod tests {
         // Timed ramp from pristine separation -> pretension -> twist -> axial compression -> return.
         let history_req = Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::Waypoints,
             material: selected,
             fixture: Fixture {
                 pretension_displacement_m: 0.001,
@@ -2300,6 +2415,12 @@ mod tests {
         );
         assert!(last.relaxation.is_some());
         assert!(last.bending_plasticity.is_some());
+        assert!(report.states.len() > history_req.loading.len());
+        for st in &report.states {
+            let sampled = history_req.loading.iter().any(|p| p.time_s == st.time_s);
+            assert_eq!(st.relaxation.is_some(), sampled);
+            assert_eq!(st.bending_plasticity.is_some(), sampled);
+        }
         for st in report.states.iter().skip(1) {
             assert!(
                 st.free_dynamic_residual_n <= 1e-6,
@@ -2356,6 +2477,7 @@ mod tests {
 
         let make_req = |material: Selection| Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: GeometryOutput::EveryStep,
             material,
             fixture: Fixture {
                 pretension_displacement_m: 0.0,

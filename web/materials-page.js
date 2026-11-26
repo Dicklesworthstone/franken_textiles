@@ -5080,6 +5080,13 @@ function cylinderExperimentResult(parent, r) {
     "tare subtraction and timestamped twist, compression or stretch-slip waypoints. Forward cylinder simulation audits protocol " +
     "discrepancies and never promotes uncalibrated specimens to garment mechanics readiness.";
   parent.append(note);
+  const waypointGeometry = r.input?.geometry_output === "waypoints";
+  const snapshotCount = waypointGeometry ? r.states.filter((state) => state.positions_m?.length).length : 0;
+  if (waypointGeometry) {
+    const snapshots = document.createElement("p");
+    snapshots.textContent = `Mesh snapshots at ${snapshotCount} loading waypoints. Reactions and energy cover all ${r.states.length} reported states.`;
+    parent.append(snapshots);
+  }
   if (r.protocol_audit?.discrepancies?.length) {
     const warn = document.createElement("p");
     warn.textContent = `Protocol discrepancies (${r.protocol_audit.discrepancies.length}): ${r.protocol_audit.discrepancies.join("; ")}`;
@@ -5105,18 +5112,22 @@ function cylinderExperimentResult(parent, r) {
     "True axial ext.", "Twist (deg)", "Tare force (N)", "Tare torque (N·m)", "Mean mid-radius (m)",
     "Momentum residual (N)", "Stored membrane (J)", "Stored bending (J)"];
   if (hasDamage) columns.push("Membrane plastic (J)", "Membrane damage (J)");
+  if (waypointGeometry) columns.push("Mesh snapshot");
   const states = table(parent, "Cylindrical-holder reactions and energy history", columns);
   for (const state of r.states) {
     const row = [state.time_s, state.axial_displacement_m, state.true_axial_extension_fraction,
       state.rotation_deg, state.tare_adjusted_force_n, state.tare_adjusted_torque_nm, state.mid_radius_range_m?.[2],
       state.momentum_balance_residual_n, state.stored_membrane_energy_j, state.stored_bending_energy_j];
     if (hasDamage) row.push(state.membrane_plastic_dissipation_j, state.membrane_damage_dissipation_j);
-    cells(states, row.map(metric));
+    const formatted = row.map(metric);
+    if (waypointGeometry) formatted.push(state.positions_m?.length ? "Available" : "");
+    cells(states, formatted);
   }
   detail(parent, "Protocol audit, pretension and timestamp rates", r.protocol_audit);
   detail(parent, "Frozen material, cylindrical holder and loading program", r.input);
   return { schema: r.schema, input_sha256: r.input_sha256, steps: r.states.length,
     ...(relaxationIntegration && relaxationIntegration !== "backward_euler" ? { relaxation_integration: relaxationIntegration } : {}),
+    ...(waypointGeometry ? { mesh_snapshots: snapshotCount } : {}),
     active_gauge_mass_kg: r.active_gauge_mass_kg, newton_iterations: r.newton_iterations,
     discrepancy_count: r.protocol_audit?.discrepancies?.length ?? 0,
     mechanics_readiness_promoted: r.mechanics_readiness_promoted, model_scope: r.model_scope,

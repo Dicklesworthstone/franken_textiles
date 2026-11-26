@@ -150,6 +150,7 @@ fn build_static_calibration_input() -> (Input, Request) {
         }];
         let states = cylinder::evaluate(&Request {
             schema: REQUEST_SCHEMA.into(),
+            geometry_output: cylinder::GeometryOutput::EveryStep,
             material: Selection {
                 id: truth.id.clone(),
                 record: Some(truth.clone()),
@@ -197,6 +198,7 @@ fn build_static_calibration_input() -> (Input, Request) {
 
     let forward_request = Request {
         schema: REQUEST_SCHEMA.into(),
+        geometry_output: cylinder::GeometryOutput::EveryStep,
         material: Selection {
             id: truth.id.clone(),
             record: Some(truth.clone()),
@@ -327,6 +329,7 @@ fn portable_cylinder_forward_and_adjoint_calibration_match_shared_engine() {
     check_fixture.cells = check_fixture.cells.map(|n| n * 2);
     let replay_req = Request {
         schema: REQUEST_SCHEMA.into(),
+        geometry_output: cylinder::GeometryOutput::EveryStep,
         material: selection,
         fixture: check_fixture,
         loading: check_exp.loading.clone(),
