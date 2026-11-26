@@ -15,6 +15,25 @@ use serde_json::{Value, json};
 
 use crate::{Args, bad_input, known_options, required, workspace};
 
+const DOCUMENT_LIMIT: usize = 16 * 1024 * 1024;
+const PATTERN_DOCUMENT_LIMIT: usize = crate::fabric::MAX_SNAPSHOT_BYTES;
+
+fn read_bounded(mut reader: impl Read, path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
+    let mut out = Vec::new();
+    reader
+        .by_ref()
+        .take(limit as u64 + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| workspace::io_error(path, e))?;
+    if out.len() > limit {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{}: exceeds {limit} byte input budget", path.display()),
+        ));
+    }
+    Ok(out)
+}
+
 pub(super) fn bytes(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
     let f = File::open(path).map_err(|e| workspace::io_error(path, e))?;
     if !f
@@ -27,24 +46,26 @@ pub(super) fn bytes(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
             path.display()
         )));
     }
-    let mut bytes = Vec::new();
-    f.take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| workspace::io_error(path, e))?;
-    if bytes.len() > limit {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            format!("{}: exceeds {limit} byte input budget", path.display()),
-        ));
-    }
-    Ok(bytes)
+    read_bounded(f, path, limit)
 }
 
 pub(super) fn document(path: &Path) -> Result<(Value, Vec<u8>), Refusal> {
-    let raw = bytes(path, 16 * 1024 * 1024)?;
+    document_with_limit(path, DOCUMENT_LIMIT)
+}
+
+/// Pattern files may carry frozen material-binding snapshots up to `fabric::MAX_SNAPSHOT_BYTES`.
+fn pattern_document(path: &Path) -> Result<(Value, Vec<u8>), Refusal> {
+    document_with_limit(path, PATTERN_DOCUMENT_LIMIT)
+}
+
+fn parse_document(path: &Path, raw: Vec<u8>) -> Result<(Value, Vec<u8>), Refusal> {
     let value =
         serde_json::from_slice(&raw).map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
     Ok((value, raw))
+}
+
+fn document_with_limit(path: &Path, limit: usize) -> Result<(Value, Vec<u8>), Refusal> {
+    parse_document(path, bytes(path, limit)?)
 }
 
 pub(super) fn mesh(path: &Path) -> Result<ColouredMesh, Refusal> {
@@ -104,7 +125,7 @@ pub(super) fn sim_points(args: &Args) -> Result<(Value, i32, String), Refusal> {
         return Err(bad_input("ftx sim-points needs exactly one SIMDIR"));
     }
     let dir = Path::new(&args.positional[1]);
-    let pattern = Pattern::new(document(Path::new(required(args, "pattern")?))?.0);
+    let pattern = Pattern::new(pattern_document(Path::new(required(args, "pattern")?))?.0);
     let errors = pattern.structure_errors();
     if !errors.is_empty() {
         return Err(bad_input(errors.join("; ")));
@@ -329,10 +350,7 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
     let pat_doc = if let Some(explicit) = args.options.get("pattern") {
         let doc = if let Some(hash) = report.get("effective_pattern_sha256") {
-            let path = Path::new(explicit);
-            let raw = bytes(path, crate::fabric::MAX_SNAPSHOT_BYTES)?;
-            let value: Value = serde_json::from_slice(&raw)
-                .map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
+            let (value, _) = pattern_document(Path::new(explicit))?;
             let canonical = serde_json::to_vec(&value).map_err(|e| bad_input(e.to_string()))?;
             if hash.as_str() != Some(sha256_hex(&canonical).as_str()) {
                 return Err(bad_input(
@@ -341,7 +359,7 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
             value
         } else {
-            document(Path::new(explicit))?.0
+            pattern_document(Path::new(explicit))?.0
         };
         let pat = Pattern::new(doc.clone());
         let errors = pat.structure_errors();
@@ -380,7 +398,7 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
         // A qualification band moves with its saved input when it is archived.
         let path = parent.join("pattern.json");
         crate::round::regular(&path, false)?;
-        Some(document(&path)?.0)
+        Some(pattern_document(&path)?.0)
     } else {
         let candidate = report["pattern"]
             .as_str()
@@ -392,7 +410,7 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
                     .filter(|p| p.is_file())
             });
         match candidate {
-            Some(p) => document(&p).ok().map(|(d, _)| d),
+            Some(p) => pattern_document(&p).ok().map(|(d, _)| d),
             None => None,
         }
     };
@@ -614,4 +632,31 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
         0,
         text,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn bounded_document_reader_enforces_limit_and_invalid_document_errors() {
+        const {
+            assert!(PATTERN_DOCUMENT_LIMIT == crate::fabric::MAX_SNAPSHOT_BYTES);
+            assert!(PATTERN_DOCUMENT_LIMIT > DOCUMENT_LIMIT);
+        }
+
+        let path = Path::new("pattern.json");
+        let valid = br#"{"schema":"fabric-pattern/1"}"#;
+        let raw = read_bounded(Cursor::new(valid), path, valid.len()).unwrap();
+        let (parsed, bytes_out) = parse_document(path, raw).unwrap();
+        assert_eq!(parsed["schema"], "fabric-pattern/1");
+        assert_eq!(bytes_out, valid);
+
+        let over = read_bounded(Cursor::new(valid), path, valid.len() - 1).unwrap_err();
+        assert_eq!(over.code, RefusalCode::BudgetExceeded);
+
+        let broken = parse_document(path, b"{not json".to_vec()).unwrap_err();
+        assert_eq!(broken.code, RefusalCode::InvalidDocument);
+    }
 }

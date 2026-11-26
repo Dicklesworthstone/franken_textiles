@@ -123,6 +123,7 @@ const USAGE: &str = "usage:
   ftx materials inspect SELECTION.json [--json]
   ftx materials resolve PATTERN.json [--json]
   ftx materials bind PATTERN.json SELECTION.json NEW-PATTERN.json [--json]
+  ftx materials bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json [--json]
   ftx materials price PATTERN.json QUOTES.json SCOPE.json [--json]
   ftx materials calibrate SWATCHES.json [--allow-estimates] [--json]
   ftx materials linearize-origin REQUEST.json [--json]
@@ -1790,7 +1791,66 @@ fn append_drape_constitutive_summary(
     let damage_j = report["membrane_plasticity_history"]["damage_dissipation_j"]
         .as_f64()
         .filter(|v| v.is_finite());
+    let time_sub = report["numerical"]["time_subdivision"]
+        .as_object()
+        .and_then(|sub| {
+            Some((
+                sub.get("subdivided_nominal_intervals")?.as_u64()?,
+                sub.get("nominal_intervals")?.as_u64()?,
+                sub.get("accepted_substeps")?.as_u64()?,
+                sub.get("trials")?.as_u64()?,
+            ))
+        });
+    let start_repair = report.get("start_repair").filter(|v| v.is_object());
+    let elastic_hold = report["elastic_hold_window"].as_object().and_then(|hold| {
+        let steps = hold.get("requested_steps")?.as_u64().filter(|&n| n > 0)?;
+        let status = hold
+            .get("status")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unknown");
+        Some((steps, status))
+    });
     if let Some(text) = text {
+        if let Some((subdivided, nominal, accepted, trials)) = time_sub {
+            text.push_str(&format!(
+                "time subdivision: {subdivided}/{nominal} intervals subdivided ({accepted} substeps, {trials} trials)\n"
+            ));
+        }
+        if let Some(repair) = start_repair {
+            let mut parts = Vec::new();
+            if let (Some(rej), Some(acc)) = (
+                repair.get("rejected_relax_iters").and_then(Value::as_u64),
+                repair.get("accepted_relax_iters").and_then(Value::as_u64),
+            ) {
+                parts.push(format!("earlier checkpoint ({rej} → {acc} iters)"));
+            }
+            if let Some(moved) = repair.get("moved_welded_vertices").and_then(Value::as_u64) {
+                let max_note = repair
+                    .get("maximum_displacement_mm")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite())
+                    .map(|mm| format!(", max {} mm", ftx_export::text::fnum(mm, 2)))
+                    .unwrap_or_default();
+                parts.push(format!(
+                    "opposing leg separation ({moved} vertices{max_note})"
+                ));
+            }
+            if !parts.is_empty() {
+                text.push_str(&format!("start repair: {}\n", parts.join("; ")));
+            } else if let Some(basis) = repair
+                .get("basis")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                text.push_str(&format!("start repair: {basis}\n"));
+            }
+        }
+        if let Some((steps, status)) = elastic_hold {
+            text.push_str(&format!(
+                "elastic hold window: {steps} step(s) ({status})\n"
+            ));
+        }
         if let Some(scheme) = scheme {
             text.push_str(&format!("relaxation integration: {scheme}\n"));
         }
@@ -1814,6 +1874,12 @@ fn append_drape_constitutive_summary(
         }
     }
     if let Some(out) = result {
+        if let Some(repair) = start_repair {
+            out["start_repair"] = repair.clone();
+        }
+        if let Some((steps, status)) = elastic_hold {
+            out["elastic_hold_window"] = json!({"requested_steps": steps, "status": status});
+        }
         if let Some(scheme) = scheme {
             out["relaxation_integration"] = json!(scheme);
         }
@@ -2617,7 +2683,10 @@ mod tests {
         let mut default_text = String::new();
         let mut default_json = json!({});
         append_drape_constitutive_summary(
-            &json!({"membrane_history": {"integration": "backward_euler"}}),
+            &json!({
+                "membrane_history": {"integration": "backward_euler"},
+                "elastic_hold_window": {"requested_steps": 0, "status": "not_requested"}
+            }),
             Some(&mut default_text),
             Some(&mut default_json),
         );
@@ -2689,6 +2758,45 @@ mod tests {
         assert_eq!(
             plastic_json["membrane_plasticity"]["plastic_dissipation_j"],
             0.005
+        );
+
+        let repair = json!({
+            "basis": "earlier_contact_clear_relaxation_and_opposing_leg_placement",
+            "rejected_relax_iters": 600,
+            "accepted_relax_iters": 400,
+            "moved_welded_vertices": 14,
+            "maximum_displacement_mm": 3.25
+        });
+        let mut diag_text = String::new();
+        let mut diag_json = json!({});
+        append_drape_constitutive_summary(
+            &json!({
+                "numerical": {
+                    "time_subdivision": {
+                        "subdivided_nominal_intervals": 3,
+                        "nominal_intervals": 12,
+                        "accepted_substeps": 18,
+                        "trials": 21
+                    }
+                },
+                "start_repair": repair,
+                "elastic_hold_window": {"requested_steps": 6, "status": "available"}
+            }),
+            Some(&mut diag_text),
+            Some(&mut diag_json),
+        );
+        assert!(
+            diag_text
+                .contains("time subdivision: 3/12 intervals subdivided (18 substeps, 21 trials)\n")
+        );
+        assert!(diag_text.contains(
+            "start repair: earlier checkpoint (600 → 400 iters); opposing leg separation (14 vertices, max 3.25 mm)\n"
+        ));
+        assert!(diag_text.contains("elastic hold window: 6 step(s) (available)\n"));
+        assert_eq!(diag_json["start_repair"], repair);
+        assert_eq!(
+            diag_json["elastic_hold_window"],
+            json!({"requested_steps": 6, "status": "available"})
         );
     }
 
