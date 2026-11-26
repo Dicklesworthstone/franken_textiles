@@ -369,6 +369,7 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
         Some(doc)
     } else if let Some(hash) = report.get("effective_pattern_sha256") {
         let path = dir.join("effective_pattern.json");
+        crate::round::regular(&path, false)?;
         let snapshot = bytes(&path, crate::fabric::MAX_SNAPSHOT_BYTES)?;
         if hash.as_str() != Some(sha256_hex(&snapshot).as_str()) {
             return Err(bad_input(
@@ -403,11 +404,11 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let candidate = report["pattern"]
             .as_str()
             .map(PathBuf::from)
-            .filter(|p| p.is_file())
+            .filter(|p| crate::round::regular(p, false).ok() == Some(true))
             .or_else(|| {
                 dir.parent()
                     .map(|p| p.join("pattern.json"))
-                    .filter(|p| p.is_file())
+                    .filter(|p| crate::round::regular(p, false).ok() == Some(true))
             });
         match candidate {
             Some(p) => pattern_document(&p).ok().map(|(d, _)| d),
@@ -658,5 +659,70 @@ mod tests {
 
         let broken = parse_document(path, b"{not json".to_vec()).unwrap_err();
         assert_eq!(broken.code, RefusalCode::InvalidDocument);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn viewer_refuses_symlinked_effective_pattern_snapshot() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-viewer-symlink-{}-{stamp}", std::process::id()));
+        let sim = root.join("sim");
+        fs::create_dir_all(&sim).unwrap();
+
+        let outside = root.join("outside_pattern.json");
+        let pat_bytes = br#"{"schema":"fabric-pattern/1","units":"mm","pieces":[]}"#;
+        fs::write(&outside, pat_bytes).unwrap();
+        symlink(&outside, sim.join("effective_pattern.json")).unwrap();
+
+        let body = "v -0.3 0 0\nv 0.3 0 0\nv -0.3 0 1.5\nf 1 2 3\n";
+        let cloth = "v -0.3 -0.1 0.2\nv 0.3 -0.1 0.2\nv -0.3 -0.1 1.2\nf 1 2 3\n";
+        fs::write(sim.join("body.obj"), body).unwrap();
+        fs::write(sim.join("garment.obj"), cloth).unwrap();
+        let frame = vec![
+            ftx_core::Vec3::new(-0.3, -0.1, 0.2),
+            ftx_core::Vec3::new(0.3, -0.1, 0.2),
+            ftx_core::Vec3::new(-0.3, -0.1, 1.2),
+        ];
+        fs::write(sim.join("fold.pc2"), ftx_drape::animation::pc2(&[frame])).unwrap();
+        fs::write(
+            sim.join("mesh_map.json"),
+            serde_json::to_vec(&json!({
+                "units": "m",
+                "vertices": 3,
+                "frames": {"fold": 0, "zip": 0, "sew": 0, "drape": 1}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            sim.join("sim_report.json"),
+            serde_json::to_vec(&json!({
+                "style": "test",
+                "settled": true,
+                "gating": [],
+                "advisory": [],
+                "self_contact": {"enabled": false},
+                "effective_pattern_sha256": sha256_hex(pat_bytes)
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let argv: Vec<String> = ["viewer", sim.to_str().unwrap()]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = cmd_viewer(&crate::parse(&argv).unwrap()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular file"), "{err}");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

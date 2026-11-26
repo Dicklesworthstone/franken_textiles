@@ -39,8 +39,13 @@ pub(super) fn cmd_render(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if args.options.contains_key("view") || args.options.contains_key("out") {
         return Err(bad_input("--view and --out need --compare"));
     }
+    crate::round::regular(dir, true)?;
+    let rendered = shaded(dir, width, height, shading)?;
+    for (name, _) in &rendered {
+        crate::round::regular(&dir.join(name), false)?;
+    }
     let mut written = serde_json::Map::new();
-    for (name, png) in shaded(dir, width, height, shading)? {
+    for (name, png) in rendered {
         let path = dir.join(&name);
         std::fs::write(&path, png)
             .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))?;
@@ -352,5 +357,54 @@ mod tests {
 
         fs::write(dir.join("garment_strain.obj"), garment).unwrap();
         assert_eq!(images(&dir, 40, 32).unwrap().len(), 6);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn render_refuses_symlinked_directory_and_output_still_without_overwriting_target() {
+        use std::os::unix::fs::symlink;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-render-symlink-{}-{stamp}", std::process::id()));
+        let dir = root.join("sim");
+        fs::create_dir_all(&dir).unwrap();
+        let body = "v -0.3 0 0\nv 0.3 0 0\nv -0.3 0 1.5\nf 1 2 3\n";
+        let cloth = "v -0.3 -0.1 0.2\nv 0.3 -0.1 0.2\nv -0.3 -0.1 1.2\nf 1 2 3\n";
+        fs::write(dir.join("body.obj"), body).unwrap();
+        for name in ["garment.obj", "garment_strain.obj"] {
+            fs::write(dir.join(name), cloth).unwrap();
+        }
+
+        // Symlinked drape directory refuses before writing any still.
+        let alias = root.join("sim_alias");
+        symlink(&dir, &alias).unwrap();
+        let alias_argv: Vec<String> = ["render", alias.to_str().unwrap(), "--res", "32x24"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = cmd_render(&crate::parse(&alias_argv).unwrap()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular directory"), "{err}");
+        assert!(!dir.join("still_front.png").exists());
+
+        // Symlinked output still refuses before writing any still and never clobbers the target.
+        let victim = root.join("outside.png");
+        fs::write(&victim, b"untouched").unwrap();
+        symlink(&victim, dir.join("still_back.png")).unwrap();
+        let dir_argv: Vec<String> = ["render", dir.to_str().unwrap(), "--res", "32x24"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = cmd_render(&crate::parse(&dir_argv).unwrap()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular file"), "{err}");
+        assert_eq!(fs::read(&victim).unwrap(), b"untouched");
+        assert!(!dir.join("still_front.png").exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
