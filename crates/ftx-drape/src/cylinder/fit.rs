@@ -2905,9 +2905,8 @@ mod tests {
         }
     }
 
-    fn fixed_law_input(nonlinear_membrane: bool) -> Input {
-        let mut material = synthetic_base_material(false);
-        let quantity = |value, unit: &str| Quantity {
+    fn reference_quantity(value: f64, unit: &str) -> Quantity {
+        Quantity {
             value,
             unit: unit.into(),
             evidence: Evidence::Measured,
@@ -2915,7 +2914,11 @@ mod tests {
             method: "synthetic independent baseline law".into(),
             conditions: BTreeMap::new(),
             bounds: None,
-        };
+        }
+    }
+
+    fn fixed_law_input(nonlinear_membrane: bool) -> Input {
+        let mut material = synthetic_base_material(false);
         for (key, value, unit) in [
             ("warp_stiffness", 900.0, "N/m"),
             ("weft_stiffness", 620.0, "N/m"),
@@ -2924,7 +2927,7 @@ mod tests {
         ] {
             material
                 .properties
-                .insert(key.into(), quantity(value, unit));
+                .insert(key.into(), reference_quantity(value, unit));
         }
         let target = if nonlinear_membrane {
             let curve = |values: [[f64; 2]; 5]| {
@@ -2938,7 +2941,7 @@ mod tests {
                     "warp": curve([[-0.3,-270.0],[0.0,0.0],[0.02,18.0],[0.08,180.0],[0.5,1800.0]]),
                     "weft": curve([[-0.3,-186.0],[0.0,0.0],[0.02,12.4],[0.08,124.0],[0.5,1240.0]]),
                     "shear": curve([[-0.5,-180.0],[-0.04,-7.2],[0.0,0.0],[0.04,7.2],[0.5,180.0]]),
-                    "coupling": quantity(40.0, "N/m")
+                    "coupling": reference_quantity(40.0, "N/m")
                 }))
                 .unwrap(),
             );
@@ -2969,7 +2972,7 @@ mod tests {
             ] {
                 material
                     .properties
-                    .insert(key.into(), quantity(value, "N*m"));
+                    .insert(key.into(), reference_quantity(value, "N*m"));
             }
             TargetParameter {
                 parameter: TargetKind::WarpStiffness,
@@ -2977,6 +2980,14 @@ mod tests {
                 branch_id: None,
             }
         };
+        static_coupon_input(material, target, nonlinear_membrane)
+    }
+
+    fn static_coupon_input(
+        material: Material,
+        target: TargetParameter,
+        allow_estimated_observations: bool,
+    ) -> Input {
         let mut fixture = base_fixture([0.0, 1.0]);
         fixture.cells = [8, 4];
         fixture.pretension_displacement_m = 0.0;
@@ -3021,7 +3032,7 @@ mod tests {
                 experiment("check", Partition::Check, 0.001, 1.0),
             ],
             admit_cylindrical_shell_model: true,
-            allow_estimated_observations: nonlinear_membrane,
+            allow_estimated_observations,
             replace_existing: true,
             allow_estimates: true,
             controls: Controls {
@@ -3814,6 +3825,75 @@ mod tests {
     }
 
     #[test]
+    fn lower_ring_adjoint_and_finite_difference_recover_shear_from_torsion() {
+        let mut material = synthetic_base_material(false);
+        for (key, value, unit) in [
+            ("warp_stiffness", 1200.0, "N/m"),
+            ("weft_stiffness", 900.0, "N/m"),
+            ("poisson_warp_weft", 0.0, "1"),
+            ("bending_rigidity", 0.0, "N*m"),
+        ] {
+            material
+                .properties
+                .insert(key.into(), reference_quantity(value, unit));
+        }
+        let target = TargetParameter {
+            parameter: TargetKind::ShearStiffness,
+            bounds: [200.0, 650.0],
+            branch_id: None,
+        };
+        let mut input = static_coupon_input(material, target, false);
+        input.controls = Controls::default();
+        // Characterize normal strain in both material directions. An axial-warp-only
+        // acquisition leaves the positive transverse strain domain effectively zero.
+        let mut weft = input.experiments[0].clone();
+        weft.id = "fit-weft".into();
+        weft.observations[0].id = "weft-torque".into();
+        weft.fixture.warp_axis = [1.0, 0.0];
+        input.experiments.push(weft);
+        for e in &mut input.experiments {
+            e.fixture.rotating_holder = cylinder::RotatingHolder::Lower;
+            let fit = e.partition == Partition::Fit;
+            let w = &mut e.loading[0];
+            w.rotation_deg = if fit { 0.02 } else { 0.01 };
+            w.axial_displacement_m = if fit { 0.0005 } else { 0.00025 };
+            // Small-angle torque of the tensioned polygonal cylinder on the prediction mesh.
+            // The transverse shear term and axial prestress both resist driven-ring rotation.
+            let mut refined = e.fixture.clone();
+            refined.cells = refined.cells.map(|n| 2 * n);
+            let extension = w.axial_displacement_m / refined.nominal_free_height_m;
+            let axial_strain = extension + 0.5 * extension * extension;
+            let axial_modulus = if refined.warp_axis == [0.0, 1.0] {
+                1200.0
+            } else {
+                900.0
+            };
+            let torque = (refined.wrapped_circumference_m() / refined.nominal_free_height_m)
+                * (400.0 * refined.isometric_apothem_m().powi(2)
+                    + axial_modulus * axial_strain * refined.isometric_mesh_radius_m().powi(2))
+                * w.rotation_deg.to_radians();
+            let obs = &mut e.observations[0];
+            obs.force_n = None;
+            obs.torque_nm = Some(Channel {
+                value: torque - refined.tare_torque_nm,
+                scale: torque,
+            });
+        }
+        for mode in [SensitivityMode::FiniteDifference, SensitivityMode::Adjoint] {
+            input.policy.sensitivity = mode;
+            let report = calibrate(&input).unwrap();
+            assert!(report.accepted, "{mode:?}: {:?}", report.reasons);
+            assert!(report.domain_replay_verified && report.selection.is_some());
+            assert!((report.parameters[0] - 400.0).abs() < 0.05);
+            assert_eq!(report.adjoint_solves > 0, mode == SensitivityMode::Adjoint);
+            for prediction in &report.predictions {
+                assert!(prediction.state.lower_torque_nm > 0.0);
+                assert!(prediction.state.upper_torque_nm < 0.0);
+            }
+        }
+    }
+
+    #[test]
     fn adjoint_static_calibration_matches_finite_difference_across_all_five_targets_and_channels() {
         let truth_mem = [900.0, 620.0, 0.25, 180.0];
         let truth_bend = 2.5e-3;
@@ -3834,9 +3914,6 @@ mod tests {
          -> Experiment {
             let mut fixture = base_fixture(warp_axis);
             fixture.cells = [16, 6];
-            if warp_axis == [1.0, 0.0] {
-                fixture.rotating_holder = cylinder::RotatingHolder::Lower;
-            }
             let loading = vec![Waypoint {
                 time_s: 0.0,
                 axial_displacement_m: axial_m,

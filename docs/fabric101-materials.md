@@ -219,6 +219,20 @@ Acceptance and publication gates enforced before any `Selection` is emitted:
 - **Mesh doubling (`max_mesh_scaled`), held-out `CHECK`, and `fitted_green_strain_range` replay**: every `FIT` and independent `CHECK` experiment is replayed on both the declared `[n_theta, n_z]` mesh and `[2 * n_theta, 2 * n_z]`, held-out `CHECK` strains must remain inside `fitted_green_strain_range`, and a final `StrainDomain::Box` replay verifies the published material.
 - **No fabricated thickness or silent readiness**: identified quantities carry `Evidence::Estimate` and require explicit `--allow-estimates` (or request `allow_estimates: true` in the browser worker) to admit; presser-foot `reported_thickness` is never promoted to unloaded contact `thickness`, so sheets lacking unloaded thickness or body friction keep `mechanics()` unready (`simulation_ready: false`). External unbundled raw Fabric-101 curve archives (upstream `GongDeshan/Fabric_101_for_Wrinkles@510519be` has no repository license for raw archive redistribution) and physical held-out coupon validation remain open under `ftx-tm2.1`.
 
+For the lower-driven fixture, independent small-angle torsion calculations provide synthetic
+torque observations on two grain mountings and a held-out loading. Both finite-difference and
+adjoint calibration recover the prescribed shear stiffness of 400 N/m to within 0.05 N/m and
+pass replay on the coarse and doubled meshes.
+
+A synthetic mixed-holder case at revision `030a0ee` illustrates the bounded replay check.
+The five-coefficient static experiment drove the lower holder for both weft acquisitions and
+the upper holder for the warp and bias acquisitions. Its adjoint gradients agreed with central
+finite differences. The finite-difference candidate passed publication, while the adjoint
+candidate stalled when replaying the upper-driven warp-extension case on the coarse mesh with
+its fitted domain enforced. Its last Newton correction was 1.36 × 10⁻¹⁰ m against a 1 × 10⁻¹⁰ m
+tolerance. The solver withheld that selection. An accurate local gradient alone cannot establish
+that a fitted material will reproduce the ordinary constrained forward solve.
+
 ### Identify relaxation from complete timed cylinder histories (`/2`)
 
 An explicit `"schema": "ftx-cylinder-calibration/2"` request uses the same forward cylinder
