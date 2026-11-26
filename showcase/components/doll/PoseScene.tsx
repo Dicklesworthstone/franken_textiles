@@ -212,7 +212,8 @@ export default function PoseScene({ onStatus, command }: {
     let replay: { began: number } | null = null;
     let worker: Worker | null = null, sewing: [number, number] | null = null;
     // A move under the sewn jacket: asked of the worker (`moving`), then played back (`carry`). `clothNow` is
-    // the jacket's present positions (solver frame), where a move starts from.
+    // the jacket's present positions (solver frame), where a move starts from; null while no worker holds a
+    // sewn session (from the start of a sew until it is dressed).
     let moving: { from: [number, number]; to: [number, number]; seconds: number } | null = null;
     let carry: { from: [number, number]; to: [number, number]; seconds: number; samples: Float32Array; start: Float32Array; began: number } | null = null;
     let clothNow: Float32Array | null = null;
@@ -240,9 +241,14 @@ export default function PoseScene({ onStatus, command }: {
         publish();
         return;
       }
-      // A sew in progress is for a pose the visitor has left: drop it and start this one.
+      // A sew in progress is for a pose the visitor has left: drop it and start this one. The old worker takes
+      // the session a move would start from with it. The jacket stays on show only if it has settled in the pose
+      // shown; one caught in a move's playback or a sew's replay would hang over the new pose while it sews.
+      const settled = same(status.shown, status.sewn ?? null) && !carry && !replay;
       moving = null;
       carry = null;
+      clothNow = null;
+      if (garment) garment.mesh.visible = settled;
       worker?.terminate();
       worker = new Worker("/labs/pose-worker.mjs", { type: "module" });
       worker.onmessage = onWorker;
