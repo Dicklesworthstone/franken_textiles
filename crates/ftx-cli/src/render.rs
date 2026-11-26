@@ -110,6 +110,9 @@ fn compare(
     };
     let before = draw(&before_body, &before_cloth);
     let after = draw(&after_body, &after_cloth);
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        crate::make_dir(parent)?;
+    }
     std::fs::create_dir(out).map_err(|e| crate::workspace::io_error(out, e))?;
     let before_path = out.join("before.png");
     let after_path = out.join("after.png");
@@ -268,6 +271,18 @@ mod tests {
             original_before
         );
         assert_eq!(fs::read(out.join("before.png")).unwrap(), original_before);
+
+        // Nested new output directories create missing parents while still refusing existing dirs.
+        let nested_out = root.join("nested/deep/pair");
+        let (nested_report, nested_code, _) =
+            compare(&before, &after, "front", &nested_out, (40, 32), standard).unwrap();
+        assert_eq!(nested_code, 0);
+        assert_eq!(nested_report["same_body_geometry"], true);
+        assert_eq!(
+            fs::read(nested_out.join("before.png")).unwrap(),
+            original_before
+        );
+        assert!(compare(&before, &after, "front", &nested_out, (40, 32), standard).is_err());
     }
 
     #[test]
