@@ -27,7 +27,7 @@ pub mod tape;
 
 pub use data::{AnnyData, default_model_path};
 pub use drape::{
-    DEFAULT_POSE_AUDIT_PAIR_BUDGET, HandCollider, JointRotation,
+    DEFAULT_POSE_AUDIT_PAIR_BUDGET, ElbowPose, HandCollider, JointRotation,
     LBS_VOLUME_CHANGE_ADVISORY_FRACTION, Legs, Pose, PoseGeometryReport, SkinIntersectionAudit,
     SkinMesh, SkinReport, ThumbPose, body_pose_geometry_json,
     body_pose_geometry_json_with_skinning, clothing_skin, clothing_skin_with_hands,
