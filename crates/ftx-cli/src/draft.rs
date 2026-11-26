@@ -119,6 +119,9 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let input = super::fabric::load(args)?;
     let (mut pat, spec, body) = prepare(args, program, &meas, style.as_ref())?;
     let fabric = input.map(|input| input.apply(&mut pat)).transpose()?;
+    if fabric.is_some() {
+        super::fabric::snapshot_bytes(&pat, "effective draft pattern")?;
+    }
     let (pp, sp) = (out.join("pattern.json"), out.join("fit_spec.json"));
     let errs = Pattern::new(pat.clone()).structure_errors();
     if fabric.is_some() || body.is_some() {
@@ -191,6 +194,9 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
     let input = super::fabric::load(args)?;
     let (mut pat, spec, body) = prepare(args, program, &evidence.value, style.as_ref())?;
     let fabric = input.map(|input| input.apply(&mut pat)).transpose()?;
+    if fabric.is_some() {
+        super::fabric::snapshot_bytes(&pat, "effective draft pattern")?;
+    }
     let errs = Pattern::new(pat.clone()).structure_errors();
     let readiness = ftx_measure::round_readiness(&pat, &evidence.value, &date);
     // Do not silently repair or replace an unreadable existing workspace contract.

@@ -506,6 +506,9 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let fabric = super::fabric::load(args)?
         .map(|input| input.apply(&mut raw))
         .transpose()?;
+    if fabric.is_some() {
+        super::fabric::snapshot_bytes(&raw, "effective round pattern")?;
+    }
     let body = WorkspaceBody::read(&ws, args)?;
     let data = measurements(&body.raw)?;
     let drafted_on_body = raw["meta"].get("draft_body").is_some();
@@ -722,22 +725,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         text.push_str(&format!("\nNOTE: {note}"));
     }
     if let Some(sim) = &sim {
-        for (key, label) in [("gating", "gating"), ("advisory", "advisory")] {
-            let flags: Vec<&str> = sim[key]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            text.push_str(&format!(
-                "\nSIM {label} flags: {}",
-                if flags.is_empty() {
-                    "none".into()
-                } else {
-                    flags.join("; ")
-                }
-            ));
-        }
+        append_round_sim_text(&mut text, sim);
     }
     text.push_str(&format!("\nROUND STATUS: {state} (flat: {}; sim: {sim_basis}; exports: {export_basis}; measurements: {})\nround dir: {}",
         validation.status(), ready["status"].as_str().unwrap_or("NOT_CHECKED"), rd.display()));
@@ -756,6 +744,31 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         2
     };
     Ok((entry, code, text))
+}
+
+/// Format round-level simulation flags and any opt-in drape diagnostics without changing default output.
+fn append_round_sim_text(text: &mut String, sim: &Value) {
+    for (key, label) in [("gating", "gating"), ("advisory", "advisory")] {
+        let flags: Vec<&str> = sim[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        text.push_str(&format!(
+            "\nSIM {label} flags: {}",
+            if flags.is_empty() {
+                "none".into()
+            } else {
+                flags.join("; ")
+            }
+        ));
+    }
+    let mut diagnostics = String::new();
+    super::append_drape_constitutive_summary(sim, Some(&mut diagnostics), None);
+    for line in diagnostics.lines() {
+        text.push_str(&format!("\nSIM {line}"));
+    }
 }
 
 /// Only a successful invocation in this newly reserved directory authorizes reading its report.
@@ -1677,5 +1690,57 @@ mod tests {
                 "expected unknown-option refusal for {argv:?}, got: {err}"
             );
         }
+    }
+
+    #[test]
+    fn round_sim_text_surfaces_opt_in_diagnostics_without_changing_defaults() {
+        let mut default_text = String::new();
+        super::append_round_sim_text(
+            &mut default_text,
+            &json!({
+                "gating": [],
+                "advisory": [],
+                "membrane_history": {"integration": "backward_euler"},
+                "elastic_hold_window": {"requested_steps": 0, "status": "not_requested"}
+            }),
+        );
+        assert_eq!(
+            default_text,
+            "\nSIM gating flags: none\nSIM advisory flags: none"
+        );
+
+        let mut opt_in_text = String::new();
+        super::append_round_sim_text(
+            &mut opt_in_text,
+            &json!({
+                "gating": [],
+                "advisory": ["one"],
+                "numerical": {
+                    "time_subdivision": {
+                        "subdivided_nominal_intervals": 2,
+                        "nominal_intervals": 8,
+                        "accepted_substeps": 12,
+                        "trials": 15
+                    }
+                },
+                "start_repair": {
+                    "basis": "opposing_leg_placement",
+                    "moved_welded_vertices": 6,
+                    "maximum_displacement_mm": 1.5
+                },
+                "elastic_hold_window": {"requested_steps": 4, "status": "available"}
+            }),
+        );
+        assert!(opt_in_text.contains("\nSIM advisory flags: one"));
+        assert!(
+            opt_in_text.contains(
+                "\nSIM time subdivision: 2/8 intervals subdivided (12 substeps, 15 trials)"
+            )
+        );
+        assert!(
+            opt_in_text
+                .contains("\nSIM start repair: opposing leg separation (6 vertices, max 1.5 mm)")
+        );
+        assert!(opt_in_text.contains("\nSIM elastic hold window: 4 step(s) (available)"));
     }
 }

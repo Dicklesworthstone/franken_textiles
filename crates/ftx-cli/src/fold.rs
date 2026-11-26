@@ -54,7 +54,7 @@ pub(super) fn document(path: &Path) -> Result<(Value, Vec<u8>), Refusal> {
 }
 
 /// Pattern files may carry frozen material-binding snapshots up to `fabric::MAX_SNAPSHOT_BYTES`.
-fn pattern_document(path: &Path) -> Result<(Value, Vec<u8>), Refusal> {
+pub(super) fn pattern_document(path: &Path) -> Result<(Value, Vec<u8>), Refusal> {
     document_with_limit(path, PATTERN_DOCUMENT_LIMIT)
 }
 

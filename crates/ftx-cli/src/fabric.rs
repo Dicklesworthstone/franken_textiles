@@ -14,6 +14,26 @@ use crate::{Args, bad_input, workspace};
 
 pub(super) const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 
+/// Serialize an effective overridden pattern and enforce the shared 64 MiB replay snapshot budget.
+pub(super) fn snapshot_bytes(pattern: &Value, context: &str) -> Result<Vec<u8>, Refusal> {
+    snapshot_bytes_with_limit(pattern, context, MAX_SNAPSHOT_BYTES)
+}
+
+fn snapshot_bytes_with_limit(
+    pattern: &Value,
+    context: &str,
+    limit: usize,
+) -> Result<Vec<u8>, Refusal> {
+    let bytes = serde_json::to_vec(pattern).map_err(|e| bad_input(e.to_string()))?;
+    if bytes.len() > limit {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{context} exceeds the 64 MiB replay budget"),
+        ));
+    }
+    Ok(bytes)
+}
+
 enum Selection {
     Fabric(Value),
     Bindings(Box<Changes>),
@@ -297,5 +317,19 @@ mod tests {
                 .get("cleared_piece_fabric_overrides")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn snapshot_bytes_enforces_exact_byte_budget() {
+        let doc = json!({"schema": "fabric-pattern/1", "pieces": []});
+        let exact = serde_json::to_vec(&doc).unwrap();
+        assert_eq!(
+            snapshot_bytes_with_limit(&doc, "effective test pattern", exact.len()).unwrap(),
+            exact
+        );
+        let err =
+            snapshot_bytes_with_limit(&doc, "effective test pattern", exact.len() - 1).unwrap_err();
+        assert_eq!(err.code, RefusalCode::BudgetExceeded);
+        assert!(err.message.contains("effective test pattern"));
     }
 }
