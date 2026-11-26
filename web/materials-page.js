@@ -3879,15 +3879,25 @@ function sewingRoutedCopyWindows(parent, routing, label) {
   const report = routing.copy_windows;
   if (!report) return;
   const milliseconds = value => Number.isSafeInteger(value) ? String(value) : "Unavailable";
+  const delivery = routing.maximum_tardiness;
+  if (delivery) {
+    const score = table(parent, `${label}: worst garment delivery delay`,
+      ["Baseline (ms)", "Selected (ms)", "Lower bound (ms)", "Minimum proved in search scope"]);
+    cells(score, [milliseconds(delivery.baseline_milliseconds), milliseconds(delivery.selected_milliseconds),
+      milliseconds(delivery.lower_bound_milliseconds), delivery.optimality_proven ? "Yes" : "No"]);
+  }
   const timings = table(parent, `${label}: garment arrivals and completion deadlines`,
     ["Schedule", "Garment copy", "First cell", "Available at (ms)", "Loading starts (ms)",
-      "Waiting before loading (ms)", "Final unloading (ms)", "Complete by (ms)", "Deadline slack (ms)"]);
+      "Waiting before loading (ms)", "Final unloading (ms)", "Complete by (ms)", "Deadline slack (ms)",
+      ...(delivery ? ["Due at (ms)", "Tardiness (ms)"] : [])]);
   for (const [name, rows] of [["Baseline", report.baseline], ["Selected", report.selected]]) {
     for (const row of rows) cells(timings, [name, metric(row.copy), row.first_cell,
       milliseconds(row.available_at_milliseconds), milliseconds(row.loading_start_milliseconds),
       milliseconds(row.waiting_milliseconds), milliseconds(row.finish_milliseconds),
       row.complete_by_milliseconds === undefined ? "None declared" : milliseconds(row.complete_by_milliseconds),
-      row.complete_by_milliseconds === undefined ? "No deadline" : milliseconds(row.deadline_slack_milliseconds)]);
+      row.complete_by_milliseconds === undefined ? "No deadline" : milliseconds(row.deadline_slack_milliseconds),
+      ...(delivery ? [row.due_at_milliseconds === undefined ? "None declared" : milliseconds(row.due_at_milliseconds),
+        row.due_at_milliseconds === undefined ? "No due time" : milliseconds(row.tardiness_milliseconds)] : [])]);
   }
   const note = document.createElement("p");
   note.textContent = "All times are exact integer milliseconds from the common job origin. " +

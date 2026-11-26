@@ -453,6 +453,11 @@ impl Request {
                     .map(|candidate| &candidate.routing),
             )
             .collect();
+        if routes.iter().any(|route| route.tardiness_directed()) {
+            return Err(invalid(
+                "recipe selection does not optimize garment delivery tardiness; use the authored route directly",
+            ));
+        }
         let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
         let routed_feed = self.objective == Objective::MinimizeRoutedFeedMilliseconds;
         let parallel_feed = self.objective == Objective::MinimizeParallelFeedMilliseconds;

@@ -33,7 +33,7 @@ const MAX_EXACT_MILLISECONDS: u64 = 9_007_199_254_740_991;
 pub struct Policy {
     /// `fixed_operation_route/1` or explicit `eligible_operation_route/1` machine alternatives.
     pub model: String,
-    /// `minimize_makespan`, `minimize_feed_milliseconds`, or
+    /// `minimize_makespan`, `minimize_maximum_tardiness`, `minimize_feed_milliseconds`, or
     /// `minimize_thread_observed_order_cost` for eligible-cell assignment.
     pub objective: String,
     /// Complete-order evaluation budget and optional inclusive deadline for cost search.
@@ -137,6 +137,21 @@ pub struct FeedTimeReport {
     pub lower_bound_attained: bool,
     /// All improving declared append-dispatch choices were explored or validly pruned, or the
     /// independent lower bound was reached. This is not a minimum elapsed-completion proof.
+    pub optimality_proven: bool,
+}
+
+/// Worst positive delay at final unloading among copies with an authored due time.
+#[derive(Clone, Debug, Serialize)]
+pub struct TardinessReport {
+    /// Score of the complete baseline (possibly replaced if hard constraints excluded the seed).
+    pub baseline_milliseconds: u64,
+    /// Score of the complete selected schedule. Early deliveries cannot compensate for late ones.
+    pub selected_milliseconds: u64,
+    /// Mandatory delay even with relaxed future resource availability and free setup.
+    pub lower_bound_milliseconds: u64,
+    /// The selected schedule attains the independent lower bound.
+    pub lower_bound_attained: bool,
+    /// The bound was attained or the declared append-dispatch search was exhausted.
     pub optimality_proven: bool,
 }
 
@@ -314,7 +329,8 @@ pub struct Timeline {
 pub struct Report {
     /// `/1` fixed; `/2` eligible; `/3` fixtures; `/4` labor; `/5` owned handoffs; `/6` calendars;
     /// `/7` cost; `/8` retained fixtures; `/9` finite staging; `/10` transfer pools; `/11` eligible labor;
-    /// `/12` owned-carrier pools; `/13` operation-qualified workers; `/14` individual copy windows.
+    /// `/12` owned-carrier pools; `/13` operation-qualified workers; `/14` individual copy windows;
+    /// `/15` cell staging; `/16` feed-time optimization; `/17` delivery tardiness.
     pub schema: &'static str,
     /// Source-qualified fixed operation route.
     pub route: Vec<RouteStep>,
@@ -349,6 +365,9 @@ pub struct Report {
     /// Exact whole-batch feed objective and its own proof; absent for existing route objectives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feed_time_search: Option<FeedTimeReport>,
+    /// Soft delivery objective, separate from hard deadlines and minimum batch completion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_tardiness: Option<TardinessReport>,
     /// Complete copy-major seed, or selected replacement if resources/windows excluded that seed.
     pub baseline: Timeline,
     /// Best complete feasible dispatch found within the admitted budget.
@@ -447,6 +466,10 @@ impl Policy {
         self.objective == "minimize_feed_milliseconds"
     }
 
+    pub(crate) fn tardiness_directed(&self) -> bool {
+        self.objective == "minimize_maximum_tardiness"
+    }
+
     fn completion_deadline(&self) -> Option<u64> {
         self.thread_order_search
             .as_ref()
@@ -487,6 +510,14 @@ impl Policy {
         {
             return Err(budget(
                 "thread-order route search supports 1..64 complete order evaluations and an exact nonnegative millisecond deadline",
+            ));
+        }
+        let has_due_times = self.copy_windows.as_ref().is_some_and(|windows| {
+            windows.copies.iter().any(|row| row.due_at_milliseconds.is_some())
+        });
+        if self.tardiness_directed() != has_due_times {
+            return Err(bad(
+                "soft garment due times require minimize_maximum_tardiness with at least one due_at_milliseconds",
             ));
         }
         if let Some(windows) = &self.copy_windows {
@@ -542,6 +573,7 @@ impl Policy {
             self.model.as_str(),
             "fixed_operation_route/1" | "eligible_operation_route/1"
         ) || !((self.objective == "minimize_makespan"
+            || self.tardiness_directed()
             || self.feed_directed() && self.feed_time_search.is_some())
             && self.thread_order_search.is_none()
             || self.cost_directed() && self.eligible() && self.thread_order_search.is_some())
@@ -1439,6 +1471,8 @@ struct Search<'a, 'b> {
     best: Option<(u64, Vec<Dispatch>)>,
     cost: Option<CostSearch<'a>>,
     feed: Option<FeedSearch>,
+    tardiness_lower: Option<u64>,
+    best_tardiness: Option<u64>,
 }
 
 struct FeedSearch {
@@ -1550,6 +1584,17 @@ impl CostSearch<'_> {
 }
 
 impl Search<'_, '_> {
+    fn attained_bound(&self) -> bool {
+        if let Some(lower) = self.tardiness_lower {
+            self.best_tardiness == Some(lower)
+        } else if let Some(feed) = &self.feed {
+            feed.lower_attained()
+        } else {
+            self.cost.is_none()
+                && self.best.as_ref().is_some_and(|(finish, _)| *finish == self.lower)
+        }
+    }
+
     fn consider(&mut self, state: &State, path: &[Dispatch]) {
         if self
             .prepared
@@ -1572,6 +1617,14 @@ impl Search<'_, '_> {
             }
             if cost.exhausted {
                 self.complete = false;
+            }
+        } else if self.tardiness_lower.is_some() {
+            let worst = self.prepared.copy_windows.as_ref()
+                .expect("admitted due times")
+                .maximum_tardiness(&state.copy_ready);
+            if self.best_tardiness.is_none_or(|old| worst < old) {
+                self.best_tardiness = Some(worst);
+                self.best = Some((state.makespan, path.to_vec()));
             }
         } else if let Some(feed) = &mut self.feed {
             if feed.best.is_none_or(|old| state.feed_milliseconds < old) {
@@ -1600,12 +1653,16 @@ impl Search<'_, '_> {
         {
             return Ok(());
         }
+        if self.attained_bound() {
+            return Ok(());
+        }
         if self.cost.is_none()
             && self.feed.is_none()
+            && self.tardiness_lower.is_none()
             && self
                 .best
                 .as_ref()
-                .is_some_and(|(finish, _)| state.makespan >= *finish || *finish == self.lower)
+                .is_some_and(|(finish, _)| state.makespan >= *finish)
         {
             return Ok(());
         }
@@ -1617,20 +1674,23 @@ impl Search<'_, '_> {
             return Ok(());
         }
         let order = if let Some(windows) = &self.prepared.copy_windows
-            && windows.has_deadlines
+            && windows.has_targets
         {
-            let Some(order) = windows.by_urgency(self.prepared, state) else {
+            let Some(priorities) = windows.priorities(self.prepared, state) else {
                 return Ok(());
             };
-            Some(order)
+            if self.best_tardiness.is_some_and(|best| priorities.worst_delay >= best) {
+                return Ok(());
+            }
+            Some(priorities.order)
         } else {
             None
         };
         // Untouched copies (`next == 0`) hold no active cell, fixture or staging reservations.
         // Without `copy_windows` all untouched copies are interchangeable; with `copy_windows`
-        // untouched copies sharing identical `(available_at_milliseconds, complete_by_milliseconds)`
+        // untouched copies sharing identical arrivals, hard deadlines and soft due times
         // are interchangeable. Swapping two interchangeable untouched copy IDs preserves every
-        // phase timestamp, constraint, makespan, feed sum and routed thread cost while visiting
+        // phase timestamp, constraint and objective score while visiting
         // the lower copy ID first, so branching only on the smallest untouched copy per class is
         // exact.
         let mut seen_untouched = ordering::OperationSet::default();
@@ -1680,14 +1740,7 @@ impl Search<'_, '_> {
                         if self.cost.as_ref().is_some_and(|cost| cost.exhausted) {
                             return Ok(());
                         }
-                        if self.feed.as_ref().is_some_and(FeedSearch::lower_attained)
-                            || self.cost.is_none()
-                                && self.feed.is_none()
-                                && self
-                                    .best
-                                    .as_ref()
-                                    .is_some_and(|(finish, _)| *finish == self.lower)
-                        {
+                        if self.attained_bound() {
                             return Ok(());
                         }
                     }
@@ -1848,7 +1901,9 @@ pub(in crate::sewing) fn build(
     let uses_labor = labor.is_some();
     let owned_transfer = policy.transfer.attending_worker.is_some();
     let mut out = SewPlan {
-        schema: if policy.feed_directed() {
+        schema: if policy.tardiness_directed() {
+            "ftx-sewing-plan/40"
+        } else if policy.feed_directed() {
             "ftx-sewing-plan/34"
         } else if uses_cell_staging {
             "ftx-sewing-plan/33"
@@ -2098,9 +2153,23 @@ pub(in crate::sewing) fn build(
         && policy
             .completion_deadline()
             .is_none_or(|deadline| seed.makespan <= deadline);
+    let tardiness_lower = if policy.tardiness_directed() {
+        let windows = prepared.copy_windows.as_ref().expect("admitted due times");
+        let priority = windows.priorities(&prepared, &prepared.initial()).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::NotConverged,
+                "a mandatory route cannot meet a hard garment deadline",
+            )
+        })?;
+        Some(priority.worst_delay)
+    } else {
+        None
+    };
     let mut search = Search {
         prepared: &prepared,
         used: seed_used,
+        tardiness_lower,
+        best_tardiness: None,
         complete: true,
         lower,
         best: None,
@@ -2142,9 +2211,8 @@ pub(in crate::sewing) fn build(
         ));
     };
     let search_nodes = search.used;
-    let search_complete = search.complete
-        || search.feed.as_ref().is_some_and(FeedSearch::lower_attained)
-        || search.cost.is_none() && search.feed.is_none() && best_finish == lower;
+    let search_complete = search.complete || search.attained_bound();
+    let tardiness_score = search.best_tardiness.zip(search.tardiness_lower);
     let thread_order_search = search.cost.as_ref().map(|cost| ThreadOrderReport {
         currency: cost.currency.clone(),
         completion_deadline_milliseconds: policy
@@ -2279,8 +2347,33 @@ pub(in crate::sewing) fn build(
         .as_ref()
         .map(|windows| windows.report(&baseline, &selected))
         .transpose()?;
+    let maximum_tardiness = if let Some((score, lower)) = tardiness_score {
+        let windows = copy_windows.as_ref().expect("replayed due times");
+        let worst = |rows: &[copy_windows::CopyTiming]| {
+            rows.iter()
+                .filter_map(|row| row.tardiness_milliseconds)
+                .max()
+                .expect("at least one due time")
+        };
+        if worst(&windows.selected) != score {
+            return Err(bad(
+                "routed delivery tardiness changed during final-unloading replay",
+            ));
+        }
+        Some(TardinessReport {
+            baseline_milliseconds: worst(&windows.baseline),
+            selected_milliseconds: score,
+            lower_bound_milliseconds: lower,
+            lower_bound_attained: score == lower,
+            optimality_proven: search_complete,
+        })
+    } else {
+        None
+    };
     let report = Report {
-        schema: if policy.feed_directed() {
+        schema: if policy.tardiness_directed() {
+            "ftx-sewing-routing/17"
+        } else if policy.feed_directed() {
             "ftx-sewing-routing/16"
         } else if uses_cell_staging {
             "ftx-sewing-routing/15"
@@ -2324,6 +2417,7 @@ pub(in crate::sewing) fn build(
         copy_windows,
         thread_order_search,
         feed_time_search,
+        maximum_tardiness,
         baseline,
         selected,
         baseline_replaced: !seed_complete,
@@ -2372,7 +2466,9 @@ pub(in crate::sewing) fn build(
         physical_routing_validated: false,
     };
     out.production = Some(super::Report {
-        schema: if policy.feed_directed() {
+        schema: if policy.tardiness_directed() {
+            "ftx-sewing-production/28"
+        } else if policy.feed_directed() {
             "ftx-sewing-production/22"
         } else if uses_cell_staging {
             "ftx-sewing-production/21"

@@ -2046,6 +2046,26 @@ The materials workbench shows both schedules' per-copy arrivals, first loading, 
 final unloading, deadlines and slack in exact integer milliseconds. Missing deadlines remain explicit.
 The sewing, manufacturing-study and scenario views retain the full arrival/waiting qualification.
 
+### Minimize the worst delivery delay
+
+Set `production.routing.objective` to `"minimize_maximum_tardiness"` and add
+`due_at_milliseconds` to at least one row in the existing qualified `copy_windows.copies` policy.
+For example, `{"copy":1,"available_at_milliseconds":0,"due_at_milliseconds":8000}` gives garment
+1 a delivery target eight seconds after the job origin. A kit can arrive after its due time.
+The delay is the positive part of complete final unloading time minus the due time. The search
+minimizes the largest delay across the targeted garments, retaining the first complete schedule
+when scores tie. Other copies still consume all their qualified resources. Any `complete_by_milliseconds`
+value remains a hard constraint, including on a garment with a soft target.
+
+Both fixed and eligible routes use the same copy, machine, worker, staging, transfer and calendar
+authority. Each copy's relaxed completion through eligible cells supplies a lower bound. The
+`maximum_tardiness` report gives the baseline, selected and lower-bound delays in exact integer
+milliseconds and records whether the search proved its minimum within the stated dispatch scope.
+A bounded feasible incumbent can still have avoidable delay. Each targeted row includes its
+due time and actual tardiness. In the two-copy fixed-route synthetic fixture, moving the second
+garment to the front reduces its delay from 4,600 ms to 800 ms while producing the same 120 stitches.
+These jobs use plan `/40`, production `/28`, routing `/17` and copy windows `/2`.
+
 ## Bounds and remaining scope
 
 The expanded graph supports at most **256 copy/operation pairs** and 1–200000 examined search nodes.

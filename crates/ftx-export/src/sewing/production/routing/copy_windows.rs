@@ -21,6 +21,9 @@ pub struct Window {
     /// Inclusive latest complete final unloading, not a source-measured process duration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complete_by_milliseconds: Option<u64>,
+    /// Optional soft target at final unloading for maximum-tardiness optimization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at_milliseconds: Option<u64>,
 }
 
 /// Complete declared copy windows with an independently qualified arrival/waiting boundary.
@@ -66,12 +69,18 @@ pub struct CopyTiming {
     /// Exact nonnegative time left at final unloading; absent without an authored deadline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline_slack_milliseconds: Option<u64>,
+    /// Authored soft delivery target from the job origin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_at_milliseconds: Option<u64>,
+    /// Positive delay beyond the due time at complete final unloading. Early deliveries score zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tardiness_milliseconds: Option<u64>,
 }
 
 /// Exact policy and independently checked per-copy boundaries of both complete schedules.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-copy-windows/1`.
+    /// `ftx-sewing-copy-windows/2` includes soft due times; `/1` describes releases and hard deadlines.
     pub schema: &'static str,
     /// Original policy and qualification; authored row order is preserved.
     pub policy: Policy,
@@ -103,6 +112,7 @@ impl Policy {
             if window.copy >= copies
                 || !seen.insert(window.copy)
                 || window.available_at_milliseconds > MAX_EXACT_MILLISECONDS
+                || window.due_at_milliseconds.is_some_and(|due| due > MAX_EXACT_MILLISECONDS)
                 || window.complete_by_milliseconds.is_some_and(|finish| {
                     finish < window.available_at_milliseconds || finish > MAX_EXACT_MILLISECONDS
                 })
@@ -116,11 +126,16 @@ impl Policy {
     }
 }
 
+pub(super) struct DispatchPriorities {
+    pub order: Vec<(i128, usize)>,
+    pub worst_delay: u64,
+}
+
 pub(super) struct Compiled {
     policy: Policy,
     windows: Vec<Window>,
     /// Dense symmetry-class index (`0..copies <= MAX_OPERATIONS`) grouping copies with identical
-    /// `(available_at_milliseconds, complete_by_milliseconds)`.
+    /// arrival, hard deadline and soft due time.
     symmetry_class: Vec<usize>,
     /// Minimum load/feed/unload work still needed from each route position, ignoring all setup,
     /// handoffs, cell availability and contention. Independent stage choices only relax the route.
@@ -128,7 +143,7 @@ pub(super) struct Compiled {
     /// Mandatory work from each exact next task through final unloading, allowing every eligible
     /// continuation and relaxing all future contention, setup and availability.
     task_remaining: Vec<u64>,
-    pub(super) has_deadlines: bool,
+    pub(super) has_targets: bool,
 }
 
 impl Compiled {
@@ -149,6 +164,7 @@ impl Compiled {
                     .entry((
                         window.available_at_milliseconds,
                         window.complete_by_milliseconds,
+                        window.due_at_milliseconds,
                     ))
                     .or_insert(next_id)
             })
@@ -184,16 +200,16 @@ impl Compiled {
                 task_remaining[index] = task.load + task.feed + task.unload + continuation;
             }
         }
-        let has_deadlines = windows
+        let has_targets = windows
             .iter()
-            .any(|window| window.complete_by_milliseconds.is_some());
+            .any(|window| window.complete_by_milliseconds.is_some() || window.due_at_milliseconds.is_some());
         Ok(Self {
             policy: policy.clone(),
             windows,
             symmetry_class,
             minimum_remaining,
             task_remaining,
-            has_deadlines,
+            has_targets,
         })
     }
 
@@ -201,23 +217,24 @@ impl Compiled {
         self.symmetry_class[copy]
     }
 
-    /// Check *every* unfinished garment against the current append-only cell clocks. A newly
-    /// dispatched operation can strand a different copy on the same bottleneck. The smallest
-    /// nonnegative slack goes first in search; equal slacks retain the physical copy ID order.
-    pub(super) fn by_urgency(
+    /// Bound each copy's final unload using its actual clock and the cheapest connected
+    /// continuation. Releasing the remaining resources and setups can only advance that time.
+    /// Signed slack prioritizes already-late soft targets without excluding a feasible order.
+    pub(super) fn priorities(
         &self,
         prepared: &Prepared<'_>,
         state: &State,
-    ) -> Option<Vec<(u64, usize)>> {
+    ) -> Option<DispatchPriorities> {
         let mut order = Vec::with_capacity(self.windows.len());
+        let mut worst_delay = 0;
         for window in &self.windows {
             let copy = window.copy;
-            let Some(choices) = prepared.choices.get(state.next[copy]) else {
-                continue;
-            };
-            let slack = if let Some(deadline) = window.complete_by_milliseconds {
-                let earliest_finish = choices
-                    .iter()
+            let target = window.complete_by_milliseconds.into_iter()
+                .chain(window.due_at_milliseconds)
+                .min();
+            let next = prepared.choices.get(state.next[copy]);
+            let finish = if let (Some(_), Some(choices)) = (target, next) {
+                choices.iter()
                     .map(|&index| {
                         let cell = prepared.tasks[index].cell;
                         let handoff = state.copy_cell[copy]
@@ -227,15 +244,32 @@ impl Compiled {
                             + self.task_remaining[index]
                     })
                     .min()
-                    .expect("admitted nonempty route domain");
-                deadline.checked_sub(earliest_finish)?
+                    .expect("admitted nonempty route domain")
             } else {
-                u64::MAX
+                state.copy_ready[copy]
             };
-            order.push((slack, copy));
+            if window.complete_by_milliseconds.is_some_and(|deadline| finish > deadline) {
+                return None;
+            }
+            if let Some(due) = window.due_at_milliseconds {
+                worst_delay = worst_delay.max(finish.saturating_sub(due));
+            }
+            if next.is_some() {
+                let slack = target.map_or(i128::MAX, |time| i128::from(time) - i128::from(finish));
+                order.push((slack, copy));
+            }
         }
         order.sort_unstable();
-        Some(order)
+        Some(DispatchPriorities { order, worst_delay })
+    }
+
+    pub(super) fn maximum_tardiness(&self, finishes: &[u64]) -> u64 {
+        self.windows.iter()
+            .filter_map(|window| {
+                window.due_at_milliseconds.map(|due| finishes[window.copy].saturating_sub(due))
+            })
+            .max()
+            .expect("admitted due time")
     }
 
     pub(super) fn initial_ready(&self) -> Vec<u64> {
@@ -311,6 +345,9 @@ impl Compiled {
                         - window.available_at_milliseconds,
                     finish_milliseconds: last.finish_milliseconds,
                     complete_by_milliseconds: window.complete_by_milliseconds,
+                    due_at_milliseconds: window.due_at_milliseconds,
+                    tardiness_milliseconds: window.due_at_milliseconds
+                        .map(|due| last.finish_milliseconds.saturating_sub(due)),
                     deadline_slack_milliseconds: window
                         .complete_by_milliseconds
                         .map(|deadline| deadline - last.finish_milliseconds),
@@ -325,7 +362,11 @@ impl Compiled {
         selected: &Timeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: "ftx-sewing-copy-windows/1",
+            schema: if self.windows.iter().any(|window| window.due_at_milliseconds.is_some()) {
+                "ftx-sewing-copy-windows/2"
+            } else {
+                "ftx-sewing-copy-windows/1"
+            },
             policy: self.policy.clone(),
             waiting_scope: "qualified_unloaded_waiting_at_selected_first_cell_before_loading/1",
             baseline: self.timings(baseline)?,
