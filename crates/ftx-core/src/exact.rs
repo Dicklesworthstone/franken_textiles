@@ -112,7 +112,14 @@ pub fn orient3d(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> Sign 
 /// On a non-finite coordinate or when the arithmetic leaves the finite range.
 #[must_use]
 pub fn orient3d_determinant(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> f64 {
-    orient3d_expansion(pa, pb, pc, pd).iter().sum()
+    assert!(
+        [pa, pb, pc, pd].iter().flatten().all(|x| x.is_finite()),
+        "orient3d determinant requires finite coordinates"
+    );
+    let det_e = orient3d_expansion(pa, pb, pc, pd);
+    let det: f64 = det_e.iter().sum();
+    assert_finite(&[det]);
+    det
 }
 
 fn orient3d_expansion(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> Vec<f64> {
@@ -190,7 +197,9 @@ pub fn orient2d_determinant(pa: [f64; 2], pb: [f64; 2], pc: [f64; 2]) -> (Sign, 
     let bx = diff_expansion(pb[0], pc[0]);
     let by = diff_expansion(pb[1], pc[1]);
     let det_e = expansion_diff(&expansion_product(&ax, &by), &expansion_product(&ay, &bx));
-    (Sign::of_i32(expansion_sign(&det_e)), det_e.iter().sum())
+    let det: f64 = det_e.iter().sum();
+    assert_finite(&[det]);
+    (Sign::of_i32(expansion_sign(&det_e)), det)
 }
 
 /// Exact orientation of a triangle's mathematical centroid against the directed line `a → b`.
@@ -598,5 +607,58 @@ mod tests {
         assert_eq!(orient3d(a, b, c, [1.0, 1.0, 1.0]), Sign::Negative);
         assert_eq!(orient3d(a, b, c, up), Sign::Negative);
         assert_eq!(orient3d(a, b, c, down), Sign::Positive);
+    }
+
+    #[test]
+    fn orient3d_determinant_matches_i128_oracle_and_retains_near_coplanar_volume() {
+        let mut seed = 0x5EED_09E0_0000_003Du64;
+        for round in 0..4000 {
+            let mut p = || [lcg(&mut seed), lcg(&mut seed), lcg(&mut seed)];
+            let (a, b, c, mut d) = (p(), p(), p(), p());
+            if round % 2 == 0 {
+                let (s, t) = (d[0] % 3, d[1] % 3);
+                d = std::array::from_fn(|i| a[i] + s * (b[i] - a[i]) + t * (c[i] - a[i]));
+            }
+            let f = |q: [i64; 3]| q.map(|v| v as f64);
+            let want = o3d_i128(a, b, c, d);
+            assert_eq!(
+                orient3d_determinant(f(a), f(b), f(c), f(d)),
+                want as f64,
+                "round {round}: {a:?} {b:?} {c:?} {d:?}"
+            );
+        }
+
+        // In binary64, 3 * (1.0 / 3.0) = 1 - 2^-54 exactly, so the signed volume against
+        // x + y + z = 1 is +2^-54 (f64::EPSILON / 4.0) despite catastrophic cancellation.
+        let (a, b, c) = ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+        assert_eq!(orient3d_determinant(a, b, c, [0.25, 0.25, 0.5]), 0.0);
+        let third = [1.0 / 3.0; 3];
+        let expected = f64::EPSILON / 4.0;
+        assert_eq!(orient3d(a, b, c, third), Sign::Positive);
+        assert_eq!(orient3d_determinant(a, b, c, third), expected);
+        assert_eq!(orient3d_determinant(b, a, c, third), -expected);
+        assert_eq!(orient3d_determinant(b, c, a, third), expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "finite")]
+    fn orient3d_determinant_panics_on_non_finite_coordinate() {
+        let _ = orient3d_determinant(
+            [f64::NAN, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "finite")]
+    fn orient3d_determinant_panics_on_overflow() {
+        let _ = orient3d_determinant(
+            [1e120, 0.0, 0.0],
+            [0.0, 1e120, 0.0],
+            [0.0, 0.0, 1e120],
+            [0.0, 0.0, 0.0],
+        );
     }
 }
