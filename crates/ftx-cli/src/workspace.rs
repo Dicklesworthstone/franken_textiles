@@ -121,6 +121,7 @@ pub(super) struct Workspace {
 
 impl Workspace {
     pub(super) fn open(root: &Path) -> Result<Self, Refusal> {
+        crate::round::regular(root, true)?;
         fs::create_dir_all(root).map_err(|e| io_error(root, e))?;
         for name in [
             ".ftx-lock",

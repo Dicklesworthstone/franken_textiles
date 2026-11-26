@@ -628,7 +628,7 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
         )));
     }
     let pattern_path = &args.positional[2];
-    let (doc, bytes) = read_json(pattern_path)?;
+    let (doc, bytes) = fold::pattern_document(std::path::Path::new(pattern_path))?;
     // the input in its key order: alter.py writes a deep copy with the edits in place
     let ordered = std::str::from_utf8(&bytes)
         .map_err(|e| e.to_string())
@@ -682,7 +682,7 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
             let (src_path, src_ref) = from
                 .rsplit_once(':')
                 .ok_or_else(|| bad_input("--from must be SRC.json:instance/edge"))?;
-            let (src, _) = read_json(src_path)?;
+            let (src, _) = fold::pattern_document(std::path::Path::new(src_path))?;
             alter::transfer_curve(&doc, &src, src_ref, text("to")?)
         }
     }?;
@@ -791,7 +791,7 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
         return Err(bad_input("ftx validate needs exactly one pattern file"));
     }
     let pattern_path = &args.positional[1];
-    let (pat, _) = read_json(pattern_path)?;
+    let (pat, _) = fold::pattern_document(std::path::Path::new(pattern_path))?;
     let (meas, _) = read_json(required(args, "measurements")?)?;
     let spec = fit_spec(args)?;
     let selected = ["model", "body-fit", "flat-body"]
@@ -1425,7 +1425,7 @@ fn cmd_drape_bound(
         return Err(bad_input("ftx drape needs exactly one pattern file"));
     }
     let pattern_path = &args.positional[1];
-    let (mut pat, pattern_bytes) = read_json(pattern_path)?;
+    let (mut pat, pattern_bytes) = fold::pattern_document(std::path::Path::new(pattern_path))?;
     let outfit = if pat["schema"] == ftx_drape::outfit::SCHEMA {
         if args.options.contains_key("fabric")
             || args.options.contains_key("material-bindings")

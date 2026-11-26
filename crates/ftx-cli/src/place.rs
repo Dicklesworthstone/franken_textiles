@@ -1308,7 +1308,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         return Err(bad_input("ftx place needs exactly one pattern file"));
     }
     let pattern_path = &args.positional[1];
-    let (mut raw, _) = super::read_json(pattern_path)?;
+    let (mut raw, _) = super::fold::pattern_document(std::path::Path::new(pattern_path))?;
     let fabric_override = super::fabric::load(args)?
         .map(|input| input.apply(&mut raw))
         .transpose()?;

@@ -1,7 +1,7 @@
 //! `ftx export TARGET PATTERN --out DIR` and `ftx check DIR`: the reference's `export.py` (spec 03 §1.3) on
 //! `ftx-export`.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ftx_core::{Refusal, RefusalCode};
@@ -11,7 +11,7 @@ use ftx_export::{
 use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
-use super::{Args, bad_input, known_options, make_dir, read_json};
+use super::{Args, bad_input, known_options, make_dir};
 
 /// The export flags that take no value.
 pub(super) const BOOLEAN_OPTIONS: &[&str] =
@@ -83,7 +83,35 @@ fn nonnegative_number(args: &Args, key: &str) -> Result<Option<f64>, Refusal> {
 }
 
 fn load_pattern(path: &str) -> Result<Pattern, Refusal> {
-    Ok(Pattern::new(read_json(path)?.0))
+    Ok(Pattern::new(
+        crate::fold::pattern_document(Path::new(path))?.0,
+    ))
+}
+
+fn check_export_destination(out: &Path, rel: &str) -> Result<PathBuf, Refusal> {
+    let rel_path = Path::new(rel);
+    let mut cur = out.to_path_buf();
+    let mut parts = Vec::new();
+    for component in rel_path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part),
+            _ => {
+                return Err(bad_input(format!(
+                    "export output path {rel:?} must stay inside --out"
+                )));
+            }
+        }
+    }
+    let Some((file, dirs)) = parts.split_last() else {
+        return Err(bad_input("export output path must name a file"));
+    };
+    for dir in dirs {
+        cur.push(dir);
+        crate::round::regular(&cur, true)?;
+    }
+    cur.push(file);
+    crate::round::regular(&cur, false)?;
+    Ok(cur)
 }
 
 /// The checks' summary line and failure lines, as the reference prints them.
@@ -195,25 +223,28 @@ pub(super) fn cmd_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
         opts.created = Some(utc_minute()?);
     }
     let ctx = Ctx::new(&pattern, opts)?;
+    crate::round::regular(&out, true)?;
     let manifest_path = out.join(format!("{}_export_manifest.json", ctx.style));
-    let existing = match std::fs::read_to_string(&manifest_path) {
-        Ok(text) => Some(
+    let existing = if crate::round::regular(&manifest_path, false)? {
+        let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            Refusal::new(RefusalCode::Io, format!("{}: {e}", manifest_path.display()))
+        })?;
+        Some(
             PyJson::parse(&text)
                 .map_err(|e| bad_input(format!("{}: {e}", manifest_path.display())))?,
-        ),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            return Err(Refusal::new(
-                RefusalCode::Io,
-                format!("{}: {e}", manifest_path.display()),
-            ));
-        }
+        )
+    } else {
+        None
     };
     let set = export_targets(&ctx, &targets, existing)?;
+    // Verify every output directory and file is non-symlink before creating or writing anything.
+    let mut destinations = Vec::with_capacity(set.files.len());
+    for (rel, bytes) in &set.files {
+        destinations.push((check_export_destination(&out, rel)?, bytes.as_slice()));
+    }
     make_dir(&out)?;
     let mut written = Vec::new();
-    for (rel, bytes) in &set.files {
-        let path = out.join(rel);
+    for (path, bytes) in destinations {
         if let Some(parent) = path.parent() {
             make_dir(parent)?;
         }
@@ -267,5 +298,101 @@ mod tests {
                 crate::parse(&["export", "svg", "p.json", "--sa", raw].map(String::from)).unwrap();
             assert!(nonnegative_number(&args, "sa").is_err(), "--sa {raw}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_refuses_symlinked_output_dir_and_files_before_writing() {
+        use std::os::unix::fs::symlink;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-export-symlink-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/oracle/export/all.json"
+        ))
+        .unwrap();
+        let pattern = &fixture["cases"][0]["input"]["pattern"];
+        let pat_path = root.join("pattern.json");
+        std::fs::write(&pat_path, serde_json::to_vec(pattern).unwrap()).unwrap();
+
+        let real_dir = root.join("real_out");
+        std::fs::create_dir(&real_dir).unwrap();
+        let linked_dir = root.join("linked_out");
+        symlink(&real_dir, &linked_dir).unwrap();
+        let args = crate::parse(&[
+            "export".into(),
+            "svg".into(),
+            pat_path.to_string_lossy().into_owned(),
+            "--out".into(),
+            linked_dir.to_string_lossy().into_owned(),
+            "--created".into(),
+            "2026-10-11T12:00".into(),
+        ])
+        .unwrap();
+        let err = cmd_export(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular directory"), "{}", err.message);
+        assert!(std::fs::read_dir(&real_dir).unwrap().next().is_none());
+
+        let out_dir = root.join("out");
+        std::fs::create_dir(&out_dir).unwrap();
+        let victim = root.join("victim.svg");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let parsed = Pattern::new(pattern.clone());
+        let ctx = Ctx::new(&parsed, ExportOptions::default()).unwrap();
+        let svg_link = out_dir.join(format!("{}_master_mm.svg", ctx.style));
+        symlink(&victim, &svg_link).unwrap();
+        let args = crate::parse(&[
+            "export".into(),
+            "svg".into(),
+            pat_path.to_string_lossy().into_owned(),
+            "--out".into(),
+            out_dir.to_string_lossy().into_owned(),
+            "--created".into(),
+            "2026-10-11T12:00".into(),
+        ])
+        .unwrap();
+        let err = cmd_export(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular file"), "{}", err.message);
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert!(
+            !out_dir
+                .join(format!("{}_export_manifest.json", ctx.style))
+                .exists(),
+            "manifest must not be written when another output file is a symlink"
+        );
+
+        let manifest_dir = root.join("manifest_link_out");
+        std::fs::create_dir(&manifest_dir).unwrap();
+        symlink(
+            &victim,
+            manifest_dir.join(format!("{}_export_manifest.json", ctx.style)),
+        )
+        .unwrap();
+        let args = crate::parse(&[
+            "export".into(),
+            "svg".into(),
+            pat_path.to_string_lossy().into_owned(),
+            "--out".into(),
+            manifest_dir.to_string_lossy().into_owned(),
+            "--created".into(),
+            "2026-10-11T12:00".into(),
+        ])
+        .unwrap();
+        let err = cmd_export(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular file"), "{}", err.message);
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert!(
+            !manifest_dir
+                .join(format!("{}_master_mm.svg", ctx.style))
+                .exists()
+        );
     }
 }

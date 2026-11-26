@@ -502,7 +502,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .map(PathBuf::from)
         .or(latest)
         .ok_or_else(|| bad_input("workspace has no round with a pattern; pass --pattern P"))?;
-    let (mut raw, _) = read_json(&source.to_string_lossy())?;
+    let (mut raw, _) = super::fold::pattern_document(&source)?;
     let fabric = super::fabric::load(args)?
         .map(|input| input.apply(&mut raw))
         .transpose()?;
@@ -532,12 +532,16 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         return Err(bad_input("--as-of must be YYYY-MM-DD"));
     }
     let ready = measurement_gate(&raw, &data, as_of)?;
-    let own_path = args.options.get("fit").map(PathBuf::from).or_else(|| {
-        source
-            .parent()
-            .map(|p| p.join("fit_spec.json"))
-            .filter(|p| p.is_file())
-    });
+    let own_path = match args.options.get("fit") {
+        Some(p) => Some(PathBuf::from(p)),
+        None => match source.parent().map(|p| p.join("fit_spec.json")) {
+            Some(p) if args.options.contains_key("pattern") => {
+                (regular(&p, false).ok() == Some(true)).then_some(p)
+            }
+            Some(p) => regular(&p, false)?.then_some(p),
+            None => None,
+        },
+    };
     let own = own_path
         .as_ref()
         .map(|p| read_json(&p.to_string_lossy()).map(|v| v.0))
@@ -1789,5 +1793,38 @@ mod tests {
         let err = ledger(&ws).unwrap_err();
         assert_eq!(err.code, RefusalCode::InvalidDocument);
         assert!(err.message.contains("line 2"), "{}", err.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn round_refuses_symlinked_prior_round_fit_spec_on_resume() {
+        use std::os::unix::fs::symlink;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-round-fit-link-{}-{stamp}", std::process::id()));
+        let ws = root.join("ws");
+        let r0 = ws.join("rounds/000");
+        std::fs::create_dir_all(&r0).unwrap();
+        let meas = ftx_measure::reference_wearer(920.0, Some(30.0), None, None).unwrap();
+        let (pat, _spec) = ftx_pattern::draft::draft("fez", &meas, None).unwrap();
+        std::fs::write(
+            ws.join("measurements.json"),
+            serde_json::to_vec(&meas).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(r0.join("pattern.json"), serde_json::to_vec(&pat).unwrap()).unwrap();
+        let outside = root.join("outside_fit.json");
+        std::fs::write(&outside, br#"{"points":[]}"#).unwrap();
+        symlink(&outside, r0.join("fit_spec.json")).unwrap();
+
+        let args = crate::parse(&["round".into(), ws.to_string_lossy().into_owned()]).unwrap();
+        let err = cmd_round(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular file"), "{}", err.message);
+        assert!(!ws.join("rounds/001").exists());
     }
 }

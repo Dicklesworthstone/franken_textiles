@@ -153,6 +153,9 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             (PyJson::from_value(&pat).dumps(Some(1)) + "\n").as_bytes(),
         )?;
     } else {
+        crate::round::regular(&out, true)?;
+        crate::round::regular(&pp, false)?;
+        crate::round::regular(&sp, false)?;
         make_dir(&out)?;
         write(&pp, &pat)?;
         write(&sp, &spec)?;
@@ -181,6 +184,7 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
 /// Prepare all input and geometry before adopting a wearer or reserving a persistent round.
 fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), Refusal> {
     let root = PathBuf::from(required(args, "ws")?);
+    crate::round::regular(&root, true)?;
     let date = super::measure::date(args, "as-of")?;
     let evidence = workspace::evidence(required(args, "measurements")?, args)?;
     let update = args.options.contains_key("update-measurements");
@@ -201,7 +205,7 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
     let readiness = ftx_measure::round_readiness(&pat, &evidence.value, &date);
     // Do not silently repair or replace an unreadable existing workspace contract.
     let contract = root.join("fit_spec.json");
-    if contract.exists() {
+    if crate::round::regular(&contract, false)? {
         workspace::read(&contract)?;
     }
     let ws = workspace::Workspace::open(&root)?;
@@ -218,7 +222,7 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
     workspace::write_new(&dir.join("measurements.json"), &evidence.bytes)?;
     workspace::write_json(&dir.join("fused_measurements.json"), &evidence.value)?;
     workspace::write_json(&dir.join("readiness.json"), &readiness)?;
-    if !contract.exists() {
+    if !crate::round::regular(&contract, false)? {
         workspace::write_json(&contract, &spec)?;
     }
     let mut result = json!({"round":number,"dir":dir,"pattern":dir.join("pattern.json"),
@@ -248,4 +252,98 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
         }
     );
     Ok((result, if errs.is_empty() { 0 } else { 2 }, text))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn draft_refuses_symlinked_outputs_and_workspace_links() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-draft-symlink-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let meas = ftx_measure::reference_wearer(920.0, Some(30.0), None, None).unwrap();
+        let meas_path = root.join("m.json");
+        std::fs::write(&meas_path, serde_json::to_vec(&meas).unwrap()).unwrap();
+
+        let real_out = root.join("real_out");
+        std::fs::create_dir(&real_out).unwrap();
+        let linked_out = root.join("linked_out");
+        symlink(&real_out, &linked_out).unwrap();
+        let args = crate::parse(&[
+            "draft".into(),
+            "fez".into(),
+            "--measurements".into(),
+            meas_path.to_string_lossy().into_owned(),
+            "--out".into(),
+            linked_out.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let err = cmd_draft(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(std::fs::read_dir(&real_out).unwrap().next().is_none());
+
+        let out_dir = root.join("out_file_link");
+        std::fs::create_dir(&out_dir).unwrap();
+        let victim = root.join("victim.json");
+        std::fs::write(&victim, b"untouched").unwrap();
+        symlink(&victim, out_dir.join("fit_spec.json")).unwrap();
+        let args = crate::parse(&[
+            "draft".into(),
+            "fez".into(),
+            "--measurements".into(),
+            meas_path.to_string_lossy().into_owned(),
+            "--out".into(),
+            out_dir.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let err = cmd_draft(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert!(
+            !out_dir.join("pattern.json").exists(),
+            "pattern.json must not be written when fit_spec.json is a symlink"
+        );
+
+        let real_ws = root.join("real_ws");
+        std::fs::create_dir(&real_ws).unwrap();
+        let linked_ws = root.join("linked_ws");
+        symlink(&real_ws, &linked_ws).unwrap();
+        let args = crate::parse(&[
+            "draft".into(),
+            "fez".into(),
+            "--measurements".into(),
+            meas_path.to_string_lossy().into_owned(),
+            "--ws".into(),
+            linked_ws.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let err = cmd_draft(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(std::fs::read_dir(&real_ws).unwrap().next().is_none());
+
+        let ws_fit_link = root.join("ws_fit_link");
+        std::fs::create_dir(&ws_fit_link).unwrap();
+        symlink(&victim, ws_fit_link.join("fit_spec.json")).unwrap();
+        let args = crate::parse(&[
+            "draft".into(),
+            "fez".into(),
+            "--measurements".into(),
+            meas_path.to_string_lossy().into_owned(),
+            "--ws".into(),
+            ws_fit_link.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let err = cmd_draft(&args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular file"), "{}", err.message);
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert!(!ws_fit_link.join("rounds").exists());
+    }
 }

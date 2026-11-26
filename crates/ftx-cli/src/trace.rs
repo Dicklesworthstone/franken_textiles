@@ -72,6 +72,7 @@ fn read_ordered(path: &str) -> Result<(PyJson, PatternDoc), Refusal> {
 }
 
 fn write_text(path: &Path, text: &str) -> Result<(), Refusal> {
+    crate::round::regular(path, false)?;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         make_dir(dir)?;
     }
@@ -587,4 +588,40 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
         code,
         text,
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn write_text_refuses_live_and_dangling_symlinks() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-trace-symlink-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+
+        let victim = root.join("victim.json");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let live_link = root.join("live.json");
+        symlink(&victim, &live_link).unwrap();
+        let err = write_text(&live_link, "overwritten").unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+
+        let missing = root.join("never_created.json");
+        let dangling_link = root.join("dangling.json");
+        symlink(&missing, &dangling_link).unwrap();
+        let err = write_text(&dangling_link, "created").unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(!missing.exists());
+
+        let regular_out = root.join("sub/out.json");
+        write_text(&regular_out, "ok\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&regular_out).unwrap(), "ok\n");
+    }
 }
