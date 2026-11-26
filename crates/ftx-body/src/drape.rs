@@ -207,13 +207,48 @@ impl ElbowPose {
 /// Each vector is an axis multiplied by an angle in radians, with magnitude at most π.
 /// These controls move the existing `finger1-1.L/R` joints and their descendants; they neither
 /// trim the hand nor establish a measured or anatomically qualified hand pose.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct ThumbPose {
     /// Left thumb's source-local rotation vector, in radians.
     pub left_rotation_vector_rad: [f64; 3],
     /// Right thumb's source-local rotation vector, in radians.
     pub right_rotation_vector_rad: [f64; 3],
+}
+
+// The public JSON contract names both sides. A derived struct deserializer also accepts a
+// positional sequence, which would silently assign left/right meaning to an undocumented array.
+impl<'de> Deserialize<'de> for ThumbPose {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            left_rotation_vector_rad: [f64; 3],
+            right_rotation_vector_rad: [f64; 3],
+        }
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = ThumbPose;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(
+                    "an object with left_rotation_vector_rad and right_rotation_vector_rad",
+                )
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let fields =
+                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(ThumbPose {
+                    left_rotation_vector_rad: fields.left_rotation_vector_rad,
+                    right_rotation_vector_rad: fields.right_rotation_vector_rad,
+                })
+            }
+        }
+        deserializer.deserialize_map(Object)
+    }
 }
 
 impl ThumbPose {
@@ -2209,7 +2244,20 @@ mod tests {
         let mut unknown = json;
         unknown["left_angle_deg"] = serde_json::json!(30.0);
         assert!(serde_json::from_value::<ThumbPose>(unknown).is_err());
-        assert!(serde_json::from_str::<ThumbPose>("{}").is_err());
+        for malformed in [
+            serde_json::json!({}),
+            serde_json::json!([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+            serde_json::json!({"left_rotation_vector_rad": [0.0, 0.0, 0.0]}),
+            serde_json::json!({"left_rotation_vector_rad": null, "right_rotation_vector_rad": [0.0, 0.0, 0.0]}),
+        ] {
+            assert!(serde_json::from_value::<ThumbPose>(malformed).is_err());
+        }
+        assert!(
+            serde_json::from_str::<ThumbPose>(
+                r#"{"left_rotation_vector_rad":[0,0,0],"left_rotation_vector_rad":[0.1,0,0],"right_rotation_vector_rad":[0,0,0]}"#,
+            )
+            .is_err()
+        );
     }
 
     #[test]
