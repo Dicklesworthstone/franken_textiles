@@ -4,8 +4,8 @@
 //! a rectangular sheet of width `W >= 2π R` and height `H >= L_0` is wrapped around two coaxial
 //! rigid cylindrical holders of radius `R`, clamped with nominal free height `L_0`, mounted with
 //! an explicit axial pretension displacement `Δz_pre` (never absorbed into `Δz / L_0`), and driven
-//! through a timed sequence of upper-holder rotations `θ(t)`, axial displacements `Δz(t)` and
-//! optional explicit upper-clamp axial slip offsets `u_slip(t)` while the lower holder stays fixed.
+//! through a timed sequence of selected-holder rotations `θ(t)`, axial displacements `Δz(t)` and
+//! optional explicit upper-clamp axial slip offsets `u_slip(t)` while the lower holder stays at zero axial displacement.
 //!
 //! Every triangle's flat 2D grain-frame rest metric is preserved isometrically on the discrete
 //! `n_theta`-sided chord cylinder `R_mesh = (π R / n_theta) / sin(π / n_theta)` (`R_mesh -> R` at
@@ -67,10 +67,41 @@ fn vec3_array(v: Vec3) -> [f64; 3] {
     [v.x, v.y, v.z]
 }
 
+/// Ring driven by the rotation actuator and instrumented for torsional reaction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotatingHolder {
+    /// The upper ring twists and translates axially (default apparatus).
+    #[default]
+    Upper,
+    /// The lower ring twists at fixed height; the upper ring only translates axially.
+    Lower,
+}
+
+impl RotatingHolder {
+    fn is_upper(&self) -> bool {
+        *self == Self::Upper
+    }
+
+    fn rotation_fraction(self, height_fraction: f64) -> f64 {
+        match self {
+            Self::Upper => height_fraction,
+            Self::Lower => 1.0 - height_fraction,
+        }
+    }
+
+    fn index(self) -> usize {
+        usize::from(self.is_upper())
+    }
+}
+
 /// Cylindrical-holder apparatus geometry, sample orientation and clamp boundary policy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fixture {
+    /// Ring receiving each signed rotation about +z. Axial displacement and force remain at the upper ring.
+    #[serde(default, skip_serializing_if = "RotatingHolder::is_upper")]
+    pub rotating_holder: RotatingHolder,
     /// Rigid holder outer radius `R` in metres (e.g. `0.040` m for Fabric-101).
     pub holder_radius_m: f64,
     /// Full flat rectangular specimen width in metres (`>= 2π R`; excess is clamped seam overlap).
@@ -195,7 +226,7 @@ impl Fixture {
     }
 }
 
-/// One prescribed upper-holder kinematic boundary waypoint; linear interpolation in time between waypoints.
+/// One prescribed holder kinematic boundary waypoint; linear interpolation in time between waypoints.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Waypoint {
@@ -204,7 +235,7 @@ pub struct Waypoint {
     /// Upper-holder axial displacement (m) relative to the mounted pretensioned zero (`L_0 + Δz_pre`).
     /// Positive stretches the specimen upward; negative compresses the holders together.
     pub axial_displacement_m: f64,
-    /// Upper-holder rotation angle about `+z` in degrees (right-hand rule; lower holder fixed at `0°`).
+    /// Driven-ring rotation about `+z` in degrees (right-hand rule; opposite ring fixed at `0°`).
     pub rotation_deg: f64,
     /// Explicit cumulative upper-clamp axial pull-out slip in metres (`>= 0`, monotonically nondecreasing).
     /// Reduces effective fabric stretch `z_upper = L_0 + Δz_pre + axial_displacement_m - clamp_slip_m`.
@@ -364,7 +395,7 @@ pub struct State {
     pub holder_separation_m: f64,
     /// Net axial extension `(holder_separation_m - L_0) / L_0` relative to unstretched `L_0` (never `Δz / L_0` when `Δz_pre != 0`).
     pub true_axial_extension_fraction: f64,
-    /// Prescribed upper-holder rotation angle about `+z` (deg).
+    /// Prescribed driven-ring rotation angle about `+z` (deg).
     pub rotation_deg: f64,
     /// Total 3D reaction forces `[lower, upper]` exerted by the holders on the cloth (N).
     pub holder_reaction_n: [[f64; 3]; 2],
@@ -378,7 +409,7 @@ pub struct State {
     pub upper_torque_nm: f64,
     /// Lower-holder axial reaction torque about `+z` (N·m).
     pub lower_torque_nm: f64,
-    /// Tare-corrected upper axial torque `upper_torque_nm - tare_torque_nm` (N·m).
+    /// Tare-corrected torque at the rotating holder (holder torque minus fixture tare) (N·m).
     pub tare_adjusted_torque_nm: f64,
     /// Whether `upper_force_n` exceeded `fixture.grip_slip_force_limit_n`.
     pub slip_limit_exceeded: bool,
@@ -563,31 +594,43 @@ fn holder_separation_m(fixture: &Fixture, waypoint: &Waypoint) -> Result<f64, Re
     Ok(z)
 }
 
-fn set_upper_ring(
+fn set_ring_positions(
     positions: &mut [Vec3],
-    n_theta: usize,
-    n_z: usize,
+    fixture: &Fixture,
     mesh_radius_m: f64,
     separation_m: f64,
     rotation_deg: f64,
 ) {
-    let theta_rad = rotation_deg.to_radians();
-    let start = n_z * n_theta;
+    let [n_theta, n_z] = fixture.cells;
+    let start = fixture.rotating_holder.index() * n_z * n_theta;
     for i in 0..n_theta {
-        let angle = 2.0 * PI * (i as f64) / (n_theta as f64) + theta_rad;
+        let angle = 2.0 * PI * (i as f64) / (n_theta as f64) + rotation_deg.to_radians();
         let (sin_a, cos_a) = det::sin_cos(angle);
-        positions[start + i] =
-            Vec3::new(mesh_radius_m * cos_a, mesh_radius_m * sin_a, separation_m);
+        positions[start + i].x = mesh_radius_m * cos_a;
+        positions[start + i].y = mesh_radius_m * sin_a;
+        positions[n_z * n_theta + i].z = separation_m;
+    }
+}
+
+fn set_ring_velocities(solver: &mut Solver, fixture: &Fixture, omega_rad_s: f64, vz_m_s: f64) {
+    let [n_theta, n_z] = fixture.cells;
+    let start = fixture.rotating_holder.index() * n_z * n_theta;
+    for i in 0..n_theta {
+        let idx = start + i;
+        let p = solver.x[idx];
+        solver.v[idx].x = -omega_rad_s * p.y;
+        solver.v[idx].y = omega_rad_s * p.x;
+        solver.v[n_z * n_theta + i].z = vz_m_s;
     }
 }
 
 pub(super) fn affine_cylinder_guess(
     x_prev: &[Vec3],
-    n_theta: usize,
-    n_z: usize,
+    fixture: &Fixture,
     dz_m: f64,
     drot_rad: f64,
 ) -> Vec<Vec3> {
+    let [n_theta, n_z] = fixture.cells;
     let mut guess = x_prev.to_vec();
     let barrelled = if n_z >= 2 && x_prev.len() > n_theta {
         let r0 = x_prev[0]
@@ -603,20 +646,21 @@ pub(super) fn affine_cylinder_guess(
         false
     };
     for iz in 1..n_z {
-        let frac_rot = iz as f64 / n_z as f64;
+        let height_fraction = iz as f64 / n_z as f64;
         let (frac_z, dr_m) = if dz_m < 0.0 && n_z >= 3 {
             let fz = if barrelled {
                 let wb = 0.015_f64.mul_add(n_z as f64, 1.0);
                 (wb + (iz - 1) as f64) / ((n_z as f64) * 1.03)
             } else {
-                frac_rot
+                height_fraction
             };
-            let dr = (-0.55 * dz_m) * det::sin(PI * frac_rot);
+            let dr = (-0.55 * dz_m) * det::sin(PI * height_fraction);
             (fz, dr)
         } else {
-            (frac_rot, 0.0)
+            (height_fraction, 0.0)
         };
-        let (sin_d, cos_d) = det::sin_cos(frac_rot * drot_rad);
+        let (sin_d, cos_d) =
+            det::sin_cos(fixture.rotating_holder.rotation_fraction(height_fraction) * drot_rad);
         let shift_z = frac_z * dz_m;
         for i in 0..n_theta {
             let idx = iz * n_theta + i;
@@ -1059,7 +1103,8 @@ fn record_state_with_step(
         tare_adjusted_force_n: upper_force_n - fixture.tare_force_n,
         upper_torque_nm: holder_torques_z[1],
         lower_torque_nm: holder_torques_z[0],
-        tare_adjusted_torque_nm: holder_torques_z[1] - fixture.tare_torque_nm,
+        tare_adjusted_torque_nm: holder_torques_z[fixture.rotating_holder.index()]
+            - fixture.tare_torque_nm,
         slip_limit_exceeded,
         free_dynamic_residual_n: free_residual,
         momentum_balance_residual_n: momentum_balance,
@@ -1147,7 +1192,7 @@ pub fn solve_static(
     for j in 0..=n_z {
         let frac = j as f64 / n_z as f64;
         let z = sep_m * frac;
-        let rot = (rotation_deg * frac).to_radians();
+        let rot = (rotation_deg * fixture.rotating_holder.rotation_fraction(frac)).to_radians();
         for i in 0..n_theta {
             let angle = 2.0 * PI * (i as f64) / (n_theta as f64) + rot;
             let (sin_a, cos_a) = det::sin_cos(angle);
@@ -1230,7 +1275,8 @@ fn assemble_solver(
     for j in 0..=n_z {
         let frac = j as f64 / n_z as f64;
         let z = sep_0 * frac;
-        let rot = (initial_waypoint.rotation_deg * frac).to_radians();
+        let rot = (initial_waypoint.rotation_deg * fixture.rotating_holder.rotation_fraction(frac))
+            .to_radians();
         for i in 0..n_theta {
             let angle = 2.0 * PI * (i as f64) / (n_theta as f64) + rot;
             let (sin_a, cos_a) = det::sin_cos(angle);
@@ -1396,7 +1442,6 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     let mut first_slip_time_s = first_state.slip_limit_exceeded.then_some(0.0);
     let mut states = vec![first_state];
 
-    let [n_theta, n_z] = input.fixture.cells;
     let mut current_time = 0.0_f64;
     let mut prev_sep = holder_separation_m(&input.fixture, &input.loading[0])?;
     let mut prev_rot_rad = input.loading[0].rotation_deg.to_radians();
@@ -1437,17 +1482,15 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
                 .then(|| {
                     affine_cylinder_guess(
                         &solver.x,
-                        n_theta,
-                        n_z,
+                        &input.fixture,
                         curr_sep - prev_sep,
                         curr_rot_rad - prev_rot_rad,
                     )
                 });
             let accepted_positions = guess.as_ref().map(|_| solver.x.clone());
-            set_upper_ring(
+            set_ring_positions(
                 &mut solver.x,
-                n_theta,
-                n_z,
+                &input.fixture,
                 mesh.mesh_radius_m,
                 curr_sep,
                 waypoint.rotation_deg,
@@ -1460,11 +1503,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             } else {
                 solver.step_with_guess(h, None)?
             };
-            for i in 0..n_theta {
-                let idx = n_z * n_theta + i;
-                let p = solver.x[idx];
-                solver.v[idx] = Vec3::new(-omega_rad_s * p.y, omega_rad_s * p.x, vz_m_s);
-            }
+            set_ring_velocities(&mut solver, &input.fixture, omega_rad_s, vz_m_s);
             newton_iterations += numerical.iterations;
             let st = record_state_with_step(
                 &input.fixture,
@@ -1533,6 +1572,7 @@ mod tests {
 
     fn fabric101_fixture(warp_axis: [f64; 2], n_theta: usize, n_z: usize) -> Fixture {
         Fixture {
+            rotating_holder: RotatingHolder::Upper,
             holder_radius_m: 0.040,
             specimen_width_m: 0.260,
             specimen_height_m: 0.110,
@@ -1603,6 +1643,74 @@ mod tests {
             record: Some(record),
             ..Selection::default()
         }
+    }
+
+    #[test]
+    fn lower_drive_prescribes_real_ring_motion_and_reads_its_own_torque() {
+        let mut fixture = fabric101_fixture([0.0, 1.0], 6, 2);
+        assert!(
+            serde_json::to_value(&fixture)
+                .unwrap()
+                .get("rotating_holder")
+                .is_none()
+        );
+        fixture.rotating_holder = RotatingHolder::Lower;
+        fixture.tare_torque_nm = 0.015;
+        fixture.tare_force_n = 0.25;
+        let controls = Controls {
+            max_step_s: 0.02,
+            ..Controls::default()
+        };
+        let input = Request {
+            schema: REQUEST_SCHEMA.into(),
+            material: synthetic_sheet_selection(1e-4, false),
+            fixture,
+            loading: [(0.0, 1.0, 0.0), (0.02, 2.0, 0.0001), (0.04, -1.0, 0.0)]
+                .map(|(time_s, rotation_deg, axial_displacement_m)| Waypoint {
+                    time_s,
+                    rotation_deg,
+                    axial_displacement_m,
+                    clamp_slip_m: 0.0,
+                })
+                .to_vec(),
+            nominal_protocol: None,
+            controls,
+        };
+        let report = evaluate(&input).unwrap();
+        let replay: Request = serde_json::from_str(&report.replay_request_json).unwrap();
+        assert_eq!(replay.fixture.rotating_holder, RotatingHolder::Lower);
+        assert_eq!(report.states.len(), 3);
+        let radius = input.fixture.isometric_mesh_radius_m();
+        let [n_theta, n_z] = input.fixture.cells;
+        for (i, s) in report.states.iter().enumerate() {
+            let angle = input.loading[i].rotation_deg.to_radians();
+            let lower = s.positions_m[0];
+            assert!((lower[0] - radius * angle.cos()).abs() < 1e-14);
+            assert!((lower[1] - radius * angle.sin()).abs() < 1e-14);
+            assert_eq!(lower[2], 0.0);
+            let upper = s.positions_m[n_theta * n_z];
+            assert!((upper[0] - radius).abs() < 1e-14);
+            assert_eq!(upper[1], 0.0);
+            assert!((upper[2] - (0.05 + input.loading[i].axial_displacement_m)).abs() < 1e-14);
+            assert_eq!(s.tare_adjusted_torque_nm, s.lower_torque_nm - 0.015);
+            assert_eq!(s.tare_adjusted_force_n, s.upper_force_n - 0.25);
+            if i != 0 {
+                let prev = &input.loading[i - 1];
+                let omega = (input.loading[i].rotation_deg - prev.rotation_deg).to_radians()
+                    / s.time_step_s;
+                let vz = (input.loading[i].axial_displacement_m - prev.axial_displacement_m)
+                    / s.time_step_s;
+                let v = s.velocities_m_s[0];
+                assert!((v[0] + omega * lower[1]).abs() < 1e-12);
+                assert!((v[1] - omega * lower[0]).abs() < 1e-12);
+                assert_eq!(v[2], 0.0);
+                let u = s.velocities_m_s[n_theta * n_z];
+                assert_eq!([u[0], u[1]], [0.0, 0.0]);
+                assert!((u[2] - vz).abs() < 1e-12);
+            }
+        }
+        assert!(report.states[0].lower_torque_nm > 0.0);
+        assert!(report.states[0].upper_torque_nm < 0.0);
     }
 
     #[test]

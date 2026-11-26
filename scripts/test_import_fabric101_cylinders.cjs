@@ -54,13 +54,16 @@ test("native replay retains holds, reversals, mounting displacement and the temp
     }
   }
   assert.ok(peak <= 0.1 && Math.abs(peak - receipt.max_rotation_error_deg) < 1e-12);
-  receipt.sample_indices.forEach((i, j) => assert.equal(request.loading[j].rotation_deg, -points[i][1]));
+  receipt.sample_indices.forEach((i, j) => assert.equal(request.loading[j].rotation_deg, points[i][1]));
   assert.throws(() => replay(source, { ...input, controls: { max_steps: 1 } }, 0.1, "named-direction-axial"), /budget/);
   assert.throws(() => replay(source, input, 0.1, undefined), /convention/);
   assert.throws(() => replay(source, input, 0.1, "named-direction-circumferential"), /warp_axis/);
   assert.deepEqual(receipt.warp_axis, [1, 0]);
   assert.equal(receipt.axial_grip_slip_assumption_m, 0);
-  assert.equal(receipt.rotation_scope, "relative_holder_angle_only");
+  assert.equal(request.fixture.rotating_holder, "lower");
+  assert.equal(receipt.model_rotating_holder, receipt.source_rotating_holder);
+  assert.equal(receipt.rotation_scope, "physical_driven_holder");
+  assert.equal(receipt.rotation_sign, 1);
 });
 
 test("refuses to silently omit axial movement or excessive rotation reversals", () => {

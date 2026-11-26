@@ -167,7 +167,7 @@ function replay(acquisition, template, tolerance, mounting) {
   }
   const rows = acquisition.phases.twist;
   const { indices, maxError } = twistIndices(rows, tolerance);
-  const loading = indices.map(i => ({ time_s: rows[i][0] - rows[0][0], rotation_deg: -rows[i][3],
+  const loading = indices.map(i => ({ time_s: rows[i][0] - rows[0][0], rotation_deg: rows[i][3],
     axial_displacement_m: 0, clamp_slip_m: 0 }));
   const step = template.controls?.max_step_s ?? 0.05, limit = template.controls?.max_steps ?? 1024;
   if (!Number.isFinite(step) || step <= 0 || !Number.isInteger(limit) || limit < 1 || limit > 2048) {
@@ -176,12 +176,12 @@ function replay(acquisition, template, tolerance, mounting) {
   const steps = loading.slice(1).reduce((n, p, i) => n + Math.ceil((p.time_s - loading[i].time_s) / step), 0);
   if (steps > limit) throw Error("Template integration budget cannot cover the measured twist");
   const travel = acquisition.protocol.measured_pretension_travel_mm * 0.001;
-  const request = { ...template, fixture: { ...fixture, pretension_displacement_m: travel }, loading };
-  // The native positive-angle rate would describe the return stroke in this reversed frame.
+  const request = { ...template, fixture: { ...fixture, rotating_holder: "lower", pretension_displacement_m: travel }, loading };
+  // Only this recorded twist stage is replayed; the template may describe a different protocol.
   delete request.nominal_protocol;
   const receipt = { sample_indices: indices, mounting_convention: mounting, warp_axis: [...axis],
-    source_rotating_holder: "lower", model_rotating_holder: "upper",
-    rotation_scope: "relative_holder_angle_only", rotation_sign: -1,
+    source_rotating_holder: "lower", model_rotating_holder: "lower",
+    rotation_scope: "physical_driven_holder", rotation_sign: 1,
     axial_grip_slip_assumption_m: 0, stage_clock_origin_s: rows[0][0],
     tolerance_deg: tolerance, max_rotation_error_deg: maxError, integration_steps: steps };
   return { request, receipt };

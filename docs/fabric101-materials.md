@@ -144,9 +144,11 @@ error and the digest of the generated request. The template and the raw recordin
 
 Section 3.1 of the paper locates the torque sensor and rotary drive on the lower holder and the
 axial force sensor on the upper holder. The lower holder turns counterclockwise when viewed from
-above. The native fixture rotates the upper holder while fixing the lower. The replay reverses
-the measured rotation to reproduce the same relative angle and records both assignments. Angular
-inertia and reaction histories for the actual driven holder require a physical lower-holder model.
+above. The importer sets `fixture.rotating_holder` to `"lower"` and preserves the recorded
+angle sign. Each state reports both holder torques. Forward prediction and inverse calibration
+subtract the declared torque tare at the driven ring and the force tare at the upper ring.
+Requests omitting the selector still drive and read torque at the upper ring. These reactions
+describe loads from the cloth; spindle inertia and instrument friction require separate evidence.
 The model assumes zero axial grip slip during the initial twist. Internal-history laws require
 a pristine timed mounting history, which these files do not provide. The native solver enforces
 that requirement. Cross-stage elapsed time, measured grip slip, sensor-to-holder reaction signs
