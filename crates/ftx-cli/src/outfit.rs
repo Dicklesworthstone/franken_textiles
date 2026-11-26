@@ -58,7 +58,8 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, Refusal> {
 
 fn read_mesh(path: &Path) -> Result<(ColouredMesh, String), Refusal> {
     let bytes = read_bytes(path)?;
-    let text = std::str::from_utf8(&bytes).map_err(|e| workspace::io_error(path, e))?;
+    let text =
+        std::str::from_utf8(&bytes).map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
     let mesh = read_obj(text).map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
     if mesh.vertices.len() > MAX_VERTICES || mesh.triangles.len() > MAX_FACES {
         return Err(budget(
@@ -176,9 +177,10 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
                 "the same drape directory was supplied more than once",
             ));
         }
-        let bytes = read_bytes(&dir.join("sim_report.json"))?;
-        let report: Value =
-            serde_json::from_slice(&bytes).map_err(|e| workspace::io_error(dir, e))?;
+        let report_path = dir.join("sim_report.json");
+        let bytes = read_bytes(&report_path)?;
+        let report: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| bad_input(format!("{}: {e}", report_path.display())))?;
         let angle = report["arm_deg"]
             .as_f64()
             .filter(|v| v.is_finite() && (0.0..=180.0).contains(v));
@@ -272,7 +274,7 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
 }
 
 fn add_hat(outfit: &mut Outfit, path: &Path, measurements: &Value) -> Result<(), Refusal> {
-    let (pattern, bytes) = crate::fold::document(path)?;
+    let (pattern, bytes) = crate::fold::pattern_document(path)?;
     if pattern["meta"]["program"] != "drafting.fez"
         || pattern["units"] != "mm"
         || !Pattern::new(pattern.clone()).structure_errors().is_empty()

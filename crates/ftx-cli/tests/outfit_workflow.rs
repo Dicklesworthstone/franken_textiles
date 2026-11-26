@@ -211,6 +211,21 @@ fn mismatched_measurements_pose_and_body_refuse_before_output_creation() {
 }
 
 #[test]
+fn malformed_sim_report_and_non_utf8_mesh_refuse_as_invalid_document() {
+    let dir = setup();
+    std::fs::write(dir.join("trousers/sim_report.json"), b"{not valid json").unwrap();
+    let bad_json = run(&dir, &["--out", "bad-json"], 3);
+    assert_eq!(bad_json["refusal"]["code"], "invalid_document");
+    assert!(!dir.join("bad-json").exists());
+
+    let dir = setup();
+    std::fs::write(dir.join("trousers/garment.obj"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    let bad_utf8 = run(&dir, &["--out", "bad-utf8"], 3);
+    assert_eq!(bad_utf8["refusal"]["code"], "invalid_document");
+    assert!(!dir.join("bad-utf8").exists());
+}
+
+#[test]
 fn stale_truncated_and_malformed_point_caches_are_refused() {
     for mutation in ["truncated", "stale", "nan", "count", "extra", "magic"] {
         let dir = setup();
