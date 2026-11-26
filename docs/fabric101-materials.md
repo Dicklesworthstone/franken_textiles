@@ -109,15 +109,37 @@ screen can select these observations; a request that requires mechanics or therm
 correctly refuses them until those measurements are supplied. Frozen selections replay against
 an empty catalog with their exact sources and checksums intact.
 
-### Read the released linen and knit instrument recordings
+### Read the released instrument recordings
 
-The offline importer reads both directions of four release specimens, each from run 001, repeat s1.
-Choose `L01`, `L02`, `KN01` or `KN02` with `--specimen`. Omitting the flag selects L01.
-For each acquisition, the importer checks the original specimen header, direction-specific tare
-sheet and three independently pinned instrument files. The acquisition identifies the exact
-source specimen and catalog material. The candidate material in a replay template can differ.
+The offline importer inventories 192 directional recordings from the 96 specimens whose release
+headers match the native Fabric-101 catalog. It checks the pinned Git blob for the header, tare
+sheet, twist, compression and stretch/slip files before it returns an acquisition. The receipt
+records SHA-256 digests of those original bytes. Raw release data stays in the caller's checkout.
 
-The following row counts refer to the raw instrument files. Each phase retains its own clock,
+Use `--list` to see each source name, catalog material ID, run, instrument ID, available warp
+and weft repeats and any unresolved twist clocks. `--specimen` accepts the exact release name
+or canonical catalog ID. Omitting it selects L01. For a direction with several recordings,
+`--repeat sN` is required. C10 has two warp repeats and L03 has two in each direction.
+E-C02, E-F02 and Paper 1 have only warp. C01, Drape 12 and E-N02 use run 002. A spelling
+such as `Drape 12` remains intact in its source paths and maps to `fabric101-2026/drape-12`.
+
+The release labels every stage clock in seconds. For 47 twist recordings, the entire clock
+contains integer ticks, typically 100 apart, spanning 61,796–61,813 labeled units. The
+remaining 145 have fractional timestamps consistent with the reported time scale. The pinned
+release provides no qualified conversion for the integer clocks. Acquisition retains every raw
+number, names the time column `instrument_stage_clock` when any phase is unresolved, includes
+each phase's original unit label and interpretation in `stage_clocks`, and expresses any
+affected actuator rate per raw clock unit. A compression or stretch/slip clock in one of these
+47 recordings is also unresolved if its readings are integers spaced at least 10 raw units
+apart on average. In three such acquisitions the measured mean interval was about 50 raw units
+in both auxiliary phases. In 63 ordinary acquisitions it was 0.101–0.108 for compression and
+0.0027–0.0068 for stretch/slip. Forward replay and inverse authoring refuse unresolved twist clocks at any step
+budget. Across all 192 original twist files, 141,553 samples parsed. For the 145 recordings with
+usable twist clocks, 59–69 waypoints retained the path within 0.01° at every sample and
+1,100–1,119 integration steps sufficed at a 0.1 s maximum step. These checks qualify acquisition
+and timed path authoring. Material response still requires an experiment with qualified reactions.
+
+The following examples give row counts from the original instrument files. Each phase retains its own clock,
 signed force and torque channels, and measured displacements and angles. The last column shows
 the number of waypoints needed to reproduce the twist angles within 0.01° at every sensor sample.
 
@@ -131,10 +153,18 @@ the number of waypoints needed to reproduce the twist angles within 0.01° at ev
 | `fabric101-2026/kn01` | Weft | 772 | 2,207 | 40,574 | 60 |
 | `fabric101-2026/kn02` | Warp | 776 | 2,126 | 38,978 | 67 |
 | `fabric101-2026/kn02` | Weft | 777 | 2,199 | 38,905 | 68 |
+| `fabric101-2026/c01` | Warp (002/s1) | 776 | 2,069 | 37,023 | 67 |
+| `fabric101-2026/drape-12` | Weft (002/s1) | 771 | 2,203 | 33,659 | 63 |
+| `fabric101-2026/l03` | Warp (001/s2) | 781 | 2,066 | 35,021 | 62 |
+| `fabric101-2026/c10` | Warp (001/s2) | 775 | 2,001 | 34,269 | 67 |
+| `fabric101-2026/s10` | Weft (001/s9) | 774 | 2,064 | 35,555 | 67 |
 
 ```sh
+node scripts/import_fabric101_cylinders.cjs --list
 node scripts/import_fabric101_cylinders.cjs /path/to/Fabric_101_for_Wrinkles warp > l01-warp.json
 node scripts/import_fabric101_cylinders.cjs --specimen KN01 /path/to/Fabric_101_for_Wrinkles weft > kn01-weft.json
+node scripts/import_fabric101_cylinders.cjs --specimen "Drape 12" /path/to/Fabric_101_for_Wrinkles weft > drape-12-weft.json
+node scripts/import_fabric101_cylinders.cjs --specimen L03 --repeat s2 /path/to/Fabric_101_for_Wrinkles warp > l03-warp-s2.json
 ```
 
 To predict a candidate material's response to the **initial twist**, supply an ordinary
@@ -162,18 +192,19 @@ axial force sensor on the upper holder. The lower holder turns counterclockwise 
 above. The importer sets `fixture.rotating_holder` to `"lower"` and preserves the recorded
 angle sign. Each state reports both holder torques. Forward prediction and inverse calibration
 subtract the declared torque tare at the driven ring and the force tare at the upper ring.
-Requests omitting the selector still drive and read torque at the upper ring. These reactions
-describe loads from the cloth; spindle inertia and instrument friction require separate evidence.
+Requests omitting the selector still drive and read torque at the upper ring. These reactions describe the loads the holders exert on the cloth. Spindle inertia and instrument
+friction require separate evidence.
 The model assumes zero axial grip slip during the initial twist. Internal-history laws require
 a pristine timed mounting history, which these files do not provide. The native solver enforces
 that requirement. Cross-stage elapsed time, measured grip slip, sensor-to-holder reaction signs
 and offsets still require independent evidence before a full inverse experiment. These
 recordings qualify actuator replay and instrument observations; they supply no calibrated law.
-To run both source-backed regressions, point the L01 and four-specimen test inputs at the local release.
+Point the source-backed tests at a local release checkout to exercise the original files, non-001 runs, repeated acquisitions and unresolved clock refusals.
 
 ```sh
 FABRIC101_RELEASE=/path/to/Fabric_101_for_Wrinkles \
 FABRIC101_COHORT_RELEASE=/path/to/Fabric_101_for_Wrinkles \
+FABRIC101_CATALOG_RELEASE=/path/to/Fabric_101_for_Wrinkles \
 node --test scripts/test_import_fabric101_cylinders.cjs
 ```
 
@@ -236,12 +267,14 @@ Row indices are zero-based indices in the measured twist stage. Every selected r
 waypoint at its actual source time relative to the stage clock origin. The fit uses force or torque
 at that row, with no interpolation of sensor values. Both ends of holds, reversals, the bound on
 angle interpolation, and the original per-path and doubled-mesh work limits still apply. Choose at
-most 64 observations across the two directions. Each direction may appear once. For held-out
-comparison, declare the other direction as `check` with its own fixture axis, mapping and rows.
-These two runs can test transfer across mountings of the same source specimen. Independent textile
-specimens, instrument calibration and constitutive qualification require additional evidence.
+most 64 observations across distinct recordings. Each direction/repeat pair may appear once.
+Set `"repeat": "s1"` or `"repeat": "s2"` on each recording when the direction has both. A
+held-out repeat can test reproducibility in the same mounting. A held-out direction can test
+transfer across mountings of the same source specimen. Each requires its own declared partition,
+fixture, channel mapping and observations. Independently sampled textile specimens, instrument
+calibration and constitutive qualification require additional evidence.
 
-The generated material preserves the candidate's ID and properties. A distinct source per direction
+The generated material preserves the candidate's ID and properties. A distinct source per recording
 binds the checked instrument files, selected raw rows, mounting, channel mappings, original stage
 clock, and SHA-256 identities of the template and map to the resulting experiment. The receipt
 also identifies the exact generated request. Changing a candidate's name or selecting a source

@@ -12,7 +12,7 @@ const stages = ["twist", "compression", "friction"];
 
 function loadPinned(root, base, pins, name, sources) {
   const file = path.join(root, base, name);
-  if (fs.statSync(file).size > 4_500_000) throw Error("Recording exceeds pinned file size limit: " + name);
+  if (fs.statSync(file).size > 5_000_000) throw Error("Recording exceeds pinned file size limit: " + name);
   const raw = fs.readFileSync(file);
   const blob = createHash("sha1").update("blob " + raw.length + "\0").update(raw).digest("hex");
   if (blob !== pins[name]) throw Error("Recording differs from the pinned Git blob: " + name);
@@ -76,33 +76,80 @@ function medianPositiveRate(rows, axis) {
   return rates.length % 2 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2;
 }
 
-function acquire(root, direction, specimen = "L01") {
-  if (!Object.hasOwn(specimens, specimen)) throw Error("Unknown Fabric-101 specimen: " + specimen);
-  const { instrument_specimen, pins } = specimens[specimen];
-  const base = "data/" + specimen + "/001/";
+function catalogId(specimen) {
+  return "fabric101-2026/" + specimen.toLowerCase().replaceAll(" ", "-");
+}
+
+function releaseName(name) {
+  if (typeof name === "string" && Object.hasOwn(specimens, name)) return name;
+  const match = Object.keys(specimens).find(id => catalogId(id) === name);
+  if (!match) throw Error("Unknown Fabric-101 specimen: " + name);
+  return match;
+}
+
+function repeats(specimen, direction) {
+  return Object.keys(specimens[specimen].pins)
+    .filter(path => path.startsWith(direction + "/") && path.endsWith("/tarevalues.csv"))
+    .map(path => path.split("/")[1]);
+}
+
+function listRecordings() {
+  return Object.entries(specimens).map(([specimen, entry]) => ({
+    specimen, material_id: catalogId(specimen), run: entry.run, instrument_specimen: entry.instrument_specimen,
+    warp: repeats(specimen, "warp"), weft: repeats(specimen, "weft"),
+    unresolved_twist_clocks: entry.unresolved_twist_clocks ?? [],
+  }));
+}
+
+function acquire(root, direction, name = "L01", selectedRepeat) {
+  const specimen = releaseName(name);
   if (!["warp", "weft"].includes(direction)) throw Error("Choose warp or weft");
-  const sources = {}, prefix = direction + "/s1/";
+  const { run, instrument_specimen, pins } = specimens[specimen];
+  const available = repeats(specimen, direction);
+  if (!available.length) throw Error("No released " + direction + " recording for " + specimen + "/" + run);
+  if (selectedRepeat === undefined && available.length !== 1) {
+    throw Error("Choose an explicit repeat for " + specimen + "/" + run + "/" + direction + ": " + available.join(", "));
+  }
+  const repeat = selectedRepeat === undefined ? available[0] : selectedRepeat;
+  if (!available.includes(repeat)) throw Error("Unavailable repeat for " + specimen + "/" + direction + ": " + repeat);
+  const base = "data/" + specimen + "/" + run + "/";
+  const sources = {}, prefix = direction + "/" + repeat + "/";
   const read = name => loadPinned(root, base, pins, name, sources);
   read("head.dat");
   const tares = readTares(read(prefix + "tarevalues.csv"));
-  const phases = {};
+  const phases = {}, stage_clocks = {};
+  const unresolvedTwist = specimens[specimen].unresolved_twist_clocks?.includes(direction + "/" + repeat);
   for (const stage of stages) {
-    phases[stage] = readSamples(read(prefix + stage + "/" + stage + ".dat"));
+    const rows = readSamples(read(prefix + stage + "/" + stage + ".dat"));
+    phases[stage] = rows;
+    // These pinned twist files report integer ticks about 100 apart under a seconds header.
+    // The release does not identify a conversion. Evaluate auxiliary phase clocks separately.
+    const meanInterval = (rows.at(-1)[0] - rows[0][0]) / (rows.length - 1);
+    const unresolved = unresolvedTwist && (stage === "twist" ||
+      (meanInterval >= 10 && rows.every(row => Number.isInteger(row[0]))));
+    stage_clocks[stage] = { header_unit: "s", interpretation: unresolved ? "unresolved" : "as_labeled_seconds" };
   }
+  const rawClocks = stages.some(stage => stage_clocks[stage].interpretation === "unresolved");
+  const protocol = {
+    peak_instrument_compression_mm: Math.max(...phases.compression.map(row => row[1])),
+    measured_pretension_travel_mm: -tares["After Pretension"].pret_moved.value,
+  };
+  const twistRate = medianPositiveRate(phases.twist, 3);
+  const compressionRate = medianPositiveRate(phases.compression, 1);
+  if (stage_clocks.twist.interpretation === "unresolved") protocol.median_positive_twist_rate_deg_per_clock_unit = twistRate;
+  else protocol.median_positive_twist_rate_deg_s = twistRate;
+  if (stage_clocks.compression.interpretation === "unresolved") protocol.median_positive_compression_rate_mm_per_clock_unit = compressionRate;
+  else protocol.median_positive_compression_rate_mm_s = compressionRate;
   return {
-    schema: specimen === "L01" ? "ftx-fabric101-l01-acquisition/1" : "ftx-fabric101-acquisition/1",
-    release_commit: revision, material_id: "fabric101-2026/" + specimen.toLowerCase(),
-    instrument_specimen, direction, repeat: "s1",
+    schema: rawClocks ? "ftx-fabric101-acquisition/2" :
+      (specimen === "L01" ? "ftx-fabric101-l01-acquisition/1" : "ftx-fabric101-acquisition/1"),
+    release_commit: revision, material_id: catalogId(specimen),
+    instrument_specimen, direction, run, repeat,
     sources, tare_stages: tares,
-    columns: ["stage_time_s", "instrument_load_position_mm", "instrument_load_n",
+    stage_clocks,
+    columns: [rawClocks ? "instrument_stage_clock" : "stage_time_s", "instrument_load_position_mm", "instrument_load_n",
       "instrument_rotation_deg", "instrument_torque_nm"],
-    phase_order: [...stages], phases,
-    protocol: {
-      median_positive_twist_rate_deg_s: medianPositiveRate(phases.twist, 3),
-      median_positive_compression_rate_mm_s: medianPositiveRate(phases.compression, 1),
-      peak_instrument_compression_mm: Math.max(...phases.compression.map(row => row[1])),
-      measured_pretension_travel_mm: -tares["After Pretension"].pret_moved.value,
-    },
+    phase_order: [...stages], phases, protocol,
   };
 }
 
@@ -150,6 +197,9 @@ function replay(acquisition, template, tolerance, mounting, observed = []) {
   }
   if (!["named-direction-axial", "named-direction-circumferential"].includes(mounting)) {
     throw Error("Declare a mounting convention for the source directory direction");
+  }
+  if (acquisition.stage_clocks?.twist?.interpretation === "unresolved") {
+    throw Error("Unresolved twist clock: the source header says seconds but the integer ticks disagree with the recorded protocol; timed replay needs independent clock evidence");
   }
   const fixture = template.fixture;
   if (fixture.holder_radius_m !== 0.04 || fixture.nominal_free_height_m !== 0.05 ||
@@ -218,7 +268,7 @@ function reactionChannel(raw, mapping, tare, sources) {
 function calibration(root, templateBytes, mapBytes) {
   const template = JSON.parse(templateBytes), map = JSON.parse(mapBytes);
   fields(map, ["schema", "specimen", "candidate_material_id", "accessed_on", "recordings"], "calibration map");
-  if (map.schema !== "ftx-fabric101-twist-map/1" || !Object.hasOwn(specimens, map.specimen) ||
+  if (map.schema !== "ftx-fabric101-twist-map/1" ||
       typeof map.accessed_on !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(map.accessed_on)) {
     throw Error("Expected a dated ftx-fabric101-twist-map/1 for a pinned specimen");
   }
@@ -230,23 +280,23 @@ function calibration(root, templateBytes, mapBytes) {
         .some(key => Object.hasOwn(material.structure ?? {}, key)) || template.policy?.sensitivity === "adjoint") {
     throw Error("Expected an admitted memoryless calibration/1 template with targets, empty experiments and timed finite differences");
   }
-  const specimenId = "fabric101-2026/" + map.specimen.toLowerCase();
+  const specimen = releaseName(map.specimen), specimenId = catalogId(specimen);
   if (typeof material.id !== "string" || !material.id.trim() || material.id !== map.candidate_material_id ||
       (material.id.startsWith("fabric101-2026/") && material.id !== specimenId)) {
     throw Error("Name the exact candidate material; a different catalog specimen cannot own these observations");
   }
-  const sources = { ...material.sources }, experiments = [], recordings = [], directions = new Set();
+  const sources = { ...material.sources }, experiments = [], recordings = [], used = new Set();
   const template_sha256 = sha256(templateBytes), map_sha256 = sha256(mapBytes);
   let total = 0, fitChannels = 0;
-  if (!Array.isArray(map.recordings) || !map.recordings.length || map.recordings.length > 2) {
-    throw Error("Choose one or both distinct twist recordings of this specimen");
+  if (!Array.isArray(map.recordings) || !map.recordings.length || map.recordings.length > 16) {
+    throw Error("Choose 1 to 16 distinct twist recordings of this specimen");
   }
   for (const r of map.recordings) {
-    fields(r, ["direction", "partition", "evidence", "fixture", "mounting", "mounting_source",
+    fields(r, ["direction", "repeat", "partition", "evidence", "fixture", "mounting", "mounting_source",
       "angle_error_deg", "rows", "channels"], "recording");
-    if (!["warp", "weft"].includes(r.direction) || directions.has(r.direction) ||
-        !["fit", "check"].includes(r.partition)) throw Error("Each source direction needs a distinct explicit FIT or CHECK assignment");
-    directions.add(r.direction);
+    if (!["warp", "weft"].includes(r.direction) || !["fit", "check"].includes(r.partition)) {
+      throw Error("Each recording needs a distinct explicit FIT or CHECK assignment");
+    }
     requireSource(material.sources, r.mounting_source);
     if (!["estimate", "published", "measured"].includes(r.evidence) ||
         (r.evidence === "estimate" && template.allow_estimated_observations !== true)) {
@@ -259,7 +309,10 @@ function calibration(root, templateBytes, mapBytes) {
       throw Error("Choose distinct raw observation rows, at least one channel and at most 64 total rows");
     }
     if (r.partition === "fit") fitChannels += channels.length * r.rows.length;
-    const a = acquire(root, r.direction, map.specimen);
+    const a = acquire(root, r.direction, specimen, r.repeat);
+    const id = [specimen, a.run, r.direction, a.repeat, "twist"].join("-");
+    if (used.has(id)) throw Error("Each original source recording needs a distinct explicit FIT or CHECK assignment");
+    used.add(id);
     if (!r.fixture || (Object.hasOwn(r.fixture, "rotating_holder") && r.fixture.rotating_holder !== "lower")) {
       throw Error("Fabric-101 needs a lower-driven fixture");
     }
@@ -271,8 +324,7 @@ function calibration(root, templateBytes, mapBytes) {
         2 * cells[0] * (2 * cells[1] + 1) * (receipt.integration_steps + 1) > 524288) {
       throw Error("Twist protocol exceeds the doubled calibration mesh or vertex-state budget");
     }
-    const id = map.specimen + "-001-" + r.direction + "-s1-twist";
-    const twistPath = "data/" + map.specimen + "/001/" + r.direction + "/s1/twist/twist.dat";
+    const twistPath = ["data", specimen, a.run, r.direction, a.repeat, "twist", "twist.dat"].map(encodeURIComponent).join("/");
     const source = "fabric101-" + id;
     if (Object.hasOwn(sources, source)) throw Error("An acquisition source would overwrite " + source);
     const observations = r.rows.map(i => {
@@ -286,8 +338,9 @@ function calibration(root, templateBytes, mapBytes) {
       return obs;
     });
     const record = { source, release_commit: revision, template_sha256, map_sha256, material_id: a.material_id,
-      candidate_material_id: material.id, instrument_specimen: a.instrument_specimen, partition: r.partition,
-      evidence: r.evidence, columns: a.columns, sources: a.sources, tare_stages: a.tare_stages,
+      candidate_material_id: material.id, instrument_specimen: a.instrument_specimen, run: a.run, repeat: a.repeat,
+      direction: a.direction, partition: r.partition,
+      evidence: r.evidence, columns: a.columns, stage_clocks: a.stage_clocks, sources: a.sources, tare_stages: a.tare_stages,
       mounting_source: r.mounting_source, channel_mapping: r.channels, ...receipt,
       measured_rows: r.rows.map((index, j) => ({ index, waypoint_index: observations[j].waypoint_index,
         raw: a.phases.twist[index] })) };
@@ -312,14 +365,23 @@ function main(args) {
     process.stdout.write(JSON.stringify({ ...receipt, request_sha256: sha256(encoded) }) + "\n");
     return;
   }
-  const explicitSpecimen = args[0] === "--specimen";
-  const specimen = explicitSpecimen ? args[1] : "L01";
-  const positional = explicitSpecimen ? args.slice(2) : args;
+  if (args.length === 1 && args[0] === "--list") {
+    process.stdout.write(JSON.stringify(listRecordings()) + "\n");
+    return;
+  }
+  const options = new Map();
+  let i = 0;
+  while (i < args.length && ["--specimen", "--repeat"].includes(args[i])) {
+    const option = args[i++];
+    if (options.has(option) || !args[i] || args[i].startsWith("--")) throw Error("Missing or repeated " + option);
+    options.set(option, args[i++]);
+  }
+  const positional = args.slice(i);
   const [root, direction, templatePath, requestPath, angleError, mounting] = positional;
   if (positional.length !== 2 && positional.length !== 6) {
-    throw Error("Usage: node scripts/import_fabric101_cylinders.cjs [--specimen L01|L02|KN01|KN02] RELEASE warp|weft [TEMPLATE.json NEW_REQUEST.json ANGLE_ERROR_DEG named-direction-axial|named-direction-circumferential]");
+    throw Error("Usage: node scripts/import_fabric101_cylinders.cjs --list | [--specimen NAME] [--repeat sN] RELEASE warp|weft [TEMPLATE.json NEW_REQUEST.json ANGLE_ERROR_DEG named-direction-axial|named-direction-circumferential]");
   }
-  const result = acquire(root, direction, specimen);
+  const result = acquire(root, direction, options.get("--specimen"), options.get("--repeat"));
   if (templatePath) {
     const template = JSON.parse(fs.readFileSync(templatePath, "utf8"));
     const { request, receipt } = replay(result, template, Number(angleError), mounting);
@@ -331,7 +393,7 @@ function main(args) {
   process.stdout.write(JSON.stringify(result) + "\n");
 }
 
-module.exports = { acquire, calibration, readSamples, replay, twistIndices };
+module.exports = { acquire, calibration, listRecordings, readSamples, replay, twistIndices };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(error.message + "\n"); process.exitCode = 1; }

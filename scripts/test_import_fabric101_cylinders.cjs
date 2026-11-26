@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { acquire, calibration, readSamples, replay, twistIndices } = require("./import_fabric101_cylinders.cjs");
+const { acquire, calibration, listRecordings, readSamples, replay, twistIndices } = require("./import_fabric101_cylinders.cjs");
 
 function template(warpAxis = [1, 0]) {
   return { schema: "ftx-cylinder-experiment/1", material: { id: "candidate" },
@@ -91,7 +91,7 @@ test("replays complete pinned linen recordings in both directions", { skip: !pro
 });
 
 test("an unknown specimen cannot select local paths or inherit another specimen's pins", () => {
-  for (const name of ["L03", "../L01", "constructor"]) {
+  for (const name of ["Drape 4", "../L01", "constructor"]) {
     assert.throws(() => acquire(".", "warp", name), /Unknown Fabric-101 specimen/);
   }
 });
@@ -205,4 +205,94 @@ test("emits signed sampled FIT and CHECK experiments directly from two pinned kn
   assert.throws(change(r => { r[0].channels.force_n.sign = 2; }), /sign/);
   assert.throws(change(r => { r[0].channels.force_n.source = "missing"; }), /retained source/);
   assert.throws(change(r => { r[0].rows = [99999]; }), /outside/);
+});
+
+
+test("every listed run, header identity and catalog ID is tied to the native catalog row", () => {
+  const rows = fs.readFileSync(path.join(__dirname, "../crates/ftx-pattern/src/material_catalog/fabric101.rs"), "utf8");
+  const catalog = new Map([...rows.matchAll(/^\s*Row\((".*?")\s*,.*?,\s*"([^"]+\/head\.dat)",\s*"([a-f0-9]{40})",\s*"([^"]+)"/gm)]
+    .map(([, name, header, sha, instrument]) => [JSON.parse(name), { header, sha, instrument }]));
+  const pins = require("./fabric101-cylinders.json"), inventory = listRecordings();
+  assert.deepEqual(inventory.map(r => r.specimen).sort(), [...catalog.keys()].sort());
+  assert.equal(inventory.length, 96);
+  let recordings = 0;
+  for (const r of inventory) {
+    const row = catalog.get(r.specimen), entry = pins[r.specimen];
+    assert.equal(row.header, [r.specimen, r.run, "head.dat"].join("/"));
+    assert.equal(row.sha, entry.pins["head.dat"]); assert.equal(row.instrument, r.instrument_specimen);
+    assert.equal(r.material_id, "fabric101-2026/" + r.specimen.toLowerCase().replaceAll(" ", "-"));
+    const paths = ["head.dat"];
+    for (const dir of ["warp", "weft"]) for (const repeat of r[dir]) {
+      recordings++;
+      for (const phase of ["tarevalues.csv", "twist/twist.dat", "compression/compression.dat", "friction/friction.dat"]) {
+        const name = [dir, repeat, phase].join("/");
+        assert.match(entry.pins[name], /^[a-f0-9]{40}$/); paths.push(name);
+      }
+    }
+    assert.deepEqual(paths.sort(), Object.keys(entry.pins).sort());
+  }
+  assert.equal(recordings, 192);
+  assert.equal(inventory.flatMap(r => r.unresolved_twist_clocks).length, 47);
+  const byId = Object.fromEntries(inventory.map(r => [r.specimen, r]));
+  assert.deepEqual(byId["L03"].warp, ["s1", "s2"]);
+  assert.deepEqual(byId["S10"].weft, ["s9"]);
+  assert.deepEqual(byId["C06"].unresolved_twist_clocks, ["warp/s1", "weft/s1"]);
+  assert.deepEqual(byId["C01"].unresolved_twist_clocks, []);
+  for (const id of ["E-C02", "E-F02", "Paper 1"]) {
+    assert.deepEqual(byId[id].weft, []);
+    assert.throws(() => acquire(".", "weft", id), /No released weft/);
+  }
+  assert.throws(() => acquire(".", "warp", "C10"), /explicit repeat/);
+  assert.throws(() => acquire(".", "warp", "L03", "s99"), /Unavailable repeat/);
+});
+
+test("keeps non-001 runs, names with spaces and repeated acquisitions in the native experiment",
+  { skip: !process.env.FABRIC101_CATALOG_RELEASE }, () => {
+  const root = process.env.FABRIC101_CATALOG_RELEASE;
+  const [tpl, original] = inverseInputs();
+  for (const [id, run] of [["C01", "002"], ["Drape 12", "002"], ["L03", "001"]]) {
+    const map = structuredClone(original); map.specimen = id;
+    if (id === "L03") {
+      map.recordings[1].direction = "warp"; map.recordings[1].fixture.warp_axis = [0, 1];
+      map.recordings[0].repeat = "s1"; map.recordings[1].repeat = "s2";
+    }
+    const { request, receipt } = calibration(root, JSON.stringify(tpl), JSON.stringify(map));
+    for (const [j, e] of request.experiments.entries()) {
+      const d = map.recordings[j], repeat = d.repeat || "s1", record = receipt.recordings[j];
+      const name = "fabric101-2026/" + id.toLowerCase().replaceAll(" ", "-");
+      const a = acquire(root, d.direction, name, repeat);
+      assert.equal(a.run, run); assert.equal(a.repeat, repeat); assert.equal(a.material_id, name);
+      assert.deepEqual(record.sources, a.sources);
+      const expected = [id, run, d.direction, repeat, "twist"].join("-");
+      assert.equal(e.id, expected); assert.equal(e.partition, d.partition);
+      assert.ok(request.material.sources[e.source].reference.endsWith(
+        ["data", encodeURIComponent(id), run, d.direction, repeat, "twist/twist.dat"].join("/")));
+      assert.deepEqual(record.measured_rows.map(r => r.raw), d.rows.map(k => a.phases.twist[k]));
+    }
+    if (id === "L03") {
+      map.recordings[1].repeat = "s1";
+      assert.throws(() => calibration(root, JSON.stringify(tpl), JSON.stringify(map)), /distinct explicit/);
+    }
+  }
+});
+
+test("keeps unresolved source ticks and refuses timed forward and inverse authoring even with a large step",
+  { skip: !process.env.FABRIC101_CATALOG_RELEASE }, () => {
+  const root = process.env.FABRIC101_CATALOG_RELEASE, a = acquire(root, "warp", "C06");
+  assert.equal(a.schema, "ftx-fabric101-acquisition/2");
+  assert.equal(a.columns[0], "instrument_stage_clock");
+  for (const stage of ["twist", "compression", "friction"]) {
+    assert.deepEqual(a.stage_clocks[stage], { header_unit: "s", interpretation: "unresolved" });
+  }
+  assert.equal(a.phases.twist[0][0], 1); assert.equal(a.phases.twist.at(-1)[0], 61801);
+  assert.equal(a.protocol.median_positive_twist_rate_deg_s, undefined);
+  assert.equal(a.protocol.median_positive_compression_rate_mm_s, undefined);
+  assert.ok(a.protocol.median_positive_twist_rate_deg_per_clock_unit > 0);
+  assert.ok(a.protocol.median_positive_compression_rate_mm_per_clock_unit > 0);
+  const forward = template([0, 1]);
+  forward.controls = { max_step_s: 1000, max_steps: 2048 };
+  assert.throws(() => replay(a, forward, 0.01, "named-direction-axial"), /Unresolved twist clock/);
+  const [inverse, map] = inverseInputs();
+  inverse.controls = forward.controls; map.specimen = "C06";
+  assert.throws(() => calibration(root, JSON.stringify(inverse), JSON.stringify(map)), /Unresolved twist clock/);
 });

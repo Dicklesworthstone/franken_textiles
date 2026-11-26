@@ -1,33 +1,1061 @@
 {
-  "L01": {
-    "instrument_specimen": "200_L01_001",
+  "A01": {
+    "run": "001",
+    "instrument_specimen": "148_A01_001",
     "pins": {
-      "head.dat": "02872ba3be75fd3e3f3a01367289b8314ecba93b",
-      "warp/s1/tarevalues.csv": "207edb65aaf011a24b9169eaae1857d0cbc5515a",
-      "warp/s1/twist/twist.dat": "8e386b5b9473fc021db8af50cc12893c57852c92",
-      "warp/s1/compression/compression.dat": "24e40d5af41e0709510f41911878c310bb166414",
-      "warp/s1/friction/friction.dat": "fdac4c9fa64304790e58f06deff77344b869562a",
-      "weft/s1/tarevalues.csv": "300552a673e0788ff2019b8806bf7c7e4fc842b6",
-      "weft/s1/twist/twist.dat": "28f956e1c8e3cd52fb41768b36acc7dce80e3d69",
-      "weft/s1/compression/compression.dat": "fee8a6c940b5f5acc98987c457892e39ca0bab9d",
-      "weft/s1/friction/friction.dat": "992a622f03cb840aa4e473351f467d268e247228"
+      "head.dat": "ce7cfb7f18203b1b297fae15e5d33af6a0378f74",
+      "warp/s1/compression/compression.dat": "c760a7a658113f84d77811a06eb08b96c8576188",
+      "warp/s1/friction/friction.dat": "6e603c792e30c3d3e73b4b6e198567fca543e662",
+      "warp/s1/tarevalues.csv": "14818c557b70f7c5b4a57eb031c230935380f1b6",
+      "warp/s1/twist/twist.dat": "f7cf0b4e1264d97cbcaa0a9a65fbc3c0eaeb4f51",
+      "weft/s1/compression/compression.dat": "10758af6d2d11476a9e277c3bdeca88310c60281",
+      "weft/s1/friction/friction.dat": "62dab43dc6cfdea48e2e758cd1111a88ba41918b",
+      "weft/s1/tarevalues.csv": "0b86596fb4d66e6f9f504f250e42678408aa9042",
+      "weft/s1/twist/twist.dat": "1e5957cd30f716864f6b892bd7af99417e2dbfa7"
     }
   },
-  "L02": {
-    "instrument_specimen": "124_L02_001",
+  "C01": {
+    "run": "002",
+    "instrument_specimen": "110_C01_002",
     "pins": {
-      "head.dat": "9405b218eb052cab1bb8f5f9dc0875ce2b29f937",
-      "warp/s1/compression/compression.dat": "42af8ce4eba3675043c472701b3bbcdd38d7c335",
-      "warp/s1/friction/friction.dat": "1d7569c729c90dfce71ff39ae79c4670e967fda8",
-      "warp/s1/tarevalues.csv": "00fa2ef0e7b8e118f655b3e2f47f36ff1f784fb6",
-      "warp/s1/twist/twist.dat": "f97863919d84dcb6232c647aa181c24cfe8d36fa",
-      "weft/s1/compression/compression.dat": "4002460956813c51351c0d584ea69a76f6224923",
-      "weft/s1/friction/friction.dat": "0385d9db1fbeb9cd661eef11e35a7c236557bd1b",
-      "weft/s1/tarevalues.csv": "fefd431bf33704013ea308b19f4361ec3b49ab37",
-      "weft/s1/twist/twist.dat": "d13e565f3c97c93c07612d9c4ab25616b2ae346b"
+      "head.dat": "13a8fd12b76e43d9becb77bc5e7fe5a101e5987d",
+      "warp/s1/compression/compression.dat": "849f62f8423286904a13cdec7c0f2b650f7afc81",
+      "warp/s1/friction/friction.dat": "99d858f7574f6758b37eecf6f5edfba45b8c038b",
+      "warp/s1/tarevalues.csv": "4025c276a61e6ea9eaaa771eb649414895532398",
+      "warp/s1/twist/twist.dat": "4a190bb9cb15b2a93808cc48b537000d828f1635",
+      "weft/s1/compression/compression.dat": "fae613ced291fde3133d6198dd9338e0332dedea",
+      "weft/s1/friction/friction.dat": "d26142b5bcb662ac1dd1656ad0c8c1f3810c1833",
+      "weft/s1/tarevalues.csv": "c7a11fcab1a6e79ae6766bce9de72a53f3689aad",
+      "weft/s1/twist/twist.dat": "b4c049efcbc8cf9c7a27bb2e3cab18daa15c8a73"
+    }
+  },
+  "C02": {
+    "run": "001",
+    "instrument_specimen": "111_C02_001",
+    "pins": {
+      "head.dat": "a4319edaa6d1648d13d8387aac0d3211a3ecf085",
+      "warp/s1/compression/compression.dat": "e85b91f5494e0155e9ef26ca5efe8e13db306002",
+      "warp/s1/friction/friction.dat": "807b66b35f7e749ae257b5faea252675147b0924",
+      "warp/s1/tarevalues.csv": "def26af43c1b992f4f5bdd36cf73a83e1b9f4822",
+      "warp/s1/twist/twist.dat": "7eef8ae47555e4152f9a14b1e59fbb41e9348d10",
+      "weft/s1/compression/compression.dat": "5d68a3af9da07308ab113ab62e21c2b565450a67",
+      "weft/s1/friction/friction.dat": "882fd7fad9778eceecd64f64e5826468c44154a8",
+      "weft/s1/tarevalues.csv": "fb4e7fb25813bb8430dda839fdae74c3338ae609",
+      "weft/s1/twist/twist.dat": "45a88233468fa67f957eee4b06ff014cfd596feb"
+    }
+  },
+  "C03": {
+    "run": "001",
+    "instrument_specimen": "112_C03_001",
+    "pins": {
+      "head.dat": "d37b4f18861ad97523b6c9a34dacb391380ce36e",
+      "warp/s1/compression/compression.dat": "c69fe87c3920cdb911c92e5a395645461dd4ea03",
+      "warp/s1/friction/friction.dat": "24da73290c64086de151f9ffdd18276abf371ca9",
+      "warp/s1/tarevalues.csv": "8b9c012123a9fe6758678682f40d4690d09d2bb0",
+      "warp/s1/twist/twist.dat": "dc2721f85c86cf9a3003ca9e6ae0515a283de63e",
+      "weft/s2/compression/compression.dat": "51d536fcbae4189dc0c419e300f0a1952293c678",
+      "weft/s2/friction/friction.dat": "ad1fbed30d1201e8bcb1c4ea239c71776a7e097c",
+      "weft/s2/tarevalues.csv": "36644ae04ab78504dd0f82067d57968c70027b8c",
+      "weft/s2/twist/twist.dat": "f0ffdc55a812594957aebebd2d8932c57d127200"
+    }
+  },
+  "C04": {
+    "run": "001",
+    "instrument_specimen": "113_C04_001",
+    "pins": {
+      "head.dat": "3e6400d2a359462342566732481b11c65b9c1a5d",
+      "warp/s1/compression/compression.dat": "8c8ff0daef606cbc66c162ed7ec21352dea63fda",
+      "warp/s1/friction/friction.dat": "0b96bf0314e0bcf346fe0bae2b2b45df77f0f34b",
+      "warp/s1/tarevalues.csv": "46d1e35fa64d36bd19cc7780a26c76b68e31ac5c",
+      "warp/s1/twist/twist.dat": "467ac2351279e19b9d4536f9b292710f679f5f7e",
+      "weft/s1/compression/compression.dat": "7485c2437b2654789944b0f5824af0fbe9cdfc97",
+      "weft/s1/friction/friction.dat": "404d121f61d4493f9432addc88784140be9a6151",
+      "weft/s1/tarevalues.csv": "43e729fc700d63781df3ca2331758f63570ae0ce",
+      "weft/s1/twist/twist.dat": "6181fa9478e2926408748727aea4988025b6d55f"
+    }
+  },
+  "C05": {
+    "run": "001",
+    "instrument_specimen": "114_C05_001",
+    "pins": {
+      "head.dat": "24fb708bd0c695acc56cd87cf30afcb32846e38e",
+      "warp/s1/compression/compression.dat": "148add0f034a45d899bc310899563859d8170b4c",
+      "warp/s1/friction/friction.dat": "db6ee2bb3f49d14a30c9ba15f5b9f2c32b5a748b",
+      "warp/s1/tarevalues.csv": "f4f0bd0c88571fa669cfba3b6656c7dc34a3d260",
+      "warp/s1/twist/twist.dat": "a5ff7f5ea2b7435763929c95db23cdaf0ff70c5b",
+      "weft/s1/compression/compression.dat": "d462bd47d3811390ac813c0048be1cbb8fb4111d",
+      "weft/s1/friction/friction.dat": "d0a0cc269c21a652adda9d0d15eedfa9694c0b6b",
+      "weft/s1/tarevalues.csv": "a3b0286cbeadd0bc6de522c83f0e06db23cea9ab",
+      "weft/s1/twist/twist.dat": "75b052fc2809d7e1b851f77c5db62f77a6abf264"
+    }
+  },
+  "C06": {
+    "run": "001",
+    "instrument_specimen": "1004_C06_001",
+    "pins": {
+      "head.dat": "2e3f5e108405de8db0df05a725ee779167b1872a",
+      "warp/s1/compression/compression.dat": "87dbc7171d233365b82576d65ea87e697d39fb4a",
+      "warp/s1/friction/friction.dat": "af048cc56e523d79b6a3650f691c28681a4d01c1",
+      "warp/s1/tarevalues.csv": "23b924dc78571112ceedf092889d385e70497f3b",
+      "warp/s1/twist/twist.dat": "65d9d33cbc08f1092726b4f9ecb4750d388d54fe",
+      "weft/s1/compression/compression.dat": "00257d5e25fadd602850c91d02de389cb2ed3b39",
+      "weft/s1/friction/friction.dat": "8d5ff86c11e8c157bde64ca78890e8907a7799d3",
+      "weft/s1/tarevalues.csv": "c237b2fe0a880e62590f17ba7ef9857c1174bc04",
+      "weft/s1/twist/twist.dat": "3da44a05ec7808b82d3fe2c23868ed21d563adc2"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "C07": {
+    "run": "001",
+    "instrument_specimen": "116_C07_001",
+    "pins": {
+      "head.dat": "dda4e18e7b9255aef74985cfabc6c56710e5e20f",
+      "warp/s2/compression/compression.dat": "53b8c8e7b1755401efcdb3e01daef3ffda33793d",
+      "warp/s2/friction/friction.dat": "eb02cdc8898da669df913a0dc1160dd1b3e1adae",
+      "warp/s2/tarevalues.csv": "9521935076da5e09fc052bde6119a62c3dce3683",
+      "warp/s2/twist/twist.dat": "23a22fa280733e86bd10bd3c19195b833962c582",
+      "weft/s1/compression/compression.dat": "b3e495f8b6359cb44d54f8312d34f359c4e588bc",
+      "weft/s1/friction/friction.dat": "aa0ceccb17aaf574fc44bec12c7300b811c681f3",
+      "weft/s1/tarevalues.csv": "70f898f30d9b353566435082f7cec6424cb58b6c",
+      "weft/s1/twist/twist.dat": "a2b762333718805f807b314d58103996324fffe4"
+    }
+  },
+  "C08": {
+    "run": "001",
+    "instrument_specimen": "117_C08_001",
+    "pins": {
+      "head.dat": "6639c499ea2b2e3b3fce5e7f51a03d5c77d6d62c",
+      "warp/s1/compression/compression.dat": "363cde332bee561e66068692972e038aabfe1262",
+      "warp/s1/friction/friction.dat": "09ff842b5f809b57c9e30a6d1ea1dc9b3303a44d",
+      "warp/s1/tarevalues.csv": "7665fab309f3132ac170adaa934c752aff5df1eb",
+      "warp/s1/twist/twist.dat": "5145f7302f4a7993a95c4c99abc24c07108320f1",
+      "weft/s1/compression/compression.dat": "24525e1d935b04b2132425396647814319410aee",
+      "weft/s1/friction/friction.dat": "79aada1275005a5d8c10079def56a3af2b20371f",
+      "weft/s1/tarevalues.csv": "66e33c520ed3a6472cb024dc0365d2e121223de9",
+      "weft/s1/twist/twist.dat": "8629b6dcb53242313111db4a72706a44bbbf0f67"
+    }
+  },
+  "C09": {
+    "run": "001",
+    "instrument_specimen": "118_C09_001",
+    "pins": {
+      "head.dat": "784839022bd9949e2adf26d5d922d485ea34dabd",
+      "warp/s2/compression/compression.dat": "6a596e53a35fe389ce1c8ce64506bb44b112b03a",
+      "warp/s2/friction/friction.dat": "d12ff2d515360274d0452642fc33b1e8de5fca74",
+      "warp/s2/tarevalues.csv": "e38d329204c0b312d1b2310a0a42a38dea667ad5",
+      "warp/s2/twist/twist.dat": "811e46cfc93914d95fe85b92380568d85de3b305",
+      "weft/s1/compression/compression.dat": "a9f1b4c15afc15159c71addad6e121e8263058ba",
+      "weft/s1/friction/friction.dat": "58c31397de883490480d257b4661047e0b5acafc",
+      "weft/s1/tarevalues.csv": "22f82a2ef911af2ac431bd3c1692686525ca3efb",
+      "weft/s1/twist/twist.dat": "f2d8dc629e3721cddf1f8fcb96f9e4c9d43996e2"
+    }
+  },
+  "C10": {
+    "run": "001",
+    "instrument_specimen": "119_C10_001",
+    "pins": {
+      "head.dat": "e9e046ac8edb2428eac44f26f136ee7008320d88",
+      "warp/s1/compression/compression.dat": "fd48541287b67fe7379a01c5243a2bc23e693877",
+      "warp/s1/friction/friction.dat": "6755ee7e1f9087513f7e21614c54553432cc2556",
+      "warp/s1/tarevalues.csv": "04681de7e88d6410607599311ff4f5e833aa2d8f",
+      "warp/s1/twist/twist.dat": "76df66296107c2f44eb6fd7d6cf86038da2d7577",
+      "warp/s2/compression/compression.dat": "aa9bd0dd23ef9d5581659a5b05d17ae944289fc8",
+      "warp/s2/friction/friction.dat": "d4506ffaffb56458e9c7e71b698e12065a7bd533",
+      "warp/s2/tarevalues.csv": "ea5e5d9c5ede54c17629cfed2c0441b51c1c708b",
+      "warp/s2/twist/twist.dat": "185841b7eab7b760f1015e09001814cb5588fede",
+      "weft/s1/compression/compression.dat": "e66eadefbf3db628cd6dcecb1b7a374beaf37b50",
+      "weft/s1/friction/friction.dat": "bb1e3710b2eb157a77d42ecf7c4ae0d9f4c8976c",
+      "weft/s1/tarevalues.csv": "5a9f426a66d934cfd5e6d1af828b9f98b7c8ff47",
+      "weft/s1/twist/twist.dat": "e72afa55c33ad83791ee5a040f9618b7be1f3a9a"
+    }
+  },
+  "C11": {
+    "run": "001",
+    "instrument_specimen": "120_C11_001",
+    "pins": {
+      "head.dat": "2f98c71639388914621aeccc3d5bec594700c87e",
+      "warp/s2/compression/compression.dat": "2c172c4365594ff047dac1283e452c1e7565c290",
+      "warp/s2/friction/friction.dat": "f780e431fd6e2616bef57a428efd8a780c2f95ff",
+      "warp/s2/tarevalues.csv": "f737e0eaedbd23d7146b36cca7bf9bbe61540232",
+      "warp/s2/twist/twist.dat": "4d1faaaaf893c72e66bc5fd4bfb753b91b6b426f",
+      "weft/s3/compression/compression.dat": "19a881f1150820ead6f9ea6fa1862eb36568c5ad",
+      "weft/s3/friction/friction.dat": "cc86106028f1994ae7b60fabfb7a2c47242fd0cc",
+      "weft/s3/tarevalues.csv": "f3432b98a5f97d882634224d9c43858a4e6fefd3",
+      "weft/s3/twist/twist.dat": "670b2810ea56119ed729b9476a163a9772954b50"
+    }
+  },
+  "C12": {
+    "run": "001",
+    "instrument_specimen": "121_C12_001",
+    "pins": {
+      "head.dat": "3137d76afd353c253b2ba7864d9ef88bf492e41d",
+      "warp/s1/compression/compression.dat": "22545bfbe9e90edf5d9107a6f2eed49266950c20",
+      "warp/s1/friction/friction.dat": "e3ef9e2d42f615e6fff2545ad551f37224c06452",
+      "warp/s1/tarevalues.csv": "8e07b0b5e19131e93c0a4277d8b156778cd9ea46",
+      "warp/s1/twist/twist.dat": "1be82a1e913cbb29cd9019d3184440cf876eb714",
+      "weft/s1/compression/compression.dat": "3278d131c00c815e32e91028e0c1ade248c1d96d",
+      "weft/s1/friction/friction.dat": "28290d652681767c948b1ccbaec016a33a169da9",
+      "weft/s1/tarevalues.csv": "212c12aac6c7fa90392a11f7aef90d74dd48a2f0",
+      "weft/s1/twist/twist.dat": "9f74b3686d07fc7180021eabb3b5df0f9bee3748"
+    }
+  },
+  "C13": {
+    "run": "001",
+    "instrument_specimen": "122_C13_001",
+    "pins": {
+      "head.dat": "a05275c660d3239bc5a2c541e8f744a4575bb64a",
+      "warp/s1/compression/compression.dat": "ccdc2bec2e9ae2904948c0b49bf396f6fbf409ee",
+      "warp/s1/friction/friction.dat": "8a243874733c36121fb2309f777f059ce3c2c0d8",
+      "warp/s1/tarevalues.csv": "0aa9ca791223f5859affb35067aea8064484cb8f",
+      "warp/s1/twist/twist.dat": "911db0fbb375b53c2cffe8b90d4506cd23285955",
+      "weft/s1/compression/compression.dat": "aa918534b141c24c8206e4a25822b1391db45a4c",
+      "weft/s1/friction/friction.dat": "24b832ebb40deb5935a000459104a44415ad9c51",
+      "weft/s1/tarevalues.csv": "909c27bc7601e3f6eea5d1858fcf0952882726c5",
+      "weft/s1/twist/twist.dat": "e4a48151aeea6daf75b61f4c698d7245b222f7af"
+    }
+  },
+  "CU01": {
+    "run": "001",
+    "instrument_specimen": "144_CU01_001",
+    "pins": {
+      "head.dat": "d3c8489a96efce12e3b943a24a69608c6a3cfd89",
+      "warp/s1/compression/compression.dat": "cd1bde955048b8af56ed8cb9fcfe44f86c8096db",
+      "warp/s1/friction/friction.dat": "7d87343fb3e1aff0f42fe1fc131c50850c036c0a",
+      "warp/s1/tarevalues.csv": "acf09d6077cd6c7c8ef86748da069eb117f82576",
+      "warp/s1/twist/twist.dat": "c3f8f0f192545babe4959bcdfa20280acab2fa48",
+      "weft/s1/compression/compression.dat": "7394a7f3d2b86deadbbb21f734737217c18262f1",
+      "weft/s1/friction/friction.dat": "70f4a7ccef719d3821e78fcf0e02ff4916bbce0f",
+      "weft/s1/tarevalues.csv": "5aefe1bd1986c640296de5d000024a2c837f6202",
+      "weft/s1/twist/twist.dat": "426a3db0c713863f29298746abdf3e829290a094"
+    }
+  },
+  "Drape 1": {
+    "run": "001",
+    "instrument_specimen": "187_Drape 1_001",
+    "pins": {
+      "head.dat": "f6142c3713d1ad8b9fa9b9a7435eb5873e95469c",
+      "warp/s2/compression/compression.dat": "bdb6c29a240d9a92684206b6ba77052b3856854f",
+      "warp/s2/friction/friction.dat": "999e3cbad4a9dbf2122ef965bb729ebb2be1a38b",
+      "warp/s2/tarevalues.csv": "df7319c831333dc55cbba1014543fa1d8cb054d3",
+      "warp/s2/twist/twist.dat": "298ae8297410562dc8d936650ce575cc52d2323b",
+      "weft/s2/compression/compression.dat": "1f02bf3a8cc995d404893f2c86670b6eb7a718dc",
+      "weft/s2/friction/friction.dat": "fe013f51a1e111891ef1d0e058d384fe490b2099",
+      "weft/s2/tarevalues.csv": "b354e9f491236fbb57659b14569fd272bac24297",
+      "weft/s2/twist/twist.dat": "63ec941cf030ee379d650ce1b345750284e420c1"
+    }
+  },
+  "Drape 10": {
+    "run": "001",
+    "instrument_specimen": "196_Drape 10_001",
+    "pins": {
+      "head.dat": "ea017aed07c810fe749621e17decd5b14e2c6d82",
+      "warp/s1/compression/compression.dat": "b05a28955e89a88b557f6c03369d29fdaedbd262",
+      "warp/s1/friction/friction.dat": "f8371134d3125c9fd69c7e328ec656acf4cea264",
+      "warp/s1/tarevalues.csv": "3658c7beb4e22d1c9bc262e14c50039229fcc568",
+      "warp/s1/twist/twist.dat": "d5af3a81f00f712db80c55996d358983d413dd61",
+      "weft/s1/compression/compression.dat": "2beae99a160053681f952605db98a07aa21a88d6",
+      "weft/s1/friction/friction.dat": "ae6ca20fd9feb9676d7455c0af2de2a3013b551c",
+      "weft/s1/tarevalues.csv": "2e6571f5feba4c48971dc10d8cc5b1bf3a7a1321",
+      "weft/s1/twist/twist.dat": "570dc719cec4649c7548bf70328b9de06359e38d"
+    }
+  },
+  "Drape 11": {
+    "run": "001",
+    "instrument_specimen": "197_Drape 11_001",
+    "pins": {
+      "head.dat": "195a893882deb462244322a2184842b03e3558d0",
+      "warp/s1/compression/compression.dat": "3b58234dd3ef2042f0a65d1d8f613922b7b36991",
+      "warp/s1/friction/friction.dat": "438cb77fd07d248ca4c51f5fe133002a5051f703",
+      "warp/s1/tarevalues.csv": "7a631bbc351bd686fa4af7194961c559817be0bd",
+      "warp/s1/twist/twist.dat": "ec0737c6cca1bf96a1696b5afb8edb3b84416749",
+      "weft/s1/compression/compression.dat": "8534aa63555d87297f48d0ed91136f3addcc27d0",
+      "weft/s1/friction/friction.dat": "b6ea2038e8456cd4ef1e690cc6eadc61b72694c5",
+      "weft/s1/tarevalues.csv": "777b6a3ec863a437b034bae28161c3bd73fe4a8b",
+      "weft/s1/twist/twist.dat": "8843cc47237978b7375ca5141427f40ba40b167d"
+    }
+  },
+  "Drape 12": {
+    "run": "002",
+    "instrument_specimen": "198_Drape 12_002",
+    "pins": {
+      "head.dat": "693f21d5319974fc8ee4111f0a6c5c724c3197fd",
+      "warp/s1/compression/compression.dat": "184151dd19266a908c7ca169224b26d55832dcb8",
+      "warp/s1/friction/friction.dat": "2f1d619464d15d4e933f1b517f6460fb75ff0226",
+      "warp/s1/tarevalues.csv": "9785a3832cffc5812db9ba58ff506bb221138dc0",
+      "warp/s1/twist/twist.dat": "5fca00251746b142e48061ec7c7f3bce9a49d635",
+      "weft/s1/compression/compression.dat": "6c276d50b9a51d4f4614f42caf9561ba5e6520d3",
+      "weft/s1/friction/friction.dat": "c021a01eb335452b7bb5156fdd2d9705962edf87",
+      "weft/s1/tarevalues.csv": "84ab40fa3ff522c183645167b7846b99a94b5422",
+      "weft/s1/twist/twist.dat": "aa2e180716c78157f6e34b0f04de096a378abe75"
+    }
+  },
+  "Drape 2": {
+    "run": "001",
+    "instrument_specimen": "188_Drape 2_001",
+    "pins": {
+      "head.dat": "1ed4f088d10c26ce6b2024fd674b0cb3857c1da5",
+      "warp/s1/compression/compression.dat": "1fb516ac9068638a3317b4df32303fdbaf676e7d",
+      "warp/s1/friction/friction.dat": "f46db8fe927e1f09033c2e15ec3d3fe390994ccb",
+      "warp/s1/tarevalues.csv": "1a7878fb2e58d2629e0a219ffb318803ca008ae8",
+      "warp/s1/twist/twist.dat": "71028ccd946e2f38165bbc0d2b9c2ffba8a3a9d5",
+      "weft/s1/compression/compression.dat": "4da7d459382fb13e50ff49d7be0993dd75fc8c51",
+      "weft/s1/friction/friction.dat": "f495d19506fd7bfb150c2baec88d6d4589f153fe",
+      "weft/s1/tarevalues.csv": "3af49fe77d769744ed419f61ed712bd50d683669",
+      "weft/s1/twist/twist.dat": "75e46ca4dd2f9f50d6957fabf53aeaba7a587b93"
+    }
+  },
+  "Drape 3": {
+    "run": "001",
+    "instrument_specimen": "189_Drape 3_001",
+    "pins": {
+      "head.dat": "9824cbb6e0df6a670a003f7fa46ac560f9ea04be",
+      "warp/s1/compression/compression.dat": "42d852a76e9031012fdff0c9d5f53670445a5ede",
+      "warp/s1/friction/friction.dat": "bb29090f6d0730fe2ab904ebeb9c806945b1273d",
+      "warp/s1/tarevalues.csv": "1a6f53cc107f05b059574b9b15775975921cbf38",
+      "warp/s1/twist/twist.dat": "583c3190ddff61f254a3a48acc04d20af93f90c4",
+      "weft/s1/compression/compression.dat": "ebf9846f9583e9e7f4bdf850c1c7d4b8e548f76c",
+      "weft/s1/friction/friction.dat": "1e3928ca6c089699d1601d58013a628851abba71",
+      "weft/s1/tarevalues.csv": "460838127809da5a1f8576509e90fd9af68eeea4",
+      "weft/s1/twist/twist.dat": "f643f0d015cc178355a63fb24774633030cd22ed"
+    }
+  },
+  "Drape 5": {
+    "run": "001",
+    "instrument_specimen": "191_Drape 5_001",
+    "pins": {
+      "head.dat": "1db45ece02fb46b46b3550a6d29b35ee36fef0ef",
+      "warp/s1/compression/compression.dat": "6bbfddcb937c9835105aa6e0c06b0f067722a04c",
+      "warp/s1/friction/friction.dat": "168d34ee96c8babe9127e547981da5184cf0d6b3",
+      "warp/s1/tarevalues.csv": "388fb7bb2bc849bc586075a5190bb1817dcbf0f9",
+      "warp/s1/twist/twist.dat": "8dbf59296381ecdb5a3341eba5c5e2e983c0ff19",
+      "weft/s1/compression/compression.dat": "0910fb5e032637a018051b11516c279b96a91b58",
+      "weft/s1/friction/friction.dat": "298d0a523041096d77c0ce675354db930a659743",
+      "weft/s1/tarevalues.csv": "e9f5211eb937871ecce945637699c90b055873bd",
+      "weft/s1/twist/twist.dat": "216c8900987a9add4090e396e4eadf2ea08cda70"
+    }
+  },
+  "Drape 6": {
+    "run": "001",
+    "instrument_specimen": "192_Drape 6_001",
+    "pins": {
+      "head.dat": "adfa6cd06cd517a3e0a8568443d503ac4846d607",
+      "warp/s1/compression/compression.dat": "ab93bc34a800feb71a7ebaee879ec717a63bf114",
+      "warp/s1/friction/friction.dat": "8a300e074839683b49ae23ace148edb56767f3d1",
+      "warp/s1/tarevalues.csv": "f565c28b08ae5ae16085c175d99e704e3e1f06d8",
+      "warp/s1/twist/twist.dat": "5c85a7eef390ba56c60a0a8701974ce58f64c4cc",
+      "weft/s1/compression/compression.dat": "205d326b677cdedc0b18005aec8303111dbb5f41",
+      "weft/s1/friction/friction.dat": "811370121b9ca799503ced4a5ade271b9ae2e025",
+      "weft/s1/tarevalues.csv": "3d5cda46a980c1e74ecd101344988d79c73096bb",
+      "weft/s1/twist/twist.dat": "49275b0621c47c7506f534dc369b654643eae2ee"
+    }
+  },
+  "Drape 7": {
+    "run": "001",
+    "instrument_specimen": "193_Drape 7_001",
+    "pins": {
+      "head.dat": "7456e956f85acf86406e5d27b39b3579e2149826",
+      "warp/s1/compression/compression.dat": "7feed39038d5b5048392723ab70d46e15996dccf",
+      "warp/s1/friction/friction.dat": "e3083c34ac5e03f3e0e7a4a9459645cd16bbd6c4",
+      "warp/s1/tarevalues.csv": "f99c698e52cbdb02cd0b97850ada5ab146a27ef8",
+      "warp/s1/twist/twist.dat": "e0a12a820362594bafd38e0cfa5159fd92464d73",
+      "weft/s1/compression/compression.dat": "50a6fbf8c1f7382b3188265af5610607f1c8b6de",
+      "weft/s1/friction/friction.dat": "12477ff8a35ccda5eddf29d8cd1b7719523659ae",
+      "weft/s1/tarevalues.csv": "e7d7393ddf48f229a20ae58fee4907bc91a388db",
+      "weft/s1/twist/twist.dat": "dc39df8421a1f73c6287835a2dbb63734355ed48"
+    }
+  },
+  "Drape 8": {
+    "run": "001",
+    "instrument_specimen": "194_Drape 8_001",
+    "pins": {
+      "head.dat": "b7f937bf8503d6298fa2e251adbbac03773c6ac0",
+      "warp/s1/compression/compression.dat": "bb7a56fe6a449d997f305d54e5dcd2df48627b08",
+      "warp/s1/friction/friction.dat": "efb4ac995c35fa8e85ef1af78a827e1f46effd80",
+      "warp/s1/tarevalues.csv": "a0e650ee217e36d13db5d290dda98ccef5f57348",
+      "warp/s1/twist/twist.dat": "b8e9a8d15bf05c68076e27dffbc078db7470ea4b",
+      "weft/s2/compression/compression.dat": "95f1dda3b8018f27de4aee0c13ba26a818777255",
+      "weft/s2/friction/friction.dat": "2a84609215e8e059655ac65a4a9a85b734cc14c4",
+      "weft/s2/tarevalues.csv": "2e766be432e6816335cec4497e5d76e16777d0b7",
+      "weft/s2/twist/twist.dat": "de45d6a799e6e2d8c8da5fbdbf0553e67afb35e0"
+    }
+  },
+  "Drape 9": {
+    "run": "001",
+    "instrument_specimen": "195_Drape 9_001",
+    "pins": {
+      "head.dat": "1bf864b68f44301c29fea43369d4df56adb9dfc7",
+      "warp/s1/compression/compression.dat": "0149525d4a2fd4eebbcfce390ea8c3e109d95d63",
+      "warp/s1/friction/friction.dat": "de237a6a2df521ce7bedf4de91c6dfc28a8c8828",
+      "warp/s1/tarevalues.csv": "9e3f4cdfbd4fc04f83c37836f87ba4d33bec68f6",
+      "warp/s1/twist/twist.dat": "21603fd66c217c88550f208683990cf916dcd18a",
+      "weft/s1/compression/compression.dat": "6f81c6e28714c3dc25087c41d1e666fac4ea710e",
+      "weft/s1/friction/friction.dat": "e7f8e71ef43e478eb32b07a4b81efc860320bddf",
+      "weft/s1/tarevalues.csv": "2564dfee170bd88d87bdcf43e738a7ecca5c0e30",
+      "weft/s1/twist/twist.dat": "66d8225318361f56d3e9f5e4fdb4ab0d98899e3b"
+    }
+  },
+  "E-C01": {
+    "run": "001",
+    "instrument_specimen": "152_E-C01_001",
+    "pins": {
+      "head.dat": "c304ee80dc98714bc3b69ed9b52d26e580edde74",
+      "warp/s1/compression/compression.dat": "de26731a7929b0cd624e52fa4f5fe0b76a0e84ce",
+      "warp/s1/friction/friction.dat": "05aa237501ea48cc6d204b4deeb7ccadac814582",
+      "warp/s1/tarevalues.csv": "99e21f4077698884e116eb12f8c26439c15ddd15",
+      "warp/s1/twist/twist.dat": "c08b6bdfbd64a937c768a38105ac732c68637616",
+      "weft/s1/compression/compression.dat": "ca9686373662134152465a7c1db7c9d50069386e",
+      "weft/s1/friction/friction.dat": "cca2de4467011ba3630544f45f8320b1e46a2b5d",
+      "weft/s1/tarevalues.csv": "c4cca30a0311f75f44aea5d6a6ef23dd6fc2338c",
+      "weft/s1/twist/twist.dat": "065caf6fc9dc94178bc27e53819092b867b1b5fb"
+    }
+  },
+  "E-C02": {
+    "run": "001",
+    "instrument_specimen": "1027_EC02_001",
+    "pins": {
+      "head.dat": "70bc1c70f17961ed44d449e8283c0db354a5d8b3",
+      "warp/s1/compression/compression.dat": "a131dd47f7e9e9ed1fd9107dceb01a8361224976",
+      "warp/s1/friction/friction.dat": "4b1d2588493598cc0f60f90b095bdb130f5522c2",
+      "warp/s1/tarevalues.csv": "d8837986ebe7d367516ee267eb7aed0f2cc23423",
+      "warp/s1/twist/twist.dat": "1e2e3cd5922d9c9e3d33155dfcd215037efcfedc"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1"
+    ]
+  },
+  "E-C03": {
+    "run": "001",
+    "instrument_specimen": "203_E-C03_001",
+    "pins": {
+      "head.dat": "82fbb622c57fec8cdff5e4621f8e73f7abd43cbe",
+      "warp/s1/compression/compression.dat": "8c5fa940ed46f383cb6c155651433696c03f2741",
+      "warp/s1/friction/friction.dat": "6c105d5fd7e1652bb6fd5e81c4d3ebc0be935b68",
+      "warp/s1/tarevalues.csv": "47cdbe6c894526f3fd9ef0cc68f4e99411d776cc",
+      "warp/s1/twist/twist.dat": "3ff7a8f6dd40fa336edac5830b8e2e996121547a",
+      "weft/s1/compression/compression.dat": "ba168046e85735b7bbd7a1f327920a22124b7f57",
+      "weft/s1/friction/friction.dat": "31037f710df06c8c90609b5369d87b0c5d564337",
+      "weft/s1/tarevalues.csv": "12d3a2c6ddbd681ba27808efaec9248781ecb0c2",
+      "weft/s1/twist/twist.dat": "bf008ee3c8ce7471bdf459267b5c710b5d1a3f41"
+    }
+  },
+  "E-C04": {
+    "run": "001",
+    "instrument_specimen": "154_E-C04_001",
+    "pins": {
+      "head.dat": "78ae4f68c78b9a429fe4716796337ec217eecea8",
+      "warp/s1/compression/compression.dat": "713ea8c6783f6b1b85deffc9871389b3cc3ce00b",
+      "warp/s1/friction/friction.dat": "832be9018177554961d313a2aefe89998d09331c",
+      "warp/s1/tarevalues.csv": "6a15f7966317c55fcc46277b5b0c9fb7e8c0ed92",
+      "warp/s1/twist/twist.dat": "a69e584b651a05a426af842c27c1738c66c87304",
+      "weft/s1/compression/compression.dat": "a091bd5447183574c666885b9c2ebd8beb476b07",
+      "weft/s1/friction/friction.dat": "1bdbecf15dc77b21dabbdb62253720701c94c0be",
+      "weft/s1/tarevalues.csv": "4521cafb787a263e19084c67c38d9c0b1825f4b2",
+      "weft/s1/twist/twist.dat": "bab93b907c7ece636eb56245621528c503b8978e"
+    }
+  },
+  "E-C05": {
+    "run": "001",
+    "instrument_specimen": "155_E-C05_001",
+    "pins": {
+      "head.dat": "ccd9ef1c191c89a2e06a13619c3f07bd449d6abf",
+      "warp/s1/compression/compression.dat": "6c4ee47543ead45dbeb881b59902785fc88ee306",
+      "warp/s1/friction/friction.dat": "b11a7b67ff36150d0da9767210b79306d8a33c7d",
+      "warp/s1/tarevalues.csv": "f1e431dc232069bccf48074edd0209e0bbf7a869",
+      "warp/s1/twist/twist.dat": "d2b4c915abbc2443aeeb099694a14e570a6a8dda",
+      "weft/s1/compression/compression.dat": "32e6c14f2a290131e38b14bfe148dee14178f10a",
+      "weft/s1/friction/friction.dat": "a471fb3df60a0981a65ffbf49953b8ec747de26f",
+      "weft/s1/tarevalues.csv": "c19d4ab70ab6de4e5e8fd057b168d9e0404d5d0a",
+      "weft/s1/twist/twist.dat": "886fc49220586264128fe70eaea2b0e2732a807a"
+    }
+  },
+  "E-C06": {
+    "run": "001",
+    "instrument_specimen": "156_E-C06_001",
+    "pins": {
+      "head.dat": "1fd2c4924453cb5dbadcadda9fa6e2be9d608b87",
+      "warp/s1/compression/compression.dat": "52265d86c19e7aee187f32fad86e71208c3c9eb0",
+      "warp/s1/friction/friction.dat": "dba8d3f1d61313c2e5364699af31dc832cd4bf28",
+      "warp/s1/tarevalues.csv": "aad34b64366690d04ff696e097959e27009ef002",
+      "warp/s1/twist/twist.dat": "d9ac772eb997f4d7e5479d98afc8053efadf1a61",
+      "weft/s1/compression/compression.dat": "7d3c9068acd455b90a9264b62025612877fba02a",
+      "weft/s1/friction/friction.dat": "0cc99b49d76875c1fae2c29e4238b018b06fc660",
+      "weft/s1/tarevalues.csv": "878c683b36c60e4a9087278841c125b5383556f5",
+      "weft/s1/twist/twist.dat": "e1e94fcb9ae1c3abc5e44a61177d03a0c1c83176"
+    }
+  },
+  "E-C07": {
+    "run": "001",
+    "instrument_specimen": "157_E-C07_001",
+    "pins": {
+      "head.dat": "93e692be44f8f88631011e549e3a8601ca81c962",
+      "warp/s2/compression/compression.dat": "d23868fbeb4d9c62e285dfebaab997e6718428e4",
+      "warp/s2/friction/friction.dat": "1b2d2ad33e3c684fc049dea4eb91608f2b0f4cb9",
+      "warp/s2/tarevalues.csv": "e0a85d5a7660d70b3e1b98e67ed8777bd28d1042",
+      "warp/s2/twist/twist.dat": "3d556769497d8eef44d456bd17fd08b2c3f6b7c0",
+      "weft/s2/compression/compression.dat": "9f15c264c1f339ad0dcd86bb134d1dd4358ab12d",
+      "weft/s2/friction/friction.dat": "6796d9a2be3c06ca216fa74aff9aa51c37247e01",
+      "weft/s2/tarevalues.csv": "f26436751514445f1bb49fe189260c1c6949794c",
+      "weft/s2/twist/twist.dat": "e5d1a7c662ed82506d6a4848477fa9ea8dd07958"
+    }
+  },
+  "E-C08": {
+    "run": "001",
+    "instrument_specimen": "158_E-C08_001",
+    "pins": {
+      "head.dat": "e199d8813d63552a9d276f6ca037e617605d4c43",
+      "warp/s1/compression/compression.dat": "60f63170bc709691d6b375176013e5b4b602348e",
+      "warp/s1/friction/friction.dat": "3b4db8b09667c84df1301a652d98e5705ae35308",
+      "warp/s1/tarevalues.csv": "5be4a3354067969bd9ecfd93356c2baa7ebb9621",
+      "warp/s1/twist/twist.dat": "b0434413ab067986e16d790e50ee78f5a93f3349",
+      "weft/s1/compression/compression.dat": "af7176dfae0d2927f9d23f31351ae84452b66191",
+      "weft/s1/friction/friction.dat": "26bded8ff500c19ac9ad3faf61bc90fa17b9ea11",
+      "weft/s1/tarevalues.csv": "9b5f90471fd9c50028e44396efc31cf0796bc84e",
+      "weft/s1/twist/twist.dat": "3685ef8ebf7bdf38dbf8fa22716416448696954e"
+    }
+  },
+  "E-C09": {
+    "run": "001",
+    "instrument_specimen": "159_E-C09_001",
+    "pins": {
+      "head.dat": "885c0cfb41cdbc8a18509182826e2be7b523e7a4",
+      "warp/s1/compression/compression.dat": "4ddacb7fe6f17121246f82596eb53dcf839e85a8",
+      "warp/s1/friction/friction.dat": "e84e0b6a075a444c4a69991a0ed9c88dbcdd799e",
+      "warp/s1/tarevalues.csv": "ffd07d923d2b560f714dfef609e1b3a508d014bf",
+      "warp/s1/twist/twist.dat": "0b617a0b8c6630f934e829fd3923708ff996b6d4",
+      "weft/s1/compression/compression.dat": "ef03bd6cab8d60e84901dedcb02ee4bfc873ffe5",
+      "weft/s1/friction/friction.dat": "40ece44bb10afc0b353bc89af379c4db54cff8a6",
+      "weft/s1/tarevalues.csv": "135fbe34bb9ee74a46d84d7567450387cee31693",
+      "weft/s1/twist/twist.dat": "07128fddb2a749ccb88cea648d9c854d6844d5b4"
+    }
+  },
+  "E-C10": {
+    "run": "001",
+    "instrument_specimen": "160_E-C10_001",
+    "pins": {
+      "head.dat": "1cef607f01a2b458ebc48ece7acae120860f8ba5",
+      "warp/s1/compression/compression.dat": "675e0c4a447325fca43c0966d9545b9d5937ea6f",
+      "warp/s1/friction/friction.dat": "ce3094546256f4bb4cf219b4db911abc88e6672e",
+      "warp/s1/tarevalues.csv": "1009f7f39d1846e55889049656ac79ac3f155e97",
+      "warp/s1/twist/twist.dat": "ac7f774cd45a311994ccf234fd41b28b281440ff",
+      "weft/s1/compression/compression.dat": "445f1d22ccd0afde4970ef8929b5fbf3b23c1fb2",
+      "weft/s1/friction/friction.dat": "9fa1f89a68c43c805db15f5c22cbe05934e52137",
+      "weft/s1/tarevalues.csv": "223e3e7360824ce4a2f62499122c45c179ed87ad",
+      "weft/s1/twist/twist.dat": "0a5b2d7d3e64c789927845b7460917a53f402845"
+    }
+  },
+  "E-F01": {
+    "run": "001",
+    "instrument_specimen": "1015_EF01_001",
+    "pins": {
+      "head.dat": "6ed7b4102ad8a8f045f56eae868a18e074f6db51",
+      "warp/s1/compression/compression.dat": "e79a8d83a69bec38335d51f25fdb8ec840e35d56",
+      "warp/s1/friction/friction.dat": "0d65753b66d1728556e45c29e0ef20668231a45f",
+      "warp/s1/tarevalues.csv": "39423005e6f7056180ebd279a2f1ee26fa3faf0f",
+      "warp/s1/twist/twist.dat": "7c7c0ebc94086fb703a2444536635dc80a840808",
+      "weft/s1/compression/compression.dat": "a463c9e5fc437b0b42e6d1a9aaf13b6c84322529",
+      "weft/s1/friction/friction.dat": "1f88af759d12cb371287e3aa40b57222e6a5a74f",
+      "weft/s1/tarevalues.csv": "6082ec14a1abe6ff08cb5acd9127a407585672a5",
+      "weft/s1/twist/twist.dat": "865c48338762aa94fb8533583ca1b5804ae3ddc6"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "E-F02": {
+    "run": "001",
+    "instrument_specimen": "1022_E-F02_001",
+    "pins": {
+      "head.dat": "a5fb2beeced2556e2d4428457e1064f5892f5052",
+      "warp/s1/compression/compression.dat": "9fb6ff9bc790d05661e1eafe2c1c45683343f50a",
+      "warp/s1/friction/friction.dat": "dfdfe95deaf1123b3df7ec37a3678004ddab2f46",
+      "warp/s1/tarevalues.csv": "f2f16df8931d177cfde3cd20ba79f5eccea58fb9",
+      "warp/s1/twist/twist.dat": "05424857fd6d792dbbb63314dccf1df4e0f1cc5e"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1"
+    ]
+  },
+  "E-F05": {
+    "run": "001",
+    "instrument_specimen": "1013_EF05_001",
+    "pins": {
+      "head.dat": "221649f0d3f6e653c8e9a94456127f851ceee3f0",
+      "warp/s1/compression/compression.dat": "5e4c6eddfb2bf82c1a82ea045018f26afe15ff8f",
+      "warp/s1/friction/friction.dat": "57b67caa436e9c96a56235949252dbc8153a7380",
+      "warp/s1/tarevalues.csv": "f4a356fd13fc46327c8f4bb96887d06eb76f17ab",
+      "warp/s1/twist/twist.dat": "9755240c95ae0cdc93e1e735db834b4ad7ed7f8d",
+      "weft/s1/compression/compression.dat": "3310ad7af0624cd8524f4c2ba135810320bbdc59",
+      "weft/s1/friction/friction.dat": "dc920c4c4e0dcc33cdc95b102199001001802119",
+      "weft/s1/tarevalues.csv": "b88e865d003ce607c7ec31642b8dced4d2ba774f",
+      "weft/s1/twist/twist.dat": "cf6455ba137baceeeb5a71e9f358e4ab8b40ffc8"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "E-KN01": {
+    "run": "001",
+    "instrument_specimen": "176_E-KN01_001",
+    "pins": {
+      "head.dat": "35ff23c80e0c09d0fe32400577a270f1536dc303",
+      "warp/s1/compression/compression.dat": "074d8fe333a1564f20859b69c603ae577244f285",
+      "warp/s1/friction/friction.dat": "a654ba7a0de9c3c3ec1692a541f31f866070b09a",
+      "warp/s1/tarevalues.csv": "ecfa4dd0568f171a4e78a9516df2e193c0ea43bd",
+      "warp/s1/twist/twist.dat": "fa584af36da9f479941b630097c4f15bb2bafb9d",
+      "weft/s1/compression/compression.dat": "badd2d729707c8d507216ca0563c13d6a35b2642",
+      "weft/s1/friction/friction.dat": "b2b9f2627685d8bc71baa72df393615f6fd8923b",
+      "weft/s1/tarevalues.csv": "846ddb65aa4cb2b6e63a50c1fbea5b011c8326d4",
+      "weft/s1/twist/twist.dat": "677241aee4e4fe159baff016a53c141a9ddd0168"
+    }
+  },
+  "E-KN03": {
+    "run": "001",
+    "instrument_specimen": "177_E-KN03_001",
+    "pins": {
+      "head.dat": "d22a2af3c04f5de3dd9a435a7a1187b025ac2b72",
+      "warp/s1/compression/compression.dat": "9f1a5a820c4b15afdc66db454351c7ca3c161d55",
+      "warp/s1/friction/friction.dat": "d0cd6550596d17850634032a6fb6e55f26b3ae88",
+      "warp/s1/tarevalues.csv": "046034702ee0000f56d72d3c717117b6f319dee0",
+      "warp/s1/twist/twist.dat": "19c6b28444b3fb93e515336abd1ea0ad336e8c01",
+      "weft/s2/compression/compression.dat": "f7c5ae6493f523e1d6acdbadf272c6dfd4b2d444",
+      "weft/s2/friction/friction.dat": "f09def1d5dc80e50d2aa2e64798e56650acd78ea",
+      "weft/s2/tarevalues.csv": "55015811a338b47957bef7d0636111fa0b769bb3",
+      "weft/s2/twist/twist.dat": "8a8c057417b83b781ebac13b484f6a144a430109"
+    }
+  },
+  "E-KN04": {
+    "run": "001",
+    "instrument_specimen": "178_E-KN04_001",
+    "pins": {
+      "head.dat": "a408297d75978fb0086cc45f84f5efab6ef587ae",
+      "warp/s1/compression/compression.dat": "875c9883e2a3b405306d278a979432f70b527e1c",
+      "warp/s1/friction/friction.dat": "a2cfcd8ab82a6af6d21541bd10928f8fb37dc5fd",
+      "warp/s1/tarevalues.csv": "a2c3c084236729417fbcfd156c01062b091422c0",
+      "warp/s1/twist/twist.dat": "f84c42c35901c0c759f0cbbebc0cec4fc899313b",
+      "weft/s1/compression/compression.dat": "76096b935d1e38c6cfd9e4459204718105b39a23",
+      "weft/s1/friction/friction.dat": "e81bcca5613a020686f3d93065f024de1e034829",
+      "weft/s1/tarevalues.csv": "e9dbd1a564b3f9053771b735b7fa2e2526a92c86",
+      "weft/s1/twist/twist.dat": "5f4a6195be8f888bfaa170ed2cfeb5734c387aac"
+    }
+  },
+  "E-KN05": {
+    "run": "001",
+    "instrument_specimen": "179_E-KN05_001",
+    "pins": {
+      "head.dat": "8bfb9f64f21af9fc7734b03a79d4a7d274f502b4",
+      "warp/s2/compression/compression.dat": "acaa4ca43339da451853f2bc24f8ca7d127238c2",
+      "warp/s2/friction/friction.dat": "e286279d13d0b3de831ba313c2aa767f0369ea66",
+      "warp/s2/tarevalues.csv": "5f6280789638e02a11ce54646fe29aaff9ca8066",
+      "warp/s2/twist/twist.dat": "ecbd001857f3d95bf39ecba44ebd12db250cc793",
+      "weft/s3/compression/compression.dat": "46e27b92338849e6e34eb257718f5ed3109eb67d",
+      "weft/s3/friction/friction.dat": "75320768b74402b39b6a4d24eafd9bd7fdfdb18a",
+      "weft/s3/tarevalues.csv": "079ec150167f0df4fa810cc9013faa083cacde9f",
+      "weft/s3/twist/twist.dat": "e7e9fb0f5d2b0250c6ba5a0ef0da1992c78837f6"
+    }
+  },
+  "E-KN07": {
+    "run": "001",
+    "instrument_specimen": "1023_EKN07_001",
+    "pins": {
+      "head.dat": "df9a5b546a70ee0a023c11d494580326cebff4f5",
+      "warp/s1/compression/compression.dat": "cefc0bcc9e16dc28fce6be8d646689a2712d648a",
+      "warp/s1/friction/friction.dat": "a3147dcb183ea122f3f270d10d10942efa329154",
+      "warp/s1/tarevalues.csv": "f03fa8d49918160a7b0398198caf4544b4e37f0d",
+      "warp/s1/twist/twist.dat": "ef8cad4d99dc1e37863038ce649b04eebafbce69",
+      "weft/s1/compression/compression.dat": "c09fc3270eb06c0762f5756be2b422aa48055d86",
+      "weft/s1/friction/friction.dat": "5a679cceb0ad8b25b6169a99578abe862386d2a1",
+      "weft/s1/tarevalues.csv": "45c6124b541a278f9039f41efe0ead5e946c9584",
+      "weft/s1/twist/twist.dat": "6cfdd46704983546ab94e0d2be0ff5f89630116e"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "E-L01": {
+    "run": "001",
+    "instrument_specimen": "161_E-L01_001",
+    "pins": {
+      "head.dat": "82f36702d9d031bc679da5c2d937cd7b0a7b562f",
+      "warp/s1/compression/compression.dat": "49b67755213834d21694dc69ab5f73242da38b46",
+      "warp/s1/friction/friction.dat": "cea34e826249f972bbf256f1b080836725c48259",
+      "warp/s1/tarevalues.csv": "15348636828f5b9c9c765f34748d85a0369f5fc9",
+      "warp/s1/twist/twist.dat": "358af31d66818d2c7c019698083fef7a29df18ac",
+      "weft/s2/compression/compression.dat": "ce8fec4b78b10c974129c0372a8be15cbe7faced",
+      "weft/s2/friction/friction.dat": "caccc2cab907f569c7132845261004fd9bdda9cc",
+      "weft/s2/tarevalues.csv": "082e01f5ff67606fb7611ec9194ab31f7c2608f4",
+      "weft/s2/twist/twist.dat": "be22346cf4ceb82e29e9902e862a898fe43f6a29"
+    }
+  },
+  "E-N01": {
+    "run": "001",
+    "instrument_specimen": "174_E-N01_001",
+    "pins": {
+      "head.dat": "c7e94fdead1567b9fb31147ed97dcb82e1d1304f",
+      "warp/s2/compression/compression.dat": "56297e034d9388a797a8688c7aede219c9482c03",
+      "warp/s2/friction/friction.dat": "68eb6831b9e4a1357193fbb591bab518d43a8032",
+      "warp/s2/tarevalues.csv": "7910a302172fc411844084c3ff3cfa895609f46e",
+      "warp/s2/twist/twist.dat": "e7889ac0a6253bd3070015e2456d1a24708d15e2",
+      "weft/s2/compression/compression.dat": "9bc38950754ac5543d16562351e411415fd764a5",
+      "weft/s2/friction/friction.dat": "489fff23bdf7382fb904dfc607ca9f37b0149a4f",
+      "weft/s2/tarevalues.csv": "f4ff868cd3e9afb30429adb3e700d0a17635530e",
+      "weft/s2/twist/twist.dat": "e976e1f2c43cbf82a538c026ac8900b47634cebc"
+    }
+  },
+  "E-N02": {
+    "run": "002",
+    "instrument_specimen": "1021_EN02_002",
+    "pins": {
+      "head.dat": "a4fac63d7a49343c2e6b6b9be38e495e1559c745",
+      "warp/s1/compression/compression.dat": "442120a6bc309df70155592c90c3509753c63e4a",
+      "warp/s1/friction/friction.dat": "e490974ee166e35e31f677ce71334e37d233b83b",
+      "warp/s1/tarevalues.csv": "4fc1aecca56eee126866dc83ab30f808f03383e6",
+      "warp/s1/twist/twist.dat": "7ee6582aabe235f36f0fb51dc610515052b18265",
+      "weft/s1/compression/compression.dat": "aa426a6080515db94d6b51d22687b20cce9bb157",
+      "weft/s1/friction/friction.dat": "9419bed6d513fefb550778ea19c8cc13d95be591",
+      "weft/s1/tarevalues.csv": "872e38e5da399da641a42439ba723d29765c6abf",
+      "weft/s1/twist/twist.dat": "a1fbb3d8788ee6c4c61c47ab1091fc9a4cf59490"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "E-P02": {
+    "run": "001",
+    "instrument_specimen": "171_E-P02_001",
+    "pins": {
+      "head.dat": "a1b1a7181bb35e3a06b47199d4286959ac6c6939",
+      "warp/s3/compression/compression.dat": "6d67c7278651b7e52bc5c4b5b6d8dc8aef1c7ca3",
+      "warp/s3/friction/friction.dat": "9d1a2506c6d151abf4909c46796b6cf5e480371a",
+      "warp/s3/tarevalues.csv": "f5afbc640dd683adb42cfb31165880ab5c4f04b7",
+      "warp/s3/twist/twist.dat": "4fa1c3d1a69a0c01894950b1e9d81a2c79e98d47",
+      "weft/s1/compression/compression.dat": "46656197de72ec7dffc411cc36d75ecf0a6b79c2",
+      "weft/s1/friction/friction.dat": "4d1c04ff22a2c02f6e2a685469c77ec25054cce4",
+      "weft/s1/tarevalues.csv": "30964eb5e2b0019e5b98634f960f254561a30c7c",
+      "weft/s1/twist/twist.dat": "3e9b8c44535d0100ebf2d8cb25503d2f84defca0"
+    }
+  },
+  "E-P03": {
+    "run": "001",
+    "instrument_specimen": "172_E-P03_001",
+    "pins": {
+      "head.dat": "fd7a6e799835852167573654e9a8755354dcbf3e",
+      "warp/s1/compression/compression.dat": "f25c5786cd88002db1465277dd14a2ce9c509e63",
+      "warp/s1/friction/friction.dat": "80d16a53dd86b7bea114b8be0696bbcd4afcab17",
+      "warp/s1/tarevalues.csv": "4679ad431bfe4e89773d3c953a731ea1defdc388",
+      "warp/s1/twist/twist.dat": "8060a96d65d9c1e7625ce9506a178be400ad4166",
+      "weft/s3/compression/compression.dat": "167d71d0410747afe9a7c93221bb27477d3e1cea",
+      "weft/s3/friction/friction.dat": "658220d2eb0c24c67f34a7a4fb4be93a7d1c6ae1",
+      "weft/s3/tarevalues.csv": "61b1bed329ee9d274c2744ed4556454734594a9b",
+      "weft/s3/twist/twist.dat": "0637533b2b3385da2acd4dd116aa3590b3b1d28d"
+    }
+  },
+  "E-P04": {
+    "run": "001",
+    "instrument_specimen": "173_E-P04_001",
+    "pins": {
+      "head.dat": "3dbf9d62a7570ae4bfba61f0f8cb7ff58ac5ca56",
+      "warp/s1/compression/compression.dat": "c1f17c47aa57af2568fe30c9dd4abd67e5af400e",
+      "warp/s1/friction/friction.dat": "ef3a41fa052ff338005f912432ec761c3adb5128",
+      "warp/s1/tarevalues.csv": "64a4a702c64ea39593d925ef203b5c81aee9ba4c",
+      "warp/s1/twist/twist.dat": "2c7d0c3b87732f2a564726d9ee58c825c925aa5b",
+      "weft/s1/compression/compression.dat": "6920fd44cf2653e69d8019b67c7aa5b7aa5e953e",
+      "weft/s1/friction/friction.dat": "b6ebd2eaa68a556f1fcebf084d05ae2f9daf3a4d",
+      "weft/s1/tarevalues.csv": "07d6d84e826a051391264b135364327c78c506e0",
+      "weft/s1/twist/twist.dat": "9199705be565a1afaf05212fabe105b9a3f306e2"
+    }
+  },
+  "E-R02": {
+    "run": "001",
+    "instrument_specimen": "170_E-R02_001",
+    "pins": {
+      "head.dat": "fcae6b32537e27b59f57f7f499ae222029115720",
+      "warp/s1/compression/compression.dat": "da06246f5b1e4fe513adc0ac2bd24131d3582590",
+      "warp/s1/friction/friction.dat": "f252626d4f6031665dbe33925042df31fbd1f907",
+      "warp/s1/tarevalues.csv": "b220443765595586e3741f97d285d13af079a631",
+      "warp/s1/twist/twist.dat": "a4f1b7d556d51dc69696875795aaa5ba6af046dc",
+      "weft/s1/compression/compression.dat": "6d06f29bfec6f89d332ccce3d7981989cf1d00cf",
+      "weft/s1/friction/friction.dat": "9aad70dc9f716b19c1bf60436a80389c3345f898",
+      "weft/s1/tarevalues.csv": "2dc7bccebfc305462a1b0bea933a4c3394942127",
+      "weft/s1/twist/twist.dat": "4a87cbb135ce596f5355b515bd3badcdbc2d61ba"
+    }
+  },
+  "E-S01": {
+    "run": "001",
+    "instrument_specimen": "1017_ES01_001",
+    "pins": {
+      "head.dat": "959391d72f4c4b3a3b102a805cbb51ac691cf704",
+      "warp/s1/compression/compression.dat": "f447ff8c91a49faba84f244af9565d5a8f43e497",
+      "warp/s1/friction/friction.dat": "3d4b5d72398f1166a5eb8b0e29e992b3b61ad9a4",
+      "warp/s1/tarevalues.csv": "06e4e131dfdec5674866476836a8950d001aa78a",
+      "warp/s1/twist/twist.dat": "99a6179a6d658ab15d8f12d32ca3284419129206",
+      "weft/s1/compression/compression.dat": "206b557bd46700732b9f6405bd679e052af84b06",
+      "weft/s1/friction/friction.dat": "44890927169215c3f758034246f11b00e90dd1d4",
+      "weft/s1/tarevalues.csv": "db6a33ae8580dd994e0c847ce83346e2011144ad",
+      "weft/s1/twist/twist.dat": "b5a2962135e0dff940978e01f6aad5bbc3479312"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "E-S02": {
+    "run": "001",
+    "instrument_specimen": "1003_ES02_001",
+    "pins": {
+      "head.dat": "b35dba190d16bfccfe4dacf14653d9ea7a237da5",
+      "warp/s1/compression/compression.dat": "0708a69963f3fb8d4e6479c099c65b181df3a5be",
+      "warp/s1/friction/friction.dat": "486049439f934605f9fca404b1203ccfcfd08d64",
+      "warp/s1/tarevalues.csv": "a595ccf3131cfa7d504b665411753c7861fded85",
+      "warp/s1/twist/twist.dat": "cdd31e9ffefe498dc17ef5bd77957e30bc2d6378",
+      "weft/s1/compression/compression.dat": "44a09e0a1b04d3d94ac11b9d94f9e59df79cc0c6",
+      "weft/s1/friction/friction.dat": "56f23e28786c4d0699a3e83d1d3b44cab845e257",
+      "weft/s1/tarevalues.csv": "9638ea38ae7f028082c2708e2ab97c3f572e69d4",
+      "weft/s1/twist/twist.dat": "715b8992d6423dad45cbe8d46e7ae4ebfd557263"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "E-S03": {
+    "run": "001",
+    "instrument_specimen": "168_E-S03_001",
+    "pins": {
+      "head.dat": "2e38f89b7b36a76ef190eecf0aba60d223deeef1",
+      "warp/s2/compression/compression.dat": "1458da7427b68d50c4a36d871202dc6ff0fd8b2d",
+      "warp/s2/friction/friction.dat": "18106fc529cac13f95eb1a3aeee672c6e0637a7c",
+      "warp/s2/tarevalues.csv": "4658a1f5f3b9f85998208d19697ddb450f69dda3",
+      "warp/s2/twist/twist.dat": "66c424d7dfedf856b9d80718ac93c611f2d975e6",
+      "weft/s2/compression/compression.dat": "f3e3f784247976566489d200bf025c3562abc9e0",
+      "weft/s2/friction/friction.dat": "335ad29a8b36c23affe002b38690b2edeb66cbfd",
+      "weft/s2/tarevalues.csv": "1ea6b58ccf2918483f1e61a42102331cce90e3f4",
+      "weft/s2/twist/twist.dat": "f92021d0253ce740ec662c94ee8821e0258b86b7"
+    }
+  },
+  "E-S04": {
+    "run": "001",
+    "instrument_specimen": "1008_ES04_001",
+    "pins": {
+      "head.dat": "c41e05720fa046e8f234c696f1d5491fb4a064c7",
+      "warp/s1/compression/compression.dat": "0c035350c3dcb08be884d5a1663fdf4f470d903b",
+      "warp/s1/friction/friction.dat": "cac9fe056f00be3b5b516c4145bbec4cfe6ac383",
+      "warp/s1/tarevalues.csv": "7ace9cf6e582870b78aa3bd1f489edd0ce456321",
+      "warp/s1/twist/twist.dat": "bfae56a4aea82b3c23e7e5c1a9b20e5d21d66dd2",
+      "weft/s1/compression/compression.dat": "e0bcdf95381c2cbde707662da7c378e56c6f9bd2",
+      "weft/s1/friction/friction.dat": "a4f3c6d463670ffbbbbe85d9911173dcfb9bf331",
+      "weft/s1/tarevalues.csv": "547a98ff80225acbd86fd633f39215fe0f174cbe",
+      "weft/s1/twist/twist.dat": "194a8cf5917bdf62ff5cafbd3fef786b531f2eb6"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "E-W01": {
+    "run": "001",
+    "instrument_specimen": "162_E-W01_001",
+    "pins": {
+      "head.dat": "fd88b6084d89844c7e5d8bd6f0eec6fe10b82c69",
+      "warp/s1/compression/compression.dat": "0de037c0c06a8cbbdd69d7c125d266c59569cdd5",
+      "warp/s1/friction/friction.dat": "5b15d839e889b931b1264789eda784088767e21d",
+      "warp/s1/tarevalues.csv": "ad92dbdbd388d0105edd529029c3833a9b783999",
+      "warp/s1/twist/twist.dat": "5fc28530762da02cab56588c7a025c6ccbc03a91",
+      "weft/s1/compression/compression.dat": "d544cf19eeca2dabbce7f184cc87367b66376fcd",
+      "weft/s1/friction/friction.dat": "326fe50d169a337835b29b3033f4fa57a2af3aec",
+      "weft/s1/tarevalues.csv": "a9b66cbeb30b71747f3273120cf5371318c3caa2",
+      "weft/s1/twist/twist.dat": "2c1617c01761c19c3be3c76ed01514deb6b1bb99"
+    }
+  },
+  "E-W02": {
+    "run": "001",
+    "instrument_specimen": "163_E-W02_001",
+    "pins": {
+      "head.dat": "c7ec2b3061201d5647af2eae4931accf30895e89",
+      "warp/s1/compression/compression.dat": "bdc0a1039c7c06f8a4f9a3a1ec48b3b045d2c847",
+      "warp/s1/friction/friction.dat": "164293188a1ece900bef9747941344e91e206421",
+      "warp/s1/tarevalues.csv": "80f5668f38e9e50a5d3928e034b649264940414e",
+      "warp/s1/twist/twist.dat": "9d3971170b48dc0f41bb573bf2fb54b6293d332a",
+      "weft/s1/compression/compression.dat": "5a8d25742f15aa2e933226ad06b23479fc3381f4",
+      "weft/s1/friction/friction.dat": "661282e3dca5ad31001876dd246f11580909d81c",
+      "weft/s1/tarevalues.csv": "935f14b4874b6902d4b220938b287c89351d4c50",
+      "weft/s1/twist/twist.dat": "5b93361d5e54e3611dc88fdc660cc79e722caa44"
+    }
+  },
+  "E-W03": {
+    "run": "001",
+    "instrument_specimen": "164_E-W03_001",
+    "pins": {
+      "head.dat": "dca51a99238e2e2a168f97fdaba918cc1c328b2f",
+      "warp/s2/compression/compression.dat": "d16c88d03062ec1cb43e0f8ba7a669b0097e8a1f",
+      "warp/s2/friction/friction.dat": "06f1425b141bee82e2b8011c4cf6086021c228f9",
+      "warp/s2/tarevalues.csv": "1ed9a37cbbab097295ce86cc1acfe7810405a9b0",
+      "warp/s2/twist/twist.dat": "eee918912bc3bd89572f859952c9c57ce156bcb6",
+      "weft/s2/compression/compression.dat": "4090838e9892914bbe772b1b848360c04e4b2a6f",
+      "weft/s2/friction/friction.dat": "4b17c12e2f85d7aed5095357a78be6a0c3d2ae43",
+      "weft/s2/tarevalues.csv": "82b8e3e9c1fdd2698904c217362683f2ce556c65",
+      "weft/s2/twist/twist.dat": "b574ac34e98a22eaf54ee8f5a1c5c4772b585503"
+    }
+  },
+  "E-W04": {
+    "run": "001",
+    "instrument_specimen": "165_E-W04_001",
+    "pins": {
+      "head.dat": "44f50c4b4cf5faf9d05bc1c261860a48fb85ac79",
+      "warp/s2/compression/compression.dat": "e6d9890b04c89d3f628071adbc0885d3f40e93d1",
+      "warp/s2/friction/friction.dat": "27df9357773c61a2149aa2c7b0e9566df671cd32",
+      "warp/s2/tarevalues.csv": "7695d7e5e7c4fc96e68c45d3349250b1036d8155",
+      "warp/s2/twist/twist.dat": "930d864d2f6707ed9419d6a7c9463c116177fa44",
+      "weft/s1/compression/compression.dat": "615e7b9fc7cf0ca82a40222d86ca2298da091367",
+      "weft/s1/friction/friction.dat": "a4b49e83316e5dc2781f4da1a7acef88d8173bef",
+      "weft/s1/tarevalues.csv": "8ff8002cae5d049ceaf25e7084ca19d0a49d22bc",
+      "weft/s1/twist/twist.dat": "fa33199ae68c7f9cacc8709b3b70480d367b3f51"
+    }
+  },
+  "EX-01": {
+    "run": "001",
+    "instrument_specimen": "1019_EX01_001",
+    "pins": {
+      "head.dat": "2297a961ad74b1e02e51e0beef6181b6118e8842",
+      "warp/s1/compression/compression.dat": "04bcb1a51551cfd7d71c2896702fd03ee8f9d2fc",
+      "warp/s1/friction/friction.dat": "2c3974fa4783f3edb538c77c703b7c3f8d868d74",
+      "warp/s1/tarevalues.csv": "9bb7dc3c50ed484f4b039432812a57280e9365cf",
+      "warp/s1/twist/twist.dat": "cd8949b81751392f2dd38cb4e8694b5c004242ca",
+      "weft/s1/compression/compression.dat": "2ea2b2cf31843a31ad9f36552e4b515030b2f43d",
+      "weft/s1/friction/friction.dat": "9035a3aec660bef35df341fb290aca09665cf48a",
+      "weft/s1/tarevalues.csv": "71c412582381cce675162c9a023b602f35a44122",
+      "weft/s1/twist/twist.dat": "0969556b3cec72ea300c18b482be07a8c4831dda"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "EX-02": {
+    "run": "001",
+    "instrument_specimen": "204_EX-02_001",
+    "pins": {
+      "head.dat": "6ca38b583a680e5a492e330006f193839c2471c9",
+      "warp/s2/compression/compression.dat": "98605e11953e3ff988ab69cf621bd3a1302c5b4e",
+      "warp/s2/friction/friction.dat": "ed051f6940fcd4d6d1ed8ab88fb448ce0c37c64c",
+      "warp/s2/tarevalues.csv": "7f9b13bf52084e04dfed030dca43346737f52a11",
+      "warp/s2/twist/twist.dat": "9e8d9c4dfb1399411fb36ccae9d8eeb17ac4cb47",
+      "weft/s1/compression/compression.dat": "769ec2f71f796fc79538a03285cb7dc3aa10ba8c",
+      "weft/s1/friction/friction.dat": "0d7cc5c7beb6ce06dbdd5438b7cd8ebab7e90d15",
+      "weft/s1/tarevalues.csv": "5c8d8bd573c2971cf9fdd0e94d810c9e253d856e",
+      "weft/s1/twist/twist.dat": "32d0455931b039933b06f9c011c3b2d1f6204869"
+    }
+  },
+  "EX-04": {
+    "run": "001",
+    "instrument_specimen": "213_EX-04-1_001",
+    "pins": {
+      "head.dat": "a3371c92647a01e1efd4c6fa08ccbdf946496590",
+      "warp/s1/compression/compression.dat": "c37e944139274902c3e8b958ec37271cd8fae158",
+      "warp/s1/friction/friction.dat": "6fffbd73d5bf6b9db659d713df98e39f40b7682c",
+      "warp/s1/tarevalues.csv": "5d74c0f9c635a7556884fa24fce74f22f3d8b144",
+      "warp/s1/twist/twist.dat": "b729a0bb0424498a7c5bd7b025125f1f04b1211b",
+      "weft/s1/compression/compression.dat": "763e83f37ef8c9dfd417f462436f4622b6463225",
+      "weft/s1/friction/friction.dat": "16c8a4c0e545afde8b3a2727fbf6b014c3f04cf5",
+      "weft/s1/tarevalues.csv": "32fb09585d19061679c5a793a37987809076392e",
+      "weft/s1/twist/twist.dat": "cbae70c003cde49029e602f482cd52cea6f400c8"
+    }
+  },
+  "EX-05": {
+    "run": "001",
+    "instrument_specimen": "206_EX-05_001",
+    "pins": {
+      "head.dat": "9e1b74645924f8b3539f57e7b85b0f762c7d4959",
+      "warp/s1/compression/compression.dat": "43154afce197b180834e4c81b190ba07eac303f4",
+      "warp/s1/friction/friction.dat": "096bfccc5a506b31d4fdf42b00ffa5351112d39e",
+      "warp/s1/tarevalues.csv": "40199834d4ea1fe4d0f3ab68ca96ae422f826694",
+      "warp/s1/twist/twist.dat": "61d7b5b3fa64d91c1f9ac25116ca4dddc82e6ab5",
+      "weft/s1/compression/compression.dat": "c9ae14914999f16ce72764e51ba2775b07ef882f",
+      "weft/s1/friction/friction.dat": "df8a3cbce1345950a65ae64f1eaf7baaf6307fbc",
+      "weft/s1/tarevalues.csv": "78ddbfa37076682167fc0f09b05010158c407f66",
+      "weft/s1/twist/twist.dat": "1722460181c55754470c882b4ffb80f6d1e6c9d6"
+    }
+  },
+  "EX-06": {
+    "run": "001",
+    "instrument_specimen": "1016_EX06_001",
+    "pins": {
+      "head.dat": "940c313688e0cf5d4747255d3dc195a2bbe9519a",
+      "warp/s1/compression/compression.dat": "a2a63688a37a93eae45fc76e3c9c5997a8baf52d",
+      "warp/s1/friction/friction.dat": "d39487274c7e085129d2ad9b047765bec2ef4d22",
+      "warp/s1/tarevalues.csv": "a13733a3a3868fa73170362c7018d8be5f55df9a",
+      "warp/s1/twist/twist.dat": "0c46d623e651c08f677ad301f0c14c6ad16a947a",
+      "weft/s1/compression/compression.dat": "891676b3a80141527289d799eb816fb7fbb45196",
+      "weft/s1/friction/friction.dat": "bbba9a58c2c34325a07e666a0aad2ca25a3c5d93",
+      "weft/s1/tarevalues.csv": "b708f931cfa7e0c135acf3e88c0767b16c90d12f",
+      "weft/s1/twist/twist.dat": "8e493556ec3fb6e0515f81a8d472dde55cc99d06"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "EX-08": {
+    "run": "001",
+    "instrument_specimen": "1011_EX08_001",
+    "pins": {
+      "head.dat": "7a3fbfc11209129fa8bb979a895bb72b05418473",
+      "warp/s1/compression/compression.dat": "75e9b87561cf0ee4690f6ab717a78711885a8860",
+      "warp/s1/friction/friction.dat": "69226d17596bec3af6c04d1aca8d6aa9c54179dc",
+      "warp/s1/tarevalues.csv": "f602c42272eda9ac14dc7997bc0efa92efba586c",
+      "warp/s1/twist/twist.dat": "73f24219ecbfc13957e644734d0e96994aed2170",
+      "weft/s1/compression/compression.dat": "d74b439f623cccfeba4943cb359aaf0d2f146bc2",
+      "weft/s1/friction/friction.dat": "7bbb002e48a96de24b725bb9edd7f8fc186ef7f8",
+      "weft/s1/tarevalues.csv": "86af2932082f969d8eb20f14341c3bcc352b30e8",
+      "weft/s1/twist/twist.dat": "f472e26b898c2fc2da49656640675dcf97a61faa"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "EX-11": {
+    "run": "001",
+    "instrument_specimen": "1025_EX11_001",
+    "pins": {
+      "head.dat": "3e8c6cd8649c99399f83e462b023b68343a241e6",
+      "warp/s1/compression/compression.dat": "b8b10ff05293c6c073c3ab3a7bc3caaebc72ef5d",
+      "warp/s1/friction/friction.dat": "144ea72173875ac4ad0cc53619cc84e508efcfc8",
+      "warp/s1/tarevalues.csv": "c2d3682ea4c9401055b0a6e4e32b348d6cfcfc8f",
+      "warp/s1/twist/twist.dat": "d5aeb9ebb521336b423b904697164936ef759c45",
+      "weft/s1/compression/compression.dat": "be93429ba49a809f7cc8cfee3d72beeba4a6be45",
+      "weft/s1/friction/friction.dat": "6aafe9ec93b1450851ee0c012366feb37380ef83",
+      "weft/s1/tarevalues.csv": "449beb55129f495b0a7fb6e92ea06105a14bbd40",
+      "weft/s1/twist/twist.dat": "5231d3493aac17e3543eaba1ba61b5010a67d7c7"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "EX-17": {
+    "run": "001",
+    "instrument_specimen": "186_EX-17_001",
+    "pins": {
+      "head.dat": "e9dc96afd118354ba8485204d91636850d41532e",
+      "warp/s3/compression/compression.dat": "7f46c61f400c6859d6e3ddafb63df5d7bfacaa42",
+      "warp/s3/friction/friction.dat": "9b328f508092585a5b5d5f04151bbce184d3b64b",
+      "warp/s3/tarevalues.csv": "8f4f0132eeac297fd2918928ac098d554742494a",
+      "warp/s3/twist/twist.dat": "3f33e5253af2026dc6c69cc1a86665ce3d7c3eef",
+      "weft/s2/compression/compression.dat": "4ef256efef66caca684e8be55e2a7fe35008074b",
+      "weft/s2/friction/friction.dat": "c437937ec51a8b6f75de87d1eaaaf5ba311e0b6d",
+      "weft/s2/tarevalues.csv": "ac487b89d9f117bbf4115fee8623df6b5537c86a",
+      "weft/s2/twist/twist.dat": "5a00212c857045a0e72ba0f51730a13ad9ef56e1"
     }
   },
   "KN01": {
+    "run": "001",
     "instrument_specimen": "149_KN01_001",
     "pins": {
       "head.dat": "acede530faf25c123b3abad8d7028d668a8a3831",
@@ -42,6 +1070,7 @@
     }
   },
   "KN02": {
+    "run": "001",
     "instrument_specimen": "150_KN02_001",
     "pins": {
       "head.dat": "1fdf2ca9f1de788acfe023159b790ad894a041ca",
@@ -53,6 +1082,458 @@
       "weft/s1/friction/friction.dat": "9976e2d1df52b0dd20508f6770ed719f2d7033d9",
       "weft/s1/tarevalues.csv": "aae36ddd6ad544828aa5ccc4c31955f8ccb55f3a",
       "weft/s1/twist/twist.dat": "9e2b5c695028a003fcc3a9da35c86a204325cc48"
+    }
+  },
+  "KN03": {
+    "run": "001",
+    "instrument_specimen": "151_KN03_001",
+    "pins": {
+      "head.dat": "0ea25c350bd64a0839bef1b613a0d159dbf41ca4",
+      "warp/s1/compression/compression.dat": "e4c7f7f0b9baa309408003357eaae976ef889f12",
+      "warp/s1/friction/friction.dat": "394c5f6a80e92014bd2492a958e99439bd0a952a",
+      "warp/s1/tarevalues.csv": "9fa0bba0d64e62826fcc13246ec2041a067ee940",
+      "warp/s1/twist/twist.dat": "c1e2a6dfa6ee9dc06b4a497d5c565c2c00e26847",
+      "weft/s1/compression/compression.dat": "1ab0af364aff2712eea772f88a524a6b9225a86f",
+      "weft/s1/friction/friction.dat": "e33def19d2e7d157214b641c46d1b3c3fee34ec6",
+      "weft/s1/tarevalues.csv": "a6bb99b849ad93ae8a554fc1c2ac691666316041",
+      "weft/s1/twist/twist.dat": "ecdbb7369e9f744b53515d2500eec75c8f5e1cd2"
+    }
+  },
+  "L01": {
+    "run": "001",
+    "instrument_specimen": "200_L01_001",
+    "pins": {
+      "head.dat": "02872ba3be75fd3e3f3a01367289b8314ecba93b",
+      "warp/s1/compression/compression.dat": "24e40d5af41e0709510f41911878c310bb166414",
+      "warp/s1/friction/friction.dat": "fdac4c9fa64304790e58f06deff77344b869562a",
+      "warp/s1/tarevalues.csv": "207edb65aaf011a24b9169eaae1857d0cbc5515a",
+      "warp/s1/twist/twist.dat": "8e386b5b9473fc021db8af50cc12893c57852c92",
+      "weft/s1/compression/compression.dat": "fee8a6c940b5f5acc98987c457892e39ca0bab9d",
+      "weft/s1/friction/friction.dat": "992a622f03cb840aa4e473351f467d268e247228",
+      "weft/s1/tarevalues.csv": "300552a673e0788ff2019b8806bf7c7e4fc842b6",
+      "weft/s1/twist/twist.dat": "28f956e1c8e3cd52fb41768b36acc7dce80e3d69"
+    }
+  },
+  "L02": {
+    "run": "001",
+    "instrument_specimen": "124_L02_001",
+    "pins": {
+      "head.dat": "9405b218eb052cab1bb8f5f9dc0875ce2b29f937",
+      "warp/s1/compression/compression.dat": "42af8ce4eba3675043c472701b3bbcdd38d7c335",
+      "warp/s1/friction/friction.dat": "1d7569c729c90dfce71ff39ae79c4670e967fda8",
+      "warp/s1/tarevalues.csv": "00fa2ef0e7b8e118f655b3e2f47f36ff1f784fb6",
+      "warp/s1/twist/twist.dat": "f97863919d84dcb6232c647aa181c24cfe8d36fa",
+      "weft/s1/compression/compression.dat": "4002460956813c51351c0d584ea69a76f6224923",
+      "weft/s1/friction/friction.dat": "0385d9db1fbeb9cd661eef11e35a7c236557bd1b",
+      "weft/s1/tarevalues.csv": "fefd431bf33704013ea308b19f4361ec3b49ab37",
+      "weft/s1/twist/twist.dat": "d13e565f3c97c93c07612d9c4ab25616b2ae346b"
+    }
+  },
+  "L03": {
+    "run": "001",
+    "instrument_specimen": "125_L03_001",
+    "pins": {
+      "head.dat": "b34aa1cdb8a1b70869547402fdbad32bbd1714c0",
+      "warp/s1/compression/compression.dat": "3c392b2cf97694826a8578bee16beea6e1d6dbc8",
+      "warp/s1/friction/friction.dat": "5afb1a6bc05d24bfa7b57c584dc05451cfa98217",
+      "warp/s1/tarevalues.csv": "79cd5628899b84158d4042b793014a0a1a592852",
+      "warp/s1/twist/twist.dat": "353be943c10669130656396fccc89587a868e13c",
+      "warp/s2/compression/compression.dat": "e94215a04c9faaa478934dcda4da06c3d4b86b81",
+      "warp/s2/friction/friction.dat": "b68e9d87cc485901b9e277f94ad921ed813adf7a",
+      "warp/s2/tarevalues.csv": "d42da52ecb75142434a51c7ef5d48ace9b9aed9d",
+      "warp/s2/twist/twist.dat": "f6b96b74d768e069871407ada2e4253d7c8bf352",
+      "weft/s1/compression/compression.dat": "5045c5a8b6e1cd40608a4c22f8da9e9b8f18fc2e",
+      "weft/s1/friction/friction.dat": "1cb94fc138cbf6e7b8ae2199d4786558b375ee67",
+      "weft/s1/tarevalues.csv": "7cc89d6cf9eb48425475f5fd2fbe098c02ad2f98",
+      "weft/s1/twist/twist.dat": "2a1ee47026eab56657fc63a93a6ca913f3838b10",
+      "weft/s2/compression/compression.dat": "b1673c8df939ca88e7b8d80e015096ca88172600",
+      "weft/s2/friction/friction.dat": "aeeb0d5cd3bfef45abcd2d898b942ba78c1a7b37",
+      "weft/s2/tarevalues.csv": "bbb8cb2ce682c5f0f55b06860f51a1e35eeea3d3",
+      "weft/s2/twist/twist.dat": "d464508405d865701515901bb57ef3b58e43e929"
+    }
+  },
+  "N01": {
+    "run": "001",
+    "instrument_specimen": "201_N01_001",
+    "pins": {
+      "head.dat": "272c407ff44220fe690c72d79d715073f106964a",
+      "warp/s2/compression/compression.dat": "205cdd7e246eccb7249a93fd21ac6e4059d847a5",
+      "warp/s2/friction/friction.dat": "9071dc67e02de2729dbfd844b355bc9e5f9fbc60",
+      "warp/s2/tarevalues.csv": "183588dccdef69a6273100eae2c3f39c45332e8e",
+      "warp/s2/twist/twist.dat": "6fe4d458e50d5af6314cadd2c518cbc0b6f92dcf",
+      "weft/s2/compression/compression.dat": "d717ef2749b6f597b1f42970f4617e9017b81532",
+      "weft/s2/friction/friction.dat": "3afce34f36d2f5eb581480f568f06fdb724aaa44",
+      "weft/s2/tarevalues.csv": "054d4a46a6d4d95a000fac69a5478312b5ca2726",
+      "weft/s2/twist/twist.dat": "c68be889f0fff249b340fa3ff199d998d3b5923f"
+    }
+  },
+  "N02": {
+    "run": "001",
+    "instrument_specimen": "147_N02_001",
+    "pins": {
+      "head.dat": "b9951c4542eb8b06872a6203925df0a5a4c115b1",
+      "warp/s1/compression/compression.dat": "2e7499371d58c5065eba7db565cf687ec4b2fa55",
+      "warp/s1/friction/friction.dat": "c43ad0149a0cb17ae42c081c866c56c2b6576341",
+      "warp/s1/tarevalues.csv": "430e16bf9fffd5ad73bab6956e55f8619a6901ef",
+      "warp/s1/twist/twist.dat": "de0587027454667ae6d4a0ce5639c27ac4e36960",
+      "weft/s1/compression/compression.dat": "4eeec9b86a4c17b5b84ef9baf8fb2a33dc8cb572",
+      "weft/s1/friction/friction.dat": "ad0c30e33b8cb1c5983ae3d9614ec971ca29e125",
+      "weft/s1/tarevalues.csv": "4a491fefdbe981f44ebe8ee5de3539c3f8e8f701",
+      "weft/s1/twist/twist.dat": "34699dba0197ffcfea653bffe3432eaaba69a1a0"
+    }
+  },
+  "P01": {
+    "run": "001",
+    "instrument_specimen": "1002_P01_001",
+    "pins": {
+      "head.dat": "1e8da4e68ebe7e4bf1e8e85e971e2537cc8d48b2",
+      "warp/s1/compression/compression.dat": "dd8d3df08af10cc345c8dffd2a30df8b4d19f1e2",
+      "warp/s1/friction/friction.dat": "78a3ecc59bb61104e9d76163df7582ae521b7c18",
+      "warp/s1/tarevalues.csv": "05ec24fa6abca87b4967eb964967cd19ae67cd9c",
+      "warp/s1/twist/twist.dat": "048fa68ed119015fca8af1340e9a01746d35f62c",
+      "weft/s1/compression/compression.dat": "6ec66935a2f47c5199e39324ef14fe4df7140071",
+      "weft/s1/friction/friction.dat": "3237b38018a1794070544552c965da3a42b37a5e",
+      "weft/s1/tarevalues.csv": "1421745b3a1aa6814c4c67c8710a17d931c660fc",
+      "weft/s1/twist/twist.dat": "e8fcf33962ebe1e9a1eecbd691f222fcf9a54662"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "P02": {
+    "run": "001",
+    "instrument_specimen": "146_P02_001",
+    "pins": {
+      "head.dat": "b6bcf2ad7a4285d15fe38a3d0cc7534e63ab8787",
+      "warp/s2/compression/compression.dat": "681c7e3d074dcbe220844cb27acdbee5006e1a9a",
+      "warp/s2/friction/friction.dat": "9a2aa252a73ecea7c0755a1b0fb076b042d9d637",
+      "warp/s2/tarevalues.csv": "39251ec28e5f4a84ba2f71ff313478f1719619c5",
+      "warp/s2/twist/twist.dat": "e04f2709a8da2a9cff68d43d369b7f1b92512efa",
+      "weft/s1/compression/compression.dat": "a99b9dfc5d7a584e0b90d77fba1d0fe616132e5a",
+      "weft/s1/friction/friction.dat": "86856962d54dd9c56620ee4e8646439ba49b10dc",
+      "weft/s1/tarevalues.csv": "6678096488c2303e065ade0d8a34c38fc18b0389",
+      "weft/s1/twist/twist.dat": "978cf2e0becc14f8192a3c62a224820436078330"
+    }
+  },
+  "Paper 1": {
+    "run": "001",
+    "instrument_specimen": "1026_Paper1_001",
+    "pins": {
+      "head.dat": "de08889640e86289aaab2cd320d34687e8cb520f",
+      "warp/s1/compression/compression.dat": "be5b10654c8e280224069b8bf6a38e96f1a8c9d9",
+      "warp/s1/friction/friction.dat": "9e88a91d0d1b4208b472e179fa8d16c27b215ffc",
+      "warp/s1/tarevalues.csv": "527bb2ea8822f0c88e68f2430133dfffa47296ea",
+      "warp/s1/twist/twist.dat": "85d97d22f1f6668f2ba47bc13597bf3947ca6cfe"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1"
+    ]
+  },
+  "R01": {
+    "run": "001",
+    "instrument_specimen": "1005_R01_001",
+    "pins": {
+      "head.dat": "46a650a0b239d549095d7cc7616e29381cc69f06",
+      "warp/s1/compression/compression.dat": "cacecbe9ad39273aec5a5e8ac333c144abd0717e",
+      "warp/s1/friction/friction.dat": "631b475edf89c3337fdbc7c9983aba5d4fe1d6bf",
+      "warp/s1/tarevalues.csv": "841c7b0450b02c16c67103a6ef226a93309b5d73",
+      "warp/s1/twist/twist.dat": "92929545c0af3c7558a8af1c11066fbabca69a7b",
+      "weft/s1/compression/compression.dat": "057424410e1ae60b8c0cb4d9549cd61a7f0b093c",
+      "weft/s1/friction/friction.dat": "02fc785739551fa6caf2ac3727b33d6f59f39121",
+      "weft/s1/tarevalues.csv": "a385b4c2df7cf38ca4d621d5eea021fc640fe158",
+      "weft/s1/twist/twist.dat": "4dd7dbf691be9f93a97a548b64b1649b7c3e6737"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "R02": {
+    "run": "001",
+    "instrument_specimen": "141_R02_001",
+    "pins": {
+      "head.dat": "aaf28b49ed69f517e8986c940314eff8780653b5",
+      "warp/s1/compression/compression.dat": "eb643b5f2f9d4454a23780e38047f2a4c4934805",
+      "warp/s1/friction/friction.dat": "44c3abe858bd9d2ff6d4b494155e122d3dedf209",
+      "warp/s1/tarevalues.csv": "07632f1f7f1cb77c11fb78f17342caf5b75d6137",
+      "warp/s1/twist/twist.dat": "e6d5824c31a198309e00c1f777a9c8e6350c99ca",
+      "weft/s2/compression/compression.dat": "8ad4d5469a15f3b284b0b2270cfee8ba287895f4",
+      "weft/s2/friction/friction.dat": "1ec7242f1c28c89156d0d89708399d88788578a7",
+      "weft/s2/tarevalues.csv": "b67986030ab1d4d31f33838fdd2d1d8db5f09329",
+      "weft/s2/twist/twist.dat": "e7597bc04d1c20e4dceda504671b9a87294eeefd"
+    }
+  },
+  "R03": {
+    "run": "001",
+    "instrument_specimen": "1020_R03_001",
+    "pins": {
+      "head.dat": "c085dbc2cbb816f61c7e01110557f2e8786c02af",
+      "warp/s1/compression/compression.dat": "a3a45abee44b882cf5fdd3c33c8a12ee60c76638",
+      "warp/s1/friction/friction.dat": "f89b8904e25b8e2b9690ed4f8191cba51567aa28",
+      "warp/s1/tarevalues.csv": "59173322ee6879f5a42bd567c37f0a5397bf47e2",
+      "warp/s1/twist/twist.dat": "3beb813f5cf98956dfdf89aff3076363844f5b55",
+      "weft/s1/compression/compression.dat": "5604cedde0f7efd528f0a188208bc11870ee8484",
+      "weft/s1/friction/friction.dat": "bfa54a3bbab5e806229b2bf6460c34fbfcfc9e01",
+      "weft/s1/tarevalues.csv": "0d9580f8954ad12a32368ca86a61215b0b80689d",
+      "weft/s1/twist/twist.dat": "d584f74326b947618fce66a4d63943f360e72460"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "S01": {
+    "run": "001",
+    "instrument_specimen": "1018_S01_001",
+    "pins": {
+      "head.dat": "f326a690403bbd2f7e75fb4b79f30e1c631fb3c7",
+      "warp/s1/compression/compression.dat": "d026e351de2acc95137f5434e8d21ce3413a5fb9",
+      "warp/s1/friction/friction.dat": "2bfb2aeff70e5b93db9431d97a99d50dd96b7c75",
+      "warp/s1/tarevalues.csv": "701c3d388fa82b13f415d60fb104452f264d7b98",
+      "warp/s1/twist/twist.dat": "f808a63e642cee110a672f945796228703587e3f",
+      "weft/s1/compression/compression.dat": "e20195e38b68043bce4dddafb6377cb4f4becb30",
+      "weft/s1/friction/friction.dat": "53502d38c252d3b33d2d16507bab9ec2026041d9",
+      "weft/s1/tarevalues.csv": "e0abb349cf236a6f209a07f196050b9f725a34e8",
+      "weft/s1/twist/twist.dat": "3f2ff58b215015bdaca69d1f7bf2247e970696c1"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "S02": {
+    "run": "001",
+    "instrument_specimen": "1006_S02_001",
+    "pins": {
+      "head.dat": "5bbb75b3575969d27b8300263a8e2b37c59f982a",
+      "warp/s1/compression/compression.dat": "f9a3a64800c7378aa2f09d2546dcb7110c9572f6",
+      "warp/s1/friction/friction.dat": "859e5e18e950ba866ec7f7f308d1e5073e7435c9",
+      "warp/s1/tarevalues.csv": "a1913c49de80404b25930660f8fc6edfbb0fa938",
+      "warp/s1/twist/twist.dat": "15c7ac2039f81ce2aed5d0208a6aa313c6132723",
+      "weft/s1/compression/compression.dat": "7c57868ebefe3a7a10e766473c172aff70b23408",
+      "weft/s1/friction/friction.dat": "d1fd36ed0adfec4bb3b7026183dad6d1a5bf77aa",
+      "weft/s1/tarevalues.csv": "d146366791c137d5cfa279a77af1c8cec8f728ea",
+      "weft/s1/twist/twist.dat": "69bd5686a3d8f170e976c264c168f4b5a91435b6"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "S03": {
+    "run": "001",
+    "instrument_specimen": "132_S03_001",
+    "pins": {
+      "head.dat": "fa2f68fa182527db2b3071197a656004dee66dc5",
+      "warp/s1/compression/compression.dat": "e6553e0c026b237ed3fff34aad73098631fe98fd",
+      "warp/s1/friction/friction.dat": "719ee81ea2e9dc649b908cc31116f4f90598f461",
+      "warp/s1/tarevalues.csv": "12ecd8680a541e5cde76d6ef78fe1e6896a2922a",
+      "warp/s1/twist/twist.dat": "0cfcf45c27f091691360384345061bb2748bebf5",
+      "weft/s4/compression/compression.dat": "3cf77a21905930830d5cc3d054724fde1fbc3635",
+      "weft/s4/friction/friction.dat": "f47f507684e025d9fca2a0e9940b9ef180d8b4df",
+      "weft/s4/tarevalues.csv": "9ae97b02abf79ba3ebe51bef66ed29e2179df9de",
+      "weft/s4/twist/twist.dat": "f39569532ae9a2de23c3b0ded78c607f7fb25a9a"
+    }
+  },
+  "S04": {
+    "run": "001",
+    "instrument_specimen": "1007_S04_001",
+    "pins": {
+      "head.dat": "8e26acd008461c9b99efb4f662013dc3df4c11e9",
+      "warp/s1/compression/compression.dat": "2982b37e0d594e7c361fee34fb1bd5bf95aec304",
+      "warp/s1/friction/friction.dat": "79852768b6d67fb6eb5b102799426a6317c4037b",
+      "warp/s1/tarevalues.csv": "c2eba0db9e664a1c027a4517738300f3f4935cac",
+      "warp/s1/twist/twist.dat": "5f63c064d4fc410a82074371e12dfb6b68010f91",
+      "weft/s1/compression/compression.dat": "f72c01f63030ac36ab0f05691cb479b600d7dd09",
+      "weft/s1/friction/friction.dat": "81dfaf96351d3e2b0244d4832d87a3d03f0eeb63",
+      "weft/s1/tarevalues.csv": "071ef906196e1b3d9a214a63f10ab26e1220dff7",
+      "weft/s1/twist/twist.dat": "1afe4938a457d7db76d23c247dd4eca04df5ed3c"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "S05": {
+    "run": "001",
+    "instrument_specimen": "1009_S05_001",
+    "pins": {
+      "head.dat": "7f38bc732b5493ae35145b5d1889d23a523907d3",
+      "warp/s1/compression/compression.dat": "39c52896fde97165b23de4159b96b09b0dd85fbf",
+      "warp/s1/friction/friction.dat": "1029916c437dfbb585f878479df26edc578e71ee",
+      "warp/s1/tarevalues.csv": "5e41fa6562af4c56fd36caaac3850058b54867f0",
+      "warp/s1/twist/twist.dat": "908b9a5d0f6173c29eef81e718dc4f1f55dac35f",
+      "weft/s1/compression/compression.dat": "a1cb1a21a953a5b5d54b21a47e31c23b4d11353f",
+      "weft/s1/friction/friction.dat": "0a4d146801eb6ff39ddfaa674d676cb1c7ac0fa5",
+      "weft/s1/tarevalues.csv": "9504eec3f0e55fa838f1d3f5489b6544fe579700",
+      "weft/s1/twist/twist.dat": "107187ddb72df583283ab2866ecf5272be90b0de"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "S06": {
+    "run": "001",
+    "instrument_specimen": "1024_S06_001",
+    "pins": {
+      "head.dat": "ef984ff1863993a5cce443d3db6be7d8e9275709",
+      "warp/s1/compression/compression.dat": "58a0abd074eeb2c6cd70d0d599f4c3019f2e4ca3",
+      "warp/s1/friction/friction.dat": "9b3220f3a6f92995bb6be8107e929eecec944454",
+      "warp/s1/tarevalues.csv": "b49e283f8ce3f8d82bd5bca011207bf62675a094",
+      "warp/s1/twist/twist.dat": "00d76bf81726e615fa528e02972dd643e1aa96dc",
+      "weft/s1/compression/compression.dat": "87b54739910771d64ce5970b6f3f217f2981e1dc",
+      "weft/s1/friction/friction.dat": "31f2fb908a6f4d4d8e0006c962322c0a10304f09",
+      "weft/s1/tarevalues.csv": "f43eb4b4ae5ca312a9e96a093e55f9c666863e20",
+      "weft/s1/twist/twist.dat": "a7c24fe8918e3443cba8ce2dc3bd9d61fc439496"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "S08": {
+    "run": "001",
+    "instrument_specimen": "1010_S08_001",
+    "pins": {
+      "head.dat": "6f5671d331594fdf110916a957b5de30244dc584",
+      "warp/s1/compression/compression.dat": "fb397e757064fde8d58c0bc8bdf11a0cbe0f869f",
+      "warp/s1/friction/friction.dat": "62bb761b07e600503e69f19b4ec340842b5c1d7f",
+      "warp/s1/tarevalues.csv": "76edc8b7763cb3b9e8607020092d1a502a38156c",
+      "warp/s1/twist/twist.dat": "d93f27652f6d43f02ac697d4c68d41ff25396256",
+      "weft/s1/compression/compression.dat": "269b0b91a861e2a0ddca0c2f413fa42d55416fe5",
+      "weft/s1/friction/friction.dat": "ad6b22253e8b7b6b85d10616336960dcb6616f1f",
+      "weft/s1/tarevalues.csv": "5162c2c150a79b3e08e50ce527ade01fbbb091ae",
+      "weft/s1/twist/twist.dat": "9880f199b9a4bcb8eb2ef2aca39a0f8d42f07591"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "S09": {
+    "run": "001",
+    "instrument_specimen": "136_S09_001",
+    "pins": {
+      "head.dat": "b03131312e37507694c3e63e37fb8c52f68d5592",
+      "warp/s1/compression/compression.dat": "0f3f8c29740cb5a4a9a3135afb4e653bcd0c8ef2",
+      "warp/s1/friction/friction.dat": "7a726b8d39685eb8778d42637a17c91d9d00cba0",
+      "warp/s1/tarevalues.csv": "82ded71596beeb0012b66cb45beb4ef1c11cd95a",
+      "warp/s1/twist/twist.dat": "caa408da65b281aa1cd82d1850ef1f91bcd04f99",
+      "weft/s1/compression/compression.dat": "3765abc19e54c1630f2361368cb767eb6bf2c898",
+      "weft/s1/friction/friction.dat": "37a96fde9a3f2a79fedc44c190ab6c91ccbefd65",
+      "weft/s1/tarevalues.csv": "ce295c73124de332e1a1fc18dd563fc2eb8f073b",
+      "weft/s1/twist/twist.dat": "9146102235faa8d36894a393fd04109c684e3352"
+    }
+  },
+  "S10": {
+    "run": "001",
+    "instrument_specimen": "137_S10_001",
+    "pins": {
+      "head.dat": "ae184774eb85cadc18db2d1e8ce39ae632abef22",
+      "warp/s2/compression/compression.dat": "016344a83b5a6d39534b82446dca0b96809707c9",
+      "warp/s2/friction/friction.dat": "a096fc5961ddc3aede6f491e28066ad7a3b80a45",
+      "warp/s2/tarevalues.csv": "e7f159acc7581522932645b71d7a097190252fcf",
+      "warp/s2/twist/twist.dat": "4b7d7d47bd82ea6a9c534486475e799bc6c6cf43",
+      "weft/s9/compression/compression.dat": "4deedc5fd50e06db9e3f65d8acac8689fea86db3",
+      "weft/s9/friction/friction.dat": "c8598ed59a829d902b36ae2203a1b6726a2abfe0",
+      "weft/s9/tarevalues.csv": "6c7b374725e9a61956eafb7a64d28f7e8fd308a2",
+      "weft/s9/twist/twist.dat": "9c321cedc46a8c8a4e24cad22aa1a7adc4122eaf"
+    }
+  },
+  "S11": {
+    "run": "001",
+    "instrument_specimen": "138_S11_001",
+    "pins": {
+      "head.dat": "c416908ebdb1252cfc87085542739f5bcb0f5059",
+      "warp/s3/compression/compression.dat": "ba83502177be8dd2e4fb6b68713960a55ade0508",
+      "warp/s3/friction/friction.dat": "c3d1f23bfb2241fca2c1f64988b5915e9bf5960e",
+      "warp/s3/tarevalues.csv": "c4bbcc027d536cc5970c3e3681852ce62f3c6026",
+      "warp/s3/twist/twist.dat": "db0e3ff8e5325ac285f1749a9c996e8831c88670",
+      "weft/s1/compression/compression.dat": "eb67a50548a08db3a6eac512813a0e7e65a1e206",
+      "weft/s1/friction/friction.dat": "24dedd9c1dc4ec2d1f1442484d13f969a7363dd3",
+      "weft/s1/tarevalues.csv": "d5be705922d3b608fd812c685322889f41452e63",
+      "weft/s1/twist/twist.dat": "06da40722e3caf2384b4ed7d7230de6b1f247225"
+    }
+  },
+  "S12": {
+    "run": "001",
+    "instrument_specimen": "1014_S12_001",
+    "pins": {
+      "head.dat": "72f50a55f766f104a0fd814572a5cc6db1a12af7",
+      "warp/s1/compression/compression.dat": "16e6f8aff70701fa5c5405d3d68caab5e05eb9b8",
+      "warp/s1/friction/friction.dat": "81363eaa476816513d8507225b4be11aeae9e7b9",
+      "warp/s1/tarevalues.csv": "fda66d0fc1b8c065c89ccdb154929dc375051c5a",
+      "warp/s1/twist/twist.dat": "e7a977d0226649b9562c7904de9ed40cea014290",
+      "weft/s1/compression/compression.dat": "962e58c74ae2dc145dbdf7849bfd2b97f37a6527",
+      "weft/s1/friction/friction.dat": "d85208a0be1b99e814c4dea128d2dd9141825ac2",
+      "weft/s1/tarevalues.csv": "582c5be33ebd761fc7090dc5e1cf624bfe112b79",
+      "weft/s1/twist/twist.dat": "d897265ab9d115b50aefe126cd62c5eaf81b9ff2"
+    },
+    "unresolved_twist_clocks": [
+      "warp/s1",
+      "weft/s1"
+    ]
+  },
+  "W01": {
+    "run": "001",
+    "instrument_specimen": "126_W01_001",
+    "pins": {
+      "head.dat": "54c5c0f98941b0c12776374a39c8aaece9e9068d",
+      "warp/s1/compression/compression.dat": "11e20be392117aef6ee1f2e3a012eca4b42a5cb5",
+      "warp/s1/friction/friction.dat": "69e1e99165539004d1fa5babc06de20469664a8f",
+      "warp/s1/tarevalues.csv": "5cccefdcfc92d9b7a0b6b95808c1eb0c959b9729",
+      "warp/s1/twist/twist.dat": "1c60c0c1f8220d9675499574df705442a26d9470",
+      "weft/s1/compression/compression.dat": "198d63bac21fe5f8987fb5355e34a10683819004",
+      "weft/s1/friction/friction.dat": "d26ea54730e1258b6587aa9de191f891927d2aa9",
+      "weft/s1/tarevalues.csv": "c67b1283d2aa94a271fc3b776e6f62ac4d1e6264",
+      "weft/s1/twist/twist.dat": "c1b17d3149aff9e6951d210f630b729bb3808402"
+    }
+  },
+  "W02": {
+    "run": "001",
+    "instrument_specimen": "127_W02_001",
+    "pins": {
+      "head.dat": "d3acf87b2743ae9021b3246cef1d8253f18aeca5",
+      "warp/s1/compression/compression.dat": "d132bbd8a29c2e84ae95a576c7c7dbd811a68b54",
+      "warp/s1/friction/friction.dat": "09bfcaeb0c7b05d071984d6523ce88d3a5fcd939",
+      "warp/s1/tarevalues.csv": "87752f36f187b2352f86d29ed3f8257cd5dabac2",
+      "warp/s1/twist/twist.dat": "25f02744bca3e7192ac7241005a885daf21f966e",
+      "weft/s1/compression/compression.dat": "d5dff8d61d3dc822fbbf55a96c72abc4bca20e88",
+      "weft/s1/friction/friction.dat": "b0c3899da0d7aee35ba3484eb75d76282e27bea2",
+      "weft/s1/tarevalues.csv": "6a33f16d6d5b26e2f2b2a9f528105fda398f4a2b",
+      "weft/s1/twist/twist.dat": "f567dc0468706446cb0b3ade527330d92c24fb6d"
+    }
+  },
+  "W03": {
+    "run": "001",
+    "instrument_specimen": "128_W03_001",
+    "pins": {
+      "head.dat": "ecf8f232387c3a8ecb984ba9096154f9e94eea16",
+      "warp/s1/compression/compression.dat": "0edaa83861845b88c72e902c74383941859a8f20",
+      "warp/s1/friction/friction.dat": "72e7ff6855ed72b93b09f88940bb415aa58fbb53",
+      "warp/s1/tarevalues.csv": "5bac5ce44eff224bbf6f08c632b59af8e6661fa5",
+      "warp/s1/twist/twist.dat": "d50438072acabea40441cc57f0efae64a35c89aa",
+      "weft/s1/compression/compression.dat": "613764bf9d6913959815dd222fa6d5d37a8e5851",
+      "weft/s1/friction/friction.dat": "32b589f6c217660e8d868af000ddb3cc2cb6d6ee",
+      "weft/s1/tarevalues.csv": "10008a905e009284511df5819c822ca7c37202dd",
+      "weft/s1/twist/twist.dat": "5c264035f8c9c21701ce1295d3dd07664cdaad4f"
+    }
+  },
+  "W04": {
+    "run": "001",
+    "instrument_specimen": "129_W04_001",
+    "pins": {
+      "head.dat": "3ad02868b5f1c7d5a98a9d05e68ce8b9397ef958",
+      "warp/s1/compression/compression.dat": "82e1d48a0ca9ad693850c0d17962e331157c10b0",
+      "warp/s1/friction/friction.dat": "854f9713f7fd4023e714443829a4312927ac7989",
+      "warp/s1/tarevalues.csv": "5bfadc995d30db38f70d17c14b9da02dfd281043",
+      "warp/s1/twist/twist.dat": "8ef9b0022b25bc694a2a64ddd932376c7a021e07",
+      "weft/s1/compression/compression.dat": "e7906e28580ee02de753123db45d9b9485a967dd",
+      "weft/s1/friction/friction.dat": "92361caab5f6c69395af71410c8c84137dc6564d",
+      "weft/s1/tarevalues.csv": "a010f82015d76d5297d6ce90dcaf83a289e2e6ee",
+      "weft/s1/twist/twist.dat": "c3dc2c2b534e6e0d47fa881d0c18430417cd6646"
     }
   }
 }
