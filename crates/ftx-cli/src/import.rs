@@ -41,7 +41,7 @@ pub(super) fn cmd_import(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ));
     }
     let out = Path::new(required(args, "out")?);
-    match fs::symlink_metadata(out) {
+    match crate::round::symlink_metadata(out) {
         Ok(_) => {
             return Err(bad_input(format!(
                 "{} already exists; choose a new import directory",

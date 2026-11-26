@@ -575,7 +575,8 @@ pub fn read_dir_files(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Refusal> 
     let io_at = |path: &Path, e: std::io::Error| {
         Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()))
     };
-    let root_meta = std::fs::symlink_metadata(dir).map_err(|e| io_at(dir, e))?;
+    let normalized: std::path::PathBuf = dir.components().collect();
+    let root_meta = std::fs::symlink_metadata(&normalized).map_err(|e| io_at(dir, e))?;
     if !root_meta.file_type().is_dir() {
         return Err(Refusal::new(
             RefusalCode::InvalidDocument,
@@ -692,12 +693,35 @@ mod tests {
         fs::create_dir_all(&export_dir).unwrap();
         fs::write(export_dir.join("ok.txt"), b"ok").unwrap();
 
-        // 1. Symlinked root directory.
+        // 1. Symlinked root directory (bare, trailing slash, and trailing `/.`).
         let alias = root.join("out_alias");
         symlink(&export_dir, &alias).unwrap();
-        let err = read_dir_files(&alias).unwrap_err();
-        assert_eq!(err.code, RefusalCode::InvalidDocument);
-        assert!(err.message.contains("regular directory"), "{err}");
+        for candidate in [
+            alias.clone(),
+            std::path::PathBuf::from(format!("{}/", alias.display())),
+            alias.join("."),
+        ] {
+            let err = read_dir_files(&candidate).unwrap_err();
+            assert_eq!(
+                err.code,
+                RefusalCode::InvalidDocument,
+                "{}",
+                candidate.display()
+            );
+            assert!(
+                err.message.contains("regular directory"),
+                "{}: {err}",
+                candidate.display()
+            );
+        }
+        assert!(
+            read_dir_files(&std::path::PathBuf::from(format!(
+                "{}/",
+                export_dir.display()
+            )))
+            .unwrap()
+            .contains_key("ok.txt")
+        );
 
         // 2. Symlinked top-level file.
         let link_file = export_dir.join("linked.txt");

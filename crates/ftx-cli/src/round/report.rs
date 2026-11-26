@@ -299,7 +299,7 @@ fn local_path(value: &str) -> bool {
 }
 
 fn regular_file(path: &Path) -> Result<bool, Refusal> {
-    match std::fs::symlink_metadata(path) {
+    match super::symlink_metadata(path) {
         Ok(m) => Ok(m.is_file() && !m.file_type().is_symlink()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(super::io(path, e)),

@@ -459,7 +459,7 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     ))?;
     let shading = crate::render::shading(args.options.get("shading").map(String::as_str))?;
     let output = PathBuf::from(required(args, "out")?);
-    match fs::symlink_metadata(&output) {
+    match crate::round::symlink_metadata(&output) {
         Ok(_) => {
             return Err(bad_input(
                 "outfit output must be a new directory; previous runs are never overwritten",

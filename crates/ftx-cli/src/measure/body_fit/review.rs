@@ -17,7 +17,7 @@ const MAX_FACES: usize = 200_000;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 
 pub(super) fn preflight(path: &Path) -> Result<(), Refusal> {
-    match fs::symlink_metadata(path) {
+    match crate::round::symlink_metadata(path) {
         Ok(_) => {
             return Err(bad_input(
                 "mesh output must be a new directory, not an existing path or link",

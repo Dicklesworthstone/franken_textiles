@@ -66,7 +66,7 @@ pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), Refusal> {
 
 /// Refuse links for mutable workspace metadata. User-selected input paths may still be links.
 fn no_link(path: &Path) -> Result<(), Refusal> {
-    match fs::symlink_metadata(path) {
+    match crate::round::symlink_metadata(path) {
         Ok(m) if m.file_type().is_symlink() => Err(bad_input(format!(
             "{}: workspace output must not be a symbolic link",
             path.display()

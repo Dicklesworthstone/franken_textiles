@@ -1294,7 +1294,7 @@ fn reserve_drape_output(out: &std::path::Path) -> Result<(), Refusal> {
 }
 
 fn reserve_output(out: &std::path::Path, command: &str) -> Result<(), Refusal> {
-    match std::fs::symlink_metadata(out) {
+    match round::symlink_metadata(out) {
         Ok(_) => {
             return Err(bad_input(format!(
                 "{}: {command} output already exists; use a new directory for every run",

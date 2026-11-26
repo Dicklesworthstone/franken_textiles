@@ -58,7 +58,7 @@ fn budget(message: &str) -> Refusal {
 fn output(args: &Args, command: &str) -> Result<PathBuf, Refusal> {
     known_options(args, command, &["out"])?;
     let path = PathBuf::from(required(args, "out")?);
-    match fs::symlink_metadata(&path) {
+    match crate::round::symlink_metadata(&path) {
         Ok(_) => {
             return Err(bad_input(
                 "mask output must be a new directory, not an existing path or link",

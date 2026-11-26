@@ -299,7 +299,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     request.options.validate()?;
     let out = Path::new(required(args, "out")?);
-    if fs::symlink_metadata(out).is_ok() {
+    if crate::round::symlink_metadata(out).is_ok() {
         return Err(bad_input(
             "video decode output must be a new directory, not an existing path or link",
         ));

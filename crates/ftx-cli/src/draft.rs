@@ -125,7 +125,7 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let (pp, sp) = (out.join("pattern.json"), out.join("fit_spec.json"));
     let errs = Pattern::new(pat.clone()).structure_errors();
     if fabric.is_some() || body.is_some() {
-        match std::fs::symlink_metadata(&out) {
+        match crate::round::symlink_metadata(&out) {
             Ok(_) => {
                 return Err(bad_input(
                     "draft with a selected fabric or body requires a fresh output directory; existing evidence is never overwritten",

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::{Args, bad_input, known_options, make_dir, required, workspace};
 
 fn unused(path: &Path) -> Result<(), Refusal> {
-    match std::fs::symlink_metadata(path) {
+    match crate::round::symlink_metadata(path) {
         Ok(_) => Err(bad_input(format!(
             "{} already exists; choose a new review output",
             path.display()
@@ -32,7 +32,7 @@ fn save_new(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
 fn publish(out: &Path, files: &[(String, Vec<u8>)]) -> Result<(), Refusal> {
     // Compute every artifact before publication. Existing unrelated files in the destination
     // are allowed, but no artifact or dangling link may be replaced. JSON is written last.
-    if std::fs::symlink_metadata(out).is_ok_and(|m| m.file_type().is_symlink()) {
+    if crate::round::symlink_metadata(out).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(bad_input("review output directory must not be a symlink"));
     }
     for (name, _) in files {
@@ -487,7 +487,7 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     // Never write `--px-out` before `publish(out, &artifacts)` succeeds, and never follow a symlink there.
     let px_external = args.options.get("px-out").map(Path::new);
     if let Some(file) = px_external {
-        match std::fs::symlink_metadata(file) {
+        match crate::round::symlink_metadata(file) {
             Ok(m) if !m.is_file() => {
                 return Err(bad_input(
                     "--px-out must name a regular file, not a directory or symlink",
@@ -623,5 +623,14 @@ mod tests {
         let regular_out = root.join("sub/out.json");
         write_text(&regular_out, "ok\n").unwrap();
         assert_eq!(std::fs::read_to_string(&regular_out).unwrap(), "ok\n");
+
+        let real_dir = root.join("real_review");
+        std::fs::create_dir(&real_dir).unwrap();
+        let dir_link = root.join("linked_review");
+        symlink(&real_dir, &dir_link).unwrap();
+        let trailing = std::path::PathBuf::from(format!("{}/", dir_link.display()));
+        let err = publish(&trailing, &[("out.json".into(), b"{}".to_vec())]).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(std::fs::read_dir(&real_dir).unwrap().next().is_none());
     }
 }

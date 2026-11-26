@@ -101,10 +101,24 @@ fn io(path: &Path, e: impl std::fmt::Display) -> Refusal {
     Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()))
 }
 
+/// Strip trailing `/` and `/.` before `lstat` so POSIX cannot dereference a symlinked directory.
+pub(super) fn symlink_metadata(path: &Path) -> std::io::Result<fs::Metadata> {
+    let normalized: PathBuf = path.components().collect();
+    fs::symlink_metadata(&normalized)
+}
+
+fn has_trailing_dir_syntax(path: &Path) -> bool {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    bytes.ends_with(b"/")
+        || bytes.ends_with(b"/.")
+        || (cfg!(windows) && (bytes.ends_with(b"\\") || bytes.ends_with(b"\\.")))
+}
+
 /// Never follow a symlink at a workspace-owned output path.
 pub(super) fn regular(path: &Path, directory: bool) -> Result<bool, Refusal> {
-    match fs::symlink_metadata(path) {
-        Ok(m) if if directory { m.is_dir() } else { m.is_file() } => Ok(true),
+    match symlink_metadata(path) {
+        Ok(m) if directory && m.is_dir() => Ok(true),
+        Ok(m) if !directory && m.is_file() && !has_trailing_dir_syntax(path) => Ok(true),
         Ok(_) => Err(bad_input(format!(
             "{} must be a regular {}",
             path.display(),
@@ -1826,5 +1840,55 @@ mod tests {
         assert_eq!(err.code, RefusalCode::InvalidDocument);
         assert!(err.message.contains("regular file"), "{}", err.message);
         assert!(!ws.join("rounds/001").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn regular_refuses_symlinked_dirs_even_with_trailing_slash_or_dot() {
+        use std::os::unix::fs::symlink;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "ftx-regular-trailing-{}-{stamp}",
+            std::process::id()
+        ));
+        let real_dir = root.join("real");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        let real_file = root.join("file.txt");
+        std::fs::write(&real_file, b"ok").unwrap();
+
+        let alias = root.join("alias");
+        symlink(&real_dir, &alias).unwrap();
+        let dangling = root.join("dangling");
+        symlink(root.join("missing"), &dangling).unwrap();
+
+        for path in [
+            alias.clone(),
+            PathBuf::from(format!("{}/", alias.display())),
+            alias.join("."),
+            dangling.clone(),
+            PathBuf::from(format!("{}/", dangling.display())),
+            dangling.join("."),
+        ] {
+            let err = regular(&path, true).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument, "{}", path.display());
+            assert!(
+                err.message.contains("regular directory"),
+                "{}: {err}",
+                path.display()
+            );
+        }
+
+        assert!(regular(&PathBuf::from(format!("{}/", real_dir.display())), true).unwrap());
+        assert!(regular(&real_dir.join("."), true).unwrap());
+        assert!(regular(&real_file, false).unwrap());
+        let file_slash = PathBuf::from(format!("{}/", real_file.display()));
+        assert_eq!(
+            regular(&file_slash, false).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
     }
 }

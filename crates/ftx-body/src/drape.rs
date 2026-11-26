@@ -72,13 +72,46 @@ impl Legs {
 }
 
 /// Absolute abduction of each arm from vertical, using the source model's left/right bone names.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ArmPose {
     /// Left arm angle from vertical, in degrees, 0..=180.
     pub left_abduction_deg: f64,
     /// Right arm angle from vertical, in degrees, 0..=180.
     pub right_abduction_deg: f64,
+}
+
+// The public JSON contract names both sides. A derived struct deserializer also accepts a
+// positional sequence, which would silently assign left/right meaning to an undocumented array.
+impl<'de> Deserialize<'de> for ArmPose {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            left_abduction_deg: f64,
+            right_abduction_deg: f64,
+        }
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = ArmPose;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an object with left_abduction_deg and right_abduction_deg")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let fields =
+                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(ArmPose {
+                    left_abduction_deg: fields.left_abduction_deg,
+                    right_abduction_deg: fields.right_abduction_deg,
+                })
+            }
+        }
+        deserializer.deserialize_map(Object)
+    }
 }
 
 impl ArmPose {
@@ -1981,6 +2014,30 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<ElbowPose>(serde_json::to_value(authored).unwrap()).unwrap(),
             authored
+        );
+        for malformed in [
+            serde_json::json!({}),
+            serde_json::json!([35.0, 10.0]),
+            serde_json::json!({"left_abduction_deg": 35.0}),
+            serde_json::json!({"left_abduction_deg": null, "right_abduction_deg": 35.0}),
+            serde_json::json!({"left_abduction_deg": 35.0, "right_abduction_deg": 10.0,
+                "extra": 1.0}),
+        ] {
+            assert!(serde_json::from_value::<ArmPose>(malformed).is_err());
+        }
+        assert!(
+            serde_json::from_str::<ArmPose>(
+                r#"{"left_abduction_deg": 0, "left_abduction_deg": 35, "right_abduction_deg": 10}"#,
+            )
+            .is_err()
+        );
+        let arms = ArmPose {
+            left_abduction_deg: 35.0,
+            right_abduction_deg: 10.0,
+        };
+        assert_eq!(
+            serde_json::from_value::<ArmPose>(serde_json::to_value(arms).unwrap()).unwrap(),
+            arms
         );
 
         let (_, mut parallel) = thumb_fixture();

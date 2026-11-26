@@ -44,7 +44,7 @@ fn bytes(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
 }
 
 fn absent(path: &Path) -> Result<(), Refusal> {
-    match fs::symlink_metadata(path) {
+    match crate::round::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(workspace::io_error(path, e)),
         Ok(_) => Err(bad_input(
