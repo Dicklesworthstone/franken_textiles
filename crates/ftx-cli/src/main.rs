@@ -1763,6 +1763,73 @@ fn cmd_drape_bound(
     Ok((result, code, text))
 }
 
+struct ElasticHoldCasing {
+    instance: String,
+    signed_mm: f64,
+    max_abs_mm: f64,
+    max_speed_mm_s: f64,
+    quiet_at_1_mm_s: Option<bool>,
+}
+
+fn elastic_hold_casings(report: &Value) -> Vec<ElasticHoldCasing> {
+    report["elastic_observation_windows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let instance = entry.get("instance")?.as_str().filter(|s| !s.is_empty())?;
+            let hold = entry.get("declared_hold")?.as_object()?;
+            if hold.get("status").and_then(Value::as_str) != Some("available") {
+                return None;
+            }
+            let signed_mm = hold
+                .get("signed_vertical_displacement_m")?
+                .as_f64()
+                .map(|v| v * 1e3)
+                .filter(|v| v.is_finite())?;
+            let max_abs_mm = hold
+                .get("maximum_absolute_vertical_displacement_m")?
+                .as_f64()
+                .map(|v| v * 1e3)
+                .filter(|v| v.is_finite())?;
+            let max_speed_mm_s = hold
+                .get("maximum_vertex_speed_m_s")?
+                .as_f64()
+                .map(|v| v * 1e3)
+                .filter(|v| v.is_finite())?;
+            let quiet_at_1_mm_s = hold.get("quiet_at_1_mm_s").and_then(Value::as_bool);
+            Some(ElasticHoldCasing {
+                instance: instance.to_string(),
+                signed_mm,
+                max_abs_mm,
+                max_speed_mm_s,
+                quiet_at_1_mm_s,
+            })
+        })
+        .collect()
+}
+
+fn format_elastic_hold_casings(casings: &[ElasticHoldCasing]) -> String {
+    casings
+        .iter()
+        .map(|c| {
+            let quiet = match c.quiet_at_1_mm_s {
+                Some(true) => ", quiet ≤1 mm/s",
+                Some(false) => ", moving >1 mm/s",
+                None => "",
+            };
+            format!(
+                "{}: Δz {} mm, max |Δz| {} mm, max speed {} mm/s{quiet}",
+                c.instance,
+                ftx_export::text::fnum(c.signed_mm, 2),
+                ftx_export::text::fnum(c.max_abs_mm, 2),
+                ftx_export::text::fnum(c.max_speed_mm_s, 2),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn append_drape_constitutive_summary(
     report: &Value,
     text: Option<&mut String>,
@@ -1803,6 +1870,11 @@ fn append_drape_constitutive_summary(
             .unwrap_or("unknown");
         Some((steps, status))
     });
+    let hold_casings = if elastic_hold.is_some() {
+        elastic_hold_casings(report)
+    } else {
+        Vec::new()
+    };
     if let Some(text) = text {
         if let Some((subdivided, nominal, accepted, trials)) = time_sub {
             text.push_str(&format!(
@@ -1839,9 +1911,16 @@ fn append_drape_constitutive_summary(
             }
         }
         if let Some((steps, status)) = elastic_hold {
-            text.push_str(&format!(
-                "elastic hold window: {steps} step(s) ({status})\n"
-            ));
+            if hold_casings.is_empty() {
+                text.push_str(&format!(
+                    "elastic hold window: {steps} step(s) ({status})\n"
+                ));
+            } else {
+                text.push_str(&format!(
+                    "elastic hold window: {steps} step(s) ({status}) — {}\n",
+                    format_elastic_hold_casings(&hold_casings)
+                ));
+            }
         }
         if let Some(scheme) = scheme {
             text.push_str(&format!("relaxation integration: {scheme}\n"));
@@ -1870,7 +1949,27 @@ fn append_drape_constitutive_summary(
             out["start_repair"] = repair.clone();
         }
         if let Some((steps, status)) = elastic_hold {
-            out["elastic_hold_window"] = json!({"requested_steps": steps, "status": status});
+            let mut block = json!({"requested_steps": steps, "status": status});
+            if !hold_casings.is_empty() {
+                block["casings"] = Value::Array(
+                    hold_casings
+                        .iter()
+                        .map(|c| {
+                            let mut row = json!({
+                                "instance": c.instance,
+                                "signed_vertical_displacement_mm": c.signed_mm,
+                                "maximum_absolute_vertical_displacement_mm": c.max_abs_mm,
+                                "maximum_vertex_speed_mm_s": c.max_speed_mm_s,
+                            });
+                            if let Some(quiet) = c.quiet_at_1_mm_s {
+                                row["quiet_at_1_mm_s"] = json!(quiet);
+                            }
+                            row
+                        })
+                        .collect(),
+                );
+            }
+            out["elastic_hold_window"] = block;
         }
         if let Some(scheme) = scheme {
             out["relaxation_integration"] = json!(scheme);
@@ -2789,6 +2888,65 @@ mod tests {
         assert_eq!(
             diag_json["elastic_hold_window"],
             json!({"requested_steps": 6, "status": "available"})
+        );
+
+        let mut casing_text = String::new();
+        let mut casing_json = json!({});
+        append_drape_constitutive_summary(
+            &json!({
+                "elastic_hold_window": {"requested_steps": 6, "status": "available"},
+                "elastic_observation_windows": [
+                    {
+                        "instance": "waistband",
+                        "declared_hold": {
+                            "status": "available",
+                            "signed_vertical_displacement_m": -0.0004,
+                            "maximum_absolute_vertical_displacement_m": 0.0005,
+                            "maximum_vertex_speed_m_s": 0.0008,
+                            "quiet_at_1_mm_s": true
+                        }
+                    },
+                    {
+                        "instance": "hem_cuff",
+                        "declared_hold": {
+                            "status": "available",
+                            "signed_vertical_displacement_m": 0.0012,
+                            "maximum_absolute_vertical_displacement_m": 0.0015,
+                            "maximum_vertex_speed_m_s": 0.0024,
+                            "quiet_at_1_mm_s": false
+                        }
+                    },
+                    {
+                        "instance": "ignored",
+                        "declared_hold": {"status": "not_requested"}
+                    }
+                ]
+            }),
+            Some(&mut casing_text),
+            Some(&mut casing_json),
+        );
+        assert_eq!(
+            casing_text,
+            "elastic hold window: 6 step(s) (available) — waistband: Δz -0.4 mm, max |Δz| 0.5 mm, max speed 0.8 mm/s, quiet ≤1 mm/s; hem_cuff: Δz 1.2 mm, max |Δz| 1.5 mm, max speed 2.4 mm/s, moving >1 mm/s\n"
+        );
+        assert_eq!(
+            casing_json["elastic_hold_window"]["casings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            casing_json["elastic_hold_window"]["casings"][0]["instance"],
+            "waistband"
+        );
+        assert_eq!(
+            casing_json["elastic_hold_window"]["casings"][0]["quiet_at_1_mm_s"],
+            true
+        );
+        assert_eq!(
+            casing_json["elastic_hold_window"]["casings"][1]["quiet_at_1_mm_s"],
+            false
         );
     }
 

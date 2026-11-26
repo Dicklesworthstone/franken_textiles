@@ -2180,6 +2180,26 @@ function nappyOccupancyResult(parent, occupancy) {
   parent.append(note);
   detail(parent, "Nappy target evidence and occupied geometry identity (display only)", occupancy);
 }
+function elasticHoldWindowSummary(report) {
+  const hold = report?.elastic_hold_window;
+  if (!hold || !Number.isInteger(hold.requested_steps) || hold.requested_steps <= 0) return null;
+  const status = typeof hold.status === "string" && hold.status ? hold.status : "unknown";
+  const casings = Array.isArray(report.elastic_observation_windows) ? report.elastic_observation_windows.flatMap(entry => {
+    const instance = typeof entry?.instance === "string" && entry.instance ? entry.instance : null;
+    const dh = entry?.declared_hold;
+    if (!instance || dh?.status !== "available") return [];
+    const signed = dh.signed_vertical_displacement_m, maxAbs = dh.maximum_absolute_vertical_displacement_m, speed = dh.maximum_vertex_speed_m_s;
+    if (![signed, maxAbs, speed].every(v => typeof v === "number" && Number.isFinite(v * 1e3))) return [];
+    return [{
+      instance,
+      signed_vertical_displacement_mm: signed * 1e3,
+      maximum_absolute_vertical_displacement_mm: maxAbs * 1e3,
+      maximum_vertex_speed_mm_s: speed * 1e3,
+      ...(typeof dh.quiet_at_1_mm_s === "boolean" ? { quiet_at_1_mm_s: dh.quiet_at_1_mm_s } : {}),
+    }];
+  }) : [];
+  return { requested_steps: hold.requested_steps, status, ...(casings.length ? { casings } : {}) };
+}
 function comparison(op, r, parent = sections.get(op).comparison, { skipManufacturing = false, filePrefix = "", casePolicies = {} } = {}) {
   if (op === "screen") {
     screening(parent, r);
@@ -2202,11 +2222,11 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
       cells(sim, [row.key, state(outcome), m.simulation_gating_clear === true ? "Yes" :
         m.simulation_gating_clear === false ? "NO — review flags" : "Unknown", metric(m.cloth_mass_kg),
         state(result?.surface), metric(m.independent_surface_power_w), state(result?.coverage), metric(m.body_coverage_power_w)]);
+      const elasticHold = elasticHoldWindowSummary(result?.drape);
       detail(parent, `${row.key}: simulation flags, identities and thermal refusals`, {
         refusal: outcome?.refusal, settled: result?.drape?.settled, flags: result?.drape?.flags,
         ...(result?.drape?.start_repair ? { start_repair: result.drape.start_repair } : {}),
-        ...(Number.isInteger(result?.drape?.elastic_hold_window?.requested_steps) && result.drape.elastic_hold_window.requested_steps > 0
-          ? { elastic_hold_window: result.drape.elastic_hold_window } : {}),
+        ...(elasticHold ? { elastic_hold_window: elasticHold } : {}),
         ...(result?.drape?.numerical?.time_subdivision ? { time_subdivision: result.drape.numerical.time_subdivision } : {}),
         ...(result?.drape?.membrane_history ? { membrane_history: result.drape.membrane_history } : {}),
         ...(result?.drape?.bending_history ? { bending_history: result.drape.bending_history } : {}),
@@ -5294,6 +5314,7 @@ function show(op, msg, request) {
     if (op === "lowerVisco") lowerViscoResult(s.comparison, r);
     if (op === "cutJob") cuttingJobComparison(op, s.comparison,
       [{ key: "Current bound pattern", cutting_job: { status: "available", result: r } }], false);
+    const foldElasticHold = op === "fold" ? elasticHoldWindowSummary(r) : null;
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "bodyCheck" ? bodyCheckResult(s.comparison, r) :
       op === "linearizeOrigin" ? originResult(s.comparison, r) :
@@ -5324,13 +5345,7 @@ function show(op, msg, request) {
         settling: r.numerical?.settling,
         ...(r.numerical?.time_subdivision ? { time_subdivision: r.numerical.time_subdivision } : {}),
         ...(r.start_repair ? { start_repair: r.start_repair } : {}),
-        ...(Number.isInteger(r.elastic_hold_window?.requested_steps) && r.elastic_hold_window.requested_steps > 0 ? {
-          elastic_hold_window: {
-            requested_steps: r.elastic_hold_window.requested_steps,
-            status: typeof r.elastic_hold_window.status === "string" && r.elastic_hold_window.status
-              ? r.elastic_hold_window.status : "unknown",
-          },
-        } : {}),
+        ...(foldElasticHold ? { elastic_hold_window: foldElasticHold } : {}),
         ...(r.static_equilibrium ? { static_equilibrium: {
           status: r.static_equilibrium.status,
           ...(r.static_equilibrium.result ? {

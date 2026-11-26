@@ -24830,6 +24830,45 @@ test('fold and scenario drape summaries surface opt-in plasticity, time_subdivis
   assert.deepEqual(richDetailObj.bending_history, { model: 'orthotropic_bending_plasticity/1', plastic_dissipation_j: 0.001 });
   assert.deepEqual(richDetailObj.membrane_plasticity_history, { model: 'hill48_membrane_plasticity/1', plastic_dissipation_j: 0.002 });
   assert.equal(descendants(secScenRich).some(n => 'innerHTML' in n), false);
+
+  // 5. Available elastic_observation_windows[*].declared_hold readings surface across Pattern Workbench, Material Workbench fold and Scenario details while rejecting non-numeric fields.
+  const holdWindows = [
+    { instance: '<waist>', declared_hold: { status: 'available', signed_vertical_displacement_m: -0.0004,
+      maximum_absolute_vertical_displacement_m: 0.0005, maximum_vertex_speed_m_s: 0.0008, quiet_at_1_mm_s: true } },
+    { instance: 'cuff', declared_hold: { status: 'available', signed_vertical_displacement_m: 0.0012,
+      maximum_absolute_vertical_displacement_m: 0.0015, maximum_vertex_speed_m_s: 0.0024, quiet_at_1_mm_s: false } },
+    { instance: 'bad_null', declared_hold: { status: 'available', signed_vertical_displacement_m: null,
+      maximum_absolute_vertical_displacement_m: 0.001, maximum_vertex_speed_m_s: 0.001, quiet_at_1_mm_s: true } },
+  ];
+  const expectedCasings = [
+    { instance: '<waist>', signed_vertical_displacement_mm: -0.4, maximum_absolute_vertical_displacement_mm: 0.5,
+      maximum_vertex_speed_mm_s: 0.8, quiet_at_1_mm_s: true },
+    { instance: 'cuff', signed_vertical_displacement_mm: 1.2, maximum_absolute_vertical_displacement_mm: 1.5,
+      maximum_vertex_speed_mm_s: 2.4, quiet_at_1_mm_s: false },
+  ];
+  const idxCasingHtml = runFold({ settled: true, flags: [],
+    elastic_hold_window: { requested_steps: 6, status: 'available' }, elastic_observation_windows: holdWindows });
+  assert.match(idxCasingHtml, /Elastic hold window: 6 step\(s\) \(available — &lt;waist&gt;: Δz -0\.40 mm, max \|Δz\| 0\.50 mm, max speed 0\.80 mm\/s, quiet ≤1 mm\/s; cuff: Δz 1\.20 mm, max \|Δz\| 1\.50 mm, max speed 2\.40 mm\/s, moving &gt;1 mm\/s\)\./);
+  assert.doesNotMatch(idxCasingHtml, /bad_null/);
+  await fp.e.fold.onclick();
+  fp.emit({ settled: true, flags: [], material: { basis: 'bound' }, body: { legs: 'standing' }, numerical: {},
+    elastic_hold_window: { requested_steps: 6, status: 'available' }, elastic_observation_windows: holdWindows },
+    [{ name: 'sim_report.json', text: '{}', mime: 'application/json' }]);
+  assert.deepEqual(JSON.parse(section(fp, 'fold').children[1].textContent).elastic_hold_window,
+    { requested_steps: 6, status: 'available', casings: expectedCasings });
+  const scenCasing = scenarioReport();
+  scenCasing.simulations.find(row => row.key === 'A').evaluation.result.drape = {
+    settled: true, flags: [],
+    elastic_hold_window: { requested_steps: 6, status: 'available' }, elastic_observation_windows: holdWindows,
+  };
+  await sp.e.scenario.onclick();
+  sp.emit(scenCasing);
+  const scenCasingDetail = descendants(section(sp, 'Fresh drape and heat alternatives'))
+    .find(n => n.tag === 'details' && n.children[0].textContent === 'A: simulation flags, identities and thermal refusals');
+  scenCasingDetail.open = true; scenCasingDetail.handlers.toggle();
+  assert.deepEqual(JSON.parse(scenCasingDetail.children[1].textContent).elastic_hold_window,
+    { requested_steps: 6, status: 'available', casings: expectedCasings });
+  assert.equal(descendants(section(sp, 'Fresh drape and heat alternatives')).some(n => 'innerHTML' in n), false);
 });
 
 test('opt-in hand_collider wires fail-closed across both workbenches, workers and handoffs', async () => {

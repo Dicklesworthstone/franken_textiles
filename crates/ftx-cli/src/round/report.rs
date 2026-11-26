@@ -856,11 +856,21 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                     .get("status")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
-                let _ = write!(
-                    out,
-                    " Elastic hold window: {steps} step(s) ({}).",
-                    xml_escape(status)
-                );
+                let casings = crate::elastic_hold_casings(sim);
+                if casings.is_empty() {
+                    let _ = write!(
+                        out,
+                        " Elastic hold window: {steps} step(s) ({}).",
+                        xml_escape(status)
+                    );
+                } else {
+                    let _ = write!(
+                        out,
+                        " Elastic hold window: {steps} step(s) ({}; {}).",
+                        xml_escape(status),
+                        xml_escape(&crate::format_elastic_hold_casings(&casings))
+                    );
+                }
             }
             out.push_str("</p>");
             static_equilibrium(&mut out, &sim["static_equilibrium"]);
@@ -1404,6 +1414,31 @@ mod tests {
             "Start repair: earlier checkpoint (600 → 400 iters); opposing leg separation (14 vertices, max 3.25 mm)."
         ));
         assert!(rich_html.contains("Elastic hold window: 6 step(s) (available)."));
+
+        let casing_entry = json!({
+            "round": 3,
+            "sim": {
+                "settled": true,
+                "self_contact": {"enabled": true},
+                "elastic_hold_window": {"requested_steps": 6, "status": "available"},
+                "elastic_observation_windows": [{
+                    "instance": "<waist>",
+                    "declared_hold": {
+                        "status": "available",
+                        "signed_vertical_displacement_m": -0.0004,
+                        "maximum_absolute_vertical_displacement_m": 0.0005,
+                        "maximum_vertex_speed_m_s": 0.0008,
+                        "quiet_at_1_mm_s": true
+                    }
+                }],
+                "gating": [],
+                "advisory": []
+            }
+        });
+        let casing_html = render(Path::new("."), &[casing_entry]).unwrap();
+        assert!(casing_html.contains(
+            "Elastic hold window: 6 step(s) (available; &lt;waist&gt;: Δz -0.4 mm, max |Δz| 0.5 mm, max speed 0.8 mm/s, quiet ≤1 mm/s)."
+        ));
 
         // Body-nested arm_pose fallback (e.g. failed round records) is also surfaced cleanly.
         let nested_arms = json!({

@@ -1091,9 +1091,15 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         let (raw_m, meas_bytes) = read_json(&meas_path.to_string_lossy())?;
         let data = measurements(&raw_m)?;
         let (_, prev_pat) = inventory(ws)?;
-        let pat = match args.options.get("pattern").map(PathBuf::from).or(prev_pat) {
-            Some(p) => read_json(&p.to_string_lossy())?.0,
-            None => json!({}),
+        let pat = match args.options.get("pattern") {
+            Some(p) => super::fold::pattern_document(Path::new(p))?.0,
+            None => match prev_pat {
+                Some(p) => {
+                    regular(&p, false)?;
+                    super::fold::pattern_document(&p)?.0
+                }
+                None => json!({}),
+            },
         };
         (data, meas_bytes, pat, ws.join("qualification"), Some(lock))
     } else {
@@ -1102,7 +1108,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         let (raw_m, meas_bytes) = read_json(meas_path)?;
         let data = measurements(&raw_m)?;
         let pat = match args.options.get("pattern") {
-            Some(p) => read_json(p)?.0,
+            Some(p) => super::fold::pattern_document(Path::new(p))?.0,
             None => json!({}),
         };
         (data, meas_bytes, pat, out, None)
@@ -1112,6 +1118,9 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         pat = json!({});
     }
     let fabric_override = input.map(|input| input.apply(&mut pat)).transpose()?;
+    if fabric_override.is_some() {
+        super::fabric::snapshot_bytes(&pat, "effective qualification pattern")?;
+    }
     if ws_arg.is_none() {
         super::reserve_drape_output(&published)?;
     }
@@ -1742,5 +1751,28 @@ mod tests {
                 .contains("\nSIM start repair: opposing leg separation (6 vertices, max 1.5 mm)")
         );
         assert!(opt_in_text.contains("\nSIM elastic hold window: 4 step(s) (available)"));
+
+        let mut casing_text = String::new();
+        super::append_round_sim_text(
+            &mut casing_text,
+            &json!({
+                "gating": [],
+                "advisory": [],
+                "elastic_hold_window": {"requested_steps": 4, "status": "available"},
+                "elastic_observation_windows": [{
+                    "instance": "waistband",
+                    "declared_hold": {
+                        "status": "available",
+                        "signed_vertical_displacement_m": -0.0004,
+                        "maximum_absolute_vertical_displacement_m": 0.0005,
+                        "maximum_vertex_speed_m_s": 0.0008,
+                        "quiet_at_1_mm_s": true
+                    }
+                }]
+            }),
+        );
+        assert!(casing_text.contains(
+            "\nSIM elastic hold window: 4 step(s) (available) — waistband: Δz -0.4 mm, max |Δz| 0.5 mm, max speed 0.8 mm/s, quiet ≤1 mm/s"
+        ));
     }
 }
