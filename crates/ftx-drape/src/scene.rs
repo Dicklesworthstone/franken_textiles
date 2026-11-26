@@ -1973,13 +1973,28 @@ pub(crate) fn run_phase_with_subdivision(
     run_phase_audited(scene, steps, h, gravity, policy, trials_used, None, frame)
 }
 
+/// Location of a rejected interior endpoint within its nominal interval, in seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RefusedSubstep {
+    /// Time from the start of the nominal interval to the captured positions.
+    pub end_s: f64,
+    /// Full nominal interval duration.
+    pub duration_s: f64,
+}
+
+pub(crate) struct RejectedEndpoint {
+    pub positions: Vec<Vec3>,
+    pub steps: usize,
+    pub substep: Option<RefusedSubstep>,
+}
+
 /// The display skin may include fingers or feet absent from the physical collider. Audit every
 /// solved endpoint while its exact positions are still available, including a bisected interval's
 /// interior endpoints that have no animation frame. Keep only the first rejected geometry.
 pub(crate) struct PhaseAudit<'a> {
     pub display: &'a mut crate::animation::ReplayContact,
     pub first_frame: usize,
-    pub rejected: Option<(Vec<Vec3>, usize)>,
+    pub rejected: Option<RejectedEndpoint>,
 }
 
 impl PhaseAudit<'_> {
@@ -1999,7 +2014,11 @@ impl PhaseAudit<'_> {
                     refusal.message
                 );
             }
-            self.rejected = Some((positions.to_vec(), k + usize::from(end_s == duration_s)));
+            self.rejected = Some(RejectedEndpoint {
+                positions: positions.to_vec(),
+                steps: k + usize::from(end_s == duration_s),
+                substep: (end_s < duration_s).then_some(RefusedSubstep { end_s, duration_s }),
+            });
             return Err(refusal);
         }
         Ok(())
@@ -2325,7 +2344,16 @@ mod grain_tests {
                 .message
                 .contains("physical frame 11: cloth triangle 0 crosses displayed body triangle 0")
         );
-        assert_eq!(audit.rejected, Some((expected.x, 0)));
+        let rejected = audit.rejected.unwrap();
+        assert_eq!(rejected.positions, expected.x);
+        assert_eq!(rejected.steps, 0);
+        assert_eq!(
+            rejected.substep,
+            Some(RefusedSubstep {
+                end_s: t,
+                duration_s: duration
+            })
+        );
         assert_eq!(format!("{:?}", scene.solver), original);
     }
 

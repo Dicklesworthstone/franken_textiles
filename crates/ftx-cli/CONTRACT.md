@@ -11,7 +11,9 @@ published `still_<view>_legible.png` automatically (using the same pixel-centre 
 After a solver refusal, pick from `sim/refused/still_VIEW.png`. If the initial placement was
 rejected, pick from the view listed in the placement report at `sim/refused/start/still_VIEW.png`.
 The original `refusal` accompanies the hit. The diagnostic map identifies `refused_pose.phase` and
-`accepted_steps`. A rejected placement has phase `placement` and zero accepted steps. Archived
+`accepted_steps`. A rejected interior substep also records `substep.end_s` and `substep.duration_s`
+in seconds within the next nominal interval. Zero completed sewing steps can therefore describe a
+moving panel when `substep` is present. A rejected placement has phase `placement` and zero accepted steps. Archived
 views without a source map support visual comparison and body or background picks. A garment
 edge requires the map from that same stage.
 
