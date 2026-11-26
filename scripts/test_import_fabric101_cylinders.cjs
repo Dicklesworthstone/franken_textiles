@@ -89,3 +89,31 @@ test("replays complete pinned linen recordings in both directions", { skip: !pro
     assert.equal(request.loading.at(-1).time_s, a.phases.twist.at(-1)[0] - start);
   }
 });
+
+test("an unknown specimen cannot select local paths or inherit another specimen's pins", () => {
+  for (const name of ["L03", "../L01", "constructor"]) {
+    assert.throws(() => acquire(".", "warp", name), /Unknown Fabric-101 specimen/);
+  }
+});
+
+test("imports and replays distinct linen, jersey and rib recordings", { skip: !process.env.FABRIC101_COHORT_RELEASE }, () => {
+  for (const [id, instrument, expected] of [
+    ["L02", "124_L02_001", [[789, 66], [786, 62]]],
+    ["KN01", "149_KN01_001", [[792, 59], [772, 60]]],
+    ["KN02", "150_KN02_001", [[776, 67], [777, 68]]],
+  ]) {
+    for (const [index, direction] of ["warp", "weft"].entries()) {
+      const acquisition = acquire(process.env.FABRIC101_COHORT_RELEASE, direction, id);
+      assert.equal(acquisition.schema, "ftx-fabric101-acquisition/1");
+      assert.equal(acquisition.instrument_specimen, instrument);
+      assert.equal(acquisition.material_id, "fabric101-2026/" + id.toLowerCase());
+      assert.equal(Object.keys(acquisition.sources).length, 5);
+      assert.ok(Object.keys(acquisition.sources).every(p => p.startsWith("data/" + id + "/001/")));
+      const { request, receipt } = replay(acquisition,
+        template(direction === "warp" ? [0, 1] : [1, 0]), 0.01, "named-direction-axial");
+      assert.deepEqual([acquisition.phases.twist.length, request.loading.length], expected[index]);
+      assert.equal(request.fixture.rotating_holder, "lower");
+      assert.ok(receipt.max_rotation_error_deg <= 0.01);
+    }
+  }
+});
