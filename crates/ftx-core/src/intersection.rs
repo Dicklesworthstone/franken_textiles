@@ -60,19 +60,34 @@ pub fn is_degenerate(t: [Vec3; 3]) -> bool {
     projection_axis(&t.map(xyz)).is_none()
 }
 
+/// Maximum coordinate magnitude admitted by [`validate_mesh`] so every exact 2D/3D predicate
+/// (`orient2d`, `orient3d`, `segment_triangle`, `triangle_triangle`, `indexed_triangle_pair`)
+/// across one or two validated meshes stays inside the certified non-overflowing `f64` domain
+/// (`6 * (2 * 1e80)^3 < 5e241 << f64::MAX`).
+pub const EXACT_PREDICATE_MAX_COORD: f64 = 1e80;
+
 /// Admit a mesh before an intersection broad phase reads its coordinates. An empty mesh is allowed.
 ///
 /// # Errors
-/// [`RefusalCode::NonFinite`] for any non-finite vertex; [`RefusalCode::DegenerateGeometry`] for an
-/// out-of-range index or exactly zero-area face. This does not test topology, winding or intersections.
-///
-/// # Panics
-/// On predicate arithmetic outside [`crate::exact`]'s supported domain.
+/// [`RefusalCode::NonFinite`] for any non-finite vertex or any coordinate exceeding
+/// [`EXACT_PREDICATE_MAX_COORD`]; [`RefusalCode::DegenerateGeometry`] for an out-of-range index or
+/// exactly zero-area face. This does not test topology, winding or intersections.
 pub fn validate_mesh(vertices: &[Vec3], triangles: &[[usize; 3]]) -> Result<(), Refusal> {
     if let Some(vertex) = vertices.iter().position(|p| !p.is_finite()) {
         return Err(Refusal::new(
             RefusalCode::NonFinite,
             format!("mesh vertex {vertex} is not finite"),
+        ));
+    }
+    if let Some(vertex) = vertices
+        .iter()
+        .position(|p| p.x.abs().max(p.y.abs()).max(p.z.abs()) > EXACT_PREDICATE_MAX_COORD)
+    {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            format!(
+                "mesh vertex {vertex} exceeds the exact-predicate coordinate domain ({EXACT_PREDICATE_MAX_COORD:e})"
+            ),
         ));
     }
     for (face, t) in triangles.iter().enumerate() {
@@ -464,5 +479,56 @@ mod tests {
             RefusalCode::NonFinite
         );
         assert!(validate_mesh(&[], &[]).is_ok());
+    }
+
+    #[test]
+    fn admission_refuses_extreme_finite_coordinates_before_exact_predicates_overflow() {
+        // Coordinates near 1e160 would previously panic inside validate_mesh -> is_degenerate -> orient2d,
+        // and coordinates near 1e110 would pass validate_mesh and panic inside orient3d.
+        for scale in [1e110_f64, 1e160_f64, f64::MAX] {
+            let huge = [
+                Vec3::ZERO,
+                Vec3::new(scale, 0.0, 0.0),
+                Vec3::new(0.0, scale, 0.0),
+            ];
+            assert_eq!(
+                validate_mesh(&huge, &[[0, 1, 2]]).unwrap_err().code,
+                RefusalCode::NonFinite,
+                "scale={scale:e}"
+            );
+        }
+
+        // At the admitted boundary ±EXACT_PREDICATE_MAX_COORD, both non-coplanar and coplanar
+        // exact-expansion predicates stay inside the certified finite domain without panicking.
+        let m = EXACT_PREDICATE_MAX_COORD;
+        let mesh = [
+            Vec3::new(-m, -m, 0.0),
+            Vec3::new(m, -m, 0.0),
+            Vec3::new(-m, m, 0.0),
+            Vec3::new(0.0, 0.0, -m),
+            Vec3::new(0.0, 0.0, m),
+            Vec3::new(m, m, 0.0),
+        ];
+        validate_mesh(&mesh, &[[0, 1, 2], [3, 4, 5]]).unwrap();
+        assert_eq!(
+            indexed_triangle_pair(&mesh, [0, 1, 2], [3, 4, 5]),
+            Some(IntersectionKind::Touching)
+        );
+        assert_eq!(
+            segment_triangle(mesh[3], mesh[4], [mesh[0], mesh[1], mesh[2]]),
+            Some(IntersectionKind::Touching)
+        );
+        assert_eq!(
+            segment_triangle(
+                Vec3::new(-0.5 * m, -0.5 * m, -m),
+                Vec3::new(-0.5 * m, -0.5 * m, m),
+                [mesh[0], mesh[1], mesh[2]],
+            ),
+            Some(IntersectionKind::Crossing)
+        );
+        assert_eq!(
+            triangle_triangle([mesh[0], mesh[1], mesh[2]], [mesh[1], mesh[5], mesh[2]]),
+            Some(IntersectionKind::Touching)
+        );
     }
 }
