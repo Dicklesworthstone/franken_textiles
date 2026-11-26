@@ -105,13 +105,46 @@ impl ArmPose {
 /// Independent elbow flexion from straight in each arm's source rest bend plane.
 ///
 /// The geometric range is 0–180 degrees; it does not establish an anatomical or contact-safe pose.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct ElbowPose {
     /// Left elbow flexion from straight, in degrees, 0..=180.
     pub left_flexion_deg: f64,
     /// Right elbow flexion from straight, in degrees, 0..=180.
     pub right_flexion_deg: f64,
+}
+
+// The public JSON contract names both sides. A derived struct deserializer also accepts a
+// positional sequence, which would silently assign left/right meaning to an undocumented array.
+impl<'de> Deserialize<'de> for ElbowPose {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            left_flexion_deg: f64,
+            right_flexion_deg: f64,
+        }
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = ElbowPose;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an object with left_flexion_deg and right_flexion_deg")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let fields =
+                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(ElbowPose {
+                    left_flexion_deg: fields.left_flexion_deg,
+                    right_flexion_deg: fields.right_flexion_deg,
+                })
+            }
+        }
+        deserializer.deserialize_map(Object)
+    }
 }
 
 impl ElbowPose {
@@ -425,7 +458,10 @@ pub fn joint_rotations(
     }
     if pose.straight_arms || pose.elbow_pose.is_some() {
         let flexion = pose.elbow_pose.map_or([None; 2], |elbows| {
-            [Some(elbows.left_flexion_deg), Some(elbows.right_flexion_deg)]
+            [
+                Some(elbows.left_flexion_deg),
+                Some(elbows.right_flexion_deg),
+            ]
         });
         for (side, flexion) in ["L", "R"].into_iter().zip(flexion) {
             let dir = |label: &str| -> Result<(usize, Vec3), Refusal> {
@@ -454,7 +490,9 @@ pub fn joint_rotations(
                 {
                     return Err(Refusal::new(
                         RefusalCode::DegenerateGeometry,
-                        format!("{side} arm has no unique source rest plane for the authored elbow pose"),
+                        format!(
+                            "{side} arm has no unique source rest plane for the authored elbow pose"
+                        ),
                     ));
                 }
             }
@@ -1721,8 +1759,7 @@ mod tests {
         for (bone, degrees) in [(2, -10.0_f64), (3, -55.0), (9, 10.0), (10, 55.0)] {
             rest.bone_frames[bone].m =
                 ftx_core::Mat3::rotation(Vec3::new(1.0, 0.0, 0.0), degrees.to_radians());
-            rest.bone_tails[bone] =
-                rest.bone_heads[bone] + rest.bone_frames[bone].m.col(1);
+            rest.bone_tails[bone] = rest.bone_heads[bone] + rest.bone_frames[bone].m.col(1);
         }
         (model, rest)
     }
@@ -1772,10 +1809,8 @@ mod tests {
                         &pose_deltas(&model, &rest, &original, t).unwrap(),
                     );
                     assert_delta_bits(
-                        &pose_deltas_with_thumbs(&model, &rest, &authored, t, &thumbs)
-                            .unwrap(),
-                        &pose_deltas_with_thumbs(&model, &rest, &original, t, &thumbs)
-                            .unwrap(),
+                        &pose_deltas_with_thumbs(&model, &rest, &authored, t, &thumbs).unwrap(),
+                        &pose_deltas_with_thumbs(&model, &rest, &original, t, &thumbs).unwrap(),
                     );
                 }
             }
@@ -1814,9 +1849,7 @@ mod tests {
                 (8, 10, Vec3::new(0.0, 3.0_f64.sqrt() * 0.5, 0.5)),
             ] {
                 assert!(
-                    (posed.bone_poses[upper].m.col(1) - Vec3::new(0.0, 1.0, 0.0))
-                        .norm()
-                        < 1e-14
+                    (posed.bone_poses[upper].m.col(1) - Vec3::new(0.0, 1.0, 0.0)).norm() < 1e-14
                 );
                 assert!(
                     (posed.bone_poses[lower].m.col(1) - expected).norm() < 1e-14,
@@ -1832,14 +1865,8 @@ mod tests {
         let folded = model
             .pose(&rest, &pose_deltas(&model, &rest, &folded, 1.0).unwrap())
             .unwrap();
-        assert!(
-            (folded.bone_poses[3].m.col(1) - Vec3::new(0.0, -1.0, 0.0)).norm()
-                < 1e-14
-        );
-        assert!(
-            (folded.bone_poses[10].m.col(1) - Vec3::new(0.0, 1.0, 0.0)).norm()
-                < 1e-14
-        );
+        assert!((folded.bone_poses[3].m.col(1) - Vec3::new(0.0, -1.0, 0.0)).norm() < 1e-14);
+        assert!((folded.bone_poses[10].m.col(1) - Vec3::new(0.0, 1.0, 0.0)).norm() < 1e-14);
     }
 
     #[test]
@@ -1871,16 +1898,14 @@ mod tests {
             let reference = model
                 .pose_with_skinning(
                     &rest,
-                    &pose_deltas_with_thumbs(&model, &rest, &straight, 1.0, &thumbs)
-                        .unwrap(),
+                    &pose_deltas_with_thumbs(&model, &rest, &straight, 1.0, &thumbs).unwrap(),
                     mode,
                 )
                 .unwrap();
             let actual = model
                 .pose_with_skinning(
                     &rest,
-                    &pose_deltas_with_thumbs(&model, &rest, &flexed, 1.0, &thumbs)
-                        .unwrap(),
+                    &pose_deltas_with_thumbs(&model, &rest, &flexed, 1.0, &thumbs).unwrap(),
                     mode,
                 )
                 .unwrap();
@@ -1899,10 +1924,8 @@ mod tests {
             let expected_wrist = pivot + turn.apply(reference.bone_poses[4].t - pivot);
             assert!((actual.bone_poses[4].t - expected_wrist).norm() < 2e-14);
         }
-        let from =
-            pose_rotation_vectors_with_thumbs(&model, &rest, &straight, &thumbs).unwrap();
-        let to =
-            pose_rotation_vectors_with_thumbs(&model, &rest, &flexed, &thumbs).unwrap();
+        let from = pose_rotation_vectors_with_thumbs(&model, &rest, &straight, &thumbs).unwrap();
+        let to = pose_rotation_vectors_with_thumbs(&model, &rest, &flexed, &thumbs).unwrap();
         let halfway = Pose {
             elbow_pose: Some(ElbowPose {
                 left_flexion_deg: 45.0,
@@ -1910,8 +1933,7 @@ mod tests {
             }),
             ..straight
         };
-        let midpoint =
-            pose_rotation_vectors_with_thumbs(&model, &rest, &halfway, &thumbs).unwrap();
+        let midpoint = pose_rotation_vectors_with_thumbs(&model, &rest, &halfway, &thumbs).unwrap();
         for ((from, to), mid) in from.iter().zip(&to).zip(&midpoint) {
             assert!((*mid - (*from + *to) * 0.5).norm() < 1e-14);
         }
@@ -1938,6 +1960,7 @@ mod tests {
         }
         for malformed in [
             serde_json::json!({}),
+            serde_json::json!([0.0, 30.0]),
             serde_json::json!({"left_flexion_deg": 30.0}),
             serde_json::json!({"left_flexion_deg": null, "right_flexion_deg": 0.0}),
             serde_json::json!({"left_flexion_deg": 30.0, "right_flexion_deg": 0.0,
@@ -1945,13 +1968,18 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<ElbowPose>(malformed).is_err());
         }
+        assert!(
+            serde_json::from_str::<ElbowPose>(
+                r#"{"left_flexion_deg": 0, "left_flexion_deg": 30, "right_flexion_deg": 0}"#,
+            )
+            .is_err()
+        );
         let authored = ElbowPose {
             left_flexion_deg: 90.0,
             right_flexion_deg: 30.0,
         };
         assert_eq!(
-            serde_json::from_value::<ElbowPose>(serde_json::to_value(authored).unwrap())
-                .unwrap(),
+            serde_json::from_value::<ElbowPose>(serde_json::to_value(authored).unwrap()).unwrap(),
             authored
         );
 
@@ -1969,10 +1997,8 @@ mod tests {
             joint_rotations(&model, &parallel, &pose).unwrap_err().code,
             RefusalCode::DegenerateGeometry
         );
-        parallel.bone_frames[3].m = ftx_core::Mat3::rotation(
-            Vec3::new(1.0, 0.0, 0.0),
-            std::f64::consts::PI,
-        );
+        parallel.bone_frames[3].m =
+            ftx_core::Mat3::rotation(Vec3::new(1.0, 0.0, 0.0), std::f64::consts::PI);
         pose.elbow_pose = Some(ElbowPose::default());
         assert_eq!(
             joint_rotations(&model, &parallel, &pose).unwrap_err().code,
