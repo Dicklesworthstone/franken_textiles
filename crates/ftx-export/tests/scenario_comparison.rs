@@ -666,6 +666,72 @@ fn independent_arm_angles_must_match_every_requested_endpoint_before_comparison(
 }
 
 #[test]
+fn elbow_flexion_must_match_every_requested_endpoint_before_comparison() {
+    let mut request = motion_request();
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut descriptor = motion_descriptor();
+    let elbows = json!({"left_flexion_deg":30,"right_flexion_deg":90});
+    descriptor["scenario"]["motion"]["keyframes"][0]["elbow_pose"] = elbows.clone();
+    for fault in [
+        "none",
+        "missing",
+        "null",
+        "left",
+        "right",
+        "swapped",
+        "inherited",
+        "extra",
+        "out_of_range",
+    ] {
+        let report = request
+            .evaluate_with(&pattern, &descriptor, |key, pattern| {
+                let mut result = synthetic_motion(pattern, 5.0);
+                let frames = &mut result["motion"]["result"]["keyframes"];
+                // JSON integer and floating-point spellings name the same physical angles.
+                frames[0]["elbow_pose"] =
+                    json!({"left_flexion_deg":30.0,"right_flexion_deg":90.0});
+                if key == "a" {
+                    match fault {
+                        "missing" => {
+                            frames[0].as_object_mut().unwrap().remove("elbow_pose");
+                        }
+                        "null" => frames[0]["elbow_pose"] = Value::Null,
+                        "left" => frames[0]["elbow_pose"]["left_flexion_deg"] = json!(31.0),
+                        "right" => frames[0]["elbow_pose"]["right_flexion_deg"] = json!(91.0),
+                        "swapped" => {
+                            frames[0]["elbow_pose"] =
+                                json!({"left_flexion_deg":90.0,"right_flexion_deg":30.0});
+                        }
+                        "inherited" => frames[1]["elbow_pose"] = elbows.clone(),
+                        "extra" => frames[0]["elbow_pose"]["extra"] = json!(0),
+                        "out_of_range" => {
+                            frames[0]["elbow_pose"]["left_flexion_deg"] = json!(181.0);
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(result)
+            })
+            .unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a", "b"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}"
+        );
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
 fn explicit_leg_poses_must_match_the_requested_motion_before_comparison() {
     let request = motion_request();
     let pattern = Pattern::from_json(PATTERN).unwrap();

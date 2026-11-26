@@ -600,6 +600,7 @@ impl FittedBody {
             let mut pose = Pose::drape();
             pose.arm_abduction_deg = Some(keyframe.arm_abduction_deg);
             pose.arm_pose = keyframe.arm_pose;
+            pose.elbow_pose = keyframe.elbow_pose;
             if let Some(legs) = keyframe.leg_pose {
                 pose.legs = match legs.posture {
                     motion::LegPosture::Seated => Legs::Seated,
@@ -1558,6 +1559,87 @@ mod tests {
                 .sha256(),
             legacy.sha256()
         );
+        assert_eq!(fitted.report, original_report);
+        assert_eq!(fitted.collision.vertices, original_collision);
+    }
+
+    #[test]
+    fn elbow_motion_samples_source_hinges_and_returns_to_straight_without_refitting() {
+        use ftx_body::drape::ElbowPose;
+
+        let mut data = model().data().clone();
+        // A distinct source bend plane and actual lowerarm skin weights, not pose metadata alone.
+        for bone in [3, 7] {
+            data.template_bone_tails[bone].y -= 0.0001;
+        }
+        for bone in &mut data.vertex_bone_indices {
+            if *bone == 1 || *bone == 5 {
+                *bone += 2;
+            }
+        }
+        let model = AnnyModel::from_data(data).unwrap();
+        let digest = "a".repeat(64);
+        let fitted = FittedBody::prepare(&model, &digest, &request()).unwrap();
+        let original_report = fitted.report.clone();
+        let original_collision = fitted.collision.vertices.clone();
+        let rest = model.rest(&fitted.params).unwrap();
+        let mut motion: motion::Request = serde_json::from_value(json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [
+                {"time_s": 0.004, "arm_abduction_deg": 35.0,
+                 "elbow_pose": {"left_flexion_deg": 1.0, "right_flexion_deg": 2.0}},
+                {"time_s": 0.008, "arm_abduction_deg": 35.0}
+            ],
+            "source_pose_sampling": {"max_step_s": 0.002, "max_segments": 4},
+            "max_step_s": 0.002, "max_trials": 8, "max_pairs": 100000,
+            "max_sample_vertices": 10000
+        }))
+        .unwrap();
+        let path = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(path.source_vertices().len(), 4);
+        for (actual, (left, right)) in path.source_vertices().iter().zip([
+            (0.5, 1.0),
+            (1.0, 2.0),
+            (0.5, 1.0),
+            (0.0, 0.0),
+        ]) {
+            let mut pose = Pose::drape();
+            pose.elbow_pose = Some(ElbowPose {
+                left_flexion_deg: left,
+                right_flexion_deg: right,
+            });
+            let posed = model
+                .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+                .unwrap();
+            let expected = clothing_skin(&model, &posed.vertices).unwrap();
+            assert_eq!(expected.triangles, fitted.collision.triangles);
+            assert_eq!(expected.source_vertex, fitted.collision.source_vertex);
+            for (actual, expected) in actual.iter().zip(expected.vertices) {
+                assert!((*actual - expected).norm() < 1e-14);
+            }
+        }
+        assert_ne!(path.source_vertices()[1], original_collision);
+        assert_eq!(path.source_vertices()[3], original_collision);
+        motion.source_pose_sampling = None;
+        let endpoints = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_eq!(path.source_vertices()[1], endpoints.source_vertices()[0]);
+        assert_eq!(path.source_vertices()[3], endpoints.source_vertices()[1]);
+        motion.keyframes[1].elbow_pose = motion.keyframes[0].elbow_pose;
+        let held = fitted.motion_path(&model, &digest, &motion).unwrap();
+        assert_ne!(held.sha256(), endpoints.sha256());
+        assert_ne!(held.source_vertices()[1], original_collision);
+        motion.keyframes[1].elbow_pose = None;
+        let mut null = serde_json::to_value(&motion).unwrap();
+        null["keyframes"][1]["elbow_pose"] = Value::Null;
+        let null: motion::Request = serde_json::from_value(null).unwrap();
+        assert_eq!(
+            fitted.motion_path(&model, &digest, &null).unwrap().sha256(),
+            endpoints.sha256()
+        );
+        // A model without a source elbow plane cannot borrow an arbitrary hinge axis.
+        let straight = self::model();
+        let selected = FittedBody::prepare(&straight, &digest, &request()).unwrap();
+        assert!(selected.motion_path(&straight, &digest, &motion).is_err());
         assert_eq!(fitted.report, original_report);
         assert_eq!(fitted.collision.vertices, original_collision);
     }

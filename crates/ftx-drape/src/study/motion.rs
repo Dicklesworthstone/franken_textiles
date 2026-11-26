@@ -56,6 +56,10 @@ pub struct Keyframe {
     /// returns both arms to this endpoint's common angle, never the previous override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arm_pose: Option<ftx_body::drape::ArmPose>,
+    /// Absolute left/right elbow flexion from straight, in degrees, 0..=180, in each source
+    /// elbow's rest bend plane. Omission/null restores straight elbows at this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elbow_pose: Option<ftx_body::drape::ElbowPose>,
     /// Optional seated/squat leg rotation. Omission keeps standing legs at this endpoint;
     /// this is not an increment from the previous endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +285,9 @@ impl Request {
             }
             if let Some(arms) = frame.arm_pose {
                 arms.validate()?;
+            }
+            if let Some(elbows) = frame.elbow_pose {
+                elbows.validate()?;
             }
             if frame.leg_pose.is_some_and(|pose| {
                 !pose.fraction.is_finite() || !(0.0..=1.0).contains(&pose.fraction)
@@ -842,6 +849,9 @@ fn evaluate_path(
         if let Some(arms) = frame.arm_pose {
             endpoint["arm_pose"] = json!(arms);
         }
+        if let Some(elbows) = frame.elbow_pose {
+            endpoint["elbow_pose"] = json!(elbows);
+        }
         if let Some(pose) = frame.leg_pose {
             endpoint["leg_pose"] = json!(pose);
         }
@@ -1038,6 +1048,52 @@ mod tests {
         request.carry_radius_m = None;
         assert_eq!(hash(&request).unwrap(), omitted_sha256);
         assert_eq!(serde_json::to_value(request).unwrap(), encoded);
+    }
+
+    #[test]
+    fn elbow_endpoints_preserve_defaults_and_require_complete_bounded_pairs() {
+        let encoded = json!({
+            "schema": "ftx-drape-motion/1",
+            "keyframes": [{"time_s": 0.002, "arm_abduction_deg": 35.0}],
+            "max_step_s": 0.001,
+            "max_trials": 16,
+            "max_pairs": 100000,
+            "max_sample_vertices": 500000
+        });
+        let baseline: Request = serde_json::from_value(encoded.clone()).unwrap();
+        baseline.validate().unwrap();
+        assert_eq!(serde_json::to_value(&baseline).unwrap(), encoded);
+        let mut value = encoded.clone();
+        value["keyframes"][0]["elbow_pose"] = Value::Null;
+        let null: Request = serde_json::from_value(value).unwrap();
+        assert_eq!(hash(&null).unwrap(), hash(&baseline).unwrap());
+        for malformed in [
+            json!({}),
+            json!([0.0, 30.0]),
+            json!({"left_flexion_deg": 30.0}),
+            json!({"left_flexion_deg": 30.0, "right_flexion_deg": "10"}),
+            json!({"left_flexion_deg": 30.0, "right_flexion_deg": 10.0, "extra": 0}),
+        ] {
+            let mut value = encoded.clone();
+            value["keyframes"][0]["elbow_pose"] = malformed;
+            assert!(serde_json::from_value::<Request>(value).is_err());
+        }
+        for (left, right) in [(0.0, 0.0), (30.0, 90.0), (180.0, 180.0)] {
+            let mut value = encoded.clone();
+            value["keyframes"][0]["elbow_pose"] =
+                json!({"left_flexion_deg": left, "right_flexion_deg": right});
+            let mut request: Request = serde_json::from_value(value.clone()).unwrap();
+            request.validate().unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap(), value);
+            assert_ne!(hash(&request).unwrap(), hash(&baseline).unwrap());
+            for invalid in [f64::NAN, f64::INFINITY, -0.01, 180.01] {
+                request.keyframes[0].elbow_pose.as_mut().unwrap().left_flexion_deg = invalid;
+                assert!(request.validate().is_err());
+                request.keyframes[0].elbow_pose.as_mut().unwrap().left_flexion_deg = left;
+                request.keyframes[0].elbow_pose.as_mut().unwrap().right_flexion_deg = invalid;
+                assert!(request.validate().is_err());
+            }
+        }
     }
 
     #[test]
