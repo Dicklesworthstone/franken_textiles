@@ -835,7 +835,7 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
         }
     };
     let (mut pen, mut xs, mut ys, mut bad_sp2) = (0i64, Vec::new(), Vec::new(), false);
-    for cmd in text.replace('\n', "").split(';') {
+    for cmd in text.replace(['\r', '\n'], "").split(';') {
         let Some(op) = cmd.get(..2) else {
             continue;
         };
@@ -1724,6 +1724,28 @@ mod tests {
                 "malformed SP2 coordinates in {bad_plt:?} must fail hpgl.bbox: {items:?}"
             );
         }
+        let crlf_ok = check_hpgl(
+            "IN;\r\nSP2;\r\nPU0,2000;\r\nPD4000,4000;\r\n",
+            "crlf.plt",
+            Some(&master),
+            &json!({}),
+        );
+        assert!(
+            crlf_ok
+                .iter()
+                .any(|c| c.check == "hpgl.bbox_matches_master" && c.ok),
+            "valid CRLF HPGL must pass hpgl.bbox_matches_master: {crlf_ok:?}"
+        );
+        let crlf_bad = check_hpgl(
+            "IN;\r\nSP2;\r\nPU0,2000;\r\nPD4000,4000,100;\r\n",
+            "crlf_bad.plt",
+            Some(&master),
+            &json!({}),
+        );
+        assert!(
+            crlf_bad.iter().any(|c| c.check == "hpgl.bbox" && !c.ok),
+            "malformed CRLF SP2 coordinates must still fail hpgl.bbox: {crlf_bad:?}"
+        );
     }
 
     #[test]
