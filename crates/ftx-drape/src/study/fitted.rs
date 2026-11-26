@@ -1569,14 +1569,14 @@ mod tests {
 
         let mut data = model().data().clone();
         // A distinct source bend plane and actual lowerarm skin weights, not pose metadata alone.
+        // Keep upper-arm vertices on bones 1 and 5 so BodyFrames retains both upper arms.
         for bone in [3, 7] {
             data.template_bone_tails[bone].y -= 0.0001;
         }
-        for bone in &mut data.vertex_bone_indices {
-            if *bone == 1 || *bone == 5 {
-                *bone += 2;
-            }
-        }
+        assert_eq!(data.vertex_bone_indices[48], 1);
+        assert_eq!(data.vertex_bone_indices[56], 5);
+        data.vertex_bone_indices[48] = 3;
+        data.vertex_bone_indices[56] = 7;
         let model = AnnyModel::from_data(data).unwrap();
         let digest = "a".repeat(64);
         let fitted = FittedBody::prepare(&model, &digest, &request()).unwrap();
@@ -1597,12 +1597,11 @@ mod tests {
         .unwrap();
         let path = fitted.motion_path(&model, &digest, &motion).unwrap();
         assert_eq!(path.source_vertices().len(), 4);
-        for (actual, (left, right)) in path.source_vertices().iter().zip([
-            (0.5, 1.0),
-            (1.0, 2.0),
-            (0.5, 1.0),
-            (0.0, 0.0),
-        ]) {
+        for (actual, (left, right)) in
+            path.source_vertices()
+                .iter()
+                .zip([(0.5, 1.0), (1.0, 2.0), (0.5, 1.0), (0.0, 0.0)])
+        {
             let mut pose = Pose::drape();
             pose.elbow_pose = Some(ElbowPose {
                 left_flexion_deg: left,

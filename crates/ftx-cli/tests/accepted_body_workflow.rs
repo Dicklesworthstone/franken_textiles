@@ -2124,9 +2124,9 @@ fn model_bytes_with_elbows(articulated: bool, local_changes: &[&str], elbows: bo
                 let (s, c) = ftx_core::det::sin_cos(f64::from(i) * std::f64::consts::TAU / 16.0);
                 vertices.extend([0.1 * c, 0.1 * s, z]);
                 influences.push(if r == arm_ring && [15, 0, 1].contains(&i) {
-                    if elbows { 3 } else { 1 }
+                    if elbows && i == 0 { 3 } else { 1 }
                 } else if r == arm_ring && [7, 8, 9].contains(&i) {
-                    if elbows { 7 } else { 5 }
+                    if elbows && i == 8 { 7 } else { 5 }
                 } else if r == 0 && c > 0.5 {
                     9
                 } else if r == 0 && c < -0.5 {
@@ -3713,7 +3713,10 @@ fn independent_elbow_motion_replays_native_and_portable_on_the_selected_body() {
     let request: motion::Request = serde_json::from_value(scenario["motion"].clone()).unwrap();
     assert_eq!(
         result["path_sha256"],
-        fitted.motion_path(&model, &digest, &request).unwrap().sha256()
+        fitted
+            .motion_path(&model, &digest, &request)
+            .unwrap()
+            .sha256()
     );
     assert_eq!(result["source_pose_sampling"]["generated_segments"], 4);
     assert_eq!(
