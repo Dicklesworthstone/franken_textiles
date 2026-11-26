@@ -487,6 +487,11 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     // Never write `--px-out` before `publish(out, &artifacts)` succeeds, and never follow a symlink there.
     let px_external = args.options.get("px-out").map(Path::new);
     if let Some(file) = px_external {
+        if crate::round::has_trailing_dir_syntax(file) {
+            return Err(bad_input(
+                "--px-out must name a regular file, not a directory or symlink",
+            ));
+        }
         match crate::round::symlink_metadata(file) {
             Ok(m) if !m.is_file() => {
                 return Err(bad_input(
@@ -632,5 +637,12 @@ mod tests {
         let err = publish(&trailing, &[("out.json".into(), b"{}".to_vec())]).unwrap_err();
         assert_eq!(err.code, RefusalCode::InvalidDocument);
         assert!(std::fs::read_dir(&real_dir).unwrap().next().is_none());
+
+        let stray_parent = root.join("stray_parent");
+        let bad_trailing_file =
+            std::path::PathBuf::from(format!("{}/out/", stray_parent.display()));
+        let err = write_text(&bad_trailing_file, "nope").unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(!stray_parent.exists());
     }
 }

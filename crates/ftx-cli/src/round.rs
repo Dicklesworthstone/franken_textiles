@@ -107,7 +107,7 @@ pub(super) fn symlink_metadata(path: &Path) -> std::io::Result<fs::Metadata> {
     fs::symlink_metadata(&normalized)
 }
 
-fn has_trailing_dir_syntax(path: &Path) -> bool {
+pub(super) fn has_trailing_dir_syntax(path: &Path) -> bool {
     let bytes = path.as_os_str().as_encoded_bytes();
     bytes.ends_with(b"/")
         || bytes.ends_with(b"/.")
@@ -116,9 +116,14 @@ fn has_trailing_dir_syntax(path: &Path) -> bool {
 
 /// Never follow a symlink at a workspace-owned output path.
 pub(super) fn regular(path: &Path, directory: bool) -> Result<bool, Refusal> {
+    if !directory && has_trailing_dir_syntax(path) {
+        return Err(bad_input(format!(
+            "{} must be a regular file",
+            path.display()
+        )));
+    }
     match symlink_metadata(path) {
-        Ok(m) if directory && m.is_dir() => Ok(true),
-        Ok(m) if !directory && m.is_file() && !has_trailing_dir_syntax(path) => Ok(true),
+        Ok(m) if if directory { m.is_dir() } else { m.is_file() } => Ok(true),
         Ok(_) => Err(bad_input(format!(
             "{} must be a regular {}",
             path.display(),
@@ -1885,10 +1890,17 @@ mod tests {
         assert!(regular(&PathBuf::from(format!("{}/", real_dir.display())), true).unwrap());
         assert!(regular(&real_dir.join("."), true).unwrap());
         assert!(regular(&real_file, false).unwrap());
-        let file_slash = PathBuf::from(format!("{}/", real_file.display()));
-        assert_eq!(
-            regular(&file_slash, false).unwrap_err().code,
-            RefusalCode::InvalidDocument
-        );
+        for bad_file in [
+            PathBuf::from(format!("{}/", real_file.display())),
+            real_file.join("."),
+            PathBuf::from(format!("{}/nonexistent/", root.display())),
+        ] {
+            assert_eq!(
+                regular(&bad_file, false).unwrap_err().code,
+                RefusalCode::InvalidDocument,
+                "{}",
+                bad_file.display()
+            );
+        }
     }
 }
