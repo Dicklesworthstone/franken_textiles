@@ -298,3 +298,49 @@ fn structure_failures_remain_explicit_results_not_fit_claims() {
     );
     assert!(dir.join("invalid.json").exists());
 }
+
+#[test]
+fn alter_creates_missing_parent_directories_only_after_validation_succeeds() {
+    let (dir, _) = workspace();
+    let refused = run(
+        &dir,
+        &[
+            "alter",
+            "cap-ease",
+            "source.json",
+            "--piece",
+            "sleeve",
+            "--seams",
+            "armhole_f_R,armhole_b_R",
+            "--target",
+            "NaN",
+            "--out",
+            "absent/nested/out.json",
+        ],
+        3,
+    );
+    assert_eq!(refused["refusal"]["code"], "non_finite");
+    assert!(!dir.join("absent").exists());
+
+    let ok = run(
+        &dir,
+        &[
+            "alter",
+            "move",
+            "source.json",
+            "--piece",
+            "front",
+            "--vertex",
+            "side_hem",
+            "--dy",
+            "-10",
+            "--out",
+            "nested/v2/moved.json",
+        ],
+        0,
+    );
+    assert_eq!(ok["result"]["structure_errors"], json!([]));
+    assert!(dir.join("nested/v2/moved.json").is_file());
+    let moved = saved(&dir, "nested/v2/moved.json");
+    assert_eq!(moved["meta"]["origin"], "VECTOR_EDIT");
+}

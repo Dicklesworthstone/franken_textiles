@@ -627,10 +627,7 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "ftx alter {op} needs exactly one pattern file"
         )));
     }
-    let pattern_path = args
-        .positional
-        .get(2)
-        .ok_or_else(|| bad_input(format!("ftx alter {op} needs a pattern file")))?;
+    let pattern_path = &args.positional[2];
     let (doc, bytes) = read_json(pattern_path)?;
     // the input in its key order: alter.py writes a deep copy with the edits in place
     let ordered = std::str::from_utf8(&bytes)
@@ -703,6 +700,9 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
         _ => (args.options.get("piece").map(String::as_str), None),
     };
     let body = ftx_trace::alter_py(&ordered, &result, op, piece, item).dumps(Some(1)) + "\n";
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        make_dir(parent)?;
+    }
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -797,11 +797,7 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let selected = ["model", "body-fit", "flat-body"]
         .iter()
         .any(|key| args.options.contains_key(*key));
-    let meas = if selected {
-        current_measurements(meas)?
-    } else {
-        meas
-    };
+    let meas = current_measurements(meas)?;
     let body = selected_flat_body(args, &pat, &meas, &spec, selected)?;
     let pattern = Pattern::new(pat);
     let rep = if let Some(selected) = &body {

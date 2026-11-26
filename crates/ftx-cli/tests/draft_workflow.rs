@@ -395,3 +395,107 @@ fn valid_cache_cannot_hide_invalid_records_before_standalone_publication() {
     }
     assert_eq!(std::fs::read(dir.join("invalid.json")).unwrap(), bytes);
 }
+
+#[test]
+fn validate_refuses_invalid_records_and_recomputes_stale_fused_cache() {
+    let dir = workspace();
+    let fixtures = programs();
+    let case = fixtures["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["input"]["program"] == "zouave_bolero")
+        .unwrap();
+    let pattern_bytes = serde_json::to_vec(&case["output"]["pattern"]).unwrap();
+    let fit_bytes = serde_json::to_vec(&case["output"]["fit_spec"]).unwrap();
+    std::fs::write(dir.join("pattern.json"), &pattern_bytes).unwrap();
+    std::fs::write(dir.join("fit.json"), &fit_bytes).unwrap();
+    std::fs::write(
+        dir.join("fresh.json"),
+        serde_json::to_vec(&case["input"]["measurements"]).unwrap(),
+    )
+    .unwrap();
+    let expected = run(
+        &dir,
+        &[
+            "validate",
+            "pattern.json",
+            "--measurements",
+            "fresh.json",
+            "--fit",
+            "fit.json",
+        ],
+        0,
+    );
+
+    // Poisoning the cached `fused` block while `records` remain valid must be ignored.
+    let mut stale = case["input"]["measurements"].clone();
+    stale["fused"]["chest"]["value_mm"] = serde_json::json!(9999.0);
+    let stale_bytes = serde_json::to_vec(&stale).unwrap();
+    std::fs::write(dir.join("stale.json"), &stale_bytes).unwrap();
+    let recomputed = run(
+        &dir,
+        &[
+            "validate",
+            "pattern.json",
+            "--measurements",
+            "stale.json",
+            "--fit",
+            "fit.json",
+        ],
+        0,
+    );
+    assert_eq!(recomputed["result"], expected["result"]);
+    assert_eq!(std::fs::read(dir.join("stale.json")).unwrap(), stale_bytes);
+
+    // Invalid `records` cannot be hidden behind an intact `fused` cache.
+    let mut invalid = case["input"]["measurements"].clone();
+    invalid["records"][0]["sigma_mm"] = serde_json::json!(-1);
+    std::fs::write(
+        dir.join("invalid.json"),
+        serde_json::to_vec(&invalid).unwrap(),
+    )
+    .unwrap();
+    let refused = run(
+        &dir,
+        &[
+            "validate",
+            "pattern.json",
+            "--measurements",
+            "invalid.json",
+            "--fit",
+            "fit.json",
+        ],
+        3,
+    );
+    assert_eq!(refused["refusal"]["code"], "invalid_document", "{refused}");
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("sigma"),
+        "{refused}"
+    );
+
+    // Explicit fused-only inputs (no `records` key) retain their supplied targets.
+    let mut fused_only = case["input"]["measurements"].clone();
+    fused_only.as_object_mut().unwrap().remove("records");
+    std::fs::write(
+        dir.join("fused-only.json"),
+        serde_json::to_vec(&fused_only).unwrap(),
+    )
+    .unwrap();
+    let direct = run(
+        &dir,
+        &[
+            "validate",
+            "pattern.json",
+            "--measurements",
+            "fused-only.json",
+            "--fit",
+            "fit.json",
+        ],
+        0,
+    );
+    assert_eq!(direct["result"], expected["result"]);
+}

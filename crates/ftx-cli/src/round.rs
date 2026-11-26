@@ -185,8 +185,8 @@ pub(super) fn ledger(ws: &Path) -> Result<Vec<Value>, Refusal> {
         .filter(|l| !l.trim().is_empty())
         .enumerate()
         .map(|(n, l)| {
-            let value: Value =
-                serde_json::from_str(l).map_err(|e| io(&path, format!("line {}: {e}", n + 1)))?;
+            let value: Value = serde_json::from_str(l)
+                .map_err(|e| bad_input(format!("{}: line {}: {e}", path.display(), n + 1)))?;
             if !value.is_object() {
                 return Err(bad_input(format!(
                     "rounds.jsonl line {} is not an object",
@@ -1774,5 +1774,20 @@ mod tests {
         assert!(casing_text.contains(
             "\nSIM elastic hold window: 4 step(s) (available) — waistband: Δz -0.4 mm, max |Δz| 0.5 mm, max speed 0.8 mm/s, quiet ≤1 mm/s"
         ));
+    }
+
+    #[test]
+    fn ledger_refuses_malformed_json_line_as_invalid_document() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let ws =
+            std::env::temp_dir().join(format!("ftx-ledger-invalid-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&ws).unwrap();
+        std::fs::write(ws.join("rounds.jsonl"), "{\"round\":0}\n{not json\n").unwrap();
+        let err = ledger(&ws).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("line 2"), "{}", err.message);
     }
 }

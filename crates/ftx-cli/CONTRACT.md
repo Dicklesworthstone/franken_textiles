@@ -497,7 +497,7 @@ trajectory, time, metrics, gates and exit status keep their dynamic basis. See
   separate from the `nappy_occupancy` report and computed `readings_mm.seat_over_nappy`. Calibration
   uses the standard measurement pose once; a seated/squat/export pose never refits that proxy.
 
-Record-bearing standalone `draft`, tape-fitting `body`, and `drape` inputs are re-fused through the same
+Record-bearing standalone `draft`, `validate`, tape-fitting `body`, and `drape` inputs are re-fused through the same
 authority as workspace rounds before fitting, model loading or output creation. A cached `fused` value cannot
 override source records. Explicit fused-only and flat inputs retain their supplied targets. Source
 hashes identify the original file bytes, and the input is never rewritten. This CLI freshness exception
