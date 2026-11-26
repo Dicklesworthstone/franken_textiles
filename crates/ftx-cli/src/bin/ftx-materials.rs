@@ -1,9 +1,6 @@
 //! Material workbench companion to `ftx`: the same catalog, selection and drape resolution APIs.
 //! This executable does no network access and never overwrites a pattern when binding a material.
 
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::Path;
 use std::process::ExitCode;
 
 use ftx_core::{Refusal, RefusalCode};
@@ -54,7 +51,7 @@ mod membrane_plasticity_calibration;
 #[path = "material_workbench/relaxation.rs"]
 mod relaxation_calibration;
 
-use calibration::{read, simulation_readiness};
+use calibration::{read, simulation_readiness, write_new_file};
 
 const USAGE: &str = "ftx-materials list
 ftx-materials catalog [SEARCH]
@@ -236,12 +233,7 @@ fn bind(raw: Value, selection: &Selection, out: &str) -> Result<Value, Refusal> 
     selected(&raw)?;
     let mut bytes = serde_json::to_vec_pretty(&raw).map_err(|e| invalid(e.to_string()))?;
     bytes.push(b'\n');
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(Path::new(out))
-        .map_err(|e| io(out, e))?;
-    file.write_all(&bytes).map_err(|e| io(out, e))?;
+    write_new_file(out, &bytes)?;
     Ok(json!({"out":out,"material_sha256":snapshot.sha256(),
         "missing_mechanics":snapshot.material().missing_mechanics(),
         "simulation_ready":simulation_readiness(&snapshot).is_ok(),"geometry_changed":false}))
@@ -333,12 +325,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             let pattern = Pattern::new(read::<Value>(pattern)?);
             let options = read::<ftx_export::sewing::SewOptions>(options)?;
             let svg = ftx_export::sewing::preview::svg(&pattern, &options, operation)?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(out)
-                .map_err(|e| io(out, e))?;
-            file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+            write_new_file(out, svg.as_bytes())?;
             Ok(json!({"out":out,"operation":operation,
                 "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
                 "hardware_execution_authorized":false}))
@@ -347,12 +334,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             let pattern = Pattern::new(read::<Value>(pattern)?);
             let options = read::<ftx_export::sewing::SewOptions>(options)?;
             let svg = ftx_export::sewing::preview::svg_cell(&pattern, &options, cell, operation)?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(out)
-                .map_err(|e| io(out, e))?;
-            file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+            write_new_file(out, svg.as_bytes())?;
             Ok(json!({"out":out,"cell":cell,"operation":operation,
                 "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
                 "hardware_execution_authorized":false}))
@@ -685,6 +667,45 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         assert!(bind(raw, &selection, out).is_err());
         assert_eq!(before, std::fs::read(&path).unwrap());
+        // Keep the test output: this repository forbids deleting files without explicit permission.
+    }
+
+    #[test]
+    fn bind_creates_missing_parent_directories_only_after_validation_succeeds() {
+        let root = std::env::temp_dir().join(format!(
+            "ftx-materials-nested-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let raw = json!({"schema":"fabric-pattern/1","units":"mm","style":"test","seams":[],
+            "pieces":[{"id":"test","material":"shell","vertices":{"a":[0,0],"b":[10,0],"c":[0,10]},
+                "edges":[{"id":"ab","from":"a","to":"b"},{"id":"bc","from":"b","to":"c"},
+                    {"id":"ca","from":"c","to":"a"}],"cut":{"qty":1},"grain":[[0,0],[0,10]]}]});
+        let bad_dir = root.join("refused/nested");
+        let bad_out = bad_dir.join("bound.json");
+        assert!(
+            bind(
+                raw.clone(),
+                &Selection {
+                    id: "absent-material".into(),
+                    ..Selection::default()
+                },
+                bad_out.to_str().unwrap(),
+            )
+            .is_err()
+        );
+        assert!(!bad_dir.exists());
+
+        let nested = root.join("ok/nested/bound.json");
+        let selection = Selection {
+            id: "fs_il019_natural".into(),
+            ..Selection::default()
+        };
+        bind(raw, &selection, nested.to_str().unwrap()).unwrap();
+        assert!(nested.is_file());
         // Keep the test output: this repository forbids deleting files without explicit permission.
     }
 }

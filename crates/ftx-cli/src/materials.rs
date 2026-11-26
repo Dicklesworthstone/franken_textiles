@@ -9,7 +9,6 @@ use ftx_pattern::materials::ThermalStack;
 use ftx_pattern::textile_import;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{fs::OpenOptions, io::Write, path::Path};
 
 #[path = "bin/material_workbench/bending.rs"]
 mod bending_calibration;
@@ -41,7 +40,7 @@ mod thermal_surface;
 #[path = "bin/material_workbench/thermal.rs"]
 mod thermal_transient;
 
-use calibration::{read, simulation_readiness};
+use calibration::{read, simulation_readiness, write_new_file};
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
@@ -105,12 +104,7 @@ fn bind_material(raw: Value, selection: &Selection, out: &str) -> Result<Value, 
     selected(&raw)?;
     let mut bytes = serde_json::to_vec_pretty(&raw).map_err(|e| invalid(e.to_string()))?;
     bytes.push(b'\n');
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(Path::new(out))
-        .map_err(|e| io(out, e))?;
-    file.write_all(&bytes).map_err(|e| io(out, e))?;
+    write_new_file(out, &bytes)?;
     Ok(json!({"out":out,"material_sha256":snapshot.sha256(),
         "missing_mechanics":snapshot.material().missing_mechanics(),
         "simulation_ready":simulation_readiness(&snapshot).is_ok(),"geometry_changed":false}))
@@ -345,12 +339,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let pattern = Pattern::new(read::<Value>(pattern)?);
         let options = read::<ftx_export::sewing::SewOptions>(options)?;
         let svg = ftx_export::sewing::preview::svg(&pattern, &options, operation)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(out)
-            .map_err(|e| io(out, e))?;
-        file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+        write_new_file(out, svg.as_bytes())?;
         let result = json!({"out":out,"operation":operation,
             "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
             "hardware_execution_authorized":false});
@@ -367,13 +356,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let pattern = ftx_pattern::Pattern::new(read::<Value>(pattern)?);
         let options = read::<ftx_export::sewing::SewOptions>(options)?;
         let svg = ftx_export::sewing::preview::svg_cell(&pattern, &options, cell, operation)?;
-        let io = |error| Refusal::new(RefusalCode::Io, format!("{out}: {error}"));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(out)
-            .map_err(io)?;
-        file.write_all(svg.as_bytes()).map_err(io)?;
+        write_new_file(out, svg.as_bytes())?;
         let result = json!({"out":out,"cell":cell,"operation":operation,
             "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
             "hardware_execution_authorized":false});
@@ -839,5 +822,118 @@ mod tests {
         );
         assert!(visco_rep["sup_rel_err"].as_f64().unwrap() <= 0.02);
         assert!(visco_rep["replay"]["dissipated"].as_f64().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn material_cli_writers_create_missing_parents_only_after_validation_and_never_clobber() {
+        let root = std::env::temp_dir().join(format!(
+            "ftx-cli-mat-out-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let pattern_path = root.join("pattern.json");
+        let pattern_doc = json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "style": "test",
+            "seams": [],
+            "pieces": [{
+                "id": "panel",
+                "material": "shell",
+                "vertices": {"a": [0, 0], "b": [100, 0], "c": [0, 100]},
+                "edges": [
+                    {"id": "ab", "from": "a", "to": "b"},
+                    {"id": "bc", "from": "b", "to": "c"},
+                    {"id": "ca", "from": "c", "to": "a"}
+                ],
+                "cut": {"qty": 1},
+                "grain": [[0, 0], [0, 50]]
+            }]
+        });
+        std::fs::write(&pattern_path, serde_json::to_vec(&pattern_doc).unwrap()).unwrap();
+
+        let sel_path = root.join("selection.json");
+        std::fs::write(&sel_path, br#"{"id":"fs_il019_natural"}"#).unwrap();
+
+        // Refused selection must not create nested parent directories.
+        let bad_sel_path = root.join("bad-selection.json");
+        std::fs::write(&bad_sel_path, br#"{"id":"no-such-material-id"}"#).unwrap();
+        let refused_parent = root.join("refused/nested");
+        let refused_out = refused_parent.join("bound.json");
+        let bad_args = super::super::parse(&[
+            "materials".into(),
+            "bind".into(),
+            pattern_path.to_string_lossy().into_owned(),
+            bad_sel_path.to_string_lossy().into_owned(),
+            refused_out.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert!(run(&bad_args).is_err());
+        assert!(!refused_parent.exists());
+
+        // Valid `ftx materials bind` creates missing nested parent directories and refuses overwrite.
+        let nested_bind = root.join("bound/nested/pattern.json");
+        let bind_args = super::super::parse(&[
+            "materials".into(),
+            "bind".into(),
+            pattern_path.to_string_lossy().into_owned(),
+            sel_path.to_string_lossy().into_owned(),
+            nested_bind.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let (bound_rep, code, _) = run(&bind_args).unwrap();
+        assert_eq!(code, 0);
+        assert!(nested_bind.is_file());
+        assert!(bound_rep["material_sha256"].is_string());
+        let saved_before = std::fs::read(&nested_bind).unwrap();
+        let err = run(&bind_args).unwrap_err();
+        assert_eq!(err.code, RefusalCode::Io);
+        assert_eq!(std::fs::read(&nested_bind).unwrap(), saved_before);
+
+        // Valid `ftx materials bind-changes` also creates missing parent directories.
+        let changes_path = root.join("changes.json");
+        std::fs::write(
+            &changes_path,
+            br#"{"schema":"ftx-material-bindings/1","default":{"id":"fs_il019_natural"}}"#,
+        )
+        .unwrap();
+        let nested_changes_out = root.join("changes/deep/bound.json");
+        let changes_args = super::super::parse(&[
+            "materials".into(),
+            "bind-changes".into(),
+            pattern_path.to_string_lossy().into_owned(),
+            changes_path.to_string_lossy().into_owned(),
+            nested_changes_out.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let (changes_rep, code, _) = run(&changes_args).unwrap();
+        assert_eq!(code, 0);
+        assert!(nested_changes_out.is_file());
+        assert_eq!(
+            ftx_core::receipt::sha256_hex(&std::fs::read(&nested_changes_out).unwrap()),
+            changes_rep["pattern_sha256"].as_str().unwrap()
+        );
+
+        // Trailing separator refuses without creating stray parent directories.
+        let stray_parent = root.join("stray");
+        let trailing = format!("{}/sub/", stray_parent.display());
+        let trailing_err = write_new_file(&trailing, b"data").unwrap_err();
+        assert_eq!(trailing_err.code, RefusalCode::Io);
+        assert!(!stray_parent.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let dangling = root.join("dangling.json");
+            let outside_target = root.join("never-created.json");
+            symlink(&outside_target, &dangling).unwrap();
+            let err = write_new_file(dangling.to_str().unwrap(), b"data").unwrap_err();
+            assert_eq!(err.code, RefusalCode::Io);
+            assert!(!outside_target.exists());
+        }
     }
 }

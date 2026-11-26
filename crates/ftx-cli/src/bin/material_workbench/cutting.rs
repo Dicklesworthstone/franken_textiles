@@ -1,8 +1,8 @@
 //! Cutting/BOM/purchasing share one computed marker and its resolved material snapshots.
 //! The requirements are gross stock areas, never user-guessed net garment area or drape mesh area.
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::Read;
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_export::cutting::{CutOptions, CutPlan, procurement};
@@ -71,12 +71,7 @@ pub(super) fn preview(
     let plan = build(pattern, options)?;
     let svg = ftx_export::cutting::preview::svg(&plan, index)?;
     // Produce the complete preview before creating a file; never replace any existing path.
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out)
-        .map_err(|e| io(out, e))?;
-    file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+    super::calibration::write_new_file(out, svg.as_bytes())?;
     Ok(json!({"out":out,"svg_sha256":sha256_hex(svg.as_bytes()),
         "pattern_sha256":plan.pattern_sha256,"material_sha256":plan.rolls[index].material.sha256(),
         "roll_index":index,"machine_execution":false}))

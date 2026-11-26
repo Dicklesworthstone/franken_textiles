@@ -7,10 +7,7 @@ use ftx_export::cutting::{
 use ftx_pattern::Pattern;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-};
+use std::{fs::File, io::Read};
 
 fn read<T: DeserializeOwned>(path: &str, left: &mut u64) -> Result<T, Refusal> {
     let mut bytes = Vec::new();
@@ -73,13 +70,7 @@ pub(super) fn preview(
     })?;
     let plan = build(pattern, request)?;
     let svg = stock_svg(&plan, index)?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out)
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{out}: {e}")))?;
-    file.write_all(svg.as_bytes())
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{out}: {e}")))?;
+    super::calibration::write_new_file(out, svg.as_bytes())?;
     Ok(
         json!({"out":out,"stock_index":index,"stock_id":plan.markers()[index].id,
         "svg_sha256":sha256_hex(svg.as_bytes()),"hardware_execution_authorized":false}),

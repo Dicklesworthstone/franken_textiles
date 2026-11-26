@@ -1,6 +1,7 @@
 //! Native calibration adapters share bounded input and complete mechanical admission.
-use std::fs::File;
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_calibration::{Input, calibrate};
@@ -26,6 +27,30 @@ pub(super) fn read<T: DeserializeOwned>(path: &str) -> Result<T, Refusal> {
     }
     serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))
+}
+
+/// Publish a brand-new output artifact after validation succeeds: creates missing parent
+/// directories, refuses existing paths or symlinks via `create_new`, and syncs to disk.
+pub(super) fn write_new_file(path: &str, bytes: &[u8]) -> Result<(), Refusal> {
+    let io = |error| Refusal::new(RefusalCode::Io, format!("{path}: {error}"));
+    let out = Path::new(path);
+    let has_trailing_sep =
+        path.ends_with(std::path::MAIN_SEPARATOR) || (cfg!(windows) && path.ends_with('/'));
+    if !path.is_empty()
+        && !has_trailing_sep
+        && out.file_name().is_some()
+        && let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(io)?;
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out)
+        .map_err(io)?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(io)
 }
 
 pub(super) fn simulation_readiness(material: &ResolvedMaterial) -> Result<(), Refusal> {

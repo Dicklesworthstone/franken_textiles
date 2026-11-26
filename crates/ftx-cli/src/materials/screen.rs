@@ -1,8 +1,5 @@
 //! File boundary shared by both native material commands; evaluators themselves perform no I/O.
-use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-};
+use std::{fs::File, io::Read};
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::{Pattern, material_screen::Request, textile_import};
@@ -66,12 +63,7 @@ pub(super) fn treatment_pattern(
                 "treatment omitted its exact pattern",
             )
         })?;
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .and_then(|mut file| file.write_all(bytes.as_bytes()))
-            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+        super::calibration::write_new_file(path, bytes.as_bytes())?;
         result["out"] = Value::String(path.to_owned());
     }
     Ok(result)
@@ -104,12 +96,7 @@ pub(super) fn bind_changes(pattern: &str, changes: &str, out: &str) -> Result<Va
             "binding omitted its exact pattern",
         )
     })?;
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out)
-        .and_then(|mut file| file.write_all(bytes.as_bytes()))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{out}: {e}")))?;
+    super::calibration::write_new_file(out, bytes.as_bytes())?;
     result["out"] = Value::String(out.to_owned());
     Ok(result)
 }

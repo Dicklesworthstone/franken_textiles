@@ -119,6 +119,12 @@ pub(super) fn check_map(map: &Value, cache: &PointCache<'_>) -> Result<(), Refus
     Ok(())
 }
 
+fn sim_entry(dir: &Path, name: &str) -> Result<std::path::PathBuf, Refusal> {
+    let path = dir.join(name);
+    crate::round::regular(&path, false)?;
+    Ok(path)
+}
+
 pub(super) fn sim_points(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(args, "sim-points", &["pattern", "measurements"])?;
     if args.positional.len() != 2 {
@@ -139,11 +145,12 @@ pub(super) fn sim_points(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let (measurements, raw_measurements) = document(Path::new(required(args, "measurements")?))?;
     let measurements = crate::current_measurements(measurements)?;
     let levels = landmarks(Meas(&measurements))?;
-    let (map, _) = document(&dir.join("mesh_map.json"))?;
-    let raw = bytes(&dir.join("fold.pc2"), MAX_CACHE_BYTES)?;
+    crate::round::regular(dir, true)?;
+    let (map, _) = document(&sim_entry(dir, "mesh_map.json")?)?;
+    let raw = bytes(&sim_entry(dir, "fold.pc2")?, MAX_CACHE_BYTES)?;
     let cache = PointCache::read(&raw)?;
     check_map(&map, &cache)?;
-    let body = mesh(&dir.join("body.obj"))?;
+    let body = mesh(&sim_entry(dir, "body.obj")?)?;
     let floor = floor(&body);
     let count = cache.frames().min(15);
     let positions = cache.mean_tail(count)?;
@@ -269,16 +276,17 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     let strain = view.map(crate::render::strain_view).transpose()?;
     let dir = Path::new(&args.positional[1]);
+    crate::round::regular(dir, true)?;
     let resolved_dir = dir
         .canonicalize()
         .map_err(|e| workspace::io_error(dir, e))?;
-    let (report, _) = document(&dir.join("sim_report.json"))?;
-    let (map, _) = document(&dir.join("mesh_map.json"))?;
-    let raw_pc2 = bytes(&dir.join("fold.pc2"), MAX_CACHE_BYTES)?;
+    let (report, _) = document(&sim_entry(dir, "sim_report.json")?)?;
+    let (map, _) = document(&sim_entry(dir, "mesh_map.json")?)?;
+    let raw_pc2 = bytes(&sim_entry(dir, "fold.pc2")?, MAX_CACHE_BYTES)?;
     let cache = PointCache::read(&raw_pc2)?;
     check_map(&map, &cache)?;
-    let body = mesh(&dir.join("body.obj"))?;
-    let garment = mesh(&dir.join("garment.obj"))?;
+    let body = mesh(&sim_entry(dir, "body.obj")?)?;
+    let garment = mesh(&sim_entry(dir, "garment.obj")?)?;
     if garment.vertices.len() != cache.points() {
         return Err(bad_input(
             "garment.obj vertex count does not match fold.pc2",
@@ -724,5 +732,199 @@ mod tests {
         assert!(err.message.contains("regular file"), "{err}");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn viewer_and_sim_points_refuse_symlinked_simdir_and_core_artifacts() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ftx-fold-symlinks-{}-{stamp}", std::process::id()));
+        let sim = root.join("sim");
+        fs::create_dir_all(&sim).unwrap();
+
+        let body = "v -0.3 0 0\nv 0.3 0 0\nv -0.3 0 1.5\nf 1 2 3\n";
+        let cloth = "v -0.3 -0.1 0.5\nv 0.3 -0.1 0.5\nv -0.3 -0.1 0.6\nf 1 2 3\n";
+        let frame = vec![
+            ftx_core::Vec3::new(-0.3, -0.1, 0.5),
+            ftx_core::Vec3::new(0.3, -0.1, 0.5),
+            ftx_core::Vec3::new(-0.3, -0.1, 0.6),
+        ];
+        let pc2_bytes = ftx_drape::animation::pc2(&[frame]);
+        let mesh_map_bytes = serde_json::to_vec(&json!({
+            "units": "m",
+            "vertices": 3,
+            "frames": {"fold": 0, "zip": 0, "sew": 0, "drape": 1},
+            "inst_range": {"panel": [0, 3]},
+            "corners": {"panel:a": 0}
+        }))
+        .unwrap();
+        let sim_report_bytes = serde_json::to_vec(&json!({
+            "style": "test",
+            "settled": true,
+            "gating": [],
+            "advisory": [],
+            "self_contact": {"enabled": false}
+        }))
+        .unwrap();
+        let core_files: [(&str, &[u8]); 5] = [
+            ("sim_report.json", &sim_report_bytes),
+            ("mesh_map.json", &mesh_map_bytes),
+            ("fold.pc2", &pc2_bytes),
+            ("body.obj", body.as_bytes()),
+            ("garment.obj", cloth.as_bytes()),
+        ];
+        for (name, bytes) in core_files {
+            fs::write(sim.join(name), bytes).unwrap();
+        }
+
+        let pat_path = root.join("pattern.json");
+        fs::write(
+            &pat_path,
+            serde_json::to_vec(&json!({
+                "schema": "fabric-pattern/1",
+                "units": "mm",
+                "style": "test",
+                "seams": [],
+                "pieces": [{
+                    "id": "panel",
+                    "vertices": {"a": [0, 0], "b": [100, 0], "c": [0, 100]},
+                    "edges": [
+                        {"id": "ab", "from": "a", "to": "b"},
+                        {"id": "bc", "from": "b", "to": "c"},
+                        {"id": "ca", "from": "c", "to": "a"}
+                    ],
+                    "cut": {"qty": 1},
+                    "placement": {
+                        "part": "torso",
+                        "theta_deg": 0.0,
+                        "x0": 0.0,
+                        "y0_landmark": "waist",
+                        "y0": 0.0
+                    }
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let meas_path = root.join("measurements.json");
+        fs::write(
+            &meas_path,
+            serde_json::to_vec(&json!({
+                "stature": 920.0, "chest": 540.0, "waist": 510.0, "hip": 550.0,
+                "neck_base": 250.0, "shoulder_length": 72.0, "shoulder_slope_deg": 18.0,
+                "across_back": 220.0, "back_neck_to_waist": 225.0, "armscye_depth": 110.0,
+                "waist_height": 510.0, "crotch_height": 380.0, "knee_height": 235.0,
+                "head": 495.0, "upper_arm": 160.0, "arm_length": 310.0,
+                "chest_width": 175.0, "hip_width": 180.0
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Sanity: both commands succeed on the regular simulation directory.
+        let ok_html = root.join("ok.html");
+        let viewer_ok: Vec<String> = [
+            "viewer",
+            sim.to_str().unwrap(),
+            "--out",
+            ok_html.to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(cmd_viewer(&crate::parse(&viewer_ok).unwrap()).unwrap().1, 0);
+
+        let points_ok: Vec<String> = [
+            "sim-points",
+            sim.to_str().unwrap(),
+            "--pattern",
+            pat_path.to_str().unwrap(),
+            "--measurements",
+            meas_path.to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(sim_points(&crate::parse(&points_ok).unwrap()).unwrap().1, 0);
+
+        // Both commands refuse a symlinked SIMDIR directory.
+        let alias = root.join("sim-alias");
+        symlink(&sim, &alias).unwrap();
+        let viewer_alias: Vec<String> = [
+            "viewer",
+            alias.to_str().unwrap(),
+            "--out",
+            root.join("alias.html").to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let err = cmd_viewer(&crate::parse(&viewer_alias).unwrap()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular directory"), "{err}");
+
+        let points_alias: Vec<String> = [
+            "sim-points",
+            alias.to_str().unwrap(),
+            "--pattern",
+            pat_path.to_str().unwrap(),
+            "--measurements",
+            meas_path.to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let err = sim_points(&crate::parse(&points_alias).unwrap()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular directory"), "{err}");
+
+        // Each core simulation file replaced with a symlink must be refused.
+        for (idx, (linked_name, _)) in core_files.iter().enumerate() {
+            let case_dir = root.join(format!("case-{idx}"));
+            fs::create_dir(&case_dir).unwrap();
+            for (name, bytes) in core_files {
+                if name == *linked_name {
+                    symlink(sim.join(name), case_dir.join(name)).unwrap();
+                } else {
+                    fs::write(case_dir.join(name), bytes).unwrap();
+                }
+            }
+            let viewer_case: Vec<String> = [
+                "viewer",
+                case_dir.to_str().unwrap(),
+                "--out",
+                root.join(format!("case-{idx}.html")).to_str().unwrap(),
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect();
+            let err = cmd_viewer(&crate::parse(&viewer_case).unwrap()).unwrap_err();
+            assert_eq!(err.code, RefusalCode::InvalidDocument, "{linked_name}");
+            assert!(err.message.contains("regular file"), "{linked_name}: {err}");
+
+            if matches!(*linked_name, "mesh_map.json" | "fold.pc2" | "body.obj") {
+                let points_case: Vec<String> = [
+                    "sim-points",
+                    case_dir.to_str().unwrap(),
+                    "--pattern",
+                    pat_path.to_str().unwrap(),
+                    "--measurements",
+                    meas_path.to_str().unwrap(),
+                ]
+                .into_iter()
+                .map(String::from)
+                .collect();
+                let err = sim_points(&crate::parse(&points_case).unwrap()).unwrap_err();
+                assert_eq!(err.code, RefusalCode::InvalidDocument, "{linked_name}");
+                assert!(err.message.contains("regular file"), "{linked_name}: {err}");
+            }
+        }
     }
 }
