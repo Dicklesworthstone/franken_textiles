@@ -221,6 +221,13 @@ fn material_override(out: &mut String, info: &Value) {
         if let Some(sha) = info["material_sha256"].as_str().filter(|s| !s.is_empty()) {
             let _ = write!(out, " Material SHA-256: <code>{}</code>.", xml_escape(sha));
         }
+        if let Some(cleared) = info["cleared_piece_fabric_overrides"]
+            .as_array()
+            .filter(|a| !a.is_empty())
+        {
+            let names: Vec<String> = cleared.iter().map(cell).collect();
+            let _ = write!(out, " Cleared piece overrides: {}.", names.join(", "));
+        }
     } else if op == "apply_material_bindings" {
         if let Some(pieces) = info["pieces"].as_array() {
             let explicit = pieces
@@ -1430,6 +1437,7 @@ mod tests {
                 "basis": "source_bearing_snapshot",
                 "material_sha256": "b".repeat(64),
                 "effective_fabric": {"name": "Linen <220>"},
+                "cleared_piece_fabric_overrides": ["sleeve_<L>"],
                 "operation": "replace_whole_fabric",
                 "note": "No geometry changed <test>."
             }
@@ -1440,6 +1448,7 @@ mod tests {
         assert!(whole_html.contains("Basis: source_bearing_snapshot."));
         assert!(whole_html.contains("Source: <code>fabrics/&lt;linen&gt;.json</code>."));
         assert!(whole_html.contains("Effective fabric: Linen &lt;220&gt;."));
+        assert!(whole_html.contains("Cleared piece overrides: sleeve_&lt;L&gt;."));
         assert!(whole_html.contains(&format!(
             "Material SHA-256: <code>{}</code>.",
             "b".repeat(64)

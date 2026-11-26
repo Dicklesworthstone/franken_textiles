@@ -160,6 +160,9 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "structure_errors": errs,
         "solved": pat["meta"].get("solved").cloned().unwrap_or(Value::Null),
     });
+    if let Some(selected) = &fabric {
+        result["fabric_override"] = selected.receipt().clone();
+    }
     if let Some(evidence) = &body {
         result["draft_body"] = json!(out.join("draft_body.json"));
         result["validation_body"] = json!(out.join("validation_body.json"));
@@ -216,6 +219,9 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
         "fit_spec":dir.join("fit_spec.json"),"structure_errors":errs,
         "readiness":readiness,"measurement_note":note,"as_of":date,
         "solved":pat["meta"]["solved"]});
+    if let Some(selected) = &fabric {
+        result["fabric_override"] = selected.receipt().clone();
+    }
     if let Some(evidence) = &body {
         result["draft_body"] = json!(dir.join("draft_body.json"));
         result["validation_body"] = json!(dir.join("validation_body.json"));

@@ -524,6 +524,35 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .filter(|f| !gating.contains(f))
             .collect()
     };
+    let arm_pose = report
+        .get("arm_pose")
+        .map(|value| {
+            let arms: ftx_body::drape::ArmPose = serde_json::from_value(value.clone())
+                .map_err(|e| bad_input(format!("saved drape arm_pose: {e}")))?;
+            arms.validate()?;
+            Ok::<_, Refusal>(arms)
+        })
+        .transpose()?;
+    let arm_deg = match report.get("arm_deg") {
+        Some(value) => {
+            let deg = value
+                .as_f64()
+                .filter(|v| v.is_finite() && (0.0..=180.0).contains(v))
+                .ok_or_else(|| {
+                    bad_input("saved drape arm_deg must be a finite angle in 0..=180 degrees")
+                })?;
+            match arm_pose {
+                Some(arms) if arms.left_abduction_deg == arms.right_abduction_deg => {
+                    arms.left_abduction_deg + 0.0
+                }
+                _ => deg + 0.0,
+            }
+        }
+        None => match arm_pose {
+            Some(arms) => 0.5 * (arms.left_abduction_deg + arms.right_abduction_deg) + 0.0,
+            None => 35.0,
+        },
+    };
     let r6 = |v: f64| (v * 1e6).round() / 1e6;
     let mut payload = json!({
         "schema": "fabric-fold-viewer/1",
@@ -545,13 +574,10 @@ pub(super) fn cmd_viewer(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "gating": gating,
             "advisory": advisory,
             "settled": report["settled"].as_bool().unwrap_or(false),
-            "arm_deg": report["arm_deg"].as_f64().unwrap_or(35.0),
+            "arm_deg": arm_deg,
         },
     });
-    if let Some(value) = report.get("arm_pose") {
-        let arms: ftx_body::drape::ArmPose = serde_json::from_value(value.clone())
-            .map_err(|e| bad_input(format!("saved drape arm_pose: {e}")))?;
-        arms.validate()?;
+    if let Some(arms) = arm_pose {
         payload["report"]["arm_pose"] = json!(arms);
     }
     if contact {

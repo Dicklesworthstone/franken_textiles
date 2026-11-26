@@ -28,10 +28,31 @@ impl Input {
     pub(super) fn apply(mut self, pattern: &mut Value) -> Result<Override, Refusal> {
         match self.selection {
             Selection::Fabric(fabric) => {
-                pattern
+                let object = pattern
                     .as_object_mut()
-                    .ok_or_else(|| bad_input("pattern must be an object"))?
-                    .insert("fabric".into(), fabric);
+                    .ok_or_else(|| bad_input("pattern must be an object"))?;
+                object.insert("fabric".into(), fabric);
+                // Whole-fabric replacement must not leave stale per-piece fabric overrides merged
+                // with a second physical law.
+                let mut cleared = Vec::new();
+                if let Some(pieces) = object.get_mut("pieces").and_then(Value::as_array_mut) {
+                    for (idx, piece) in pieces.iter_mut().enumerate() {
+                        if let Some(piece_obj) = piece.as_object_mut()
+                            && let Some(old) = piece_obj.remove("fabric")
+                            && !old.is_null()
+                        {
+                            let id = piece_obj
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .unwrap_or_else(|| format!("piece[{idx}]"));
+                            cleared.push(id);
+                        }
+                    }
+                }
+                if !cleared.is_empty() {
+                    self.frozen.receipt["cleared_piece_fabric_overrides"] = json!(cleared);
+                }
             }
             Selection::Bindings(changes) => {
                 let mut result = changes.apply(&Pattern::new(pattern.clone()))?;
@@ -224,5 +245,57 @@ mod tests {
         assert!(receipt_entry.1.ends_with(b"\n"));
         let parsed: Value = serde_json::from_slice(&receipt_entry.1).expect("valid receipt JSON");
         assert_eq!(parsed, receipt);
+    }
+
+    #[test]
+    fn whole_fabric_override_clears_stale_piece_overrides_and_records_them() {
+        let replacement = json!({"areal_g_m2": 220, "tensile_N_m": 1200, "bending_Nm": 2e-5});
+        let make_input = || Input {
+            selection: Selection::Fabric(replacement.clone()),
+            frozen: Override {
+                bytes: serde_json::to_vec(&replacement).unwrap(),
+                receipt: json!({
+                    "source": "wool.json",
+                    "operation": "replace_whole_fabric",
+                    "basis": "legacy_uncertain",
+                    "effective_fabric": replacement,
+                }),
+            },
+        };
+
+        // Pattern with per-piece overrides: stale piece fabrics are stripped and audited.
+        let mut bound = json!({
+            "schema": "fabric-pattern/1",
+            "fabric": {"name": "old_shell", "interfaces": []},
+            "pieces": [
+                {"id": "front"},
+                {"id": "sleeve", "fabric": {"name": "old_sleeve"}},
+                {"id": "cuff", "fabric": null}
+            ]
+        });
+        let ov = make_input().apply(&mut bound).unwrap();
+        assert_eq!(bound["fabric"], replacement);
+        assert!(bound["pieces"][0].get("fabric").is_none());
+        assert!(bound["pieces"][1].get("fabric").is_none());
+        assert!(bound["pieces"][2].get("fabric").is_none());
+        assert_eq!(
+            ov.receipt()["cleared_piece_fabric_overrides"],
+            json!(["sleeve"])
+        );
+
+        // Uniform pattern without piece overrides: receipt gains no extra field.
+        let mut uniform = json!({
+            "schema": "fabric-pattern/1",
+            "fabric": {"name": "old_shell"},
+            "pieces": [{"id": "front"}]
+        });
+        let ov_uniform = make_input().apply(&mut uniform).unwrap();
+        assert_eq!(uniform["fabric"], replacement);
+        assert!(
+            ov_uniform
+                .receipt()
+                .get("cleared_piece_fabric_overrides")
+                .is_none()
+        );
     }
 }

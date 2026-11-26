@@ -1292,10 +1292,10 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let hands = super::parse_hands(args)?;
     let size = render::resolution(args.options.get("res").map(String::as_str))?;
     let shading = render::shading(args.options.get("shading").map(String::as_str))?;
-    let pattern_path = args
-        .positional
-        .get(1)
-        .ok_or_else(|| bad_input("ftx place needs a pattern file"))?;
+    if args.positional.len() != 2 {
+        return Err(bad_input("ftx place needs exactly one pattern file"));
+    }
+    let pattern_path = &args.positional[1];
     let (raw, _) = super::read_json(pattern_path)?;
     let source = Pattern::new(raw);
     // Refuse an unplaced attachment before the body is fitted; the stages apply the same rule.

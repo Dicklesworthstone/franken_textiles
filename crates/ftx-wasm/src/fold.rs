@@ -210,6 +210,10 @@ fn hand_collider_is_wrist(hands: &HandCollider) -> bool {
     hands.is_wrist()
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 fn deserialize_arm_pose<'de, D>(deserializer: D) -> Result<Option<ArmPose>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -252,6 +256,9 @@ pub struct FoldSettings {
     pub thumb_pose: Option<ThumbPose>,
     /// Maximum extra gravity steps, stopping early only at the shared quiet-window criterion.
     pub max_settle_steps: usize,
+    /// Report-only elastic casing hold window over the last N accepted gravity steps (0 disables).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub elastic_hold_steps: usize,
     /// Optional nominal step duration in seconds (omitted when using the default `1/24 s`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_s: Option<f64>,
@@ -325,6 +332,7 @@ impl Default for FoldSettings {
             hand_collider: HandCollider::Wrist,
             thumb_pose: None,
             max_settle_steps: 0,
+            elastic_hold_steps: 0,
             step_s: None,
             sew_steps: None,
             drape_steps: None,
@@ -457,6 +465,7 @@ fn fold_on_source(
         hand_collider,
         thumb_pose,
         max_settle_steps,
+        elastic_hold_steps,
         step_s,
         sew_steps,
         drape_steps,
@@ -500,6 +509,7 @@ fn fold_on_source(
         drape_steps: drape_steps.unwrap_or(defaults.drape_steps),
         tol: newton_tol_m_s.unwrap_or(defaults.tol),
         max_settle_steps,
+        elastic_hold_steps,
         static_equilibrium,
         time_subdivision,
         newton_strategy,
@@ -700,6 +710,33 @@ mod tests {
         assert_eq!(options.step, DrapeOptions::default().step);
         value["time_subdivision"]["tolerance"] = json!(1.0);
         assert!(serde_json::from_value::<FoldSettings>(value).is_err());
+    }
+
+    #[test]
+    fn configured_fold_retains_elastic_hold_steps_and_validates_against_drape_steps() {
+        let default = serde_json::to_value(FoldSettings::default()).unwrap();
+        assert!(default.get("elastic_hold_steps").is_none());
+        let parsed_default: FoldSettings = serde_json::from_value(default.clone()).unwrap();
+        assert_eq!(parsed_default.elastic_hold_steps, 0);
+
+        let mut configured = default.clone();
+        configured["elastic_hold_steps"] = json!(6);
+        let parsed: FoldSettings = serde_json::from_value(configured.clone()).unwrap();
+        assert_eq!(parsed.elastic_hold_steps, 6);
+        assert_eq!(serde_json::to_value(parsed).unwrap(), configured);
+
+        let valid_opts = DrapeOptions {
+            elastic_hold_steps: parsed.elastic_hold_steps,
+            ..DrapeOptions::default()
+        };
+        assert!(validate_browser_schedule(&valid_opts, None).is_ok());
+
+        let invalid_opts = DrapeOptions {
+            drape_steps: 4,
+            elastic_hold_steps: 6,
+            ..DrapeOptions::default()
+        };
+        assert!(validate_browser_schedule(&invalid_opts, None).is_err());
     }
 
     #[test]

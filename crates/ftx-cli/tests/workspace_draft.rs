@@ -88,7 +88,7 @@ fn draft_and_round_replay_frozen_shell_and_sleeve_assignments() {
     for (index, command) in [(1, draft.as_slice()), (2, round.as_slice())] {
         let mut args = command.to_vec();
         args.extend(["--material-bindings", "materials.json"]);
-        run(&dir, &args, 0);
+        let out = run(&dir, &args, 0);
         let saved = dir.join(format!("w/rounds/{index:03}"));
         let pattern = read(&saved.join("pattern.json"));
         assert_eq!(pattern["pieces"], expected["pattern"]["pieces"]);
@@ -100,6 +100,7 @@ fn draft_and_round_replay_frozen_shell_and_sleeve_assignments() {
         );
         assert_eq!(fs::read(saved.join("fabric.source.json")).unwrap(), bytes);
         let receipt = read(&saved.join("fabric_override.json"));
+        assert_eq!(out["result"]["fabric_override"], receipt);
         assert_eq!(receipt["pieces"], expected["pieces"]);
         assert_eq!(
             receipt["source_pattern_sha256"],
@@ -107,6 +108,11 @@ fn draft_and_round_replay_frozen_shell_and_sleeve_assignments() {
         );
         assert_eq!(receipt["bound_pattern_sha256"], expected["pattern_sha256"]);
     }
+    let report_html = fs::read_to_string(dir.join("w/report.html")).unwrap();
+    assert!(report_html.contains("<h3>Material override</h3>"));
+    assert!(report_html.contains("Operation: Per-piece material bindings."));
+    assert!(report_html.contains("rounds/002/fabric_override.json"));
+    assert!(report_html.contains("rounds/002/fabric.source.json"));
     assert_eq!(
         read(&dir.join("w/rounds/002/exports/checks.json"))["status"],
         "PASS"
@@ -135,6 +141,27 @@ fn draft_and_round_replay_frozen_shell_and_sleeve_assignments() {
         3,
     );
     assert!(!dir.join("w/rounds/003").exists());
+    // Replacing the whole fabric on a material-bound round must clear prior per-piece overrides.
+    fs::write(
+        dir.join("whole_linen.json"),
+        serde_json::to_vec_pretty(&json!({"material_id": "fs_il019_natural"})).unwrap(),
+    )
+    .unwrap();
+    let replaced = run(&dir, &["round", "w", "--fabric", "whole_linen.json"], 0);
+    assert_eq!(
+        replaced["result"]["fabric_override"]["cleared_piece_fabric_overrides"],
+        json!([sleeve])
+    );
+    let replaced_pattern = read(&dir.join("w/rounds/003/pattern.json"));
+    for piece in replaced_pattern["pieces"].as_array().unwrap() {
+        assert!(
+            piece.get("fabric").is_none(),
+            "whole-fabric replacement must clear stale per-piece fabric on {}",
+            piece["id"]
+        );
+    }
+    let updated_html = fs::read_to_string(dir.join("w/report.html")).unwrap();
+    assert!(updated_html.contains(&format!("Cleared piece overrides: {sleeve}.")));
     assert_eq!(read(&first.join("pattern.json")), original);
 }
 

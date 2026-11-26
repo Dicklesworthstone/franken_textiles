@@ -306,6 +306,29 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
         assert_eq!(invalid.status.code(), Some(3));
         assert!(!dir.join("invalid-pose.html").exists());
     }
+    for bad_deg in [Value::Null, json!("35"), json!(-1.0), json!(181.0)] {
+        save(
+            &dir.join("sim/sim_report.json"),
+            &json!({"arm_deg": bad_deg}),
+        );
+        let invalid = rebuild("invalid-deg.html");
+        assert_eq!(invalid.status.code(), Some(3));
+        assert!(!dir.join("invalid-deg.html").exists());
+    }
+    save(
+        &dir.join("sim/sim_report.json"),
+        &json!({"arm_deg": 50.0, "arm_pose": {"left_abduction_deg": 20.0, "right_abduction_deg": 20.0}}),
+    );
+    assert!(rebuild("sym-pose.html").status.success());
+    let sym_html = std::fs::read_to_string(dir.join("sym-pose.html")).unwrap();
+    let (_, sym_data) = sym_html.split_once("\nconst D = ").unwrap();
+    let (sym_data, _) = sym_data.split_once(";\nconst $ = ").unwrap();
+    let sym_view: Value = serde_json::from_str(sym_data).unwrap();
+    assert_eq!(sym_view["report"]["arm_deg"], json!(20.0));
+    assert_eq!(
+        sym_view["report"]["arm_pose"],
+        json!({"left_abduction_deg": 20.0, "right_abduction_deg": 20.0})
+    );
 
     // A contact-protected historical cache has no panel-station marker. Its first
     // four display frames must stay on the board. The retained solver suffix is f32.
