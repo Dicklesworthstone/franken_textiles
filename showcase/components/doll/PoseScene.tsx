@@ -266,6 +266,9 @@ export default function PoseScene({ onStatus, command }: {
       const degrees = Math.max(Math.abs(pose[0] - from[0]), Math.abs(pose[1] - from[1]));
       const seconds = Math.max(0.1, degrees / ARM_SPEED_DEG_S);
       moving = { from, to: pose, seconds };
+      // A sew still replaying ends now, on the sewn jacket the move starts from: left running, it would draw the
+      // sew's frames over a short move's playback and end on the jacket as sewn, not as moved.
+      if (replay && garment && clothNow) { replay = null; garment.update(toThree(clothNow)); }
       // The jacket stays on, in its pose, while the solver works; the playback then moves both together.
       setBody(from[0], from[1]);
       if (garment) garment.mesh.visible = true;
