@@ -444,7 +444,7 @@ pub fn check_files(
                     Ok(doc) => {
                         if let Some(pieces) = doc["pieces"].as_array() {
                             if let Some(expected) = info["count"].as_u64()
-                                && expected as usize != pieces.len()
+                                && u64::try_from(pieces.len()).ok() != Some(expected)
                             {
                                 out.push(CheckItem {
                                     check: "cutter.report".into(),
@@ -565,33 +565,201 @@ pub fn check_files(
     out
 }
 
-/// Reads every file of an output directory (and of its sub-directories one level down) into a set.
+/// Reads every regular file of an output directory (and of its regular sub-directories one level
+/// down) into a set, refusing symlinks at the root directory or any visited entry.
 ///
 /// # Errors
-/// `io` when the directory cannot be read.
+/// [`RefusalCode::Io`] when a path cannot be inspected or read; [`RefusalCode::InvalidDocument`]
+/// when `dir` is not a regular directory or any entry in `dir` (or one level down) is a symlink.
 pub fn read_dir_files(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Refusal> {
-    let io = |e: std::io::Error| Refusal::new(RefusalCode::Io, format!("{}: {e}", dir.display()));
+    let io_at = |path: &Path, e: std::io::Error| {
+        Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()))
+    };
+    let root_meta = std::fs::symlink_metadata(dir).map_err(|e| io_at(dir, e))?;
+    if !root_meta.file_type().is_dir() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{}: expected a regular directory", dir.display()),
+        ));
+    }
     let mut out = BTreeMap::new();
-    for entry in std::fs::read_dir(dir).map_err(io)? {
-        let path = entry.map_err(io)?.path();
+    for entry in std::fs::read_dir(dir).map_err(|e| io_at(dir, e))? {
+        let entry = entry.map_err(|e| io_at(dir, e))?;
+        let path = entry.path();
+        let ft = entry.file_type().map_err(|e| io_at(&path, e))?;
+        if ft.is_symlink() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "{}: expected a regular file or directory, not a symlink",
+                    path.display()
+                ),
+            ));
+        }
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if path.is_dir() {
-            for sub in std::fs::read_dir(&path).map_err(io)? {
-                let sp = sub.map_err(io)?.path();
-                if sp.is_file() {
+        if ft.is_dir() {
+            for sub in std::fs::read_dir(&path).map_err(|e| io_at(&path, e))? {
+                let sub = sub.map_err(|e| io_at(&path, e))?;
+                let sp = sub.path();
+                let sft = sub.file_type().map_err(|e| io_at(&sp, e))?;
+                if sft.is_symlink() {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("{}: expected a regular file, not a symlink", sp.display()),
+                    ));
+                }
+                if sft.is_file() {
                     let sn = sp
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    out.insert(format!("{name}/{sn}"), std::fs::read(&sp).map_err(io)?);
+                    out.insert(
+                        format!("{name}/{sn}"),
+                        std::fs::read(&sp).map_err(|e| io_at(&sp, e))?,
+                    );
                 }
             }
-        } else if path.is_file() {
-            out.insert(name, std::fs::read(&path).map_err(io)?);
+        } else if ft.is_file() {
+            out.insert(name, std::fs::read(&path).map_err(|e| io_at(&path, e))?);
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn fresh_temp_dir(tag: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ftx-export-{tag}-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn read_dir_files_reads_two_levels_and_refuses_non_directories() {
+        let root = fresh_temp_dir("read-dir-ok");
+        let sub = root.join("cutter");
+        let deep = sub.join("ignored_deep");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(root.join("a.txt"), b"top").unwrap();
+        fs::write(sub.join("b.svg"), b"nested").unwrap();
+        fs::write(deep.join("c.svg"), b"too-deep").unwrap();
+
+        let files = read_dir_files(&root).unwrap();
+        assert_eq!(
+            files.get("a.txt").map(Vec::as_slice),
+            Some(b"top".as_slice())
+        );
+        assert_eq!(
+            files.get("cutter/b.svg").map(Vec::as_slice),
+            Some(b"nested".as_slice())
+        );
+        assert_eq!(files.len(), 2);
+
+        let err_file = read_dir_files(&root.join("a.txt")).unwrap_err();
+        assert_eq!(err_file.code, RefusalCode::InvalidDocument);
+        assert!(err_file.message.contains("regular directory"), "{err_file}");
+
+        let err_missing = read_dir_files(&root.join("missing")).unwrap_err();
+        assert_eq!(err_missing.code, RefusalCode::Io);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_dir_files_refuses_symlinks_at_root_top_and_nested_levels() {
+        use std::os::unix::fs::symlink;
+
+        let root = fresh_temp_dir("read-dir-symlink");
+        let outside = root.join("outside.txt");
+        fs::write(&outside, b"secret").unwrap();
+        let outside_dir = root.join("outside_dir");
+        fs::create_dir_all(&outside_dir).unwrap();
+        fs::write(outside_dir.join("leak.svg"), b"leak").unwrap();
+
+        let export_dir = root.join("out");
+        fs::create_dir_all(&export_dir).unwrap();
+        fs::write(export_dir.join("ok.txt"), b"ok").unwrap();
+
+        // 1. Symlinked root directory.
+        let alias = root.join("out_alias");
+        symlink(&export_dir, &alias).unwrap();
+        let err = read_dir_files(&alias).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular directory"), "{err}");
+
+        // 2. Symlinked top-level file.
+        let link_file = export_dir.join("linked.txt");
+        symlink(&outside, &link_file).unwrap();
+        let err = read_dir_files(&export_dir).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("symlink"), "{err}");
+        fs::remove_file(&link_file).unwrap();
+
+        // 3. Symlinked subdirectory.
+        let link_sub = export_dir.join("cutter");
+        symlink(&outside_dir, &link_sub).unwrap();
+        let err = read_dir_files(&export_dir).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("symlink"), "{err}");
+        fs::remove_file(&link_sub).unwrap();
+
+        // 4. Symlinked file inside a regular subdirectory.
+        let cutter = export_dir.join("cutter");
+        fs::create_dir_all(&cutter).unwrap();
+        symlink(&outside, cutter.join("piece.svg")).unwrap();
+        let err = read_dir_files(&export_dir).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("symlink"), "{err}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn check_files_compares_cutter_count_without_32bit_truncation() {
+        let mut files = BTreeMap::new();
+        let huge_count = (1u64 << 32) + 1;
+        files.insert(
+            "TEST_export_manifest.json".into(),
+            serde_json::json!({
+                "schema": "fabric-pattern-export/1",
+                "files": {
+                    "cutter": {
+                        "file": "cutter/TEST_cutter_report.json",
+                        "count": huge_count
+                    }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        files.insert(
+            "cutter/TEST_cutter_report.json".into(),
+            serde_json::json!({
+                "pieces": [{"file": "cutter/p.svg"}]
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        files.insert(
+            "cutter/p.svg".into(),
+            b"<svg width=\"10mm\" height=\"10mm\" viewBox=\"0 0 10 10\"><path d=\"M 0,0 L 10,0 L 10,10 Z\"/></svg>".to_vec(),
+        );
+        let items = check_files(&files, "out", None);
+        assert!(
+            items.iter().any(|i| i.check == "cutter.report" && !i.ok),
+            "u64 cutter count exceeding 2^32 must fail cutter.report: {items:?}"
+        );
+    }
 }

@@ -834,7 +834,7 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
             (nums(&m["cut_bbox"]), m["height_mm"].as_f64().unwrap_or(0.0))
         }
     };
-    let (mut pen, mut xs, mut ys) = (0i64, Vec::new(), Vec::new());
+    let (mut pen, mut xs, mut ys, mut bad_sp2) = (0i64, Vec::new(), Vec::new(), false);
     for cmd in text.replace('\n', "").split(';') {
         let Some(op) = cmd.get(..2) else {
             continue;
@@ -843,17 +843,26 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
         if op == "SP" {
             pen = args.parse().unwrap_or(0);
         } else if (op == "PU" || op == "PD") && !args.is_empty() && pen == 2 {
-            let v: Vec<i64> = args.split(',').filter_map(|t| t.parse().ok()).collect();
-            xs.extend(v.iter().step_by(2).copied());
-            ys.extend(v.iter().skip(1).step_by(2).copied());
+            let parsed: Option<Vec<i64>> = args.split(',').map(|t| t.parse().ok()).collect();
+            match parsed {
+                Some(v) if v.len().is_multiple_of(2) => {
+                    xs.extend(v.iter().step_by(2).copied());
+                    ys.extend(v.iter().skip(1).step_by(2).copied());
+                }
+                _ => bad_sp2 = true,
+            }
         }
     }
-    if xs.is_empty() || ys.is_empty() || bbox.len() != 4 {
+    if bad_sp2 || xs.is_empty() || ys.is_empty() || bbox.len() != 4 {
         out.push(CheckItem::new(
             "hpgl.bbox",
             file,
             false,
-            "no SP2 coordinates",
+            if bad_sp2 {
+                "malformed SP2 coordinates"
+            } else {
+                "no SP2 coordinates"
+            },
         ));
         return out;
     }
@@ -1703,11 +1712,18 @@ mod tests {
                 "malformed cut_bbox {bad_bbox} must fail hpgl.same_layout_as_master: {items:?}"
             );
         }
-        let odd = check_hpgl("IN;SP2;PU100;", "odd.plt", Some(&master), &json!({}));
-        assert!(
-            odd.iter().any(|c| c.check == "hpgl.bbox" && !c.ok),
-            "odd SP2 coordinate with missing y must fail hpgl.bbox: {odd:?}"
-        );
+        for bad_plt in [
+            "IN;SP2;PU100;",
+            "IN;SP2;PU0,2000;PD4000,4000,100;",
+            "IN;SP2;PU0,2000;PD4000,bad,4000;",
+            "IN;SP2;PU0,bad,4000,2000,4000;",
+        ] {
+            let items = check_hpgl(bad_plt, "bad.plt", Some(&master), &json!({}));
+            assert!(
+                items.iter().any(|c| c.check == "hpgl.bbox" && !c.ok),
+                "malformed SP2 coordinates in {bad_plt:?} must fail hpgl.bbox: {items:?}"
+            );
+        }
     }
 
     #[test]
