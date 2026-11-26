@@ -290,6 +290,29 @@ fn norm2(d: Vec2) -> f64 {
     (d.x * d.x + d.y * d.y).sqrt()
 }
 
+/// Coordinate-span ceiling keeping Shewchuk's exact `orient3d` degree-3 products and expansion
+/// splits (`6 * D^3 * 2^54 <= 1.1e257 << f64::MAX`) inside the finite non-panicking domain.
+const EXACT_PREDICATE_MAX_SPAN: f64 = 1e80;
+
+/// Fail closed before invoking exact geometric predicates (`segment_triangle` / `orient3d`) so
+/// extreme mixed-scale coordinates cannot panic inside `ftx_core::exact`.
+fn ensure_exact_predicate_domain(points: &[Vec3], what: &str) -> Result<(), Refusal> {
+    let mut lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut hi = Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &p in points {
+        if !p.is_finite() {
+            return Err(Refusal::new(RefusalCode::NonFinite, what));
+        }
+        lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+        hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+    }
+    let span = hi - lo;
+    if !span.is_finite() || span.x.max(span.y).max(span.z) > EXACT_PREDICATE_MAX_SPAN {
+        return Err(Refusal::new(RefusalCode::NonFinite, what));
+    }
+    Ok(())
+}
+
 /// Unit normal from a face cross product without squaring underflow/overflow or silently
 /// turning a collapsed cross product into a zero-vector impulse.
 fn unit_normal(cross: Vec3, what: &str) -> Result<Option<Vec3>, Refusal> {
@@ -1059,6 +1082,16 @@ fn apply_self_repulsion(
             let face = topo.tris[ti];
             let triangle = face.map(|v| p[v]);
             let segment = edge.map(|v| p[v]);
+            ensure_exact_predicate_domain(
+                &[
+                    segment[0],
+                    segment[1],
+                    triangle[0],
+                    triangle[1],
+                    triangle[2],
+                ],
+                "non-finite self-repulsion crossing witness",
+            )?;
             let cross = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]);
             let raw_signed = segment.map(|v| (v - triangle[0]).dot(cross));
             if !cross.is_finite() || !raw_signed[0].is_finite() || !raw_signed[1].is_finite() {
@@ -1213,6 +1246,10 @@ fn edge_face_witness(edge: [Vec3; 2], triangle: [Vec3; 3]) -> Result<EdgeFaceWit
             distance: norm3(edge_point - triangle_point),
         }
     };
+    ensure_exact_predicate_domain(
+        &[edge[0], edge[1], triangle[0], triangle[1], triangle[2]],
+        "non-finite start body-feature witness",
+    )?;
     let normal = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]);
     let a = (edge[0] - triangle[0]).dot(normal);
     let b = (edge[1] - triangle[0]).dot(normal);
@@ -1349,17 +1386,13 @@ fn apply_body_repulsion(
             if hit.distance >= clearance {
                 continue;
             }
-            let normal = body.nearest(hit.edge_point).normal;
-            let nlen = norm3(normal);
-            if !normal.is_finite() || !nlen.is_finite() {
-                return Err(Refusal::new(
-                    RefusalCode::NonFinite,
-                    "non-finite start body nearest normal",
-                ));
-            }
-            if nlen == 0.0 {
+            let Some(normal) = unit_normal(
+                body.nearest(hit.edge_point).normal,
+                "non-finite start body nearest normal",
+            )?
+            else {
                 continue;
-            }
+            };
             add(
                 triangle,
                 &hit.triangle_weights,
@@ -1870,6 +1903,38 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, RefusalCode::NonFinite);
+
+        // Mixed-scale tiny triangle (cross = 1e-200) pierced by a huge segment (±1e160):
+        // cross and raw_signed are both finite, yet exact orient3d(seg[0], seg[1], t0, t1)
+        // would overflow and panic without the coordinate-span domain guard.
+        let mut mixed = vec![
+            Vec3::new(0.0, 0.0, z),
+            Vec3::new(tiny, 0.0, z),
+            Vec3::new(0.0, tiny, z),
+            Vec3::new(0.25 * tiny, 0.25 * tiny, -1e160),
+            Vec3::new(0.25 * tiny, 0.25 * tiny, 1e160),
+            Vec3::new(0.050, 0.050, 1e160),
+        ];
+        let mixed_cross = (mixed[1] - mixed[0]).cross(mixed[2] - mixed[0]);
+        assert!(mixed_cross.is_finite());
+        assert!((mixed[3] - mixed[0]).dot(mixed_cross).is_finite());
+        assert!((mixed[4] - mixed[0]).dot(mixed_cross).is_finite());
+        let mixed_err = apply_self_repulsion(
+            &mut mixed,
+            &mesh.verts2d,
+            &mesh.owner,
+            &topology,
+            &body,
+            RELAX_CLEARANCE,
+            opts,
+            &mut RepulsionWork::new(opts),
+        )
+        .unwrap_err();
+        assert_eq!(mixed_err.code, RefusalCode::NonFinite);
+        let witness_err = edge_face_witness([mixed[3], mixed[4]], [mixed[0], mixed[1], mixed[2]])
+            .err()
+            .expect("mixed-scale edge_face_witness must refuse before orient3d overflow");
+        assert_eq!(witness_err.code, RefusalCode::NonFinite);
     }
 
     #[test]
