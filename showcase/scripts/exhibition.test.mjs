@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { after, before, test } from "node:test";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import { chromium } from "playwright-core";
 
 const site = process.env.FTX_STUDIO_URL || "http://127.0.0.1:3000";
@@ -740,4 +742,71 @@ test("the menu lands the keyboard on a section of the home page, and the atelier
     const form = await phone.locator(".sa-display").boundingBox();
     assert.ok(form.width >= 380, `The fitted form spans the phone (${form.width} px)`);
   } finally { await phone.close(); }
+});
+
+
+async function posingRoomFunctions(names, sandbox) {
+  const source = await readFile(new URL("../components/doll/PoseScene.tsx", import.meta.url), "utf8");
+  const syntax = ts.createSourceFile("PoseScene.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declarations = [];
+  const visit = node => {
+    if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(syntax));
+    ts.forEachChild(node, visit);
+  };
+  visit(syntax);
+  assert.equal(declarations.length, names.length, "exercise the actual posing-room functions");
+  const javascript = ts.transpileModule(declarations.join("\n"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  runInNewContext(javascript, sandbox);
+}
+
+test("posing the form rounds once after both arms in the native arithmetic order", async () => {
+  const sandbox = { Float32Array, Float64Array, THREE: { MathUtils: { clamp: (x, low, high) => Math.min(high, Math.max(low, x)) } } };
+  await posingRoomFunctions(["posed"], sandbox);
+  const offset = x => new Float32Array([x, 0, 0]);
+  const arm = (a, b) => ({ indices: new Uint32Array([0]), offsets: [offset(a), offset(b)] });
+  const halfUlp = 2 ** -24;
+  const form = { base: offset(1), poseScratch: new Float64Array(3), angles: [0, 1],
+    arms: [arm(halfUlp, halfUlp), arm(halfUlp, halfUlp)] };
+  const out = new Float32Array(3);
+  assert.equal(sandbox.posed(form, 0.5, 0.5, out), out);
+  assert.deepEqual(Array.from(out), [1 + 2 ** -23, 0, 0],
+    "overlapping arm contributions must not each round away at a half-ULP");
+  // The native law adds base + weighted-from before weighted-to. Reuse resets the scratch.
+  form.arms = [arm(-2, 2 ** -100), { indices: new Uint32Array(), offsets: [offset(0), offset(0)] }];
+  sandbox.posed(form, 0.5, 0, out);
+  assert.deepEqual(Array.from(out), [2 ** -101, 0, 0]);
+  sandbox.posed(form, 0, 0, out);
+  assert.deepEqual(Array.from(out), [-1, 0, 0]);
+});
+
+test("selecting the accepted pose finishes sew and move replays without losing the live session", async () => {
+  for (const kind of ["sew", "move"]) {
+    const pose = kind === "move" ? [45, 35] : [35, 35];
+    const start = new Float32Array([1, 2, 3]), final = new Float32Array([7, 8, 9]);
+    const worker = {};
+    const updates = [], published = [];
+    const sandbox = {
+      Float32Array, worker, sewing: null, moving: null,
+      same: (a, b) => !!a && !!b && a[0] === b[0] && a[1] === b[1],
+      status: { phase: "replay", shown: [40, 35], sewn: pose },
+      clothNow: kind === "move" ? start : final,
+      replay: kind === "sew" ? { began: 1 } : null,
+      carry: kind === "move" ? { start, samples: new Float32Array([0.1, 4, 5, 6, 0.2, ...final]) } : null,
+      garment: { mesh: { visible: false }, update: points => updates.push(Array.from(points)) },
+      setBody: (left, right) => { sandbox.status.shown = [left, right]; },
+      publish: () => published.push({ phase: sandbox.status.phase, shown: [...sandbox.status.shown],
+        carry: sandbox.carry, replay: sandbox.replay, cloth: updates.at(-1) }),
+      Worker: class { constructor() { throw Error("the accepted session must not be replaced"); } },
+    };
+    await posingRoomFunctions(["sew", "toThree"], sandbox);
+    sandbox.sew(pose);
+    assert.equal(sandbox.worker, worker);
+    assert.deepEqual(Array.from(sandbox.clothNow), Array.from(final), kind);
+    assert.equal(sandbox.garment.mesh.visible, true);
+    assert.deepEqual(published, [{ phase: "ready", shown: pose, carry: null, replay: null, cloth: [7, 9, -8] }], kind);
+    assert.equal(sandbox.sewing, null);
+    assert.equal(sandbox.moving, null);
+  }
 });
