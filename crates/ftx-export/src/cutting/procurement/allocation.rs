@@ -368,7 +368,7 @@ impl Search<'_> {
         Ok(self.cache[&mask][candidate].clone())
     }
 
-    fn visit(&mut self, depth: usize) -> Result<(), Refusal> {
+    fn visit(&mut self, depth: usize, prev_candidate: usize) -> Result<(), Refusal> {
         if depth == self.visit_order.len() {
             let cost = self
                 .active
@@ -384,8 +384,28 @@ impl Search<'_> {
             }
             return Ok(());
         }
-        let bit = 1 << self.visit_order[depth];
-        for candidate in 0..self.ids.len() {
+        let current_idx = self.visit_order[depth];
+        // Two adjacent segments in `demand.segments` with bit-identical length and quantity
+        // contribute identically and in the exact same floating-point summation position inside
+        // `scope()`. Enforcing non-decreasing offer indices across such a run prunes redundant
+        // permutations while retaining the lexicographically first (offer-ID order) tie-break.
+        let start_candidate = if depth > 0 {
+            let prev_idx = self.visit_order[depth - 1];
+            let prev = &self.demand.segments[prev_idx];
+            let curr = &self.demand.segments[current_idx];
+            if current_idx == prev_idx + 1
+                && prev.length_m.to_bits() == curr.length_m.to_bits()
+                && prev.quantity.to_bits() == curr.quantity.to_bits()
+            {
+                prev_candidate
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let bit = 1 << current_idx;
+        for candidate in start_candidate..self.ids.len() {
             if !self.work.charge(false) {
                 self.exhausted = true;
                 break;
@@ -416,7 +436,7 @@ impl Search<'_> {
             // An all-unit source price break can make a larger order cheaper than its prefix.
             // Partial-cost pruning is valid only when every candidate has a constant unit price.
             if !self.costs_monotone || self.incumbent.as_ref().is_none_or(|old| cost < old.cost) {
-                self.visit(depth + 1)?;
+                self.visit(depth + 1, candidate)?;
             }
             self.active[candidate] = previous;
             self.masks[candidate] = old_mask;
@@ -523,7 +543,7 @@ fn group(
         search.cache.insert(full, offers);
         // With at most one possible offer the whole-order sample already exhausts every option.
         if search.ids.len() > 1 {
-            search.visit(0)?;
+            search.visit(0, 0)?;
         }
     }
     let selected_orders = search.orders()?;

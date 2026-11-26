@@ -1303,3 +1303,54 @@ fn preflight_bounds_thread_choices_quote_work_and_wrong_supplier_allocation_sche
         consumables::purchasing_work_bound(&serde_json::from_value(materials).unwrap()).is_err()
     );
 }
+
+#[test]
+fn split_thread_identical_segment_symmetry_proves_multi_copy_three_offer_optimum() {
+    // Twelve identical 0.8 m segments across three non-monotone price-break offers have
+    // 3^12 = 531,441 labeled assignments without symmetry breaking, exceeding MAX_WORK.
+    // Non-decreasing offer assignment over contiguous identical segments collapses this to
+    // <= C(14, 2) = 91 canonical splits and proves the unique $38 optimum (5 on a, 5 on b, 2 on c).
+    let (pattern, mut options, selected) = fixture();
+    options["passes"].as_array_mut().unwrap().truncate(1);
+    options["qualifications"][0]["thread_consumption"]["channels"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    options["consumables"]["production_copies"] = json!(12);
+    let mut a = quote(&selected, "a", "a");
+    a["available_quantity"] = json!(4.0);
+    a["price_breaks"] = json!([{"minimum_quantity":4.0,"price":6.0}]);
+    let mut b = quote(&selected, "b", "b");
+    b["available_quantity"] = json!(4.0);
+    b["price_breaks"] = json!([{"minimum_quantity":4.0,"price":7.0}]);
+    let mut c = quote(&selected, "c", "c");
+    c["available_quantity"] = json!(6.0);
+    c["price"] = json!(12.0);
+    c["price_breaks"] = json!([{"minimum_quantity":4.0,"price":9.0}]);
+    purchasing(&mut options, vec![a, b, c]);
+    split_policy(&mut options, 2000);
+    let consumed = build(pattern, options).unwrap().consumables.unwrap();
+    close(consumed.total_required_length_m.unwrap(), 9.6);
+    let priced = consumed.purchasing.unwrap();
+    assert_eq!(priced.segments.as_ref().unwrap().len(), 12);
+    assert!(priced.complete_offer_coverage);
+    assert_eq!(priced.order_allocation_optimality_proven, Some(true));
+    close(priced.selected_total().unwrap(), 38.0);
+    let allocated = priced.material_orders[0].allocation.as_ref().unwrap();
+    assert!(
+        allocated.optimality_proven && allocated.search_complete && !allocated.budget_exhausted
+    );
+    assert!(allocated.search_nodes + allocated.quote_evaluations < 1000);
+    let orders = allocated.selected_orders.as_ref().unwrap();
+    assert_eq!(orders.len(), 3);
+    let counts: Vec<(&str, usize)> = orders
+        .iter()
+        .map(|order| {
+            (
+                order.offer.quote.offer_id.as_str(),
+                order.segment_indices.len(),
+            )
+        })
+        .collect();
+    assert_eq!(counts, vec![("a", 5), ("b", 5), ("c", 2)]);
+}
