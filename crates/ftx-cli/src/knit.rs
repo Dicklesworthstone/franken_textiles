@@ -22,14 +22,16 @@ use ftx_export::knit::{
 };
 use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime, YarnDyeProgram, YarnDyeingQualification};
 use ftx_pattern::knit::{
-    CarrierId, GaugeSpec, KnitDoc, KnitSwatchQualification, MachineBackendKind, MachineProfile,
+    GaugeSpec, KnitDoc, KnitSwatchQualification, MachineBackendKind, MachineProfile,
     ParametricPanelSpec, RaglanPulloverSpec, WearerAgeClass, compile_knit_doc,
     draft_seamless_raglan_tube, draft_shaped_panel,
 };
 use ftx_trace::raster::load_target_raster_with_limit;
 use serde_json::{Value, json};
 
-use super::{Args, bad_input, export, reserve_output, workspace};
+use super::{Args, bad_input, export, known_options, reserve_output, workspace};
+
+const MAX_KNIT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Boolean flags accepted by `ftx knit` and `ftx dye` without a following value.
 pub(super) const BOOLEAN_OPTIONS: &[&str] =
@@ -67,7 +69,7 @@ fn parse_dye_machine(id: &str) -> Result<DyeMachineProfile, Refusal> {
 fn parse_age_class(raw: &str) -> Result<WearerAgeClass, Refusal> {
     match raw {
         "infant" | "infant_under3" => Ok(WearerAgeClass::InfantUnder3),
-        "child" | "child_3_to_14" => Ok(WearerAgeClass::Child3To14),
+        "child" | "child3_to14" | "child_3_to_14" => Ok(WearerAgeClass::Child3To14),
         "adult" => Ok(WearerAgeClass::Adult),
         "swatch" | "calibration_swatch_only" => Ok(WearerAgeClass::CalibrationSwatchOnly),
         _ => Err(bad_input(format!(
@@ -78,11 +80,15 @@ fn parse_age_class(raw: &str) -> Result<WearerAgeClass, Refusal> {
 
 fn parse_regime(raw: &str) -> Result<DyeingRegime, Refusal> {
     match raw {
-        "stripes" | "1a" => Ok(DyeingRegime::Regime1AStripes),
-        "pooling" | "1b" => Ok(DyeingRegime::Regime1BCircularPooling),
-        "fiducial" | "2" => Ok(DyeingRegime::Regime2FiducialSynced),
-        "inline" | "3" => Ok(DyeingRegime::Regime3InlineDancer),
-        "jacquard" | "4" => Ok(DyeingRegime::Regime4MultiCarrierJacquard),
+        "stripes" | "1a" | "regime1_a_stripes" => Ok(DyeingRegime::Regime1AStripes),
+        "pooling" | "1b" | "regime1_b_circular_pooling" => {
+            Ok(DyeingRegime::Regime1BCircularPooling)
+        }
+        "fiducial" | "2" | "regime2_fiducial_synced" => Ok(DyeingRegime::Regime2FiducialSynced),
+        "inline" | "3" | "regime3_inline_dancer" => Ok(DyeingRegime::Regime3InlineDancer),
+        "jacquard" | "4" | "regime4_multi_carrier_jacquard" => {
+            Ok(DyeingRegime::Regime4MultiCarrierJacquard)
+        }
         _ => Err(bad_input(format!(
             "invalid --regime '{raw}' (expected stripes, pooling, fiducial, inline, or jacquard)"
         ))),
@@ -108,8 +114,19 @@ fn opt_u32(args: &Args, key: &str, default: u32) -> Result<u32, Refusal> {
 }
 
 fn write_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<(), Refusal> {
-    let p = dir.join(name);
-    std::fs::write(&p, bytes).map_err(|e| workspace::io_error(&p, e))
+    workspace::write_new(&dir.join(name), bytes)
+}
+
+fn read_utf8(path: &std::path::Path, label: &str) -> Result<String, Refusal> {
+    let bytes = crate::read_regular_bounded(path, MAX_KNIT_FILE_BYTES, label)?;
+    String::from_utf8(bytes).map_err(|e| bad_input(format!("{}: {e}", path.display())))
+}
+
+fn no_extra_positional(args: &Args, expected: usize, usage: &str) -> Result<(), Refusal> {
+    if args.positional.len() != expected {
+        return Err(bad_input(format!("usage: {usage}")));
+    }
+    Ok(())
 }
 
 /// Dispatches `ftx knit <swatch|draft|verify|poincloux> ...`.
@@ -126,6 +143,24 @@ pub(super) fn cmd_knit(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(
+        args,
+        "knit swatch",
+        &[
+            "machine",
+            "yarn",
+            "needles",
+            "courses-per-zone",
+            "cams",
+            "created",
+            "out",
+        ],
+    )?;
+    no_extra_positional(
+        args,
+        2,
+        "ftx knit swatch --out NEW_DIR [--machine ID] [--yarn ID] [--needles N] [--courses-per-zone N] [--cams A,B] [--created YYYY-MM-DDTHH:MM]",
+    )?;
     let machine_id = args
         .options
         .get("machine")
@@ -140,14 +175,23 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let needles = opt_u32(args, "needles", 40)?;
     let courses_per_zone = opt_u32(args, "courses-per-zone", 20)?;
     let cams: Vec<f64> = match args.options.get("cams") {
-        Some(s) => s
-            .split(',')
-            .map(|tok| {
-                tok.trim()
-                    .parse::<f64>()
-                    .map_err(|_| bad_input(format!("invalid cam setting '{tok}'")))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
+        Some(s) => {
+            let parsed = s
+                .split(',')
+                .map(|tok| {
+                    let v = tok
+                        .trim()
+                        .parse::<f64>()
+                        .map_err(|_| bad_input(format!("invalid cam setting '{tok}'")))?;
+                    Refusal::finite("cam setting", v)?;
+                    Ok(v)
+                })
+                .collect::<Result<Vec<_>, Refusal>>()?;
+            if parsed.is_empty() {
+                return Err(bad_input("--cams must list at least one cam setting"));
+            }
+            parsed
+        }
         None => vec![
             profile.cam_setting_range[0]
                 + 0.35 * (profile.cam_setting_range[1] - profile.cam_setting_range[0]),
@@ -183,6 +227,19 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "hand-knit chart acceptance check failed",
         ));
     }
+    // Prepare all backend outputs and serialized JSON before reserving --out so failures leave no partial directory.
+    let doc_json = serde_json::to_string_pretty(&kit.doc)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let kc = if profile.backend_kind == MachineBackendKind::KniterateKc {
+        Some(export_kniterate_kc(&compiled, &profile)?)
+    } else {
+        None
+    };
+    let ayab = if profile.backend_kind == MachineBackendKind::BrotherAyab {
+        Some(export_brother_ayab(&kit.doc, &profile, &compiled.cert)?)
+    } else {
+        None
+    };
 
     reserve_output(&out_dir, "knit swatch")?;
     let mut files = vec![
@@ -194,8 +251,6 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "swatch_chart.pdf".to_string(),
         "swatch_instructions.txt".to_string(),
     ];
-    let doc_json = serde_json::to_string_pretty(&kit.doc)
-        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     write_file(&out_dir, "swatch.knit.json", doc_json.as_bytes())?;
     write_file(&out_dir, "swatch.k", kit.knitout.knitout_text.as_bytes())?;
     write_file(&out_dir, "cert.json", kit.knitout.cert_json.as_bytes())?;
@@ -212,12 +267,10 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
         hand.instructions_text.as_bytes(),
     )?;
 
-    if profile.backend_kind == MachineBackendKind::KniterateKc {
-        let kc = export_kniterate_kc(&compiled, &profile)?;
+    if let Some(kc) = kc {
         write_file(&out_dir, "swatch.kc", kc.kc_text.as_bytes())?;
         files.push("swatch.kc".to_string());
-    } else if profile.backend_kind == MachineBackendKind::BrotherAyab {
-        let ayab = export_brother_ayab(&kit.doc, &profile, &compiled.cert)?;
+    } else if let Some(ayab) = ayab {
         write_file(&out_dir, "swatch_ayab.png", &ayab.png_bytes)?;
         write_file(
             &out_dir,
@@ -248,6 +301,42 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(
+        args,
+        "knit draft",
+        &[
+            "style",
+            "machine",
+            "allow-proprietary-binary",
+            "age-class",
+            "wales",
+            "courses",
+            "yarn-tex",
+            "thickness-mm",
+            "yarn",
+            "cam",
+            "has-drawstring",
+            "name",
+            "width-mm",
+            "chest-mm",
+            "length-mm",
+            "armhole-mm",
+            "armhole-inset-mm",
+            "neck-mm",
+            "neck-depth-mm",
+            "rib-courses",
+            "yoke-mm",
+            "collar-rib",
+            "qual",
+            "created",
+            "out",
+        ],
+    )?;
+    no_extra_positional(
+        args,
+        2,
+        "ftx knit draft --age-class infant|child|adult --out NEW_DIR [--style panel|raglan] [--machine ID] [--qual SWATCH.json]",
+    )?;
     let style = args
         .options
         .get("style")
@@ -268,11 +357,28 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let wearer_age_class = parse_age_class(age_str)?;
     let wales_per_100mm = opt_f64(args, "wales", 24.0)?;
     let courses_per_100mm = opt_f64(args, "courses", 32.0)?;
+    let yarn_tex = args
+        .options
+        .get("yarn-tex")
+        .map(|s| {
+            let v = s
+                .parse::<f64>()
+                .map_err(|_| bad_input(format!("--yarn-tex must be a number, got '{s}'")))?;
+            Refusal::finite("yarn-tex", v)?;
+            if v <= 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    "--yarn-tex must be positive",
+                ));
+            }
+            Ok(v)
+        })
+        .transpose()?;
     let gauge = GaugeSpec {
         wales_per_100mm,
         courses_per_100mm,
         needle_pitch_mm: profile.needle_pitch_mm,
-        yarn_tex: args.options.get("yarn-tex").and_then(|s| s.parse().ok()),
+        yarn_tex,
         thickness_mm: Some(opt_f64(args, "thickness-mm", 2.0)?),
         relaxed_after_wash: true,
     };
@@ -345,7 +451,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let qual: Option<KnitSwatchQualification> = match args.options.get("qual") {
         Some(path) => {
             let p = PathBuf::from(path);
-            let txt = std::fs::read_to_string(&p).map_err(|e| workspace::io_error(&p, e))?;
+            let txt = read_utf8(&p, "knit swatch qualification")?;
             Some(
                 serde_json::from_str(&txt)
                     .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
@@ -360,16 +466,35 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None => export::utc_minute()?,
     };
     let hand = export_hand_knit_document(&doc, &created)?;
+    let svg_checks = check_hand_knit_svg(&hand.svg_text, "chart.svg");
+    let pdf_checks = check_hand_knit_pdf(&hand.pdf_bytes, "chart.pdf");
+    if !svg_checks.iter().all(|c| c.ok) || !pdf_checks.iter().all(|c| c.ok) {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "hand-knit chart acceptance check failed",
+        ));
+    }
 
     let out_dir = PathBuf::from(
         args.options
             .get("out")
             .ok_or_else(|| bad_input("`ftx knit draft` requires --out NEW_DIR"))?,
     );
-    reserve_output(&out_dir, "knit draft")?;
-
     let doc_json = serde_json::to_string_pretty(&doc)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let kc = if profile.backend_kind == MachineBackendKind::KniterateKc {
+        Some(export_kniterate_kc(&compiled, &profile)?)
+    } else {
+        None
+    };
+    let ayab = if profile.backend_kind == MachineBackendKind::BrotherAyab {
+        Some(export_brother_ayab(&doc, &profile, &compiled.cert)?)
+    } else {
+        None
+    };
+
+    reserve_output(&out_dir, "knit draft")?;
+
     write_file(&out_dir, "pattern.knit.json", doc_json.as_bytes())?;
     write_file(&out_dir, "program.k", knitout.knitout_text.as_bytes())?;
     write_file(&out_dir, "cert.json", knitout.cert_json.as_bytes())?;
@@ -381,11 +506,9 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         hand.instructions_text.as_bytes(),
     )?;
 
-    if profile.backend_kind == MachineBackendKind::KniterateKc {
-        let kc = export_kniterate_kc(&compiled, &profile)?;
+    if let Some(kc) = kc {
         write_file(&out_dir, "program.kc", kc.kc_text.as_bytes())?;
-    } else if profile.backend_kind == MachineBackendKind::BrotherAyab {
-        let ayab = export_brother_ayab(&doc, &profile, &compiled.cert)?;
+    } else if let Some(ayab) = ayab {
         write_file(&out_dir, "pattern_ayab.png", &ayab.png_bytes)?;
         write_file(
             &out_dir,
@@ -415,12 +538,14 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    let doc_path = PathBuf::from(args.positional.get(2).ok_or_else(|| {
-        bad_input(
-            "usage: ftx knit verify PATTERN.knit.json --machine ID [--qual SWATCH.json] [--json]",
-        )
-    })?);
-    let txt = std::fs::read_to_string(&doc_path).map_err(|e| workspace::io_error(&doc_path, e))?;
+    known_options(args, "knit verify", &["machine", "qual"])?;
+    no_extra_positional(
+        args,
+        3,
+        "ftx knit verify PATTERN.knit.json [--machine ID] [--qual SWATCH.json] [--json]",
+    )?;
+    let doc_path = PathBuf::from(&args.positional[2]);
+    let txt = read_utf8(&doc_path, "knit pattern document")?;
     let doc: KnitDoc = serde_json::from_str(&txt)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     let machine_id = args
@@ -432,7 +557,7 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let qual: Option<KnitSwatchQualification> = match args.options.get("qual") {
         Some(path) => {
             let p = PathBuf::from(path);
-            let qtxt = std::fs::read_to_string(&p).map_err(|e| workspace::io_error(&p, e))?;
+            let qtxt = read_utf8(&p, "knit swatch qualification")?;
             Some(
                 serde_json::from_str(&qtxt)
                     .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
@@ -458,8 +583,17 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_knit_poincloux(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(args, "knit poincloux", &["mu"])?;
+    no_extra_positional(args, 2, "ftx knit poincloux [--mu MU] [--json]")?;
     let mut params = PoinclouxParams::reference_monofilament();
     params.mu_friction = opt_f64(args, "mu", params.mu_friction)?;
+    Refusal::finite("mu", params.mu_friction)?;
+    if params.mu_friction < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "--mu cannot be negative",
+        ));
+    }
     let strains = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30];
     let curve = poincloux_uniaxial_curve(&params, &strains)?;
     let rows: Vec<Value> = curve
@@ -499,6 +633,33 @@ pub(super) fn cmd_dye(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(
+        args,
+        "dye optimize",
+        &[
+            "machine",
+            "age-class",
+            "regime",
+            "courses",
+            "wales",
+            "circular",
+            "drift-eps",
+            "drift-sigma",
+            "wick-mm",
+            "max-iters",
+            "image",
+            "cells",
+            "name",
+            "yarn",
+            "dye-qual",
+            "out",
+        ],
+    )?;
+    no_extra_positional(
+        args,
+        2,
+        "ftx dye optimize --out NEW_DIR [--machine ID] [--age-class CLASS] [--regime R] [--courses N] [--wales N] [--image PATH] [--dye-qual Q.json]",
+    )?;
     let machine_id = args
         .options
         .get("machine")
@@ -519,17 +680,38 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
     )?;
     let courses = opt_u32(args, "courses", 12)?;
     let wales = opt_u32(args, "wales", 12)?;
+    if !(2..=256).contains(&courses) || !(2..=256).contains(&wales) {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("dye grid {courses}x{wales} must be within 2..=256 courses and 2..=256 wales"),
+        ));
+    }
     let is_circular = args.options.contains_key("circular");
     let drift = DriftParameters {
         systematic_eps: opt_f64(args, "drift-eps", 0.002)?,
         stochastic_sigma_eta: opt_f64(args, "drift-sigma", 0.015)?,
     };
     let wick_mm = opt_f64(args, "wick-mm", 1.5)?;
+    Refusal::finite("drift-eps", drift.systematic_eps)?;
+    Refusal::finite("drift-sigma", drift.stochastic_sigma_eta)?;
+    Refusal::finite("wick-mm", wick_mm)?;
+    if drift.stochastic_sigma_eta < 0.0 || wick_mm < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "--drift-sigma and --wick-mm cannot be negative",
+        ));
+    }
     let max_iters = opt_u32(args, "max-iters", 25)? as usize;
+    if !(1..=200).contains(&max_iters) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("--max-iters {max_iters} must be within 1..=200"),
+        ));
+    }
 
     let target = if let Some(img_path) = args.options.get("image") {
         let p = PathBuf::from(img_path);
-        let bytes = std::fs::read(&p).map_err(|e| workspace::io_error(&p, e))?;
+        let bytes = crate::read_regular_bounded(&p, MAX_KNIT_FILE_BYTES, "dye target image")?;
         load_target_raster_with_limit(&bytes, 16_000_000)?
     } else {
         // Built-in synthetic two-band stripe test target
@@ -550,7 +732,17 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut optics = DyeOpticsModel::synthetic_cmyk_cotton();
     optics.primaries.truncate(machine.primaries.len());
     let n_p = optics.primaries.len();
-    let n_cells = opt_u32(args, "cells", (courses * wales / 2).clamp(8, 128))? as usize;
+    let default_cells = courses
+        .saturating_mul(wales)
+        .saturating_div(2)
+        .clamp(8, 128);
+    let n_cells = opt_u32(args, "cells", default_cells)? as usize;
+    if !(1..=2048).contains(&n_cells) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("--cells {n_cells} must be within 1..=2048"),
+        ));
+    }
     let tr_cfg = CapillaryTransportConfig {
         ds_m: stitch_map.total_yarn_length_m / (n_cells as f64),
         sigma_wick_m: wick_mm * 0.001,
@@ -594,7 +786,7 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let qual: Option<YarnDyeingQualification> = match args.options.get("dye-qual") {
         Some(path) => {
             let p = PathBuf::from(path);
-            let txt = std::fs::read_to_string(&p).map_err(|e| workspace::io_error(&p, e))?;
+            let txt = read_utf8(&p, "yarn dyeing qualification")?;
             Some(
                 serde_json::from_str(&txt)
                     .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
@@ -608,18 +800,27 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .get("out")
             .ok_or_else(|| bad_input("`ftx dye optimize` requires --out NEW_DIR"))?,
     );
-    reserve_output(&out_dir, "dye optimize")?;
-
     let prog_json = serde_json::to_string_pretty(&opt.program)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     let pareto_json = serde_json::to_string_pretty(&pareto)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let controller_bundle =
+        if wearer_age_class == WearerAgeClass::CalibrationSwatchOnly || qual.is_some() {
+            Some(verify_and_export_dye_program(
+                &opt.program,
+                &machine,
+                qual.as_ref(),
+                None,
+            )?)
+        } else {
+            None
+        };
+
+    reserve_output(&out_dir, "dye optimize")?;
     write_file(&out_dir, "dye_program.json", prog_json.as_bytes())?;
     write_file(&out_dir, "pareto_regimes.json", pareto_json.as_bytes())?;
 
-    let mut emitted_controller = false;
-    if wearer_age_class == WearerAgeClass::CalibrationSwatchOnly || qual.is_some() {
-        let bundle = verify_and_export_dye_program(&opt.program, &machine, qual.as_ref(), None)?;
+    let emitted_controller = if let Some(bundle) = controller_bundle {
         write_file(&out_dir, "dye_schedule.csv", bundle.schedule_csv.as_bytes())?;
         write_file(
             &out_dir,
@@ -627,8 +828,10 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
             bundle.controller_gcode.as_bytes(),
         )?;
         write_file(&out_dir, "dye_cert.json", bundle.cert_json.as_bytes())?;
-        emitted_controller = true;
-    }
+        true
+    } else {
+        false
+    };
 
     let result = json!({
         "machine": machine.id,
@@ -658,13 +861,14 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_dye_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    let prog_path = PathBuf::from(
-        args.positional
-            .get(2)
-            .ok_or_else(|| bad_input("usage: ftx dye verify PROGRAM.json --machine ID [--dye-qual Q.json] --out NEW_DIR [--json]"))?,
-    );
-    let txt =
-        std::fs::read_to_string(&prog_path).map_err(|e| workspace::io_error(&prog_path, e))?;
+    known_options(args, "dye verify", &["machine", "dye-qual", "out"])?;
+    no_extra_positional(
+        args,
+        3,
+        "ftx dye verify PROGRAM.json [--machine ID] [--dye-qual Q.json] [--out NEW_DIR] [--json]",
+    )?;
+    let prog_path = PathBuf::from(&args.positional[2]);
+    let txt = read_utf8(&prog_path, "dye program document")?;
     let prog: YarnDyeProgram = serde_json::from_str(&txt)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     let machine = parse_dye_machine(
@@ -676,7 +880,7 @@ fn cmd_dye_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let qual: Option<YarnDyeingQualification> = match args.options.get("dye-qual") {
         Some(path) => {
             let p = PathBuf::from(path);
-            let qtxt = std::fs::read_to_string(&p).map_err(|e| workspace::io_error(&p, e))?;
+            let qtxt = read_utf8(&p, "yarn dyeing qualification")?;
             Some(
                 serde_json::from_str(&qtxt)
                     .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
@@ -712,7 +916,260 @@ fn cmd_dye_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
     Ok((result, 0, text))
 }
 
-#[allow(dead_code)]
-fn _carrier_unused_check() -> CarrierId {
-    CarrierId("1".to_string())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse;
+
+    fn fresh_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-knit-cli-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn knit_and_dye_cli_validate_options_bounds_and_round_trip() {
+        let root = fresh_dir("roundtrip");
+        let swatch_dir = root.join("swatch");
+        let swatch_args = parse(
+            &[
+                "knit",
+                "swatch",
+                "--machine",
+                "kniterate-7e",
+                "--needles",
+                "20",
+                "--courses-per-zone",
+                "8",
+                "--cams",
+                "5.5,7.5",
+                "--created",
+                "2026-11-27T12:00",
+                "--out",
+                swatch_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (swatch_val, code, _) = cmd_knit(&swatch_args).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(swatch_val["hardware_execution_authorized"], false);
+        assert!(swatch_dir.join("swatch.knit.json").is_file());
+        assert!(swatch_dir.join("swatch.kc").is_file());
+
+        // Reusing --out must refuse without overwriting.
+        assert!(cmd_knit(&swatch_args).is_err());
+
+        // Verify the generated swatch document cleanly.
+        let verify_args = parse(
+            &[
+                "knit",
+                "verify",
+                swatch_dir.join("swatch.knit.json").to_str().unwrap(),
+                "--machine",
+                "kniterate-7e",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (ver_val, ver_code, _) = cmd_knit(&verify_args).unwrap();
+        assert_eq!(ver_code, 0);
+        assert_eq!(ver_val["verified"], true);
+
+        // Unknown options and extra positionals must refuse (never silently drop safety flags).
+        // A misspelled boolean flag with no value fails closed during CLI parsing.
+        assert!(
+            parse(
+                &[
+                    "knit",
+                    "draft",
+                    "--age-class",
+                    "infant",
+                    "--has-drawstrings",
+                    "--out",
+                    root.join("never-created-1").to_str().unwrap(),
+                ]
+                .map(String::from),
+            )
+            .is_err()
+        );
+        // An unknown valued option reaches `known_options` and must refuse before touching disk.
+        let unknown_opt = parse(
+            &[
+                "knit",
+                "draft",
+                "--age-class",
+                "infant",
+                "--qual-file",
+                "q.json",
+                "--out",
+                root.join("never-created-1").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_knit(&unknown_opt).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert!(!root.join("never-created-1").exists());
+
+        // Extra positional arguments must also refuse.
+        let extra_pos = parse(
+            &[
+                "knit",
+                "verify",
+                swatch_dir.join("swatch.knit.json").to_str().unwrap(),
+                "unexpected-extra.json",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_knit(&extra_pos).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Invalid --yarn-tex must refuse instead of silently turning into None.
+        let bad_tex = parse(
+            &[
+                "knit",
+                "draft",
+                "--age-class",
+                "adult",
+                "--yarn-tex",
+                "not-a-number",
+                "--out",
+                root.join("never-created-2").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_knit(&bad_tex).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert!(!root.join("never-created-2").exists());
+
+        // Dye bounds refuse overflow/zero-cells/negative wick before touching disk.
+        let bad_grid = parse(
+            &[
+                "dye",
+                "optimize",
+                "--courses",
+                "100000",
+                "--wales",
+                "100000",
+                "--out",
+                root.join("never-created-3").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_dye(&bad_grid).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+        let zero_cells = parse(
+            &[
+                "dye",
+                "optimize",
+                "--courses",
+                "6",
+                "--wales",
+                "6",
+                "--cells",
+                "0",
+                "--out",
+                root.join("never-created-4").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_dye(&zero_cells).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+
+        // Valid dye optimize -> verify round-trip.
+        let dye_dir = root.join("dye");
+        let dye_args = parse(
+            &[
+                "dye",
+                "optimize",
+                "--courses",
+                "6",
+                "--wales",
+                "6",
+                "--max-iters",
+                "6",
+                "--out",
+                dye_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (dye_val, dye_code, _) = cmd_dye(&dye_args).unwrap();
+        assert_eq!(dye_code, 0);
+        assert_eq!(dye_val["emitted_controller_files"], true);
+        let dye_verify_args = parse(
+            &[
+                "dye",
+                "verify",
+                dye_dir.join("dye_program.json").to_str().unwrap(),
+                "--machine",
+                "piezo-cmyk",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (dv_val, dv_code, _) = cmd_dye(&dye_verify_args).unwrap();
+        assert_eq!(dv_code, 0);
+        assert_eq!(dv_val["verified"], true);
+    }
+
+    #[test]
+    fn knit_and_dye_cli_refuse_directories_and_unix_fifos_without_blocking() {
+        let root = fresh_dir("nonregular");
+        let dir_str = root.to_str().unwrap();
+
+        let knit_dir = parse(&["knit", "verify", dir_str].map(String::from)).unwrap();
+        assert_eq!(
+            cmd_knit(&knit_dir).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        let dye_dir = parse(&["dye", "verify", dir_str].map(String::from)).unwrap();
+        assert_eq!(
+            cmd_dye(&dye_dir).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        #[cfg(unix)]
+        {
+            let fifo = root.join("knit.fifo");
+            let created = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(created, "mkfifo should create test FIFO");
+            let fifo_str = fifo.to_str().unwrap();
+            let knit_fifo = parse(&["knit", "verify", fifo_str].map(String::from)).unwrap();
+            assert_eq!(
+                cmd_knit(&knit_fifo).unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+            let dye_fifo = parse(&["dye", "verify", fifo_str].map(String::from)).unwrap();
+            assert_eq!(
+                cmd_dye(&dye_fifo).unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+        }
+    }
 }

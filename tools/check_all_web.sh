@@ -911,6 +911,7 @@ fi
 node --experimental-vm-modules tools/check_materials_wasm.cjs --native "$FTX_MATERIALS_BIN"
 node --experimental-vm-modules tools/check_strip_wasm.cjs --native "$FTX_MATERIALS_BIN"
 node tools/check_sewing_wasm.cjs "$WORK/node-pkg/ftx_wasm.js" "$FTX_MATERIALS_BIN"
+node tools/check_knit_web.cjs
 
 if [ "$VM_ONLY" -eq 1 ]; then
   echo "[check_all_web] PASS: VM + direct WASM suites passed (--vm-only, with_replays=$WITH_REPLAYS, work dir: $WORK)"

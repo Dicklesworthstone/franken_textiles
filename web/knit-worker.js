@@ -2,7 +2,7 @@
 // No pattern, image, or yarn data ever leaves the browser.
 import init, * as ftx from "./pkg/ftx_wasm.js";
 
-const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-26.1";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.1";
 let loadFailure = null;
 
 const ready = init().then(() => {
@@ -39,11 +39,11 @@ self.onmessage = async ({ data: msg }) => {
     if (!env.ok) {
       const code = env.refusal?.code || "refused";
       const message = env.refusal?.message || "operation refused";
-      postMessage({ type: "refusal", request: msg.request, code, message, refusal: env.refusal });
+      postMessage({ type: "refusal", kind: msg.type, request: msg.request, code, message, refusal: env.refusal });
       return;
     }
     postMessage({ type: "result", request: msg.request, kind: msg.type, result: env.result });
   } catch (error) {
-    postMessage({ type: "error", request: msg.request, message: String(error?.message || error) });
+    postMessage({ type: "error", kind: msg?.type, request: msg?.request, message: String(error?.message || error) });
   }
 };

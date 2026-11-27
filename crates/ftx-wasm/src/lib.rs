@@ -24,10 +24,10 @@ pub mod web_tracing;
 pub mod zip;
 
 /// Deterministic source-to-bundle interface stamp checked at Worker boot by `web/worker.js`,
-/// `web/materials-worker.js`, `web/photo-worker.js`, and `web/trace-worker.js` so a stale local
-/// `web/pkg/` bundle fails fast with `./tools/build_web.sh` instead of cryptic mid-workflow schema
-/// errors.
-pub const WASM_INTERFACE_STAMP: &str = "ftx-wasm-interface/2026-11-26.1";
+/// `web/materials-worker.js`, `web/photo-worker.js`, `web/trace-worker.js`, and
+/// `web/knit-worker.js` so a stale local `web/pkg/` bundle fails fast with `./tools/build_web.sh`
+/// instead of cryptic mid-workflow schema errors.
+pub const WASM_INTERFACE_STAMP: &str = "ftx-wasm-interface/2026-11-27.1";
 
 /// Return [`WASM_INTERFACE_STAMP`] for native and browser callers.
 #[must_use]

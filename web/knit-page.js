@@ -84,6 +84,39 @@ function drawGridCanvas(canvas, cols, rows, rgbList) {
   }
 }
 
+function renderSvg(container, svgText) {
+  if (typeof DOMParser === "function") {
+    const parsed = new DOMParser().parseFromString(String(svgText || ""), "image/svg+xml");
+    const root = parsed.documentElement;
+    if (
+      !root ||
+      root.nodeName.toLowerCase() !== "svg" ||
+      parsed.querySelector("parsererror, script")
+    ) {
+      throw new Error("Refused malformed or unsafe SVG chart payload.");
+    }
+    container.replaceChildren(document.importNode(root, true));
+    return;
+  }
+  container.textContent = String(svgText || "");
+}
+
+function parseFiniteInput(id, label) {
+  const raw = document.getElementById(id).value.trim();
+  if (!raw) throw new Error(`${label} is required.`);
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new Error(`${label} must be a finite number.`);
+  return value;
+}
+
+function parseIntRange(id, label, min, max) {
+  const value = parseFiniteInput(id, label);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${label} must be an integer between ${min} and ${max}.`);
+  }
+  return value;
+}
+
 function renderSwatch(res) {
   const out = document.getElementById("swatchOut");
   const dl = document.getElementById("swatchDownloads");
@@ -99,7 +132,7 @@ function renderSwatch(res) {
   makeDownload(dl, "swatch_cert.json", JSON.stringify(res.cert, null, 2), "application/json");
   makeDownload(dl, "swatch_qualification_template.json", JSON.stringify(res.qualification_template, null, 2), "application/json");
 
-  svgBox.innerHTML = res.chart_svg;
+  renderSvg(svgBox, res.chart_svg);
   pre.textContent =
     `=== Certificate (hardware_execution_authorized=${res.cert.hardware_execution_authorized}) ===\n` +
     JSON.stringify(res.cert, null, 2) +
@@ -112,7 +145,7 @@ function renderPanel(res) {
   const out = document.getElementById("panelOut");
   document.getElementById("panelSummary").textContent =
     `Drafted ${res.stitch_count} stitches (${res.short_row_turns} anchored short-row turns) · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed}`;
-  document.getElementById("panelSvgBox").innerHTML = res.chart_svg;
+  renderSvg(document.getElementById("panelSvgBox"), res.chart_svg);
   document.getElementById("panelPre").textContent =
     JSON.stringify(res.metadata, null, 2) + "\n\n" + res.instructions_text;
   out.hidden = false;
@@ -172,12 +205,37 @@ function renderDye(res, targetPixels, targetW, targetH) {
 
   document.getElementById("dyePre").textContent = res.controller_gcode
     ? `=== Schedule CSV ===\n${res.schedule_csv}\n\n=== G-Code ===\n${res.controller_gcode}`
-    : "Wearable age classes require an Exp-4 fastness qualification receipt before emitting controller G-code; JSON dye program is ready for review.";
+    : res.controller_export_refusal
+      ? `Controller export refused [${res.controller_export_refusal.code || "refused"}]: ${res.controller_export_refusal.message || "hazard check failed"}`
+      : "Wearable age classes require an Exp-4 fastness qualification receipt before emitting controller G-code; JSON dye program is ready for review.";
   out.hidden = false;
+}
+
+function failEngine(message) {
+  statusEl.textContent = "Engine unavailable.";
+  runSwatchBtn.disabled = true;
+  runPanelBtn.disabled = true;
+  runDyeBtn.disabled = true;
+  showError(message);
+}
+
+function isStaleReply(msg) {
+  return Boolean(
+    msg.request &&
+    msg.kind &&
+    latestRequestByKind[msg.kind] &&
+    msg.request !== latestRequestByKind[msg.kind]
+  );
 }
 
 function startWorker() {
   worker = new Worker("knit-worker.js", { type: "module" });
+  worker.onerror = (event) => {
+    failEngine(String(event?.message || "Knitting & dyeing worker failed to load."));
+  };
+  worker.onmessageerror = () => {
+    failEngine("Knitting & dyeing worker returned an unreadable message.");
+  };
   worker.onmessage = ({ data: msg }) => {
     if (msg.type === "ready") {
       statusEl.textContent = "Local WASM knitting & dyeing engine ready.";
@@ -185,35 +243,56 @@ function startWorker() {
       runPanelBtn.disabled = false;
       runDyeBtn.disabled = false;
     } else if (msg.type === "loadError") {
-      statusEl.textContent = "Engine unavailable.";
-      showError(msg.message);
+      failEngine(msg.message);
     } else if (msg.type === "refusal") {
       targetByRequest.delete(msg.request);
+      if (isStaleReply(msg)) return;
       statusEl.textContent = `Refused (${msg.code}).`;
       showError(`[${msg.code}] ${msg.message}`);
     } else if (msg.type === "error") {
       targetByRequest.delete(msg.request);
+      if (isStaleReply(msg)) return;
       statusEl.textContent = "Error.";
       showError(msg.message);
     } else if (msg.type === "result") {
       const target = targetByRequest.get(msg.request);
       targetByRequest.delete(msg.request);
-      if (msg.request && latestRequestByKind[msg.kind] && msg.request !== latestRequestByKind[msg.kind]) {
-        return;
-      }
+      if (isStaleReply(msg)) return;
       clearError();
       statusEl.textContent = `Completed ${msg.kind}.`;
-      if (msg.kind === "swatch") renderSwatch(msg.result);
-      else if (msg.kind === "panel") renderPanel(msg.result);
-      else if (msg.kind === "dye" && target) renderDye(msg.result, target.pixels, target.w, target.h);
+      try {
+        if (msg.kind === "swatch") renderSwatch(msg.result);
+        else if (msg.kind === "panel") renderPanel(msg.result);
+        else if (msg.kind === "dye" && target) renderDye(msg.result, target.pixels, target.w, target.h);
+      } catch (err) {
+        statusEl.textContent = "Render refused.";
+        showError(String(err?.message || err));
+      }
     }
   };
 }
 
 runSwatchBtn.addEventListener("click", () => {
   clearError();
-  const cams = document.getElementById("swatchCams").value
-    .split(",").map((s) => Number(s.trim())).filter((v) => Number.isFinite(v));
+  let needles;
+  let coursesPerZone;
+  let cams;
+  try {
+    needles = parseIntRange("swatchNeedles", "Needles", 4, 80);
+    coursesPerZone = parseIntRange("swatchCourses", "Courses / Cam Zone", 1, 200);
+    const rawCams = document.getElementById("swatchCams").value.split(",");
+    cams = rawCams.map((token) => {
+      const trimmed = token.trim();
+      if (!trimmed) throw new Error("Cam settings must be a comma-separated list of finite numbers.");
+      const num = Number(trimmed);
+      if (!Number.isFinite(num)) throw new Error(`Invalid cam setting: "${trimmed}".`);
+      return num;
+    });
+  } catch (err) {
+    statusEl.textContent = "Invalid input.";
+    showError(String(err?.message || err));
+    return;
+  }
   const request = ++reqId;
   latestRequestByKind.swatch = request;
   statusEl.textContent = "Generating verified calibration swatch kit…";
@@ -223,8 +302,8 @@ runSwatchBtn.addEventListener("click", () => {
     payload: {
       machine: document.getElementById("swatchMachine").value,
       yarn_id: document.getElementById("swatchYarn").value.trim() || "merino-200tex",
-      needles: Number(document.getElementById("swatchNeedles").value),
-      courses_per_zone: Number(document.getElementById("swatchCourses").value),
+      needles,
+      courses_per_zone: coursesPerZone,
       cam_settings: cams,
     },
   });
@@ -232,6 +311,20 @@ runSwatchBtn.addEventListener("click", () => {
 
 runPanelBtn.addEventListener("click", () => {
   clearError();
+  let hem;
+  let chest;
+  let length;
+  let rib;
+  try {
+    hem = parseFiniteInput("panelHem", "Hem Width (mm)");
+    chest = parseFiniteInput("panelChest", "Chest Width (mm)");
+    length = parseFiniteInput("panelLength", "Length (mm)");
+    rib = parseIntRange("panelRib", "Rib Hem Courses", 0, 200);
+  } catch (err) {
+    statusEl.textContent = "Invalid input.";
+    showError(String(err?.message || err));
+    return;
+  }
   const machine = document.getElementById("panelMachine").value;
   const defaults = PANEL_MACHINE_DEFAULTS[machine] || PANEL_MACHINE_DEFAULTS["kniterate-7e"];
   const request = ++reqId;
@@ -245,14 +338,14 @@ runPanelBtn.addEventListener("click", () => {
       panel: {
         name: "workbench_panel",
         wearer_age_class: document.getElementById("panelAgeClass").value,
-        hem_width_mm: Number(document.getElementById("panelHem").value),
-        chest_width_mm: Number(document.getElementById("panelChest").value),
-        length_mm: Number(document.getElementById("panelLength").value),
+        hem_width_mm: hem,
+        chest_width_mm: chest,
+        length_mm: length,
         armhole_depth_mm: 95,
         armhole_inset_total_mm: 36,
         neck_width_mm: 105,
         neck_depth_mm: 24,
-        rib_hem_courses: Number(document.getElementById("panelRib").value),
+        rib_hem_courses: rib,
         cam_setting: 7.0,
         yarn_id: "merino-200tex",
         carrier_id: defaults.carrier_id,
@@ -271,8 +364,25 @@ runPanelBtn.addEventListener("click", () => {
 
 runDyeBtn.addEventListener("click", () => {
   clearError();
-  const courses = Number(document.getElementById("dyeCourses").value);
-  const wales = Number(document.getElementById("dyeWales").value);
+  let courses;
+  let wales;
+  let driftEps;
+  let driftSigma;
+  let wickMm;
+  try {
+    courses = parseIntRange("dyeCourses", "Grid Courses", 2, 40);
+    wales = parseIntRange("dyeWales", "Grid Wales", 2, 40);
+    driftEps = parseFiniteInput("dyeEps", "Systematic Drift ε");
+    driftSigma = parseFiniteInput("dyeSigma", "Brownian σ_η");
+    wickMm = parseFiniteInput("dyeWick", "Wicking σ (mm)");
+    if (driftSigma < 0 || wickMm < 0) {
+      throw new Error("Brownian σ_η and wicking σ (mm) cannot be negative.");
+    }
+  } catch (err) {
+    statusEl.textContent = "Invalid input.";
+    showError(String(err?.message || err));
+    return;
+  }
   const preset = document.getElementById("dyePreset").value;
   const pixels = buildPresetPixels(preset, wales, courses);
   const request = ++reqId;
@@ -291,12 +401,21 @@ runDyeBtn.addEventListener("click", () => {
       srgb_u8: pixels,
       grid: [courses, wales],
       is_circular: document.getElementById("dyeMode").value === "circular",
-      drift_eps: Number(document.getElementById("dyeEps").value),
-      drift_sigma_eta: Number(document.getElementById("dyeSigma").value),
-      wick_mm: Number(document.getElementById("dyeWick").value),
+      drift_eps: driftEps,
+      drift_sigma_eta: driftSigma,
+      wick_mm: wickMm,
       max_iters: 18,
     },
   });
 });
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("pagehide", () => {
+    for (const id of ["swatchDownloads", "dyeDownloads"]) {
+      const el = document.getElementById(id);
+      if (el) clearDownloads(el);
+    }
+  });
+}
 
 startWorker();

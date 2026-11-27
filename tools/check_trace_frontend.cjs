@@ -250,13 +250,13 @@ test('load errors and image read limits do not hang the page or publish files', 
   assert.equal(p.e.trace.disabled, true); assert.match(p.e.error.textContent, /missing module/);
 });
 
-test('all four browser workers reject missing or mismatched wasm_interface_stamp on real web/pkg bundles and accept the matching stamp', async () => {
-  const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-26.1';
+test('all five browser workers reject missing or mismatched wasm_interface_stamp on real web/pkg bundles and accept the matching stamp', async () => {
+  const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-27.1';
   for (const mode of ['missing', 'mismatch', 'previous', 'match']) {
     const stampExport = mode === 'missing'
       ? {}
       : { wasm_interface_stamp: () => (mode === 'match' ? EXPECTED_STAMP :
-        mode === 'previous' ? 'ftx-wasm-interface/2026-11-25.1' : 'ftx-wasm-interface/stale') };
+        mode === 'previous' ? 'ftx-wasm-interface/2026-11-26.1' : 'ftx-wasm-interface/stale') };
 
     // 1. web/worker.js
     {
@@ -343,6 +343,32 @@ test('all four browser workers reject missing or mismatched wasm_interface_stamp
         for (const [k, v] of Object.entries(values)) this.setExport(k, v);
       }, { context });
       const mod = new vm.SourceTextModule(read('trace-worker.js'), { context });
+      await mod.link(() => imports); await mod.evaluate();
+      await new Promise(resolve => setImmediate(resolve));
+      if (mode === 'match') {
+        assert.equal(sent.at(-1).type, 'ready');
+      } else {
+        assert.equal(sent.at(-1).type, 'loadError');
+        assert.match(sent.at(-1).message, /rebuild web\/pkg via \.\/tools\/build_web\.sh/);
+      }
+    }
+
+    // 5. web/knit-worker.js
+    {
+      const sent = [];
+      const values = {
+        default: () => Promise.resolve(),
+        initSync: () => {},
+        knit_swatch_json: () => '{"ok":true,"result":{}}',
+        knit_panel_preview_json: () => '{"ok":true,"result":{}}',
+        dye_optimize_json: () => '{"ok":true,"result":{}}',
+        ...stampExport,
+      };
+      const context = vm.createContext({ JSON, Error, self: {}, postMessage: m => sent.push(m) });
+      const imports = new vm.SyntheticModule(Object.keys(values), function () {
+        for (const [k, v] of Object.entries(values)) this.setExport(k, v);
+      }, { context });
+      const mod = new vm.SourceTextModule(read('knit-worker.js'), { context });
       await mod.link(() => imports); await mod.evaluate();
       await new Promise(resolve => setImmediate(resolve));
       if (mode === 'match') {
