@@ -485,3 +485,51 @@ reports nonnegative `damage_dissipated_j_m2 = (d_{n+1} - d_n) * (psi_el + psi_ha
 bit-identical behavior and fingerprints. Refuses combination with parallel Maxwell, undamaged plastic
 calibration, and undamaged plastic-heat conversion; excludes fracture/rupture, monolithic softening,
 and empirical textile claims. Tests: `tests/material_membrane_plasticity.rs`.
+
+**Knitting stitch-graph IR, Knitout v2, shaping seam, V-bed VM and receipts** (`knit`, `FTX-K02` / `FTX-K03` / `FTX-K04` / `FTX-K05` / `FTX-K12`).
+Pure serializable data, drafting, compilation, and discrete verification inside `ftx-pattern` with zero
+dependency on `ftx-body`, `ftx-drape`, `ftx-trace`, `ftx-export`, or `spade` (preserving the 10-crate
+acyclic DAG and a mechanical extraction boundary).
+- `knit::ir` defines `ftx-knit/1` (`KnitDoc`, `#[serde(deny_unknown_fields)]`, required non-defaulting
+  `wearer_age_class: WearerAgeClass`, `StitchNode` with hook-stack-ordered `parents: Vec<ParentRef>`,
+  `ShortRowTurn`, `CableGroup`, `YarnRun`, `GaugeSpec`, `CarrierId`, `CamStitchSetting`) and lossless
+  CMU Knitout v2 AST (`KnitoutProgram`, `KnitoutOp` with carrier sets, quarter-pitch `Rack`, `Amiss`,
+  `Pause`, `AddRollerAdvance`, `SpeedNumber`, `PresserMode`, `CarrierSpacing`) plus canonical serializer
+  `to_knitout_text` and bijective read-back parser `parse_knitout`, sealed via
+  `ftx_core::receipt::canonical_json_sha256`.
+- `knit::shaping` defines Seam 1 (`ShapingSurface`, `EaseProfile`, `EaseShellMesh` with open
+  `boundary_rings` and `non_self_intersecting`, `KnitShellRegion`) so `ftx-body` supplies uncapped
+  Anny shells without introducing a reverse crate edge.
+- `knit::receipts` defines Seam 4 pure receipts: `KnitSwatchQualification` (`#[serde(deny_unknown_fields)]`,
+  `material_sha256`, `machine_sha256`, `yarn_lot_id`, `was_washed_and_blocked`, `evidence`, `source`,
+  `conditioning`, `allow_estimates`), `DrapeUncertaintyReceipt` (`ftx-drape-uncertainty/1`), and
+  `KnitMachineCert` (`ftx-machine-cert/1`) unconditionally sealing `hardware_execution_authorized: false`,
+  `physical_knitting_validated: false`, and `four_claims.fit_claimed: false`.
+- `knit::profile` & `knit::vm` define built-in `MachineProfile` envelopes (Kniterate 7E, Brother KH-930/KH-270
+  AYAB, generic V-bed/slider 12E, hand-knit, Tier-B Shima/Stoll handoffs) and `verify_knitout_program`
+  enforcing all 7 discrete crash & child/infant safety gates (slider ban on `Knit`/`Tuck`/`Split`,
+  hook-stack/tuck caps, carrier hook-vs-gripper lifecycle & spacing, racking alignment & strain,
+  `UniformRoller` short-row imbalance, blocked-pitch child float limit, EN 14682 hood/neck drawstring ban,
+  infant unanchored short-row eyelet refusal, and `CalibrationSwatchCaps` hard limits).
+- No-claim boundary: discrete VM verification and parametric/autoknit shaping establish software kinematics
+  and declared constraint checks only — never physical knitability, yarn-lot equivalence, unattended machine
+  safety, or real-body fit.
+
+**Continuous yarn-dyeing IR, machine profiles and qualification** (`dye`, `FTX-K13`).
+Pure serializable data and fail-closed qualification gates in `ftx-pattern` with zero solver or raster-decoder
+dependency:
+- `dye::ir` defines `ftx-dye-program/1` (`YarnDyeProgram`, `#[serde(deny_unknown_fields)]`, required
+  non-defaulting `wearer_age_class`, five-regime `DyeingRegime` IA..IV, contiguous positive-speed
+  `DyeSegment`s, sacrificial `startup_leader_m`/`shutdown_trailer_m`, mandatory `not_for_garment_wear: true`
+  on `CalibrationSwatchOnly`, and `Regime3IntakeTimeline`).
+- `dye::machine` defines `DyeMachineProfile` (`DyeApplicatorKind`, `CapstanPinSpec`, `DancerAccumulatorSpec`,
+  `DyePrimarySpec`, oven temperature/length/scorch cap, line speed/accel bounds, and optical fiducial sensor
+  capability).
+- `dye::qualification` defines `YarnDyeingQualification` (`#[serde(deny_unknown_fields)]`, `material_sha256`,
+  `dye_machine_sha256`, `yarn_lot_id`, `dye_lot_id`, `OpticalMeasurementBasis`, capillary `wick_dispersion_mm`,
+  `shrinkage_axial_pct`, `wet_tenacity_retention_ratio`, `yarn_breaking_force_n`, optional `yarn_tg_c`,
+  `washing_off_validated`, `ISO 105-C06`, `ISO 105-X12`, `saliva_fastness_validated`, `evidence`, `source`,
+  `allow_estimates`), refusing estimated optical/coupon records without opt-in and enforcing child/infant
+  wash-off and fastness thresholds fail-closed.
+- No-claim boundary: IR validation and qualification checks do not substitute for physical Exp-4 bleed/wash
+  coupons, spectrophotometer calibration, or unattended dye-rig execution.
