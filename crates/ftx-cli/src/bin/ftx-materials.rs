@@ -247,6 +247,54 @@ struct StackInput {
     boundary_resistance_m2_k_w: f64,
 }
 
+fn parse_study_args<'a>(
+    words: &[&'a str],
+) -> Result<(Vec<&'a str>, Option<&'a str>, Option<&'a str>), Refusal> {
+    let mut inputs = Vec::with_capacity(words.len());
+    let mut adopt: Option<&'a str> = None;
+    let mut out: Option<&'a str> = None;
+    let mut i = 0;
+    while i < words.len() {
+        match words[i] {
+            "--adopt" => {
+                if adopt.is_some() {
+                    return Err(invalid("duplicate --adopt option"));
+                }
+                let Some(&val) = words.get(i + 1) else {
+                    return Err(invalid("--adopt requires an alternative key"));
+                };
+                adopt = Some(val);
+                i += 2;
+            }
+            "--out" => {
+                if out.is_some() {
+                    return Err(invalid("duplicate --out option"));
+                }
+                let Some(&val) = words.get(i + 1) else {
+                    return Err(invalid("--out requires a new pattern file path"));
+                };
+                out = Some(val);
+                i += 2;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid(format!("unknown option {flag}")));
+            }
+            "--" => {
+                inputs.extend_from_slice(&words[i + 1..]);
+                break;
+            }
+            other if other.starts_with("--") => {
+                return Err(invalid(format!("unknown option {other}")));
+            }
+            other => {
+                inputs.push(other);
+                i += 1;
+            }
+        }
+    }
+    Ok((inputs, adopt, out))
+}
+
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
@@ -278,12 +326,8 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             screening::treatment_pattern(pattern, request, Some(out))
         }
         ["study" | "study-on-body" | "scenario-study", ..] => {
-            let (inputs, key, out) = match words.as_slice() {
-                [inputs @ .., "--adopt", key, "--out", out]
-                | [inputs @ .., "--out", out, "--adopt", key] => (inputs, Some(*key), Some(*out)),
-                inputs => (inputs, None, None),
-            };
-            screening::study_command(inputs, key, out)
+            let (inputs, key, out) = parse_study_args(&words)?;
+            screening::study_command(&inputs, key, out)
         }
         ["stock-plan", pattern, request] => finite_stock::plan(pattern, request),
         ["stock-identities", pattern, request] => finite_stock::identities(pattern, request),
@@ -701,5 +745,83 @@ mod tests {
         bind(raw, &selection, nested.to_str().unwrap()).unwrap();
         assert!(nested.is_file());
         // Keep the test output: this repository forbids deleting files without explicit permission.
+    }
+
+    #[test]
+    fn study_adopt_option_parsing_matches_main_cli_rules() {
+        let missing_out = run(&[
+            "study".into(),
+            "pattern.json".into(),
+            "study.json".into(),
+            "--adopt".into(),
+            "cotton".into(),
+        ])
+        .unwrap_err();
+        assert!(
+            missing_out
+                .message
+                .contains("use --adopt KEY together with --out"),
+            "{missing_out}"
+        );
+
+        let missing_adopt = run(&[
+            "study".into(),
+            "pattern.json".into(),
+            "study.json".into(),
+            "--out".into(),
+            "out.json".into(),
+        ])
+        .unwrap_err();
+        assert!(
+            missing_adopt
+                .message
+                .contains("use --adopt KEY together with --out"),
+            "{missing_adopt}"
+        );
+
+        let dup = run(&[
+            "study".into(),
+            "pattern.json".into(),
+            "study.json".into(),
+            "--adopt".into(),
+            "a".into(),
+            "--adopt".into(),
+            "b".into(),
+            "--out".into(),
+            "out.json".into(),
+        ])
+        .unwrap_err();
+        assert!(dup.message.contains("duplicate --adopt"), "{dup}");
+
+        let unknown = run(&[
+            "study".into(),
+            "pattern.json".into(),
+            "study.json".into(),
+            "--bogus".into(),
+        ])
+        .unwrap_err();
+        assert!(
+            unknown.message.contains("unknown option --bogus"),
+            "{unknown}"
+        );
+
+        let (inputs, adopt, out) = parse_study_args(&[
+            "study",
+            "--out",
+            "out.json",
+            "pattern.json",
+            "--adopt",
+            "cotton",
+            "study.json",
+        ])
+        .unwrap();
+        assert_eq!(inputs, vec!["study", "pattern.json", "study.json"]);
+        assert_eq!(adopt, Some("cotton"));
+        assert_eq!(out, Some("out.json"));
+        assert!(parse_study_args(&["study", "pattern.json", "study.json", "--adopt"]).is_err());
+        assert!(parse_study_args(&["study", "pattern.json", "study.json", "--out"]).is_err());
+        assert!(
+            parse_study_args(&["study", "p", "r", "--out", "a.json", "--out", "b.json"]).is_err()
+        );
     }
 }

@@ -114,7 +114,7 @@ fn alternative<'a>(report: &'a Value, key: &str) -> Result<&'a Value, Refusal> {
 }
 
 fn check_comparison(report: &Value, key: &str) -> Result<(), Refusal> {
-    if let Some(comparison) = report.get("comparison")
+    if let Some(comparison) = report.get("comparison").filter(|value| !value.is_null())
         && alternative(comparison, key)?["eligible"] != true
     {
         return Err(super::invalid(format!(
@@ -152,6 +152,7 @@ fn publish_pattern(
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
+    check_destination(path)?;
     let out = Path::new(path);
     let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
     let parent = out.parent().unwrap_or(Path::new(""));
@@ -198,6 +199,9 @@ fn adopt(report: &mut Value, key: &str, path: &str) -> Result<(), Refusal> {
         )));
     }
     check_comparison(report, key)?;
+    if let Some(mfg) = report.get("manufacturing") {
+        check_comparison(mfg, key)?;
+    }
     if let Some(cases) = report["cases"].as_array() {
         for case in cases {
             check_comparison(case, key)?;
@@ -282,6 +286,19 @@ mod adoption_tests {
         let err = adopt(&mut report, "cotton", "").unwrap_err();
         assert!(err.message.contains("excluded by the study comparison"));
         assert!(report.get("adopted_pattern").is_none());
+
+        // A manufacturing-level comparison exclusion must also block adoption even when
+        // top-level and case-level comparisons are absent.
+        let mut mfg_excluded = json!({
+            "manufacturing": {
+                "alternatives": [{"key": "cotton", "binding": binding}],
+                "comparison": {"alternatives": [{"key": "cotton", "eligible": false}]}
+            },
+            "cases": [{"key": "unranked"}]
+        });
+        let err = adopt(&mut mfg_excluded, "cotton", "").unwrap_err();
+        assert!(err.message.contains("excluded by the study comparison"));
+        assert!(mfg_excluded.get("adopted_pattern").is_none());
     }
 
     #[test]
@@ -306,5 +323,29 @@ mod adoption_tests {
         assert!(publish_pattern(out, |file| file.write_all(b"new")).is_err());
         assert_eq!(std::fs::read(&path).unwrap().as_slice(), b"original");
         assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
+
+        // Trailing-directory destinations must refuse before creating stray parent directories.
+        let stray_parent = std::env::temp_dir().join(format!(
+            "ftx-adopt-trailing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let trailing = format!("{}/", stray_parent.display());
+        let err = publish_pattern(&trailing, |file| file.write_all(b"x")).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(!stray_parent.exists());
+    }
+
+    #[test]
+    fn null_comparison_is_treated_as_absent_while_non_null_exclusions_still_refuse() {
+        let report_null = json!({"comparison": null});
+        assert!(check_comparison(&report_null, "cotton").is_ok());
+
+        let report_excluded =
+            json!({"comparison": {"alternatives": [{"key": "cotton", "eligible": false}]}});
+        assert!(check_comparison(&report_excluded, "cotton").is_err());
     }
 }
