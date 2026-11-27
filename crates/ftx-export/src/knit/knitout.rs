@@ -6,7 +6,7 @@ use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::knit::{
     CompiledKnitBundle, KnitDoc, KnitMachineCert, KnitSwatchQualification, MachineBackendKind,
-    MachineProfile, compile_knit_doc, draft_calibration_swatch,
+    MachineProfile, compile_knit_doc, draft_calibration_swatch, parse_knitout,
 };
 use ftx_pattern::materials::{Evidence, Source};
 
@@ -66,6 +66,15 @@ pub fn refuse_proprietary_binary_target(
 pub fn export_knitout_v2(bundle: &CompiledKnitBundle) -> Result<KnitoutExportBundle, Refusal> {
     bundle.cert.verify_integrity()?;
     let knitout_text = bundle.program.to_knitout_text()?;
+    // Independent read-back verification: re-parse the emitted Knitout v2 stream and assert
+    // exact AST and canonical text round-trip equality before sealing the export bundle.
+    let reparsed = parse_knitout(&knitout_text)?;
+    if reparsed != bundle.program || reparsed.to_knitout_text()? != knitout_text {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "Knitout v2 read-back verification disagreed with compiled program AST",
+        ));
+    }
     let knitout_sha256 = sha256_hex(knitout_text.as_bytes());
     if knitout_sha256 != bundle.cert.program_sha256 {
         return Err(Refusal::new(

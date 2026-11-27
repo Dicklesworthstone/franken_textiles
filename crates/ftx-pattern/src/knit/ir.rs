@@ -725,6 +725,19 @@ impl KnitoutProgram {
         for (k, v) in &self.header.extra {
             check_line("header key", k)?;
             check_line("header value", v)?;
+            let trimmed = k.trim();
+            if trimmed.is_empty()
+                || k.contains(':')
+                || matches!(
+                    trimmed,
+                    "Machine" | "Gauge" | "Width" | "Position" | "Carriers"
+                )
+            {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("invalid or reserved Knitout extra header key '{k}'"),
+                ));
+            }
             let _ = writeln!(out, ";;{k}: {v}");
         }
         for op in &self.ops {
@@ -928,5 +941,482 @@ pub fn format_quarter_pitches(quarter_pitches: i32) -> String {
         2 => format!("{sign}{whole}.5"),
         3 => format!("{sign}{whole}.75"),
         _ => unreachable!(),
+    }
+}
+
+fn parse_quarter_pitches(tok: &str) -> Result<i32, Refusal> {
+    let (neg, rest) = if let Some(s) = tok.strip_prefix('-') {
+        (true, s)
+    } else if let Some(s) = tok.strip_prefix('+') {
+        (false, s)
+    } else {
+        (false, tok)
+    };
+    let (whole_str, frac_q) = match rest.split_once('.') {
+        Some((w, f)) => {
+            let fq = match f {
+                "0" | "00" => 0_i32,
+                "25" => 1_i32,
+                "5" | "50" => 2_i32,
+                "75" => 3_i32,
+                _ => {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("Knitout rack '{tok}' is not an exact quarter-pitch multiple"),
+                    ));
+                }
+            };
+            (w, fq)
+        }
+        None => (rest, 0_i32),
+    };
+    let whole: u32 = whole_str.parse().map_err(|_| {
+        Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("invalid Knitout rack value '{tok}'"),
+        )
+    })?;
+    let whole_i32 = i32::try_from(whole).map_err(|_| {
+        Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("Knitout rack '{tok}' overflows quarter-pitch range"),
+        )
+    })?;
+    let mag = whole_i32
+        .checked_mul(4)
+        .and_then(|v| v.checked_add(frac_q))
+        .ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("Knitout rack '{tok}' overflows quarter-pitch range"),
+            )
+        })?;
+    Ok(if neg { -mag } else { mag })
+}
+
+fn parse_needle(tok: &str) -> Result<Needle, Refusal> {
+    let (bed, rest) = if let Some(s) = tok.strip_prefix("fs") {
+        (Bed::FrontSlider, s)
+    } else if let Some(s) = tok.strip_prefix("bs") {
+        (Bed::BackSlider, s)
+    } else if let Some(s) = tok.strip_prefix('f') {
+        (Bed::Front, s)
+    } else if let Some(s) = tok.strip_prefix('b') {
+        (Bed::Back, s)
+    } else {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("invalid Knitout needle token '{tok}'"),
+        ));
+    };
+    let index: i32 = rest.parse().map_err(|_| {
+        Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("invalid Knitout needle index in '{tok}'"),
+        )
+    })?;
+    Ok(Needle { bed, index })
+}
+
+fn parse_dir(tok: &str) -> Result<CourseDir, Refusal> {
+    match tok {
+        "+" => Ok(CourseDir::Plus),
+        "-" => Ok(CourseDir::Minus),
+        _ => Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("invalid Knitout carriage direction '{tok}' (expected '+' or '-')"),
+        )),
+    }
+}
+
+fn parse_carriers(toks: &[&str], require_non_empty: bool) -> Result<Vec<CarrierId>, Refusal> {
+    if require_non_empty && toks.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "Knitout carrier operation requires at least one carrier",
+        ));
+    }
+    toks.iter().map(|t| CarrierId::new(*t)).collect()
+}
+
+/// Parses canonical CMU Knitout v2 text (`;!knitout-2`) losslessly back into a [`KnitoutProgram`]
+/// for independent read-back verification (`FTX-K06`).
+///
+/// # Errors
+/// [`RefusalCode::InvalidDocument`] or [`RefusalCode::OutOfRange`] on malformed headers, unknown
+/// opcodes, invalid needles/carriers, or non-quarter-pitch racking values.
+pub fn parse_knitout(text: &str) -> Result<KnitoutProgram, Refusal> {
+    let mut lines = text.lines().enumerate();
+    let Some((_, first)) = lines.next() else {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "empty Knitout stream (missing ;!knitout-2 magic line)",
+        ));
+    };
+    if first.trim_end_matches('\r') != ";!knitout-2" {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("expected ';!knitout-2' magic line, got '{first}'"),
+        ));
+    }
+
+    let mut machine: Option<String> = None;
+    let mut gauge: Option<String> = None;
+    let mut width: Option<u32> = None;
+    let mut position: Option<String> = None;
+    let mut carriers: Option<Vec<CarrierId>> = None;
+    let mut extra: BTreeMap<String, String> = BTreeMap::new();
+    let mut ops: Vec<KnitoutOp> = Vec::new();
+    let mut in_body = false;
+
+    for (line_idx, raw) in lines {
+        let line_no = line_idx + 1;
+        let line = raw.trim_end_matches('\r');
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(hdr) = line.strip_prefix(";;") {
+            if in_body {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("Knitout header on line {line_no} appeared after operations"),
+                ));
+            }
+            let Some((k, v)) = hdr.split_once(':') else {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("malformed Knitout header on line {line_no}: '{line}'"),
+                ));
+            };
+            let key = k.trim();
+            let val = v.trim();
+            match key {
+                "Machine" => {
+                    if machine.replace(val.to_string()).is_some() {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "duplicate ;;Machine header",
+                        ));
+                    }
+                }
+                "Gauge" => {
+                    if gauge.replace(val.to_string()).is_some() {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "duplicate ;;Gauge header",
+                        ));
+                    }
+                }
+                "Width" => {
+                    let w: u32 = val.parse().map_err(|_| {
+                        Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            format!("invalid ;;Width header '{val}'"),
+                        )
+                    })?;
+                    if width.replace(w).is_some() {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "duplicate ;;Width header",
+                        ));
+                    }
+                }
+                "Position" => {
+                    if position.replace(val.to_string()).is_some() {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "duplicate ;;Position header",
+                        ));
+                    }
+                }
+                "Carriers" => {
+                    let toks: Vec<&str> = val.split_whitespace().collect();
+                    let parsed = parse_carriers(&toks, false)?;
+                    if carriers.replace(parsed).is_some() {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "duplicate ;;Carriers header",
+                        ));
+                    }
+                }
+                _ => {
+                    if key.is_empty() {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            format!("empty Knitout header key on line {line_no}"),
+                        ));
+                    }
+                    if extra.insert(key.to_string(), val.to_string()).is_some() {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            format!("duplicate Knitout header ';;{key}' on line {line_no}"),
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
+
+        in_body = true;
+        if let Some(comment) = line.strip_prefix(';') {
+            let text = comment.strip_prefix(' ').unwrap_or(comment).to_string();
+            ops.push(KnitoutOp::Comment { text });
+            continue;
+        }
+
+        let (code, inline_note) = match line.split_once(';') {
+            Some((c, n)) => (c.trim(), Some(n.strip_prefix(' ').unwrap_or(n).to_string())),
+            None => (line.trim(), None),
+        };
+        let toks: Vec<&str> = code.split_whitespace().collect();
+        if toks.is_empty() {
+            continue;
+        }
+        let op = match toks[0] {
+            "in" => KnitoutOp::In {
+                carriers: parse_carriers(&toks[1..], true)?,
+            },
+            "out" => KnitoutOp::Out {
+                carriers: parse_carriers(&toks[1..], true)?,
+            },
+            "inhook" => KnitoutOp::InHook {
+                carriers: parse_carriers(&toks[1..], true)?,
+            },
+            "releasehook" => KnitoutOp::ReleaseHook {
+                carriers: parse_carriers(&toks[1..], true)?,
+            },
+            "outhook" => KnitoutOp::OutHook {
+                carriers: parse_carriers(&toks[1..], true)?,
+            },
+            "stitch" if toks.len() == 3 => KnitoutOp::Stitch {
+                leading: toks[1].parse().map_err(|_| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("invalid stitch leading value on line {line_no}"),
+                    )
+                })?,
+                trailing: toks[2].parse().map_err(|_| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("invalid stitch trailing value on line {line_no}"),
+                    )
+                })?,
+            },
+            "rack" if toks.len() == 2 => KnitoutOp::Rack {
+                quarter_pitches: parse_quarter_pitches(toks[1])?,
+            },
+            "knit" if toks.len() >= 3 => KnitoutOp::Knit {
+                dir: parse_dir(toks[1])?,
+                needle: parse_needle(toks[2])?,
+                carriers: parse_carriers(&toks[3..], false)?,
+            },
+            "tuck" if toks.len() >= 3 => KnitoutOp::Tuck {
+                dir: parse_dir(toks[1])?,
+                needle: parse_needle(toks[2])?,
+                carriers: parse_carriers(&toks[3..], false)?,
+            },
+            "split" if toks.len() >= 4 => KnitoutOp::Split {
+                dir: parse_dir(toks[1])?,
+                from: parse_needle(toks[2])?,
+                to: parse_needle(toks[3])?,
+                carriers: parse_carriers(&toks[4..], false)?,
+            },
+            "xfer" if toks.len() == 3 => KnitoutOp::Xfer {
+                from: parse_needle(toks[1])?,
+                to: parse_needle(toks[2])?,
+            },
+            "miss" if toks.len() >= 3 => KnitoutOp::Miss {
+                dir: parse_dir(toks[1])?,
+                needle: parse_needle(toks[2])?,
+                carriers: parse_carriers(&toks[3..], false)?,
+            },
+            "amiss" if toks.len() == 2 => KnitoutOp::Amiss {
+                needle: parse_needle(toks[1])?,
+            },
+            "drop" if toks.len() == 2 => KnitoutOp::Drop {
+                needle: parse_needle(toks[1])?,
+            },
+            "pause" if toks.len() == 1 => KnitoutOp::Pause {
+                note: inline_note.filter(|s| !s.is_empty()),
+            },
+            "x-add-roller-advance" if toks.len() == 2 => KnitoutOp::AddRollerAdvance {
+                units: toks[1].parse().map_err(|_| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("invalid x-add-roller-advance on line {line_no}"),
+                    )
+                })?,
+            },
+            "x-speed-number" if toks.len() == 2 => KnitoutOp::SpeedNumber {
+                speed: toks[1].parse().map_err(|_| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("invalid x-speed-number on line {line_no}"),
+                    )
+                })?,
+            },
+            "x-presser-mode" if toks.len() == 2 => {
+                let mode = toks[1];
+                if mode.is_empty() || mode.bytes().any(|b| !b.is_ascii_graphic() || b == b';') {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("invalid x-presser-mode '{mode}' on line {line_no}"),
+                    ));
+                }
+                KnitoutOp::PresserMode {
+                    mode: mode.to_string(),
+                }
+            }
+            "x-carrier-spacing" if toks.len() == 2 => KnitoutOp::CarrierSpacing {
+                needles: toks[1].parse().map_err(|_| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("invalid x-carrier-spacing on line {line_no}"),
+                    )
+                })?,
+            },
+            _ => {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("unrecognized or malformed Knitout op on line {line_no}: '{line}'"),
+                ));
+            }
+        };
+        ops.push(op);
+    }
+
+    let header = KnitoutHeader {
+        machine: machine.ok_or_else(|| {
+            Refusal::new(RefusalCode::InvalidDocument, "missing ;;Machine header")
+        })?,
+        gauge: gauge
+            .ok_or_else(|| Refusal::new(RefusalCode::InvalidDocument, "missing ;;Gauge header"))?,
+        width: width
+            .ok_or_else(|| Refusal::new(RefusalCode::InvalidDocument, "missing ;;Width header"))?,
+        position: position.ok_or_else(|| {
+            Refusal::new(RefusalCode::InvalidDocument, "missing ;;Position header")
+        })?,
+        carriers: carriers.ok_or_else(|| {
+            Refusal::new(RefusalCode::InvalidDocument, "missing ;;Carriers header")
+        })?,
+        extra,
+    };
+
+    Ok(KnitoutProgram {
+        schema: KNITOUT_SCHEMA.to_string(),
+        header,
+        ops,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_knitout_round_trips_all_ops_and_rejects_malformed_streams() {
+        let c1 = CarrierId("1".to_string());
+        let c2 = CarrierId("2".to_string());
+        let mut extra = BTreeMap::new();
+        extra.insert("X-Source".to_string(), "unit-test".to_string());
+        let prog = KnitoutProgram {
+            schema: KNITOUT_SCHEMA.to_string(),
+            header: KnitoutHeader {
+                machine: "Kniterate".to_string(),
+                gauge: "7".to_string(),
+                width: 252,
+                position: "Center".to_string(),
+                carriers: vec![c1.clone(), c2.clone()],
+                extra,
+            },
+            ops: vec![
+                KnitoutOp::Comment {
+                    text: "round-trip test".to_string(),
+                },
+                KnitoutOp::CarrierSpacing { needles: 2 },
+                KnitoutOp::SpeedNumber { speed: 150 },
+                KnitoutOp::PresserMode {
+                    mode: "auto".to_string(),
+                },
+                KnitoutOp::AddRollerAdvance { units: -2 },
+                KnitoutOp::In {
+                    carriers: vec![c1.clone()],
+                },
+                KnitoutOp::InHook {
+                    carriers: vec![c2.clone()],
+                },
+                KnitoutOp::Stitch {
+                    leading: 5,
+                    trailing: 6,
+                },
+                KnitoutOp::Rack {
+                    quarter_pitches: -3,
+                },
+                KnitoutOp::Rack { quarter_pitches: 0 },
+                KnitoutOp::Rack { quarter_pitches: 5 },
+                KnitoutOp::Knit {
+                    dir: CourseDir::Plus,
+                    needle: Needle::new(Bed::Front, 10),
+                    carriers: vec![c1.clone()],
+                },
+                KnitoutOp::Tuck {
+                    dir: CourseDir::Minus,
+                    needle: Needle::new(Bed::Back, -2),
+                    carriers: vec![c1.clone(), c2.clone()],
+                },
+                KnitoutOp::Split {
+                    dir: CourseDir::Plus,
+                    from: Needle::new(Bed::Front, 10),
+                    to: Needle::new(Bed::Back, 10),
+                    carriers: vec![c1.clone()],
+                },
+                KnitoutOp::Xfer {
+                    from: Needle::new(Bed::FrontSlider, 10),
+                    to: Needle::new(Bed::BackSlider, 11),
+                },
+                KnitoutOp::Miss {
+                    dir: CourseDir::Minus,
+                    needle: Needle::new(Bed::Front, 9),
+                    carriers: vec![c1.clone()],
+                },
+                KnitoutOp::Amiss {
+                    needle: Needle::new(Bed::Back, 9),
+                },
+                KnitoutOp::Pause {
+                    note: Some("check yarn".to_string()),
+                },
+                KnitoutOp::Pause { note: None },
+                KnitoutOp::Drop {
+                    needle: Needle::new(Bed::Front, 10),
+                },
+                KnitoutOp::ReleaseHook {
+                    carriers: vec![c2.clone()],
+                },
+                KnitoutOp::OutHook { carriers: vec![c2] },
+                KnitoutOp::Out { carriers: vec![c1] },
+            ],
+        };
+        let text = prog.to_knitout_text().unwrap();
+        let reparsed = parse_knitout(&text).unwrap();
+        assert_eq!(reparsed, prog);
+        assert_eq!(reparsed.to_knitout_text().unwrap(), text);
+
+        // Bad magic, unknown op, non-quarter-pitch rack all fail closed.
+        assert_eq!(
+            parse_knitout(";!knitout-1\n").unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert_eq!(
+            parse_knitout(&text.replace("rack -0.75", "rack -0.33"))
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        assert_eq!(
+            parse_knitout(&format!("{text}bogus f1\n"))
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
     }
 }
