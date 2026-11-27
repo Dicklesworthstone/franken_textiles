@@ -357,11 +357,13 @@ export default function PoseScene({ onStatus, command }: {
       }
       sewn = next;
       clothNow = next.cloth;
-      garment.mesh.visible = true;
       Object.assign(status, {
         sewn: [next.left, next.right], sewSeconds: next.seconds, clothVertices: n, sewingSince: undefined,
         flags: next.summary.report?.gating ?? [],
       });
+      // An arm still held away when the sew lands: the jacket stays off the form (as in setBody) until the arm
+      // is back in the sewn pose; letting go elsewhere moves it there or sews it on again (`up`).
+      garment.mesh.visible = same(status.shown, status.sewn ?? null);
       if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
         replay = { began: -1 };
         status.phase = "replay";

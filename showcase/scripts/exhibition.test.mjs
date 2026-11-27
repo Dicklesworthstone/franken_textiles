@@ -810,3 +810,20 @@ test("selecting the accepted pose finishes sew and move replays without losing t
     assert.equal(sandbox.moving, null);
   }
 });
+
+test("a sew that lands while an arm is held elsewhere keeps the jacket off the form", async () => {
+  for (const [shown, visible] of [[[50, 35], false], [[35, 35], true]]) {
+    const garment = { mesh: { visible: true }, update: () => {} };
+    const sandbox = {
+      Float32Array, garment, sewn: { summary: { cloth_vertices: 1 } }, clothNow: null, replay: null,
+      status: { phase: "sewing", shown, sewn: [45, 45] },
+      same: (a, b) => !!a && !!b && String(a) === String(b),
+      matchMedia: () => ({ matches: false }), publish: () => {}, paint: () => {},
+    };
+    await posingRoomFunctions(["dress"], sandbox);
+    sandbox.dress({ left: 35, right: 35, seconds: 1, cloth: new Float32Array(3), summary: { cloth_vertices: 1 } });
+    assert.equal(garment.mesh.visible, visible, `arm shown at ${shown}, sewn at 35, 35`);
+    assert.deepEqual(Array.from(sandbox.status.sewn), [35, 35]);
+    assert.equal(sandbox.status.phase, "replay");
+  }
+});
