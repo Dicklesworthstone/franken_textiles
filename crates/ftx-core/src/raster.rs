@@ -37,7 +37,7 @@ impl TargetRaster {
         width: u32,
         height: u32,
         srgb_u8: Vec<[u8; 3]>,
-        alpha_weight: Vec<f32>,
+        mut alpha_weight: Vec<f32>,
         source_sha256: [u8; 32],
     ) -> Result<Self, Refusal> {
         if width == 0 || height == 0 {
@@ -64,18 +64,21 @@ impl TargetRaster {
                 ),
             ));
         }
-        for (idx, &a) in alpha_weight.iter().enumerate() {
+        for (idx, a) in alpha_weight.iter_mut().enumerate() {
             if !a.is_finite() {
                 return Err(Refusal::new(
                     RefusalCode::NonFinite,
                     format!("target raster alpha_weight[{idx}] is non-finite"),
                 ));
             }
-            if !(0.0..=1.0).contains(&a) {
+            if !(0.0..=1.0).contains(a) {
                 return Err(Refusal::new(
                     RefusalCode::OutOfRange,
                     format!("target raster alpha_weight[{idx}] = {a} is outside [0, 1]"),
                 ));
+            }
+            if *a == 0.0 {
+                *a = 0.0_f32;
             }
         }
         Ok(Self {
@@ -138,6 +141,25 @@ impl TargetRaster {
         let fg = self.alpha_weight.iter().filter(|&&a| a > 0.0).count();
         fg as f64 / self.pixel_count() as f64
     }
+
+    /// Canonical lowercase-hex SHA-256 over dimensions, sRGB triplets, normalized alpha weights
+    /// (`-0.0 -> +0.0`), and [`Self::source_sha256`].
+    #[must_use]
+    pub fn canonical_sha256(&self) -> String {
+        let mut h = Sha256::new();
+        h.update(b"ftx-target-raster/1\0");
+        h.update(&self.width.to_le_bytes());
+        h.update(&self.height.to_le_bytes());
+        h.update(&self.source_sha256);
+        for px in &self.srgb_u8 {
+            h.update(px);
+        }
+        for &a in &self.alpha_weight {
+            let norm = if a == 0.0 { 0.0_f32 } else { a };
+            h.update(&norm.to_bits().to_le_bytes());
+        }
+        h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +173,13 @@ mod tests {
         assert_eq!(r.pixel(1, 1), Some(([255, 0, 0], 1.0)));
         assert_eq!(r.pixel(2, 0), None);
         assert!((r.foreground_fraction() - 1.0).abs() < 1e-12);
+        assert_eq!(r.canonical_sha256().len(), 64);
+
+        let neg_zero =
+            TargetRaster::new(1, 1, vec![[10, 20, 30]], vec![-0.0_f32], [7; 32]).unwrap();
+        let pos_zero = TargetRaster::new(1, 1, vec![[10, 20, 30]], vec![0.0_f32], [7; 32]).unwrap();
+        assert_eq!(neg_zero.alpha_weight[0].to_bits(), 0.0_f32.to_bits());
+        assert_eq!(neg_zero.canonical_sha256(), pos_zero.canonical_sha256());
 
         let err = TargetRaster::new(1, 1, vec![[0, 0, 0]], vec![1.5], [0; 32]).unwrap_err();
         assert_eq!(err.code, RefusalCode::OutOfRange);
