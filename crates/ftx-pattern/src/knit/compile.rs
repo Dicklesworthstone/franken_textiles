@@ -238,6 +238,119 @@ impl LoopCompiler<'_> {
     }
 }
 
+/// A bounded flat neckline: the center stays on hold while two independently carried
+/// shoulders are worked. These identities are checked against the actual live hooks;
+/// metadata alone never exempts an arbitrary stranded loop from the final graph check.
+struct ShoulderSchedule {
+    start: u32,
+    held: BTreeSet<u32>,
+    left_carrier: CarrierId,
+    right_carrier: CarrierId,
+    left_wale: i32,
+    right_wale: i32,
+}
+
+impl ShoulderSchedule {
+    fn read(doc: &KnitDoc) -> Result<Option<Self>, Refusal> {
+        let Some(start) = doc.metadata.get("shoulder_start_course") else {
+            return Ok(None);
+        };
+        let invalid = || {
+            Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            "neckline schedule must identify two separate shoulder carriers and every held center loop",
+        ).repair("redraft the neckline with separate carriers and explicit held-neck stitch identities")
+        };
+        let start = start.parse::<u32>().map_err(|_| invalid())?;
+        let previous_course = doc
+            .stitches
+            .iter()
+            .filter(|node| node.course < start)
+            .map(|node| node.course)
+            .max()
+            .ok_or_else(invalid)?;
+        if !doc.stitches.iter().any(|node| node.course == start) {
+            return Err(invalid());
+        }
+        let carrier = |key: &str| {
+            doc.metadata
+                .get(key)
+                .ok_or_else(invalid)
+                .and_then(|value| CarrierId::new(value.clone()))
+        };
+        let left_carrier = carrier("left_shoulder_carrier")?;
+        let right_carrier = carrier("right_shoulder_carrier")?;
+        if left_carrier == right_carrier {
+            return Err(invalid());
+        }
+        for (carrier, direction) in [(&left_carrier, "plus"), (&right_carrier, "minus")] {
+            if doc
+                .metadata
+                .get(&format!("shoulder_initial_direction_{}", carrier.as_str()))
+                .map(String::as_str)
+                != Some(direction)
+            {
+                return Err(invalid());
+            }
+        }
+        let mut held = BTreeSet::new();
+        let mut wales = BTreeSet::new();
+        for value in doc
+            .metadata
+            .get("held_neck_stitch_ids")
+            .ok_or_else(invalid)?
+            .split(',')
+        {
+            let id = value.parse::<u32>().map_err(|_| invalid())?;
+            if !held.insert(id) {
+                return Err(invalid());
+            }
+        }
+        let mut found = 0;
+        for node in doc.stitches.iter().filter(|node| held.contains(&node.id)) {
+            if node.course != previous_course || node.bed != Bed::Front {
+                return Err(invalid());
+            }
+            found += 1;
+            wales.insert(node.wale);
+        }
+        if found != held.len() {
+            return Err(invalid());
+        }
+        let left_wale = *wales.first().ok_or_else(invalid)?;
+        let right_wale = *wales.last().ok_or_else(invalid)?;
+        if i64::from(right_wale) - i64::from(left_wale) + 1 != wales.len() as i64 {
+            return Err(invalid());
+        }
+        for node in doc.stitches.iter().filter(|node| node.course >= start) {
+            let carrier = if node.wale < left_wale {
+                &left_carrier
+            } else if node.wale > right_wale {
+                &right_carrier
+            } else {
+                return Err(invalid());
+            };
+            if node.bed != Bed::Front
+                || node.carrier_ids.as_slice() != std::slice::from_ref(carrier)
+                || node
+                    .parents
+                    .iter()
+                    .any(|parent| held.contains(&parent.stitch_id))
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(Some(Self {
+            start,
+            held,
+            left_carrier,
+            right_carrier,
+            left_wale,
+            right_wale,
+        }))
+    }
+}
+
 fn validate_qualified_gauge(
     doc: &KnitDoc,
     profile: &MachineProfile,
@@ -474,21 +587,20 @@ pub fn compile_knit_doc(
         });
     }
 
-    // Bring carriers in cleanly depending on machine hook capability
-    if profile.has_yarn_inserting_hooks {
-        for c in &carriers_vec {
-            ops.push(KnitoutOp::InHook {
-                carriers: vec![c.clone()],
-            });
-        }
-    } else {
-        for c in &carriers_vec {
-            ops.push(KnitoutOp::In {
-                carriers: vec![c.clone()],
-            });
+    let shoulders = ShoulderSchedule::read(doc)?;
+    if let Some(schedule) = &shoulders {
+        let last_course = *by_course
+            .last_key_value()
+            .expect("validated nonempty document")
+            .0;
+        let held_courses = last_course.saturating_sub(schedule.start).saturating_add(1);
+        if held_courses > profile.max_roller_imbalance_courses {
+            return Err(Refusal::new(
+                RefusalCode::MaterialProcessHazard,
+                format!("neckline roller imbalance spans {held_courses} source courses, exceeding the machine holding cap {}", profile.max_roller_imbalance_courses),
+            ).repair("reduce the held neckline depth or use a separately verified manual holding/finishing workflow"));
         }
     }
-
     let mut compiler = LoopCompiler {
         profile,
         live: BTreeMap::new(),
@@ -496,7 +608,10 @@ pub fn compile_knit_doc(
     };
     let mut flat_dir = CourseDir::Plus;
     let mut last_cam_int: Option<i32> = None;
-    let mut hooks_released = !profile.has_yarn_inserting_hooks;
+    let mut active_carriers = BTreeSet::new();
+    let mut hooked_since = BTreeMap::new();
+    let mut next_carrier_direction = BTreeMap::new();
+    let mut last_pass_dir = None;
     let mut previous_layout: Option<bool> = None;
 
     for (&course_idx, nodes) in &by_course {
@@ -529,7 +644,83 @@ pub fn compile_knit_doc(
         previous_layout = Some(circular);
 
         let mut sorted: Vec<&StitchNode> = nodes.clone();
-        if circular {
+        let shoulder = shoulders
+            .as_ref()
+            .filter(|schedule| course_idx >= schedule.start);
+        let mut shoulder_directions = BTreeMap::new();
+        if let Some(schedule) = shoulder {
+            if circular {
+                return Err(topology_refusal(
+                    nodes[0],
+                    "held-center shoulders require a flat front-bed panel",
+                ));
+            }
+            if course_idx == schedule.start {
+                let held: BTreeSet<_> = compiler
+                    .live
+                    .iter()
+                    .filter(|(needle, _)| {
+                        needle.bed == Bed::Front
+                            && needle.index >= map_needle(Bed::Front, schedule.left_wale).index
+                            && needle.index <= map_needle(Bed::Front, schedule.right_wale).index
+                    })
+                    .flat_map(|(_, stack)| stack.iter().copied())
+                    .collect();
+                if held != schedule.held {
+                    return Err(topology_refusal(
+                        nodes[0],
+                        "declared held neckline identities do not match the live center hooks",
+                    ));
+                }
+            }
+            let mut sections = Vec::new();
+            for (carrier, initial) in [
+                (&schedule.left_carrier, CourseDir::Plus),
+                (&schedule.right_carrier, CourseDir::Minus),
+            ] {
+                let dir = next_carrier_direction
+                    .get(carrier)
+                    .copied()
+                    .unwrap_or(initial);
+                if course_idx == schedule.start && dir != initial {
+                    return Err(topology_refusal(
+                        nodes[0],
+                        "the shoulder carrier must begin at its existing outer edge",
+                    ));
+                }
+                let mut section: Vec<_> = nodes
+                    .iter()
+                    .copied()
+                    .filter(|node| node.carrier_ids.as_slice() == std::slice::from_ref(carrier))
+                    .collect();
+                section.sort_by_key(|node| node.wale);
+                if section.is_empty()
+                    || section
+                        .windows(2)
+                        .any(|pair| i64::from(pair[1].wale) - i64::from(pair[0].wale) != 1)
+                {
+                    return Err(topology_refusal(
+                        nodes[0],
+                        "each shoulder needs one contiguous pass with its own carrier",
+                    ));
+                }
+                if dir == CourseDir::Minus {
+                    section.reverse();
+                }
+                sections.push((dir, section));
+            }
+            // Return with the last-used carrier first, then work the other shoulder.
+            // Keeping two directional passes per shoulder course avoids understating held
+            // loop age by merging disconnected same-direction sections in the VM.
+            sections.sort_by_key(|(dir, _)| last_pass_dir.is_some_and(|last| last == *dir));
+            sorted.clear();
+            for (dir, section) in sections {
+                for node in section {
+                    shoulder_directions.insert(node.id, dir);
+                    sorted.push(node);
+                }
+            }
+        } else if circular {
             sorted.sort_by(|a, b| {
                 a.bed.cmp(&b.bed).then_with(|| {
                     if a.bed == Bed::Front {
@@ -560,15 +751,20 @@ pub fn compile_knit_doc(
             ));
         }
 
+        let mut shoulder_bind_chains = BTreeMap::new();
         for (position, node) in sorted.iter().copied().enumerate() {
             if binding_off {
                 let mut parents = node.parents.clone();
                 parents.sort_by_key(|parent| parent.stack_pos);
-                let expected_count = if position == 0 { 1 } else { 2 };
+                let preceding = if shoulder.is_some() {
+                    shoulder_bind_chains.insert(node.carrier_ids[0].clone(), node.id)
+                } else {
+                    position.checked_sub(1).map(|index| sorted[index].id)
+                };
+                let expected_count = if preceding.is_none() { 1 } else { 2 };
                 if parents.len() != expected_count
-                    || (position > 0
-                        && parents.last().map(|parent| parent.stitch_id)
-                            != Some(sorted[position - 1].id))
+                    || (preceding.is_some()
+                        && parents.last().map(|parent| parent.stitch_id) != preceding)
                 {
                     return Err(topology_refusal(
                         node,
@@ -576,7 +772,9 @@ pub fn compile_knit_doc(
                     ));
                 }
             }
-            let dir = if circular {
+            let dir = if let Some(dir) = shoulder_directions.get(&node.id) {
+                *dir
+            } else if circular {
                 if node.bed == Bed::Front {
                     CourseDir::Plus
                 } else {
@@ -585,6 +783,21 @@ pub fn compile_knit_doc(
             } else {
                 flat_dir
             };
+            for carrier in &node.carrier_ids {
+                if active_carriers.insert(carrier.clone()) {
+                    compiler.ops.push(if profile.has_yarn_inserting_hooks {
+                        hooked_since.insert(carrier.clone(), course_idx);
+                        KnitoutOp::InHook {
+                            carriers: vec![carrier.clone()],
+                        }
+                    } else {
+                        KnitoutOp::In {
+                            carriers: vec![carrier.clone()],
+                        }
+                    });
+                }
+                next_carrier_direction.insert(carrier.clone(), dir.reversed());
+            }
             let needle = map_needle(node.bed, node.wale);
             compiler.gather(node, needle)?;
             let cam_int = (node.cam_stitch_setting.setting * 10.0).round() as i32;
@@ -609,27 +822,29 @@ pub fn compile_knit_doc(
                 }
             });
             compiler.live.insert(needle, vec![node.id]);
+            last_pass_dir = Some(dir);
         }
 
-        if !hooks_released && course_idx >= 1 {
-            for carrier in &carriers_vec {
-                compiler.ops.push(KnitoutOp::ReleaseHook {
-                    carriers: vec![carrier.clone()],
-                });
-            }
-            hooks_released = true;
+        let ready_hooks: Vec<_> = hooked_since
+            .iter()
+            .filter(|(_, start)| **start < course_idx)
+            .map(|(carrier, _)| carrier.clone())
+            .collect();
+        for carrier in ready_hooks {
+            compiler.ops.push(KnitoutOp::ReleaseHook {
+                carriers: vec![carrier.clone()],
+            });
+            hooked_since.remove(&carrier);
         }
         if !circular {
             flat_dir = flat_dir.reversed();
         }
     }
 
-    if !hooks_released {
-        for carrier in &carriers_vec {
-            compiler.ops.push(KnitoutOp::ReleaseHook {
-                carriers: vec![carrier.clone()],
-            });
-        }
+    for carrier in hooked_since.keys() {
+        compiler.ops.push(KnitoutOp::ReleaseHook {
+            carriers: vec![carrier.clone()],
+        });
     }
 
     let final_ids: BTreeSet<u32> = by_course
@@ -637,12 +852,12 @@ pub fn compile_knit_doc(
         .into_iter()
         .flat_map(|(_, nodes)| nodes.iter().map(|node| node.id))
         .collect();
-    if compiler
-        .live
-        .values()
-        .flatten()
-        .any(|id| !final_ids.contains(id))
-    {
+    if compiler.live.values().flatten().any(|id| {
+        !final_ids.contains(id)
+            && !shoulders
+                .as_ref()
+                .is_some_and(|schedule| schedule.held.contains(id))
+    }) {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
             "the final course strands unconsumed loops from an earlier course",
@@ -738,6 +953,9 @@ pub fn compile_knit_doc(
         limitations.push(
             "Live loops remain on the machine; the final operator pause requires manual bind-off before fabric removal.".to_string(),
         );
+    }
+    if shoulders.is_some() {
+        limitations.push("The center neckline loops remain on hold while separately carried shoulders are knitted and chain-bound off. Finish the held neckline manually; no anchored short-row or physical-fit claim is made.".to_string());
     }
     if profile.backend_kind.is_opaque_proprietary() {
         limitations.push(
@@ -1285,5 +1503,215 @@ mod tests {
             .unwrap();
         assert_eq!(compiler.live[&Needle::new(Bed::Front, 11)], vec![0, 1]);
         assert_eq!(compiler.live[&back], vec![2]);
+    }
+
+    fn neckline_doc() -> KnitDoc {
+        use Bed::Front as F;
+        use LoopKind::{BindOff, CastOn, Knit};
+        let mut stitches = Vec::new();
+        for wale in 0..6 {
+            stitches.push(topology_node(wale, 0, wale as i32, F, CastOn, &[]));
+            stitches.push(topology_node(wale + 6, 1, wale as i32, F, Knit, &[wale]));
+        }
+        stitches.extend([
+            topology_node(12, 2, 0, F, Knit, &[6]),
+            topology_node(13, 2, 1, F, Knit, &[7]),
+            topology_node(14, 2, 5, F, Knit, &[11]),
+            topology_node(15, 2, 4, F, Knit, &[10]),
+            topology_node(16, 3, 1, F, BindOff, &[13]),
+            topology_node(17, 3, 0, F, BindOff, &[12, 16]),
+            topology_node(18, 3, 4, F, BindOff, &[15]),
+            topology_node(19, 3, 5, F, BindOff, &[14, 18]),
+        ]);
+        for node in &mut stitches {
+            if [14, 15, 18, 19].contains(&node.id) {
+                node.carrier_ids = vec![CarrierId("2".to_string())];
+            }
+        }
+        let mut doc = topology_doc(stitches);
+        doc.wearer_age_class = WearerAgeClass::Child3To14;
+        for (key, value) in [
+            ("shoulder_start_course", "2"),
+            ("held_neck_stitch_ids", "8,9"),
+            ("left_shoulder_carrier", "1"),
+            ("right_shoulder_carrier", "2"),
+            ("shoulder_initial_direction_1", "plus"),
+            ("shoulder_initial_direction_2", "minus"),
+        ] {
+            doc.metadata.insert(key.to_string(), value.to_string());
+        }
+        doc
+    }
+
+    #[test]
+    fn separate_shoulders_preserve_held_center_and_bind_off_without_a_neck_float() {
+        let mut profile = MachineProfile::hand_knit(4.0);
+        // Synthetic capability variant exercises delayed inserting hooks without claiming
+        // a tested physical knitting machine or reusing an unrelated qualification.
+        profile.has_yarn_inserting_hooks = true;
+        let mut doc = neckline_doc();
+        let bundle = compile_knit_doc(&doc, &profile, None, None, None).unwrap();
+        let held = replay_parentage(
+            &doc,
+            &bundle.program,
+            &[
+                0, 1, 2, 3, 4, 5, 11, 10, 9, 8, 7, 6, 12, 13, 14, 15, 18, 19, 16, 17,
+            ],
+        );
+        assert_eq!(
+            held.values().flatten().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([8, 9])
+        );
+        assert_eq!(bundle.vm_report.max_float_mm, 0.0);
+        assert_eq!(bundle.vm_report.estimated_courses, 6);
+        let mut formed = 0;
+        let mut second_in = None;
+        let mut second_release = None;
+        for op in &bundle.program.ops {
+            match op {
+                KnitoutOp::Knit { .. } | KnitoutOp::Tuck { .. } => formed += 1,
+                KnitoutOp::InHook { carriers } if carriers[0].as_str() == "2" => {
+                    second_in = Some(formed)
+                }
+                KnitoutOp::ReleaseHook { carriers } if carriers[0].as_str() == "2" => {
+                    second_release = Some(formed)
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            second_in,
+            Some(14),
+            "second yarn starts only at the neckline"
+        );
+        assert_eq!(
+            second_release,
+            Some(20),
+            "second inserting hook stays until its next course"
+        );
+        assert!(bundle.program.ops.iter().any(|op| matches!(op,
+            KnitoutOp::Pause { note: Some(note) } if note.contains("2 occupied hooks"))));
+        assert!(
+            bundle
+                .cert
+                .limitations
+                .iter()
+                .any(|text| text.contains("held neckline"))
+        );
+        doc.stitches.reverse();
+        assert_eq!(
+            bundle.program,
+            compile_knit_doc(&doc, &profile, None, None, None)
+                .unwrap()
+                .program
+        );
+    }
+
+    #[test]
+    fn neckline_metadata_cannot_hide_stranded_loops_or_bypass_holding_limits() {
+        let profile = MachineProfile::hand_knit(4.0);
+        let mut missing_held = neckline_doc();
+        missing_held
+            .metadata
+            .insert("held_neck_stitch_ids".to_string(), "8".to_string());
+        assert!(
+            compile_knit_doc(&missing_held, &profile, None, None, None)
+                .unwrap_err()
+                .message
+                .contains("strands")
+        );
+        for (key, value) in [
+            ("held_neck_stitch_ids", "6,9"),
+            ("held_neck_stitch_ids", "8,8,9"),
+            ("left_shoulder_carrier", "2"),
+            ("shoulder_initial_direction_2", "plus"),
+        ] {
+            let mut bad = neckline_doc();
+            bad.metadata.insert(key.to_string(), value.to_string());
+            assert_eq!(
+                compile_knit_doc(&bad, &profile, None, None, None)
+                    .unwrap_err()
+                    .code,
+                RefusalCode::MachineStateInfeasible
+            );
+        }
+        let mut wrong_chain = neckline_doc();
+        wrong_chain
+            .stitches
+            .iter_mut()
+            .find(|node| node.id == 19)
+            .unwrap()
+            .parents[1]
+            .stitch_id = 16;
+        assert!(
+            compile_knit_doc(&wrong_chain, &profile, None, None, None)
+                .unwrap_err()
+                .message
+                .contains("preceding")
+        );
+        let mut tight_holding = profile;
+        // Two source courses still require four independently carried shoulder passes.
+        tight_holding.max_roller_imbalance_courses = 3;
+        let refusal =
+            compile_knit_doc(&neckline_doc(), &tight_holding, None, None, None).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::MaterialProcessHazard);
+        assert!(refusal.message.contains("roller imbalance"));
+        let mut course_gap = neckline_doc();
+        for node in &mut course_gap.stitches {
+            if node.course == 3 {
+                node.course = 100;
+            }
+        }
+        let refusal = compile_knit_doc(
+            &course_gap,
+            &MachineProfile::hand_knit(4.0),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::MaterialProcessHazard);
+        assert!(refusal.message.contains("source courses"));
+    }
+
+    #[test]
+    fn drafted_necklines_compile_with_both_primary_carrier_sides() {
+        let profile = MachineProfile::hand_knit(4.0);
+        let gauge = topology_doc(Vec::new()).gauge;
+        for length_mm in [48.0, 52.0] {
+            let doc = draft_shaped_panel(
+                &ParametricPanelSpec {
+                    name: "synthetic separate shoulders".to_string(),
+                    wearer_age_class: WearerAgeClass::Child3To14,
+                    hem_width_mm: 80.0,
+                    chest_width_mm: 80.0,
+                    length_mm,
+                    armhole_depth_mm: 0.0,
+                    armhole_inset_total_mm: 0.0,
+                    neck_width_mm: 24.0,
+                    neck_depth_mm: 8.0,
+                    rib_hem_courses: 2,
+                    cam_setting: 4.0,
+                    yarn_id: "synthetic".to_string(),
+                    carrier_id: CarrierId("1".to_string()),
+                    has_hood_or_neck_drawstring: false,
+                },
+                &gauge,
+                &profile,
+            )
+            .unwrap();
+            let bundle = compile_knit_doc(&doc, &profile, None, None, None).unwrap();
+            assert_eq!(bundle.vm_report.max_float_mm, 0.0);
+            assert_eq!(
+                bundle
+                    .program
+                    .ops
+                    .iter()
+                    .filter(|op| matches!(op, KnitoutOp::Drop { .. }))
+                    .count(),
+                2
+            );
+            bundle.cert.verify_integrity().unwrap();
+        }
     }
 }

@@ -166,7 +166,16 @@ pub fn export_brother_ayab(
                 .carrier_ids
                 .first()
                 .is_some_and(|c| c.as_str() != primary_carrier.as_str());
-        grid.insert((st.course, st.wale), bit);
+        if grid.insert((st.course, st.wale), bit).is_some() {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "AYAB cannot encode multiple bed operations at course {}, wale {} in one image pixel",
+                    st.course, st.wale
+                ),
+            )
+            .repair("use the bed-separated charts and reviewed Knitout program; a separate AYAB carriage-pass schedule is required for this pattern"));
+        }
         if matches!(
             st.kind,
             LoopKind::Decrease | LoopKind::Increase | LoopKind::Cable
@@ -549,5 +558,24 @@ mod tests {
                 .code,
             RefusalCode::MaterialProcessHazard
         );
+    }
+
+    #[test]
+    fn ayab_refuses_lossy_overlapping_bed_pixels_instead_of_overwriting_them() {
+        let profile = MachineProfile::brother_kh930_ayab();
+        let mut doc = draft_calibration_swatch(&profile, "synthetic-yarn", 8, 4, &[5.0]).unwrap();
+        let compiled = compile_knit_doc(&doc, &profile, None, None, None).unwrap();
+        let mut back = doc.stitches[0].clone();
+        back.id = doc.stitches.iter().map(|st| st.id).max().unwrap() + 1;
+        back.bed = Bed::Back;
+        doc.stitches.push(back);
+        for _ in 0..2 {
+            let error = export_brother_ayab(&doc, &profile, &compiled.cert).unwrap_err();
+            assert_eq!(error.code, RefusalCode::MachineStateInfeasible);
+            assert!(error.message.contains("one image pixel"));
+            // Preserve parent-before-child order while reversing which bed wins the old map insert.
+            let back = doc.stitches.pop().unwrap();
+            doc.stitches.insert(0, back);
+        }
     }
 }

@@ -131,18 +131,28 @@ fn lifted_procir_golden_digests_match_pinned_frankensim() {
 
 #[test]
 fn lifted_tangle_hopf_linking_and_crossing_flip_detection() {
-    let mut hopf = build_canonical_hopf_link::<FtxDetMath>();
+    let hopf = build_canonical_hopf_link::<FtxDetMath>();
     let cert = certify_topology_det(&hopf).expect("hopf link topology certificate");
     assert!(cert.isotopy_valid);
+    // A(theta) = (R cos(theta), R sin(theta), 0) bounds a disk with normal +z.
+    // B(phi) = (R + R cos(phi), 0, R sin(phi)) crosses its interior at phi = pi,
+    // with tangent (0, 0, -R). The other z = 0 crossing is outside that disk, so
+    // the signed intersection number, and hence the Gauss linking number, is -1.
     assert_eq!(cert.pairwise_linking, vec![(1, 2, -1)]);
     assert!(cert.max_linking_residual < 1e-12);
 
-    // Reversing curve 2 orientation flips Gauss linking number from -1 to +1.
-    hopf.curves[1].nodes.reverse();
-    let rev_cert = certify_topology_det(&hopf).expect("reversed hopf link topology certificate");
-    assert!(rev_cert.isotopy_valid);
-    assert_eq!(rev_cert.pairwise_linking, vec![(1, 2, 1)]);
-    assert!(rev_cert.max_linking_residual < 1e-12);
+    // Reversing one curve changes oriented linking; reversing both preserves it.
+    let mut reversed = hopf.clone();
+    reversed.curves[1].nodes.reverse();
+    let one_reversed = certify_topology_det(&reversed).expect("one reversed Hopf component");
+    assert!(one_reversed.isotopy_valid);
+    assert_eq!(one_reversed.pairwise_linking, vec![(1, 2, 1)]);
+    assert!(one_reversed.max_linking_residual < 1e-12);
+    reversed.curves[0].nodes.reverse();
+    let both_reversed = certify_topology_det(&reversed).expect("both reversed Hopf components");
+    assert!(both_reversed.isotopy_valid);
+    assert_eq!(both_reversed.pairwise_linking, vec![(1, 2, -1)]);
+    assert!(both_reversed.max_linking_residual < 1e-12);
 
     // Flipping the prescribed crossing sign must fail isotopy verification.
     let mut flipped = build_canonical_planar_tangle::<FtxDetMath>();

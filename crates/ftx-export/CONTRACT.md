@@ -1375,3 +1375,30 @@ outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` 
 **No claims.** GEOS's exact vertex lists for union outlines (its ring starts where its overlay starts and
 its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; zlib's compressed bytes; the reference's DXF template; a check that raises
 on a missing file.
+
+## Knitting charts across needle beds (`FTX-K07`)
+
+`knit::hand_knit::export_hand_knit_document` preserves the complete `(bed, course, wale)` address.
+Front and back stitches at the same course/wale occupy separate labeled SVG panels and PDF pages,
+with a 100 mm test square on each PDF page. Written guides keep each bed within its source course
+without inventing alternating right/wrong-side rows. Repeated addresses on the same bed refuse, and
+the vector budget counts every rendered bed panel. Focused tests inspect every SVG cell and symbol,
+actual PDF pages, source-order invariance, collisions and the combined budget. Pages are not yet
+tiled and source-operation guides do not establish a complete physically qualified hand-knitting
+procedure. These chart guarantees do not imply that an AYAB raster represents both beds.
+
+## Saved knitting documents (`FTX-K17`, `FTX-K18`)
+
+`knit::export_knit_document` is the shared byte authority for `ftx knit export`, `ftx knit draft`
+and portable/browser saved-pattern exports. It compiles the exact document against the selected
+machine and qualification, checks chart exports, and prepares ordered source, machine, Knitout,
+certificate, SVG, PDF and instruction files before clients expose output. Supplied qualifications
+are retained. Supplied drape receipts must verify their seal, match the document and independently
+selected material, and have no unresolved gating flags; the certificate binds their payload digest.
+
+Kniterate conversion refusal is retained as `backend_export_refusal.json` alongside review artifacts;
+it never becomes a `.kc` file. AYAB refuses multiple operations mapped to one course/wale pixel rather
+than losing a bed. Proprietary targets retain their vendor handoff manifests. CLI output directories
+must be new; portable ZIP files contain the same artifact bytes. Browser inputs carry original JSON
+text through the JavaScript boundary to preserve numeric and sealed-receipt integrity. Software
+verification and downloadable archives never imply machine execution permission or physical fit.

@@ -100,7 +100,7 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
 
 <section id="panelSection">
   <h2>2. Measured Shaped Panel Preview</h2>
-  <p>Draft a straight-top flat panel with side shaping, armhole decreases, and optional double-bed rib. Neckline short rows and single-bed rib are not supported. This chart preview does not qualify a production garment; EN 14682 child drawstring restrictions remain part of the separate machine-program checks.</p>
+  <p>Draft a flat panel with side shaping, armhole decreases, and optional double-bed rib. Leave both neckline dimensions at zero for a straight top, or enter a measured opening width and drop. An open neckline holds the center loops and works the shoulders with separate carriers; the held neckline requires manual finishing. Single-bed rib and anchored neckline short rows are not supported. This chart preview does not qualify a production garment; EN 14682 child drawstring restrictions remain part of the separate machine-program checks.</p>
   <div class="row">
     <label>Machine
       <select id="panelMachine">
@@ -131,6 +131,12 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
     <label>Rib Hem Courses
       <input id="panelRib" type="number" min="0" max="30" value="6">
     </label>
+    <label>Neck Opening Width (mm; 0 for straight top)
+      <input id="panelNeckWidth" type="number" min="0" step="any" value="0">
+    </label>
+    <label>Neck Drop (mm; 0 for straight top)
+      <input id="panelNeckDepth" type="number" min="0" step="any" value="0">
+    </label>
     <button id="runPanel" class="primary" type="button" disabled>Draft &amp; Chart Panel</button>
   </div>
   <div id="panelOut" hidden>
@@ -146,8 +152,49 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
   </div>
 </section>
 
+<section id="exportSection">
+  <h2>3. Export a Saved Knit Pattern</h2>
+  <p>Open a pattern JSON saved from the swatch or panel tools, or from the CLI, and verify it for the selected machine. Add measured swatch qualification and a sealed drape receipt when required. All files stay in this browser; their original JSON text goes directly to the local engine.</p>
+  <p>Files and the encoded request must fit within a combined 4 MiB budget. Download the accepted software artifacts and certificate as a ZIP, with file hashes shown below. Kniterate still requires external Knitout conversion. Export does not authorize hardware execution or establish physical knitting or fit validation.</p>
+  <div class="row">
+    <label>Export Machine
+      <select id="exportMachine">
+        <option value="kniterate-7e">Kniterate 7E (Knitout v2 for external conversion)</option>
+        <option value="brother-kh930-ayab">Brother KH-930 / AYAB</option>
+        <option value="brother-kh270-ayab">Brother KH-270 / AYAB</option>
+        <option value="hand-knit">Hand Knit (chart and written guide)</option>
+        <option value="shima-seiki-12e-handoff">Shima Seiki 12E (verified Knitout handoff only)</option>
+        <option value="stoll-12e-handoff">Stoll 12E (verified Knitout handoff only)</option>
+      </select>
+    </label>
+    <label>Pattern JSON (required)
+      <input id="exportPattern" type="file" accept=".json,application/json">
+    </label>
+    <label>Measured Swatch Qualification JSON (optional)
+      <input id="exportQualification" type="file" accept=".json,application/json">
+    </label>
+    <label>Sealed Drape Receipt JSON (optional)
+      <input id="exportDrapeReceipt" type="file" accept=".json,application/json">
+    </label>
+    <label>Source Material SHA-256 (optional)
+      <input id="exportMaterialSha256" type="text" placeholder="Digest of the selected material record" maxlength="64">
+    </label>
+    <label>Archive Timestamp (optional)
+      <input id="exportCreated" type="datetime-local" aria-describedby="exportTimestampHelp">
+    </label>
+    <button id="runExport" class="primary" type="button" disabled>Verify &amp; Build ZIP</button>
+  </div>
+  <p id="exportTimestampHelp">Leave the timestamp blank to use the engine's fixed, reproducible default.</p>
+  <div id="exportOut" hidden>
+    <h3>Saved Pattern Export</h3>
+    <p id="exportSummary"></p>
+    <div id="exportDownloads" class="downloads"></div>
+    <pre id="exportPre"></pre>
+  </div>
+</section>
+
 <section id="dyeSection">
-  <h2>3. Programmed Continuous Yarn Dyeing Optimizer</h2>
+  <h2>4. Programmed Continuous Yarn Dyeing Optimizer</h2>
   <p>Inverse-solve a 1D yarn dye profile so that after knitting (flatbed boustrophedon or circular tube), capillary wicking, Kubelka–Munk optical absorption, and Brownian stitch-length drift, the knitted surface reproduces a target motif. Compares all 5 dyeing regimes on the Pareto frontier.</p>
   <div class="row">
     <label>Dye Rig Profile
