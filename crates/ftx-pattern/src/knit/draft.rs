@@ -16,6 +16,9 @@ use super::ir::{
 };
 use super::profile::{CalibrationSwatchCaps, MachineProfile, WearerAgeClass};
 
+/// Hard upper bound on drafted courses to prevent unbounded allocation on extreme dimensions.
+const MAX_DRAFT_COURSES: u32 = 5_000;
+
 /// Parameters for drafting a measured fully-fashioned flat knitted panel (front/back bodice or sleeve).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +98,12 @@ pub fn draft_calibration_swatch(
     cam_settings: &[f64],
 ) -> Result<KnitDoc, Refusal> {
     profile.validate()?;
+    if yarn_id.trim().is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "calibration swatch requires a non-empty yarn_id",
+        ));
+    }
     if cam_settings.is_empty() || courses_per_zone == 0 {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
@@ -295,6 +304,23 @@ pub fn draft_shaped_panel(
 ) -> Result<KnitDoc, Refusal> {
     gauge.validate()?;
     profile.validate()?;
+    if spec.name.trim().is_empty() || spec.yarn_id.trim().is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "panel spec requires non-empty name and yarn_id",
+        ));
+    }
+    CarrierId::new(spec.carrier_id.as_str())?;
+    if !profile.carrier_ids.contains(&spec.carrier_id) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            format!(
+                "panel carrier '{}' is not available on machine '{}'",
+                spec.carrier_id.as_str(),
+                profile.id
+            ),
+        ));
+    }
     for (name, val) in [
         ("hem_width_mm", spec.hem_width_mm),
         ("chest_width_mm", spec.chest_width_mm),
@@ -344,6 +370,23 @@ pub fn draft_shaped_panel(
     let wale_pitch = gauge.blocked_wale_pitch_mm();
     let course_height = gauge.blocked_course_height_mm();
 
+    let max_needles_f64 = f64::from(profile.needle_count);
+    for (label, mm) in [
+        ("hem_width_mm", spec.hem_width_mm),
+        ("chest_width_mm", spec.chest_width_mm),
+    ] {
+        let est = (mm / wale_pitch).round();
+        if !est.is_finite() || est > max_needles_f64 + 2.0 {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "panel {label} ({mm:.1} mm, ~{est:.0} needles) exceeds machine '{}' limit {}",
+                    profile.id, profile.needle_count
+                ),
+            ));
+        }
+    }
+
     // Round stitch counts to even integers for symmetric shaping around center 0
     let round_even = |mm: f64| -> i32 {
         let raw = (mm / wale_pitch).round().max(4.0) as i32;
@@ -362,7 +405,17 @@ pub fn draft_shaped_panel(
         ));
     }
 
-    let total_courses = (spec.length_mm / course_height).round().max(6.0) as u32;
+    let total_courses_f64 = (spec.length_mm / course_height).round();
+    if !total_courses_f64.is_finite() || total_courses_f64 > f64::from(MAX_DRAFT_COURSES) {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "panel length {:.1} mm ({total_courses_f64:.0} courses) exceeds course cap {MAX_DRAFT_COURSES}",
+                spec.length_mm
+            ),
+        ));
+    }
+    let total_courses = total_courses_f64.max(6.0) as u32;
     if spec.rib_hem_courses.saturating_add(2) > total_courses {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
@@ -376,11 +429,42 @@ pub fn draft_shaped_panel(
     let armhole_start = total_courses
         .saturating_sub(armhole_courses)
         .max(spec.rib_hem_courses + 2);
+    if spec.armhole_inset_total_mm >= spec.chest_width_mm {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "armhole_inset_total_mm must be strictly smaller than chest_width_mm",
+        ));
+    }
     let armhole_inset_per_side = ((spec.armhole_inset_total_mm * 0.5) / wale_pitch)
         .round()
         .max(0.0) as i32;
+    let min_shoulder_half = chest_wales / 2 - armhole_inset_per_side;
+    if min_shoulder_half < 2 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "armhole_inset_total_mm ({:.1} mm) leaves fewer than 4 shoulder stitches at chest width {:.1} mm",
+                spec.armhole_inset_total_mm, spec.chest_width_mm
+            ),
+        ));
+    }
     let neck_courses = (spec.neck_depth_mm / course_height).round() as u32;
     let neck_start = total_courses.saturating_sub(neck_courses);
+    let neck_half = if neck_courses > 0 {
+        let nh = ((spec.neck_width_mm * 0.5) / wale_pitch).round() as i32;
+        if spec.neck_width_mm <= 0.0 || nh < 1 || nh >= min_shoulder_half {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "neck_width_mm ({:.1} mm, half-width {nh} st) must fit strictly inside remaining shoulder half-width ({min_shoulder_half} st)",
+                    spec.neck_width_mm
+                ),
+            ));
+        }
+        nh
+    } else {
+        0
+    };
 
     let est_loop_mm = 2.6 * wale_pitch;
     let mut stitches = Vec::new();
@@ -400,7 +484,7 @@ pub fn draft_shaped_panel(
             let span = (total_courses - armhole_start).max(1) as f64;
             let t = (f64::from(c - armhole_start) / span).min(1.0);
             let dec = (t * f64::from(armhole_inset_per_side)).round() as i32;
-            (chest_wales / 2 - dec).max(2)
+            chest_wales / 2 - dec
         }
     };
 
@@ -413,12 +497,10 @@ pub fn draft_shaped_panel(
 
         // If inside neck shaping region, emit anchored short-row turnaround on shoulders
         if neck_courses > 0 && c >= neck_start && c < total_courses {
-            let neck_half = ((spec.neck_width_mm * 0.5) / wale_pitch).round() as i32;
-            let turn_w = neck_half.clamp(1, (half - 1).max(1));
             short_row_turns.push(ShortRowTurn {
                 course: c,
-                turn_wale: turn_w,
-                dir_after: if c % 2 == 0 {
+                turn_wale: neck_half,
+                dir_after: if c.is_multiple_of(2) {
                     CourseDir::Minus
                 } else {
                     CourseDir::Plus
@@ -554,6 +636,23 @@ pub fn draft_seamless_raglan_tube(
 ) -> Result<KnitDoc, Refusal> {
     gauge.validate()?;
     profile.validate()?;
+    if spec.name.trim().is_empty() || spec.yarn_id.trim().is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "raglan spec requires non-empty name and yarn_id",
+        ));
+    }
+    CarrierId::new(spec.carrier_id.as_str())?;
+    if !profile.carrier_ids.contains(&spec.carrier_id) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            format!(
+                "raglan carrier '{}' is not available on machine '{}'",
+                spec.carrier_id.as_str(),
+                profile.id
+            ),
+        ));
+    }
     if !profile.has_back_bed {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
@@ -596,6 +695,22 @@ pub fn draft_seamless_raglan_tube(
 
     let wale_pitch = gauge.blocked_wale_pitch_mm();
     let course_height = gauge.blocked_course_height_mm();
+    let max_tube_st_f64 = 2.0 * f64::from(profile.needle_count);
+    for (label, girth) in [
+        ("neck_girth_mm", spec.neck_girth_mm),
+        ("chest_girth_mm", spec.chest_girth_mm),
+    ] {
+        let est = (girth / wale_pitch).round();
+        if !est.is_finite() || est > max_tube_st_f64 + 4.0 {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "raglan {label} ({girth:.1} mm, ~{est:.0} stitches) exceeds tubular capacity of machine '{}' ({} needles/bed)",
+                    profile.id, profile.needle_count
+                ),
+            ));
+        }
+    }
     let round_mult4 = |girth: f64| -> i32 {
         let s = (girth / wale_pitch).round().max(8.0) as i32;
         ((s + 3) / 4) * 4
@@ -613,16 +728,32 @@ pub fn draft_seamless_raglan_tube(
         ));
     }
 
-    let yoke_courses = (spec.yoke_depth_mm / course_height).round().max(4.0) as u32;
-    let body_courses = (spec.body_length_below_arm_mm / course_height)
-        .round()
-        .max(4.0) as u32;
+    let yoke_f64 = (spec.yoke_depth_mm / course_height).round();
+    let body_f64 = (spec.body_length_below_arm_mm / course_height).round();
+    if !yoke_f64.is_finite()
+        || !body_f64.is_finite()
+        || yoke_f64 > f64::from(MAX_DRAFT_COURSES)
+        || body_f64 > f64::from(MAX_DRAFT_COURSES)
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("raglan vertical dimensions exceed course cap {MAX_DRAFT_COURSES}"),
+        ));
+    }
+    let yoke_courses = yoke_f64.max(4.0) as u32;
+    let body_courses = body_f64.max(4.0) as u32;
     let total_courses = spec
         .collar_rib_courses
         .checked_add(yoke_courses)
         .and_then(|c| c.checked_add(body_courses))
         .and_then(|c| c.checked_add(spec.hem_rib_courses))
         .ok_or_else(|| Refusal::new(RefusalCode::OutOfRange, "raglan course count overflow"))?;
+    if total_courses > MAX_DRAFT_COURSES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("raglan total courses {total_courses} exceeds course cap {MAX_DRAFT_COURSES}"),
+        ));
+    }
     let est_loop_mm = 2.6 * wale_pitch;
 
     let mut stitches = Vec::new();
@@ -868,6 +999,122 @@ mod tests {
                 .unwrap_err()
                 .code,
             RefusalCode::OutOfRange
+        );
+    }
+
+    #[test]
+    fn drafters_refuse_impossible_shaping_overflow_and_invalid_ids() {
+        let prof = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 24.0,
+            courses_per_100mm: 32.0,
+            needle_pitch_mm: prof.needle_pitch_mm,
+            yarn_tex: Some(180.0),
+            thickness_mm: Some(2.2),
+            relaxed_after_wash: true,
+        };
+        assert_eq!(
+            draft_calibration_swatch(&prof, "   ", 24, 4, &[8.0])
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        let base_panel = ParametricPanelSpec {
+            name: "front".to_string(),
+            wearer_age_class: WearerAgeClass::Adult,
+            hem_width_mm: 280.0,
+            chest_width_mm: 300.0,
+            length_mm: 360.0,
+            armhole_depth_mm: 120.0,
+            armhole_inset_total_mm: 40.0,
+            neck_width_mm: 110.0,
+            neck_depth_mm: 40.0,
+            rib_hem_courses: 8,
+            cam_setting: 8.0,
+            yarn_id: "merino-180tex".to_string(),
+            carrier_id: CarrierId("1".to_string()),
+            has_hood_or_neck_drawstring: false,
+        };
+
+        // Impossible armhole inset >= chest_width must refuse OutOfRange (no silent clamp).
+        let mut bad_inset = base_panel.clone();
+        bad_inset.armhole_inset_total_mm = 300.0;
+        assert_eq!(
+            draft_shaped_panel(&bad_inset, &gauge, &prof)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        // Neck opening wider than remaining shoulder span must refuse OutOfRange (no silent clamp).
+        let mut bad_neck = base_panel.clone();
+        bad_neck.neck_width_mm = 280.0;
+        assert_eq!(
+            draft_shaped_panel(&bad_neck, &gauge, &prof)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        // Extreme panel length must refuse BudgetExceeded (no OOM).
+        let mut huge_len = base_panel.clone();
+        huge_len.length_mm = 1.0e8;
+        assert_eq!(
+            draft_shaped_panel(&huge_len, &gauge, &prof)
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+
+        // Extreme width must refuse MachineStateInfeasible without i32 overflow.
+        let mut huge_w = base_panel.clone();
+        huge_w.chest_width_mm = 1.0e15;
+        assert_eq!(
+            draft_shaped_panel(&huge_w, &gauge, &prof).unwrap_err().code,
+            RefusalCode::MachineStateInfeasible
+        );
+
+        // Unknown carrier must refuse MachineStateInfeasible.
+        let mut bad_car = base_panel;
+        bad_car.carrier_id = CarrierId("99".to_string());
+        assert_eq!(
+            draft_shaped_panel(&bad_car, &gauge, &prof)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+
+        // Extreme raglan girth & height refuse cleanly without overflow or OOM.
+        let base_raglan = RaglanPulloverSpec {
+            name: "raglan".to_string(),
+            wearer_age_class: WearerAgeClass::Adult,
+            neck_girth_mm: 280.0,
+            chest_girth_mm: 580.0,
+            yoke_depth_mm: 130.0,
+            body_length_below_arm_mm: 200.0,
+            collar_rib_courses: 6,
+            hem_rib_courses: 8,
+            cam_setting: 8.0,
+            yarn_id: "merino-180tex".to_string(),
+            carrier_id: CarrierId("1".to_string()),
+            has_hood_or_neck_drawstring: false,
+        };
+        let mut huge_girth = base_raglan.clone();
+        huge_girth.chest_girth_mm = 1.0e15;
+        assert_eq!(
+            draft_seamless_raglan_tube(&huge_girth, &gauge, &prof)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+        let mut huge_yoke = base_raglan;
+        huge_yoke.yoke_depth_mm = 1.0e8;
+        assert_eq!(
+            draft_seamless_raglan_tube(&huge_yoke, &gauge, &prof)
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
         );
     }
 }

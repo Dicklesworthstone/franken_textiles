@@ -54,11 +54,16 @@ pub struct AutoKnitReport {
     pub max_abs_girth_residual_mm: f64,
 }
 
+/// Upper bound on generated AutoKnit courses to prevent unbounded memory allocation on malformed shells.
+const MAX_AUTOKNIT_COURSES: u32 = 5_000;
+
 /// Drafts a seamless tubular [`KnitDoc`] directly from a 3D [`EaseShellMesh`] via `iDT` + harmonic time field.
 ///
 /// # Errors
-/// [`RefusalCode::DegenerateGeometry`] if the shell has `< 2` boundary rings or degenerate triangles,
-/// [`RefusalCode::MachineStateInfeasible`] if the circumference exceeds machine capacity, or
+/// [`RefusalCode::DegenerateGeometry`] if the shell has `< 2` boundary rings, out-of-range indices, or degenerate triangles,
+/// [`RefusalCode::OutOfRange`] or [`RefusalCode::InvalidDocument`] if `cfg` has invalid fields,
+/// [`RefusalCode::BudgetExceeded`] if the shell exceeds the course cap,
+/// [`RefusalCode::MachineStateInfeasible`] if the circumference or carrier exceeds machine capacity, or
 /// [`RefusalCode::NotConverged`] if the harmonic solve fails.
 pub fn draft_autoknit_from_shell(
     shell: &EaseShellMesh,
@@ -68,11 +73,54 @@ pub fn draft_autoknit_from_shell(
 ) -> Result<AutoKnitReport, Refusal> {
     gauge.validate()?;
     profile.validate()?;
+    if cfg.name.trim().is_empty() || cfg.yarn_id.trim().is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "AutoKnit config requires non-empty name and yarn_id",
+        ));
+    }
+    CarrierId::new(cfg.carrier_id.as_str())?;
+    if !profile.carrier_ids.contains(&cfg.carrier_id) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            format!(
+                "AutoKnit carrier '{}' is not available on machine '{}'",
+                cfg.carrier_id.as_str(),
+                profile.id
+            ),
+        ));
+    }
+    Refusal::finite("cam_setting", cfg.cam_setting)?;
+    if cfg.cam_setting < profile.cam_setting_range[0]
+        || cfg.cam_setting > profile.cam_setting_range[1]
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "AutoKnit cam setting {} outside machine profile range {:?}",
+                cfg.cam_setting, profile.cam_setting_range
+            ),
+        ));
+    }
     if shell.vertices_m.len() < 6 || shell.triangles.len() < 4 {
         return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
             "EaseShellMesh has too few vertices/triangles for 3D-to-knit drafting",
         ));
+    }
+    let n_shell_verts = shell.vertices_m.len();
+    for ring in &shell.boundary_rings {
+        for &v in &ring.vertices {
+            if (v as usize) >= n_shell_verts {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    format!(
+                        "EaseShellMesh boundary ring '{}' references out-of-range vertex {v} (n_verts={n_shell_verts})",
+                        ring.name
+                    ),
+                ));
+            }
+        }
     }
     let start_verts: BTreeSet<usize> = shell
         .boundary_rings
@@ -216,7 +264,16 @@ pub fn draft_autoknit_from_shell(
 
     let course_height_mm = gauge.blocked_course_height_mm();
     let wale_pitch_mm = gauge.blocked_wale_pitch_mm();
-    let course_count = (shell_height_mm / course_height_mm).round().max(4.0) as u32;
+    let raw_courses = (shell_height_mm / course_height_mm).round();
+    if !raw_courses.is_finite() || raw_courses > f64::from(MAX_AUTOKNIT_COURSES) {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "AutoKnit shell height {shell_height_mm:.1} mm requires {raw_courses:.0} courses, exceeding cap {MAX_AUTOKNIT_COURSES}"
+            ),
+        ));
+    }
+    let course_count = raw_courses.max(4.0) as u32;
 
     // Step 3: Slice iso-time contours t_c = c / course_count and compute per-course girth
     let mut stitches = Vec::new();
@@ -225,6 +282,8 @@ pub fn draft_autoknit_from_shell(
     let mut next_id = 0u32;
     let mut max_abs_girth_residual_mm = 0.0_f64;
     let est_loop_mm = 2.6 * wale_pitch_mm;
+    let max_total_st_f64 =
+        f64::from(profile.needle_count) * if profile.has_back_bed { 2.0 } else { 1.0 };
 
     for c in 0..=course_count {
         let t_iso = f64::from(c) / f64::from(course_count);
@@ -237,7 +296,23 @@ pub fn draft_autoknit_from_shell(
                 .first()
                 .map_or(200.0, |r| r.perimeter_m * 1000.0)
         };
-        let raw_st = (girth_mm / wale_pitch_mm).round().max(8.0) as i32;
+        if !girth_mm.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                format!("AutoKnit course {c} produced non-finite girth"),
+            ));
+        }
+        let raw_st_f64 = (girth_mm / wale_pitch_mm).round().max(8.0);
+        if raw_st_f64 > max_total_st_f64 + 2.0 {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "AutoKnit course {c} girth {girth_mm:.1} mm ({raw_st_f64:.0} stitches) exceeds machine '{}' capacity",
+                    profile.id
+                ),
+            ));
+        }
+        let raw_st = raw_st_f64 as i32;
         let total_st = if raw_st % 2 == 0 { raw_st } else { raw_st + 1 };
         let residual = (f64::from(total_st) * wale_pitch_mm - girth_mm).abs();
         max_abs_girth_residual_mm = max_abs_girth_residual_mm.max(residual);
@@ -409,6 +484,11 @@ fn intrinsic_delaunay_flip(verts: &[Vec3], tris: &mut [[usize; 3]], max_flips: u
                 // Only flip if the new edge (o0, o1) does not already exist
                 let new_key = if o0 < o1 { (o0, o1) } else { (o1, o0) };
                 if !edge_tris.contains_key(&new_key) {
+                    let area0 = (verts[o1] - verts[u]).cross(verts[o0] - verts[u]).norm();
+                    let area1 = (verts[o0] - verts[v]).cross(verts[o1] - verts[v]).norm();
+                    if area0 <= 1e-14 || area1 <= 1e-14 {
+                        continue;
+                    }
                     // Preserve outward orientation cleanly
                     let tri0 = tris[t0];
                     let u_before_v = (tri0[0] == u && tri0[1] == v)
@@ -539,5 +619,96 @@ mod tests {
         assert!(rep.course_count >= 60);
         assert!(rep.max_abs_girth_residual_mm < 10.0);
         assert!(rep.doc.stitches.len() > 2000);
+    }
+
+    #[test]
+    fn autoknit_refuses_oob_boundary_ring_invalid_cfg_and_oversized_shell() {
+        let prof = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 24.0,
+            courses_per_100mm: 32.0,
+            needle_pitch_mm: prof.needle_pitch_mm,
+            yarn_tex: Some(180.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        let base_cfg = AutoKnitConfig {
+            name: "tube".to_string(),
+            wearer_age_class: WearerAgeClass::Adult,
+            yarn_id: "merino-180tex".to_string(),
+            carrier_id: CarrierId("1".to_string()),
+            cam_setting: 8.0,
+            max_idt_flips: 20,
+            has_hood_or_neck_drawstring: false,
+        };
+        let mut shell = EaseShellMesh {
+            vertices_m: vec![
+                [0.1, 0.0, 0.0],
+                [-0.05, 0.086, 0.0],
+                [-0.05, -0.086, 0.0],
+                [0.1, 0.0, 0.2],
+                [-0.05, 0.086, 0.2],
+                [-0.05, -0.086, 0.2],
+            ],
+            triangles: vec![
+                [0, 1, 4],
+                [0, 4, 3],
+                [1, 2, 5],
+                [1, 5, 4],
+                [2, 0, 3],
+                [2, 3, 5],
+            ],
+            boundary_rings: vec![
+                BoundaryRing {
+                    name: "hem".to_string(),
+                    is_start: true,
+                    vertices: vec![0, 1, 2],
+                    perimeter_m: 0.6,
+                },
+                BoundaryRing {
+                    name: "neck".to_string(),
+                    is_start: false,
+                    vertices: vec![3, 4, 999], // out-of-bounds vertex index
+                    perimeter_m: 0.6,
+                },
+            ],
+            source_body_sha256: "synthetic".to_string(),
+        };
+        assert_eq!(
+            draft_autoknit_from_shell(&shell, &gauge, &prof, &base_cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::DegenerateGeometry
+        );
+
+        // Fix boundary ring and test invalid cam_setting & unknown carrier
+        shell.boundary_rings[1].vertices = vec![3, 4, 5];
+        let mut bad_cam = base_cfg.clone();
+        bad_cam.cam_setting = f64::NAN;
+        assert_eq!(
+            draft_autoknit_from_shell(&shell, &gauge, &prof, &bad_cam)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        let mut bad_carrier = base_cfg.clone();
+        bad_carrier.carrier_id = CarrierId("99".to_string());
+        assert_eq!(
+            draft_autoknit_from_shell(&shell, &gauge, &prof, &bad_carrier)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+
+        // Unreasonably tall shell (100 meters) refuses with BudgetExceeded instead of OOM
+        for v in &mut shell.vertices_m[3..6] {
+            v[2] = 100.0;
+        }
+        assert_eq!(
+            draft_autoknit_from_shell(&shell, &gauge, &prof, &base_cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
     }
 }

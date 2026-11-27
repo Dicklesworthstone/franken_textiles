@@ -182,22 +182,30 @@ pub fn compile_knit_doc(
                         // Alignment check: if opp_bed is Back, front_dst == back_src + rack -> rack = nw - pw = shift
                         // If opp_bed is Front, front_src == back_dst + rack -> rack = pw - nw = -shift
                         let rack_pitches = if opp_bed == Bed::Back { shift } else { -shift };
-                        if (rack_pitches * 4).abs() <= profile.max_racking_quarter_pitches {
-                            xfer_ops.push(KnitoutOp::Rack { quarter_pitches: 0 });
-                            xfer_ops.push(KnitoutOp::Xfer {
-                                from: src_n,
-                                to: mid_n,
-                            });
-                            xfer_ops.push(KnitoutOp::Rack {
-                                quarter_pitches: rack_pitches * 4,
-                            });
-                            xfer_ops.push(KnitoutOp::Xfer {
-                                from: mid_n,
-                                to: dst_n,
-                            });
-                            xfer_ops.push(KnitoutOp::Rack { quarter_pitches: 0 });
-                            next_occupied.remove(&pw);
+                        let required_qp = (rack_pitches * 4).abs();
+                        if required_qp > profile.max_racking_quarter_pitches {
+                            return Err(Refusal::new(
+                                RefusalCode::MachineStateInfeasible,
+                                format!(
+                                    "course {course_idx} decrease transfer from wale {pw} to {nw} requires racking {required_qp} quarter-pitches, exceeding machine '{}' limit {}",
+                                    profile.id, profile.max_racking_quarter_pitches
+                                ),
+                            ));
                         }
+                        xfer_ops.push(KnitoutOp::Rack { quarter_pitches: 0 });
+                        xfer_ops.push(KnitoutOp::Xfer {
+                            from: src_n,
+                            to: mid_n,
+                        });
+                        xfer_ops.push(KnitoutOp::Rack {
+                            quarter_pitches: rack_pitches * 4,
+                        });
+                        xfer_ops.push(KnitoutOp::Xfer {
+                            from: mid_n,
+                            to: dst_n,
+                        });
+                        xfer_ops.push(KnitoutOp::Rack { quarter_pitches: 0 });
+                        next_occupied.remove(&pw);
                     }
                 }
             }
@@ -533,5 +541,67 @@ mod tests {
                 .code,
             RefusalCode::MachineStateInfeasible
         );
+    }
+
+    #[test]
+    fn compile_refuses_decrease_exceeding_machine_racking_limit() {
+        let mut prof = MachineProfile::kniterate_7e();
+        prof.max_racking_quarter_pitches = 0; // double-bed machine with zero racking
+        let gauge = GaugeSpec {
+            wales_per_100mm: 24.0,
+            courses_per_100mm: 32.0,
+            needle_pitch_mm: prof.needle_pitch_mm,
+            yarn_tex: Some(180.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        let doc = draft_shaped_panel(
+            &ParametricPanelSpec {
+                name: "shaped_zero_rack".to_string(),
+                wearer_age_class: WearerAgeClass::Adult,
+                hem_width_mm: 220.0,
+                chest_width_mm: 220.0,
+                length_mm: 180.0,
+                armhole_depth_mm: 60.0,
+                armhole_inset_total_mm: 40.0,
+                neck_width_mm: 0.0,
+                neck_depth_mm: 0.0,
+                rib_hem_courses: 0,
+                cam_setting: 8.0,
+                yarn_id: "merino-180tex".to_string(),
+                carrier_id: CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &prof,
+        )
+        .unwrap();
+        let qual = KnitSwatchQualification {
+            id: "sw-zero-rack".to_string(),
+            material_sha256: "mat-123".to_string(),
+            machine_sha256: prof.canonical_sha256().unwrap(),
+            yarn_lot_id: "lot-1".to_string(),
+            was_washed_and_blocked: true,
+            wales_per_100mm: 24.0,
+            courses_per_100mm: 32.0,
+            thickness_mm: 2.0,
+            cam_stitch_setting: 8.0,
+            wick_dispersion_mm: None,
+            shrinkage_axial_pct: None,
+            yarn_intake_drift_eps: Some(0.002),
+            yarn_intake_drift_sigma_eta: Some(0.015),
+            evidence: Evidence::Measured,
+            source: Source {
+                reference: "local:sw".to_string(),
+                accessed_on: "2026-11-27".to_string(),
+                note: "washed swatch".to_string(),
+            },
+            method: "flat dry".to_string(),
+            conditioning: BTreeMap::new(),
+            allow_estimates: false,
+        };
+        let err = compile_knit_doc(&doc, &prof, Some(&qual), Some("mat-123"), None).unwrap_err();
+        assert_eq!(err.code, RefusalCode::MachineStateInfeasible);
+        assert!(err.message.contains("racking"));
     }
 }
