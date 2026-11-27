@@ -32,6 +32,8 @@ pub mod raster;
 pub mod receipt;
 pub mod refusal;
 pub mod response_curve;
+pub mod shaping;
+pub mod sparse;
 pub mod text;
 pub mod textile;
 pub mod vec;
