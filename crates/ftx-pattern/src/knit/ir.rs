@@ -407,7 +407,10 @@ impl KnitDoc {
                 ));
             }
             if node.bed.is_slider()
-                && matches!(node.kind, LoopKind::Knit | LoopKind::Purl | LoopKind::Tuck | LoopKind::Split)
+                && matches!(
+                    node.kind,
+                    LoopKind::Knit | LoopKind::Purl | LoopKind::Tuck | LoopKind::Split
+                )
             {
                 return Err(Refusal::new(
                     RefusalCode::MachineStateInfeasible,
@@ -452,7 +455,10 @@ impl KnitDoc {
                         ),
                     ));
                 };
-                if parent_course >= node.course && !matches!(node.kind, LoopKind::BindOff) {
+                if p.stitch_id == node.id
+                    || parent_course > node.course
+                    || (parent_course == node.course && !matches!(node.kind, LoopKind::BindOff))
+                {
                     return Err(Refusal::new(
                         RefusalCode::InvalidDocument,
                         format!(
@@ -468,6 +474,44 @@ impl KnitDoc {
                             "stitch {} has duplicate parent stack_pos {}",
                             node.id, p.stack_pos
                         ),
+                    ));
+                }
+            }
+        }
+        let mut seen_runs = BTreeSet::new();
+        for run in &self.yarn_runs {
+            if !seen_runs.insert(run.run_id) {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("duplicate yarn run_id {}", run.run_id),
+                ));
+            }
+            CarrierId::new(run.carrier_id.as_str())?;
+            if run.start_course > run.end_course {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "yarn run {} start_course {} exceeds end_course {}",
+                        run.run_id, run.start_course, run.end_course
+                    ),
+                ));
+            }
+            Refusal::finite("total_yarn_length_m", run.total_yarn_length_m)?;
+            if run.total_yarn_length_m < 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "yarn run {} total_yarn_length_m cannot be negative",
+                        run.run_id
+                    ),
+                ));
+            }
+            if let Some(tail) = run.cut_tail_mm {
+                Refusal::finite("cut_tail_mm", tail)?;
+                if tail < 0.0 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("yarn run {} cut_tail_mm cannot be negative", run.run_id),
                     ));
                 }
             }
@@ -508,66 +552,129 @@ pub struct KnitoutHeader {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum KnitoutOp {
     /// Bring carrier(s) into action directly (`in cs`).
-    In { carriers: Vec<CarrierId> },
+    In {
+        /// Carrier set brought into action.
+        carriers: Vec<CarrierId>,
+    },
     /// Take carrier(s) out of action directly (`out cs`).
-    Out { carriers: Vec<CarrierId> },
+    Out {
+        /// Carrier set parked out of action.
+        carriers: Vec<CarrierId>,
+    },
     /// Bring carrier(s) in via yarn-inserting hook (`inhook cs`).
-    InHook { carriers: Vec<CarrierId> },
+    InHook {
+        /// Carrier set brought in on the yarn-inserting hook.
+        carriers: Vec<CarrierId>,
+    },
     /// Release yarn-inserting hook (`releasehook cs`).
-    ReleaseHook { carriers: Vec<CarrierId> },
+    ReleaseHook {
+        /// Carrier set released from the yarn-inserting hook.
+        carriers: Vec<CarrierId>,
+    },
     /// Take carrier(s) out via yarn-inserting hook (`outhook cs`).
-    OutHook { carriers: Vec<CarrierId> },
+    OutHook {
+        /// Carrier set taken out via the yarn-inserting hook.
+        carriers: Vec<CarrierId>,
+    },
     /// Set leading/trailing stitch numbers (`stitch L T`).
-    Stitch { leading: i32, trailing: i32 },
+    Stitch {
+        /// Leading stitch-length dial value.
+        leading: i32,
+        /// Trailing stitch-length dial value.
+        trailing: i32,
+    },
     /// Rack back bed relative to front bed in exact integer quarter-pitches (`rack R`).
     /// For example, `+4` emits `rack 1`, `-2` emits `rack -0.5`, `+1` emits `rack 0.25`.
-    Rack { quarter_pitches: i32 },
+    Rack {
+        /// Signed bed racking offset in exact quarter-pitches.
+        quarter_pitches: i32,
+    },
     /// Knit stitch (`knit D N cs`).
     Knit {
+        /// Carriage travel direction.
         dir: CourseDir,
+        /// Target needle address.
         needle: Needle,
+        /// Active carrier set feeding the stitch.
         carriers: Vec<CarrierId>,
     },
     /// Tuck loop (`tuck D N cs`).
     Tuck {
+        /// Carriage travel direction.
         dir: CourseDir,
+        /// Target needle address.
         needle: Needle,
+        /// Active carrier set feeding the tuck.
         carriers: Vec<CarrierId>,
     },
     /// Split stitch transferring old loop to `to` while forming new loop on `from` (`split D N1 N2 cs`).
     Split {
+        /// Carriage travel direction.
         dir: CourseDir,
+        /// Source needle forming the new loop.
         from: Needle,
+        /// Destination needle receiving the old loop.
         to: Needle,
+        /// Active carrier set feeding the split.
         carriers: Vec<CarrierId>,
     },
     /// Transfer loop(s) (`xfer N1 N2`).
-    Xfer { from: Needle, to: Needle },
+    Xfer {
+        /// Source needle losing its loop stack.
+        from: Needle,
+        /// Destination needle receiving the loop stack.
+        to: Needle,
+    },
     /// Move carrier(s) without knitting (`miss D N cs`).
     Miss {
+        /// Carriage travel direction.
         dir: CourseDir,
+        /// Target needle position.
         needle: Needle,
+        /// Active carrier set carried past the needle.
         carriers: Vec<CarrierId>,
     },
     /// Empty-carrier needle pass / tuck-release (`amiss N`).
-    Amiss { needle: Needle },
+    Amiss {
+        /// Target needle address.
+        needle: Needle,
+    },
     /// Drop loop(s) off needle (`drop N`).
-    Drop { needle: Needle },
+    Drop {
+        /// Target needle address to cast off.
+        needle: Needle,
+    },
     /// Standard operator pause (`pause ; <note>`).
     Pause {
+        /// Optional operator note rendered after `; `.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
     /// Non-executable comment line (`; <text>`).
-    Comment { text: String },
+    Comment {
+        /// Single-line comment text.
+        text: String,
+    },
     /// Extension: relative roller advance (`x-add-roller-advance N`).
-    AddRollerAdvance { units: i32 },
+    AddRollerAdvance {
+        /// Signed roller-advance units.
+        units: i32,
+    },
     /// Extension: carriage speed setting (`x-speed-number N`).
-    SpeedNumber { speed: u32 },
+    SpeedNumber {
+        /// Machine speed index.
+        speed: u32,
+    },
     /// Extension: presser foot mode (`x-presser-mode M`).
-    PresserMode { mode: String },
+    PresserMode {
+        /// Presser mode keyword (`auto`, `on`, `off`).
+        mode: String,
+    },
     /// Extension: minimum carrier spacing (`x-carrier-spacing N`).
-    CarrierSpacing { needles: u32 },
+    CarrierSpacing {
+        /// Minimum needle gap enforced between carriers.
+        needles: u32,
+    },
 }
 
 /// Complete lossless CMU Knitout v2 program.
@@ -588,39 +695,59 @@ impl KnitoutProgram {
     /// # Errors
     /// [`RefusalCode::InvalidDocument`] if a comment/pause note contains raw newlines.
     pub fn to_knitout_text(&self) -> Result<String, Refusal> {
+        if self.schema != KNITOUT_SCHEMA {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("expected schema '{KNITOUT_SCHEMA}', got '{}'", self.schema),
+            ));
+        }
+        let check_line = |label: &str, value: &str| -> Result<(), Refusal> {
+            if value.contains(['\n', '\r']) {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("Knitout {label} cannot contain line breaks"),
+                ));
+            }
+            Ok(())
+        };
+        check_line("header machine", &self.header.machine)?;
+        check_line("header gauge", &self.header.gauge)?;
+        check_line("header position", &self.header.position)?;
+        let carriers_line = format_carriers(&self.header.carriers, false)?;
+
         let mut out = String::new();
         out.push_str(";!knitout-2\n");
         let _ = writeln!(out, ";;Machine: {}", self.header.machine);
         let _ = writeln!(out, ";;Gauge: {}", self.header.gauge);
         let _ = writeln!(out, ";;Width: {}", self.header.width);
         let _ = writeln!(out, ";;Position: {}", self.header.position);
-        let carriers_line = join_carriers(&self.header.carriers);
         let _ = writeln!(out, ";;Carriers: {carriers_line}");
         for (k, v) in &self.header.extra {
-            if k.contains('\n') || v.contains('\n') {
-                return Err(Refusal::new(
-                    RefusalCode::InvalidDocument,
-                    "Knitout header key/value cannot contain newlines",
-                ));
-            }
+            check_line("header key", k)?;
+            check_line("header value", v)?;
             let _ = writeln!(out, ";;{k}: {v}");
         }
         for op in &self.ops {
             match op {
                 KnitoutOp::In { carriers } => {
-                    let _ = writeln!(out, "in {}", join_carriers(carriers));
+                    let cs = format_carriers(carriers, true)?;
+                    let _ = writeln!(out, "in {cs}");
                 }
                 KnitoutOp::Out { carriers } => {
-                    let _ = writeln!(out, "out {}", join_carriers(carriers));
+                    let cs = format_carriers(carriers, true)?;
+                    let _ = writeln!(out, "out {cs}");
                 }
                 KnitoutOp::InHook { carriers } => {
-                    let _ = writeln!(out, "inhook {}", join_carriers(carriers));
+                    let cs = format_carriers(carriers, true)?;
+                    let _ = writeln!(out, "inhook {cs}");
                 }
                 KnitoutOp::ReleaseHook { carriers } => {
-                    let _ = writeln!(out, "releasehook {}", join_carriers(carriers));
+                    let cs = format_carriers(carriers, true)?;
+                    let _ = writeln!(out, "releasehook {cs}");
                 }
                 KnitoutOp::OutHook { carriers } => {
-                    let _ = writeln!(out, "outhook {}", join_carriers(carriers));
+                    let cs = format_carriers(carriers, true)?;
+                    let _ = writeln!(out, "outhook {cs}");
                 }
                 KnitoutOp::Stitch { leading, trailing } => {
                     let _ = writeln!(out, "stitch {leading} {trailing}");
@@ -633,26 +760,44 @@ impl KnitoutProgram {
                     needle,
                     carriers,
                 } => {
-                    let _ = writeln!(
-                        out,
-                        "knit {} {} {}",
-                        dir.knitout_symbol(),
-                        needle.knitout_token(),
-                        join_carriers(carriers)
-                    );
+                    let cs = format_carriers(carriers, false)?;
+                    if cs.is_empty() {
+                        let _ = writeln!(
+                            out,
+                            "knit {} {}",
+                            dir.knitout_symbol(),
+                            needle.knitout_token()
+                        );
+                    } else {
+                        let _ = writeln!(
+                            out,
+                            "knit {} {} {cs}",
+                            dir.knitout_symbol(),
+                            needle.knitout_token()
+                        );
+                    }
                 }
                 KnitoutOp::Tuck {
                     dir,
                     needle,
                     carriers,
                 } => {
-                    let _ = writeln!(
-                        out,
-                        "tuck {} {} {}",
-                        dir.knitout_symbol(),
-                        needle.knitout_token(),
-                        join_carriers(carriers)
-                    );
+                    let cs = format_carriers(carriers, false)?;
+                    if cs.is_empty() {
+                        let _ = writeln!(
+                            out,
+                            "tuck {} {}",
+                            dir.knitout_symbol(),
+                            needle.knitout_token()
+                        );
+                    } else {
+                        let _ = writeln!(
+                            out,
+                            "tuck {} {} {cs}",
+                            dir.knitout_symbol(),
+                            needle.knitout_token()
+                        );
+                    }
                 }
                 KnitoutOp::Split {
                     dir,
@@ -660,14 +805,24 @@ impl KnitoutProgram {
                     to,
                     carriers,
                 } => {
-                    let _ = writeln!(
-                        out,
-                        "split {} {} {} {}",
-                        dir.knitout_symbol(),
-                        from.knitout_token(),
-                        to.knitout_token(),
-                        join_carriers(carriers)
-                    );
+                    let cs = format_carriers(carriers, false)?;
+                    if cs.is_empty() {
+                        let _ = writeln!(
+                            out,
+                            "split {} {} {}",
+                            dir.knitout_symbol(),
+                            from.knitout_token(),
+                            to.knitout_token()
+                        );
+                    } else {
+                        let _ = writeln!(
+                            out,
+                            "split {} {} {} {cs}",
+                            dir.knitout_symbol(),
+                            from.knitout_token(),
+                            to.knitout_token()
+                        );
+                    }
                 }
                 KnitoutOp::Xfer { from, to } => {
                     let _ = writeln!(out, "xfer {} {}", from.knitout_token(), to.knitout_token());
@@ -677,13 +832,22 @@ impl KnitoutProgram {
                     needle,
                     carriers,
                 } => {
-                    let _ = writeln!(
-                        out,
-                        "miss {} {} {}",
-                        dir.knitout_symbol(),
-                        needle.knitout_token(),
-                        join_carriers(carriers)
-                    );
+                    let cs = format_carriers(carriers, false)?;
+                    if cs.is_empty() {
+                        let _ = writeln!(
+                            out,
+                            "miss {} {}",
+                            dir.knitout_symbol(),
+                            needle.knitout_token()
+                        );
+                    } else {
+                        let _ = writeln!(
+                            out,
+                            "miss {} {} {cs}",
+                            dir.knitout_symbol(),
+                            needle.knitout_token()
+                        );
+                    }
                 }
                 KnitoutOp::Amiss { needle } => {
                     let _ = writeln!(out, "amiss {}", needle.knitout_token());
@@ -693,23 +857,13 @@ impl KnitoutProgram {
                 }
                 KnitoutOp::Pause { note } => match note {
                     Some(n) if !n.is_empty() => {
-                        if n.contains('\n') {
-                            return Err(Refusal::new(
-                                RefusalCode::InvalidDocument,
-                                "Knitout pause note cannot contain newlines",
-                            ));
-                        }
+                        check_line("pause note", n)?;
                         let _ = writeln!(out, "pause ; {n}");
                     }
                     _ => out.push_str("pause\n"),
                 },
                 KnitoutOp::Comment { text } => {
-                    if text.contains('\n') {
-                        return Err(Refusal::new(
-                            RefusalCode::InvalidDocument,
-                            "Knitout comment cannot contain newlines",
-                        ));
-                    }
+                    check_line("comment", text)?;
                     let _ = writeln!(out, "; {text}");
                 }
                 KnitoutOp::AddRollerAdvance { units } => {
@@ -719,6 +873,12 @@ impl KnitoutProgram {
                     let _ = writeln!(out, "x-speed-number {speed}");
                 }
                 KnitoutOp::PresserMode { mode } => {
+                    if mode.is_empty() || mode.bytes().any(|b| !b.is_ascii_graphic() || b == b';') {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            format!("invalid Knitout presser mode '{mode}'"),
+                        ));
+                    }
                     let _ = writeln!(out, "x-presser-mode {mode}");
                 }
                 KnitoutOp::CarrierSpacing { needles } => {
@@ -739,12 +899,21 @@ impl KnitoutProgram {
     }
 }
 
-fn join_carriers(carriers: &[CarrierId]) -> String {
-    carriers
+fn format_carriers(carriers: &[CarrierId], require_non_empty: bool) -> Result<String, Refusal> {
+    if require_non_empty && carriers.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "Knitout carrier operation requires at least one carrier",
+        ));
+    }
+    for cid in carriers {
+        CarrierId::new(cid.as_str())?;
+    }
+    Ok(carriers
         .iter()
         .map(CarrierId::as_str)
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" "))
 }
 
 /// Formats integer quarter-pitches cleanly as Knitout decimal rack tokens (`0`, `1`, `-0.5`, `0.25`).

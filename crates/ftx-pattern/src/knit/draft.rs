@@ -94,17 +94,18 @@ pub fn draft_calibration_swatch(
     cam_settings: &[f64],
 ) -> Result<KnitDoc, Refusal> {
     profile.validate()?;
-    if cam_settings.is_empty() {
+    if cam_settings.is_empty() || courses_per_zone == 0 {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
-            "calibration swatch requires at least one cam_setting zone",
+            "calibration swatch requires at least one cam_setting zone and courses_per_zone >= 1",
         ));
     }
     let total_courses = courses_per_zone
         .checked_mul(u32::try_from(cam_settings.len()).unwrap_or(u32::MAX))
         .and_then(|c| c.checked_add(2)) // cast-on + bind-off
         .ok_or_else(|| Refusal::new(RefusalCode::OutOfRange, "swatch course count overflow"))?;
-    if needles < 4 || needles > CalibrationSwatchCaps::MAX_NEEDLES || needles > profile.needle_count {
+    if needles < 4 || needles > CalibrationSwatchCaps::MAX_NEEDLES || needles > profile.needle_count
+    {
         return Err(Refusal::new(
             RefusalCode::MaterialProcessHazard,
             format!(
@@ -310,6 +311,23 @@ pub fn draft_shaped_panel(
             "panel widths and length must be positive",
         ));
     }
+    if spec.armhole_inset_total_mm < 0.0 || spec.neck_width_mm < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "armhole_inset_total_mm and neck_width_mm cannot be negative",
+        ));
+    }
+    if spec.cam_setting < profile.cam_setting_range[0]
+        || spec.cam_setting > profile.cam_setting_range[1]
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "panel cam setting {} outside machine profile range {:?}",
+                spec.cam_setting, profile.cam_setting_range
+            ),
+        ));
+    }
     if spec.armhole_depth_mm < 0.0
         || spec.armhole_depth_mm >= spec.length_mm
         || spec.neck_depth_mm < 0.0
@@ -343,9 +361,22 @@ pub fn draft_shaped_panel(
     }
 
     let total_courses = (spec.length_mm / course_height).round().max(6.0) as u32;
+    if spec.rib_hem_courses.saturating_add(2) > total_courses {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "rib_hem_courses ({}) leaves insufficient body courses for panel length ({total_courses} courses)",
+                spec.rib_hem_courses
+            ),
+        ));
+    }
     let armhole_courses = (spec.armhole_depth_mm / course_height).round() as u32;
-    let armhole_start = total_courses.saturating_sub(armhole_courses).max(spec.rib_hem_courses + 2);
-    let armhole_inset_per_side = ((spec.armhole_inset_total_mm * 0.5) / wale_pitch).round().max(0.0) as i32;
+    let armhole_start = total_courses
+        .saturating_sub(armhole_courses)
+        .max(spec.rib_hem_courses + 2);
+    let armhole_inset_per_side = ((spec.armhole_inset_total_mm * 0.5) / wale_pitch)
+        .round()
+        .max(0.0) as i32;
     let neck_courses = (spec.neck_depth_mm / course_height).round() as u32;
     let neck_start = total_courses.saturating_sub(neck_courses);
 
@@ -407,7 +438,8 @@ pub fn draft_shaped_panel(
                         stitch_id: pid,
                         stack_pos: 0,
                     });
-                } else if let Some(&pid) = prev_map.get(&(w + 1)).or_else(|| prev_map.get(&(w - 1))) {
+                } else if let Some(&pid) = prev_map.get(&(w + 1)).or_else(|| prev_map.get(&(w - 1)))
+                {
                     parents.push(ParentRef {
                         stitch_id: pid,
                         stack_pos: 0,
@@ -468,10 +500,22 @@ pub fn draft_shaped_panel(
     let length_residual_mm = f64::from(total_courses) * course_height - spec.length_mm;
 
     let mut metadata = BTreeMap::new();
-    metadata.insert("pathway".to_string(), "measured_fully_fashioned_panel".to_string());
-    metadata.insert("hem_width_residual_mm".to_string(), format!("{hem_residual_mm:+.2}"));
-    metadata.insert("chest_width_residual_mm".to_string(), format!("{chest_residual_mm:+.2}"));
-    metadata.insert("length_residual_mm".to_string(), format!("{length_residual_mm:+.2}"));
+    metadata.insert(
+        "pathway".to_string(),
+        "measured_fully_fashioned_panel".to_string(),
+    );
+    metadata.insert(
+        "hem_width_residual_mm".to_string(),
+        format!("{hem_residual_mm:+.2}"),
+    );
+    metadata.insert(
+        "chest_width_residual_mm".to_string(),
+        format!("{chest_residual_mm:+.2}"),
+    );
+    metadata.insert(
+        "length_residual_mm".to_string(),
+        format!("{length_residual_mm:+.2}"),
+    );
 
     let doc = KnitDoc {
         schema: KNIT_SCHEMA.to_string(),
@@ -511,8 +555,20 @@ pub fn draft_seamless_raglan_tube(
     if !profile.has_back_bed {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
-            format!("seamless tubular raglan requires a back bed, which '{}' lacks", profile.id),
+            format!(
+                "seamless tubular raglan requires a back bed, which '{}' lacks",
+                profile.id
+            ),
         ));
+    }
+    for (name, val) in [
+        ("neck_girth_mm", spec.neck_girth_mm),
+        ("chest_girth_mm", spec.chest_girth_mm),
+        ("yoke_depth_mm", spec.yoke_depth_mm),
+        ("body_length_below_arm_mm", spec.body_length_below_arm_mm),
+        ("cam_setting", spec.cam_setting),
+    ] {
+        Refusal::finite(name, val)?;
     }
     if spec.neck_girth_mm <= 0.0
         || spec.chest_girth_mm < spec.neck_girth_mm
@@ -522,6 +578,17 @@ pub fn draft_seamless_raglan_tube(
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
             "invalid raglan girths or lengths",
+        ));
+    }
+    if spec.cam_setting < profile.cam_setting_range[0]
+        || spec.cam_setting > profile.cam_setting_range[1]
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "raglan cam setting {} outside machine profile range {:?}",
+                spec.cam_setting, profile.cam_setting_range
+            ),
         ));
     }
 
@@ -545,8 +612,15 @@ pub fn draft_seamless_raglan_tube(
     }
 
     let yoke_courses = (spec.yoke_depth_mm / course_height).round().max(4.0) as u32;
-    let body_courses = (spec.body_length_below_arm_mm / course_height).round().max(4.0) as u32;
-    let total_courses = spec.collar_rib_courses + yoke_courses + body_courses + spec.hem_rib_courses;
+    let body_courses = (spec.body_length_below_arm_mm / course_height)
+        .round()
+        .max(4.0) as u32;
+    let total_courses = spec
+        .collar_rib_courses
+        .checked_add(yoke_courses)
+        .and_then(|c| c.checked_add(body_courses))
+        .and_then(|c| c.checked_add(spec.hem_rib_courses))
+        .ok_or_else(|| Refusal::new(RefusalCode::OutOfRange, "raglan course count overflow"))?;
     let est_loop_mm = 2.6 * wale_pitch;
 
     let mut stitches = Vec::new();
@@ -627,14 +701,23 @@ pub fn draft_seamless_raglan_tube(
 
     let total_yarn_m = stitches.len() as f64 * est_loop_mm / 1000.0;
     let mut metadata = BTreeMap::new();
-    metadata.insert("pathway".to_string(), "top_down_seamless_raglan".to_string());
+    metadata.insert(
+        "pathway".to_string(),
+        "top_down_seamless_raglan".to_string(),
+    );
     metadata.insert(
         "neck_girth_residual_mm".to_string(),
-        format!("{:+.2}", f64::from(neck_st) * wale_pitch - spec.neck_girth_mm),
+        format!(
+            "{:+.2}",
+            f64::from(neck_st) * wale_pitch - spec.neck_girth_mm
+        ),
     );
     metadata.insert(
         "chest_girth_residual_mm".to_string(),
-        format!("{:+.2}", f64::from(chest_st) * wale_pitch - spec.chest_girth_mm),
+        format!(
+            "{:+.2}",
+            f64::from(chest_st) * wale_pitch - spec.chest_girth_mm
+        ),
     );
 
     let doc = KnitDoc {
@@ -668,7 +751,8 @@ mod tests {
     #[test]
     fn calibration_swatch_enforces_hard_caps() {
         let prof = MachineProfile::kniterate_7e();
-        let doc = draft_calibration_swatch(&prof, "wool-200tex", 40, 20, &[6.0, 8.0, 10.0]).unwrap();
+        let doc =
+            draft_calibration_swatch(&prof, "wool-200tex", 40, 20, &[6.0, 8.0, 10.0]).unwrap();
         assert_eq!(doc.wearer_age_class, WearerAgeClass::CalibrationSwatchOnly);
         assert_eq!(doc.stitches.len(), 40 * (60 + 2));
 
@@ -732,5 +816,57 @@ mod tests {
         )
         .unwrap();
         assert!(raglan.metadata.contains_key("chest_girth_residual_mm"));
+
+        // Non-finite raglan inputs and out-of-range panel inputs fail closed instead of clamping.
+        let nan_raglan = draft_seamless_raglan_tube(
+            &RaglanPulloverSpec {
+                name: "bad_raglan".to_string(),
+                wearer_age_class: WearerAgeClass::Adult,
+                neck_girth_mm: f64::NAN,
+                chest_girth_mm: 580.0,
+                yoke_depth_mm: 130.0,
+                body_length_below_arm_mm: 200.0,
+                collar_rib_courses: 6,
+                hem_rib_courses: 8,
+                cam_setting: 8.0,
+                yarn_id: "merino-180tex".to_string(),
+                carrier_id: CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &prof,
+        )
+        .unwrap_err();
+        assert_eq!(nan_raglan.code, RefusalCode::NonFinite);
+
+        let neg_inset = draft_shaped_panel(
+            &ParametricPanelSpec {
+                name: "bad_panel".to_string(),
+                wearer_age_class: WearerAgeClass::Adult,
+                hem_width_mm: 280.0,
+                chest_width_mm: 300.0,
+                length_mm: 360.0,
+                armhole_depth_mm: 120.0,
+                armhole_inset_total_mm: -10.0,
+                neck_width_mm: 0.0,
+                neck_depth_mm: 0.0,
+                rib_hem_courses: 8,
+                cam_setting: 8.0,
+                yarn_id: "merino-180tex".to_string(),
+                carrier_id: CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &prof,
+        )
+        .unwrap_err();
+        assert_eq!(neg_inset.code, RefusalCode::OutOfRange);
+
+        assert_eq!(
+            draft_calibration_swatch(&prof, "wool-200tex", 40, 0, &[8.0])
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
     }
 }

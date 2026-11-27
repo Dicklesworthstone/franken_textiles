@@ -126,7 +126,8 @@ impl KnitSwatchQualification {
         ] {
             Refusal::finite(k, v)?;
         }
-        if self.wales_per_100mm <= 0.0 || self.courses_per_100mm <= 0.0 || self.thickness_mm <= 0.0 {
+        if self.wales_per_100mm <= 0.0 || self.courses_per_100mm <= 0.0 || self.thickness_mm <= 0.0
+        {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "swatch gauge counts and thickness must be strictly positive",
@@ -140,6 +141,9 @@ impl KnitSwatchQualification {
                     "wick_dispersion_mm cannot be negative",
                 ));
             }
+        }
+        if let Some(s) = self.shrinkage_axial_pct {
+            Refusal::finite("shrinkage_axial_pct", s)?;
         }
         if let Some(eps) = self.yarn_intake_drift_eps {
             Refusal::finite("yarn_intake_drift_eps", eps)?;
@@ -469,7 +473,9 @@ mod tests {
                     carriers: vec![CarrierId("1".to_string())],
                 },
                 KnitoutOp::CarrierSpacing { needles: 2 },
-                KnitoutOp::Rack { quarter_pitches: -2 },
+                KnitoutOp::Rack {
+                    quarter_pitches: -2,
+                },
                 KnitoutOp::Knit {
                     dir: CourseDir::Plus,
                     needle: Needle::new(Bed::Front, 10),
@@ -630,5 +636,57 @@ mod tests {
         // Unknown field rejected by deny_unknown_fields
         let bad_json = json.replace("\"lot-42\",", "\"lot-42\", \"phantom\": 1,");
         assert!(serde_json::from_str::<KnitSwatchQualification>(&bad_json).is_err());
+
+        let mut nan_shrink = q;
+        nan_shrink.was_washed_and_blocked = true;
+        nan_shrink.shrinkage_axial_pct = Some(f64::NAN);
+        assert_eq!(
+            nan_shrink
+                .validate_for_production("m1", "k1")
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+    }
+
+    #[test]
+    fn machine_profile_and_knitout_reject_nan_and_control_injection() {
+        let mut prof = MachineProfile::kniterate_7e();
+        prof.cam_setting_range = [f64::NAN, 15.0];
+        assert_eq!(prof.validate().unwrap_err().code, RefusalCode::NonFinite);
+
+        let bad_prog = KnitoutProgram {
+            schema: KNITOUT_SCHEMA.to_string(),
+            header: KnitoutHeader {
+                machine: "Kniterate\ninject".to_string(),
+                gauge: "7".to_string(),
+                width: 252,
+                position: "Center".to_string(),
+                carriers: vec![CarrierId("1".to_string())],
+                extra: BTreeMap::new(),
+            },
+            ops: vec![],
+        };
+        assert_eq!(
+            bad_prog.to_knitout_text().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        let empty_in = KnitoutProgram {
+            schema: KNITOUT_SCHEMA.to_string(),
+            header: KnitoutHeader {
+                machine: "Kniterate".to_string(),
+                gauge: "7".to_string(),
+                width: 252,
+                position: "Center".to_string(),
+                carriers: vec![CarrierId("1".to_string())],
+                extra: BTreeMap::new(),
+            },
+            ops: vec![KnitoutOp::In { carriers: vec![] }],
+        };
+        assert_eq!(
+            empty_in.to_knitout_text().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
     }
 }

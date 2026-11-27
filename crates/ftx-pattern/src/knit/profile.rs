@@ -1,5 +1,7 @@
 //! Wearer age classification, calibration swatch caps, and knitting machine hardware profiles.
 
+use std::collections::BTreeSet;
+
 use ftx_core::receipt::canonical_json_sha256;
 use ftx_core::{Refusal, RefusalCode};
 use serde::{Deserialize, Serialize};
@@ -291,12 +293,48 @@ impl MachineProfile {
                 "machine profile requires non-empty id, needle_count > 0, and >= 1 carrier",
             ));
         }
-        Refusal::finite("gauge_e", self.gauge_e)?;
-        Refusal::finite("needle_pitch_mm", self.needle_pitch_mm)?;
+        let mut seen_carriers = BTreeSet::new();
+        for cid in &self.carrier_ids {
+            CarrierId::new(cid.as_str())?;
+            if !seen_carriers.insert(cid.as_str()) {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!(
+                        "machine profile contains duplicate carrier '{}'",
+                        cid.as_str()
+                    ),
+                ));
+            }
+        }
+        for (name, val) in [
+            ("gauge_e", self.gauge_e),
+            ("needle_pitch_mm", self.needle_pitch_mm),
+            ("cam_setting_range[0]", self.cam_setting_range[0]),
+            ("cam_setting_range[1]", self.cam_setting_range[1]),
+            ("recommended_tex_range[0]", self.recommended_tex_range[0]),
+            ("recommended_tex_range[1]", self.recommended_tex_range[1]),
+            ("child_float_cap_mm", self.child_float_cap_mm),
+            ("infant_tail_cap_mm", self.infant_tail_cap_mm),
+            ("infant_eyelet_cap_mm", self.infant_eyelet_cap_mm),
+        ] {
+            Refusal::finite(name, val)?;
+        }
         if self.gauge_e <= 0.0 || self.needle_pitch_mm <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "machine gauge_e and needle_pitch_mm must be positive",
+            ));
+        }
+        if self.max_loops_per_hook == 0
+            || self.max_tuck_stack == 0
+            || self.max_racking_quarter_pitches < 0
+            || self.child_float_cap_mm <= 0.0
+            || self.infant_tail_cap_mm <= 0.0
+            || self.infant_eyelet_cap_mm <= 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "machine hook/tuck limits, racking cap, and child safety caps must be valid positive bounds",
             ));
         }
         if self.cam_setting_range[0] > self.cam_setting_range[1]
