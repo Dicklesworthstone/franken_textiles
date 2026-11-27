@@ -14,11 +14,11 @@ use ftx_drape::dye::{
     optimize_yarn_dye_program, rank_five_regime_pareto, srgb_u8_to_xyz_d65,
 };
 use ftx_drape::knit::{PoinclouxParams, poincloux_uniaxial_curve};
-use ftx_export::dye::verify_and_export_dye_program;
+use ftx_export::dye::{export_exp4_bleed_swatch_kit, verify_and_export_dye_program};
 use ftx_export::knit::{
     check_hand_knit_pdf, check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
     export_hand_knit_document, export_kniterate_kc, export_knitout_v2,
-    refuse_proprietary_binary_target,
+    export_tier_b_vendor_handoff, refuse_proprietary_binary_target,
 };
 use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime, YarnDyeProgram, YarnDyeingQualification};
 use ftx_pattern::knit::{
@@ -50,9 +50,10 @@ fn parse_machine(id: &str) -> Result<MachineProfile, Refusal> {
         "shima-seiki-12e-handoff" | "shima-12e" | "shima" => {
             Ok(MachineProfile::shima_seiki_12e_handoff())
         }
+        "stoll-12e-handoff" | "stoll-12e" | "stoll" => Ok(MachineProfile::stoll_12e_handoff()),
         "hand-knit" | "hand" => Ok(MachineProfile::hand_knit(4.0)),
         _ => Err(bad_input(format!(
-            "unknown --machine '{id}' (expected kniterate-7e, brother-kh930, brother-kh270, shima-12e, or hand-knit)"
+            "unknown --machine '{id}' (expected kniterate-7e, brother-kh930, brother-kh270, shima-12e, stoll-12e, or hand-knit)"
         ))),
     }
 }
@@ -253,6 +254,16 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         None
     };
+    let handoff = if profile.backend_kind.is_opaque_proprietary() {
+        let fmt = match profile.backend_kind {
+            MachineBackendKind::ShimaSeikiHandoff => ".dat",
+            MachineBackendKind::StollHandoff => "SINTRAL",
+            _ => "proprietary",
+        };
+        Some(export_tier_b_vendor_handoff(&compiled, &profile, fmt)?)
+    } else {
+        None
+    };
 
     reserve_output(&out_dir, "knit swatch")?;
     let mut files = vec![
@@ -292,6 +303,13 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
         )?;
         files.push("swatch_ayab.png".to_string());
         files.push("ayab_session_checklist.json".to_string());
+    } else if let Some(handoff) = handoff {
+        write_file(
+            &out_dir,
+            "vendor_handoff_manifest.json",
+            handoff.manifest_json.as_bytes(),
+        )?;
+        files.push("vendor_handoff_manifest.json".to_string());
     }
 
     let result = json!({
@@ -505,6 +523,16 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     } else {
         None
     };
+    let handoff = if profile.backend_kind.is_opaque_proprietary() {
+        let fmt = match profile.backend_kind {
+            MachineBackendKind::ShimaSeikiHandoff => ".dat",
+            MachineBackendKind::StollHandoff => "SINTRAL",
+            _ => "proprietary",
+        };
+        Some(export_tier_b_vendor_handoff(&compiled, &profile, fmt)?)
+    } else {
+        None
+    };
 
     reserve_output(&out_dir, "knit draft")?;
 
@@ -539,6 +567,13 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         )?;
         files.push("pattern_ayab.png".to_string());
         files.push("ayab_session_checklist.json".to_string());
+    } else if let Some(handoff) = handoff {
+        write_file(
+            &out_dir,
+            "vendor_handoff_manifest.json",
+            handoff.manifest_json.as_bytes(),
+        )?;
+        files.push("vendor_handoff_manifest.json".to_string());
     }
 
     let result = json!({
@@ -595,6 +630,7 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None => None,
     };
     let compiled = compile_knit_doc(&doc, &profile, qual.as_ref(), None, None)?;
+    let _ = export_knitout_v2(&compiled)?;
     let result = json!({
         "verified": true,
         "vm_report": compiled.vm_report,
@@ -652,13 +688,87 @@ fn cmd_knit_poincloux(args: &Args) -> Result<(Value, i32, String), Refusal> {
     Ok((result, 0, text))
 }
 
-/// Dispatches `ftx dye <optimize|verify> ...`.
+/// Dispatches `ftx dye <swatch|optimize|verify> ...`.
 pub(super) fn cmd_dye(args: &Args) -> Result<(Value, i32, String), Refusal> {
     match args.positional.get(1).map(String::as_str) {
+        Some("swatch") => cmd_dye_swatch(args),
         Some("optimize") => cmd_dye_optimize(args),
         Some("verify") => cmd_dye_verify(args),
-        _ => Err(bad_input("expected `ftx dye optimize|verify`")),
+        _ => Err(bad_input("expected `ftx dye swatch|optimize|verify`")),
     }
+}
+
+fn cmd_dye_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(args, "dye swatch", &["machine", "yarn", "out"])?;
+    no_extra_positional(
+        args,
+        2,
+        "ftx dye swatch --out NEW_DIR [--machine piezo-cmyk|dip-3bath] [--yarn ID] [--json]",
+    )?;
+    let machine_id = args
+        .options
+        .get("machine")
+        .map(String::as_str)
+        .unwrap_or("piezo-cmyk");
+    let machine = parse_dye_machine(machine_id)?;
+    let yarn_id = args
+        .options
+        .get("yarn")
+        .map(String::as_str)
+        .unwrap_or("cotton-120tex");
+    let out_dir = PathBuf::from(
+        args.options
+            .get("out")
+            .ok_or_else(|| bad_input("`ftx dye swatch` requires --out NEW_DIR"))?,
+    );
+    let kit = export_exp4_bleed_swatch_kit(&machine, yarn_id, SWATCH_MATERIAL_PLACEHOLDER)?;
+    let prog_json = serde_json::to_string_pretty(&kit.program)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+
+    reserve_output(&out_dir, "dye swatch")?;
+    let files = vec![
+        "exp4_dye_program.json".to_string(),
+        "exp4_schedule.csv".to_string(),
+        "exp4_controller.gcode".to_string(),
+        "exp4_cert.json".to_string(),
+        "qualification_template.json".to_string(),
+    ];
+    write_file(&out_dir, "exp4_dye_program.json", prog_json.as_bytes())?;
+    write_file(
+        &out_dir,
+        "exp4_schedule.csv",
+        kit.export.schedule_csv.as_bytes(),
+    )?;
+    write_file(
+        &out_dir,
+        "exp4_controller.gcode",
+        kit.export.controller_gcode.as_bytes(),
+    )?;
+    write_file(&out_dir, "exp4_cert.json", kit.export.cert_json.as_bytes())?;
+    write_file(
+        &out_dir,
+        "qualification_template.json",
+        kit.qualification_template_json.as_bytes(),
+    )?;
+
+    let result = json!({
+        "machine": machine.id,
+        "wearer_age_class": "calibration_swatch_only",
+        "not_for_garment_wear": true,
+        "out_dir": out_dir.display().to_string(),
+        "files": files,
+        "gcode_sha256": kit.export.gcode_sha256,
+        "cert_sha256": kit.export.cert.cert_sha256,
+        "hardware_execution_authorized": false,
+        "physical_dyeing_validated": false,
+    });
+    let text = format!(
+        "Generated Exp-4 dye bleed/fastness swatch kit for {} in {} ({} files; not_for_garment_wear=true)",
+        machine.id,
+        out_dir.display(),
+        files.len()
+    );
+    Ok((result, 0, text))
 }
 
 fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
@@ -1192,14 +1302,74 @@ mod tests {
         let cert_json: Value =
             serde_json::from_str(&std::fs::read_to_string(ayab_dir.join("cert.json")).unwrap())
                 .unwrap();
+        let qual_tpl_json: Value = serde_json::from_str(
+            &std::fs::read_to_string(ayab_dir.join("qualification_template.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            cert_json["material_sha256"].as_str(),
+            qual_tpl_json["material_sha256"].as_str(),
             Some(SWATCH_MATERIAL_PLACEHOLDER)
         );
+        assert_eq!(cert_json["automated_carriage_control"], false);
         assert_eq!(
             cert_json["cert_sha256"].as_str(),
             ayab_val["cert_sha256"].as_str()
         );
+
+        // Tier-B Shima swatch emits verified Knitout v2 + vendor_handoff_manifest.json (machine_executable=false).
+        let shima_swatch_dir = root.join("shima-swatch");
+        let shima_swatch_args = parse(
+            &[
+                "knit",
+                "swatch",
+                "--machine",
+                "shima-12e",
+                "--needles",
+                "16",
+                "--courses-per-zone",
+                "6",
+                "--cams",
+                "5.0,7.0",
+                "--created",
+                "2026-11-27T12:00",
+                "--out",
+                shima_swatch_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (_, shima_code, _) = cmd_knit(&shima_swatch_args).unwrap();
+        assert_eq!(shima_code, 0);
+        let manifest_json: Value = serde_json::from_str(
+            &std::fs::read_to_string(shima_swatch_dir.join("vendor_handoff_manifest.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest_json["machine_executable"], false);
+        assert_eq!(manifest_json["hardware_execution_authorized"], false);
+
+        // Exp-4 dye swatch kit emits verified files with not_for_garment_wear=true.
+        let dye_swatch_dir = root.join("dye-swatch");
+        let dye_swatch_args = parse(
+            &[
+                "dye",
+                "swatch",
+                "--machine",
+                "piezo-cmyk",
+                "--yarn",
+                "cotton-120tex",
+                "--out",
+                dye_swatch_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (ds_val, ds_code, _) = cmd_dye(&dye_swatch_args).unwrap();
+        assert_eq!(ds_code, 0);
+        assert_eq!(ds_val["not_for_garment_wear"], true);
+        assert_eq!(ds_val["hardware_execution_authorized"], false);
+        assert!(dye_swatch_dir.join("exp4_controller.gcode").is_file());
+        assert!(dye_swatch_dir.join("qualification_template.json").is_file());
 
         // Hand-knit draft reports honesty flags & files; Shima proprietary binary refuses fail-closed.
         let hand_dir = root.join("hand-panel");
