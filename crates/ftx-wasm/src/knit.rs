@@ -882,11 +882,22 @@ mod tests {
         assert_eq!(panel_out["svg_checks_passed"], true);
         assert_eq!(panel_out["fit_claimed"], false);
         assert_eq!(panel_out["hardware_execution_authorized"], false);
-        let mut unsupported_neck: Value = serde_json::from_str(&panel_req).unwrap();
-        unsupported_neck["panel"]["neck_width_mm"] = json!(105.0);
-        unsupported_neck["panel"]["neck_depth_mm"] = json!(24.0);
+        let mut open_neck: Value = serde_json::from_str(&panel_req).unwrap();
+        open_neck["panel"]["neck_width_mm"] = json!(105.0);
+        open_neck["panel"]["neck_depth_mm"] = json!(24.0);
+        let neck_out: Value =
+            serde_json::from_str(&knit_panel_preview_json(&open_neck.to_string()).unwrap())
+                .unwrap();
+        assert_eq!(neck_out["svg_checks_passed"], true);
+        assert_eq!(neck_out["short_row_turns"], 0);
         assert_eq!(
-            knit_panel_preview_json(&unsupported_neck.to_string())
+            neck_out["metadata"]["neckline_construction"],
+            "center_loops_held_separate_shoulder_carriers"
+        );
+        let mut impossible_neck = open_neck;
+        impossible_neck["panel"]["neck_width_mm"] = json!(260.0);
+        assert_eq!(
+            knit_panel_preview_json(&impossible_neck.to_string())
                 .unwrap_err()
                 .code,
             RefusalCode::OutOfRange

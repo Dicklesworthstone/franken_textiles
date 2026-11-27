@@ -182,6 +182,7 @@ fn production_export_consumes_the_selected_qualification_and_rejects_stale_gauge
         .insert("material_sha256".into(), "synthetic-material".into());
     doc.metadata
         .insert("yarn_lot_id".into(), "synthetic-lot".into());
+    qual.yarn_lot_id = "synthetic-lot".into();
     qual.was_washed_and_blocked = true;
     qual.wales_per_100mm = doc.gauge.wales_per_100mm;
     qual.courses_per_100mm = doc.gauge.courses_per_100mm;
