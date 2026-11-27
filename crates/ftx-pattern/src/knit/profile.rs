@@ -282,6 +282,35 @@ impl MachineProfile {
         }
     }
 
+    /// Stoll 12E Tier-B handoff profile (emits verified Knitout v2 ONLY; direct `SINTRAL` binary refused).
+    #[must_use]
+    pub fn stoll_12e_handoff() -> Self {
+        Self {
+            id: "stoll-12e-handoff".to_string(),
+            name: "Stoll 12E Fine Gauge (Knitout v2 Handoff Only)".to_string(),
+            backend_kind: MachineBackendKind::StollHandoff,
+            needle_count: 600,
+            gauge_e: 12.0,
+            needle_pitch_mm: 25.4 / 12.0,
+            has_back_bed: true,
+            has_sliders: true,
+            has_yarn_inserting_hooks: true,
+            automated_carriage_control: true,
+            carrier_ids: (1..=10).map(|i| CarrierId(i.to_string())).collect(),
+            min_carrier_spacing: 1,
+            max_racking_quarter_pitches: 48,
+            max_loops_per_hook: 4,
+            max_tuck_stack: 4,
+            cam_setting_range: [0.0, 20.0],
+            recommended_tex_range: [20.0, 140.0],
+            max_roller_imbalance_courses: 10,
+            child_float_cap_mm: 12.0,
+            infant_tail_cap_mm: 20.0,
+            infant_eyelet_cap_mm: 6.0,
+            requires_calibration_swatch: true,
+        }
+    }
+
     /// Validates internal invariants of this machine profile.
     ///
     /// # Errors
