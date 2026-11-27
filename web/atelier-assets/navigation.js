@@ -10,6 +10,7 @@
     ["materials", "materials.html", "Materials", '<path d="m3 9 9-5 9 5-9 5zM3 13l9 5 9-5M3 17l9 5 9-5"/>'],
     ["photo", "photo.html", "Photo measure", '<rect x="2" y="6" width="20" height="15" rx="2"/><path d="m6 6 2-3h7l2 3"/><circle cx="12" cy="13.5" r="4"/>'],
     ["trace", "trace.html", "Tracing", '<path d="m3 18 5-13 10 3 3 10-12 2z" stroke-dasharray="3 3"/><circle cx="8" cy="5" r="1.5"/><circle cx="21" cy="18" r="1.5"/>'],
+    ["knit", "knit.html", "Knitting & Dyeing", '<path d="M4 19 19 4M4 4l15 15"/><circle cx="19.5" cy="4.5" r="1.5"/><circle cx="19.5" cy="19.5" r="1.5"/>'],
   ];
   const icon = content => '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6">' + content + '</svg>';
   const mast = document.createElement("header");

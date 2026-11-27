@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Knitting &amp; Programmed Yarn Dyeing — FrankenTextiles</title>
+<style>
+:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; background: light-dark(#f5f6f7,#151719); color: light-dark(#17212b,#eceff2); }
+main { max-width: 1140px; margin: auto; padding: 24px; }
+section { padding: 20px; margin: 20px 0; border: 1px solid #82909b; border-radius: 10px; }
+h1,h2,h3 { line-height: 1.2; }
+h2 { font-size: 1.3rem; margin-top: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; }
+label { display: block; margin: 8px 0; font-size: .92rem; }
+label input:not([type=checkbox]), label select { display: block; margin-top: 4px; }
+input, select, textarea, button { font: inherit; padding: 8px; max-width: 100%; box-sizing: border-box; }
+button { cursor: pointer; border-radius: 5px; }
+button:disabled { cursor: default; opacity: .6; }
+button.primary { background: #135eab; border: 1px solid #135eab; color: white; }
+a { color: light-dark(#095da8,#8bc5ff); }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .82rem; max-height: 28em; overflow: auto; background: light-dark(#eef1f4, #1e2228); padding: 12px; border-radius: 6px; }
+.warning, #error { border-left: 4px solid #c26d12; padding: 8px 12px; background: light-dark(#fff8ee, #292117); border-radius: 4px; }
+#error { border-color: #b52b20; color: light-dark(#9a2016,#ffb3a9); background: light-dark(#fff2f1, #2c1716); }
+.honesty-bar { display: flex; flex-wrap: wrap; gap: 10px; font-size: .82rem; margin: 12px 0; }
+.badge { padding: 4px 10px; border-radius: 999px; border: 1px solid #82909b; font-family: ui-monospace, monospace; }
+.preview-box { border: 1px solid #82909b; border-radius: 8px; padding: 12px; background: light-dark(#fffdf8, #1a1d22); overflow: auto; }
+canvas { image-rendering: pixelated; border: 1px solid #82909b; border-radius: 4px; max-width: 100%; }
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,144,155,.35); }
+.downloads a { display: inline-block; margin: 6px 14px 6px 0; }
+[hidden] { display: none !important; }
+</style>
+<link rel="stylesheet" href="workbench.css">
+<script defer src="atelier-assets/navigation.js"></script>
+</head>
+<body class="wb wb-knit"><main>
+<header class="wb-hero">
+  <div class="wb-intro">
+    <h1>Knitting &amp; Programmed Yarn Dyeing</h1>
+    <p>Draft and verify flat-bed &amp; hand-knit patterns, generate hard-capped machine calibration swatches (Knitout v2, Kniterate 7E, Brother AYAB, vector CYC SVG), and solve drift-robust continuous length-wise yarn dyeing plans locally in your browser.</p>
+    <div class="honesty-bar" aria-label="Safety and claim boundaries">
+      <span class="badge">hardware_execution_authorized: false</span>
+      <span class="badge">physical_knitting_validated: false</span>
+      <span class="badge">physical_dyeing_validated: false</span>
+      <span class="badge">fit_claimed: false</span>
+      <span class="badge">local-only · zero uploads</span>
+    </div>
+    <p id="knitStatus" role="status" aria-live="polite">Initializing local WebAssembly knitting &amp; dyeing engine…</p>
+  </div>
+</header>
+
+<p id="error" role="alert" hidden></p>
+
+<section id="swatchSection">
+  <h2>1. Stepped Calibration Swatch Kit (Exp-3)</h2>
+  <p>Before running any garment program on a knitting machine, knit, wash, and block a hard-capped calibration swatch (<code>CalibrationSwatchOnly</code>: max 80 needles, 160 courses, 60% speed, 70% takedown) to measure real yarn gauge, shrinkage, and drift.</p>
+  <div class="row">
+    <label>Machine Profile
+      <select id="swatchMachine">
+        <option value="kniterate-7e">Kniterate 7E (.kc + Knitout v2)</option>
+        <option value="brother-kh930-ayab">Brother KH-930 / AYAB (1-bit PNG + checklist)</option>
+        <option value="brother-kh270-ayab">Brother KH-270 / AYAB</option>
+        <option value="hand-knit">Hand Knit (CYC Vector SVG + written guide)</option>
+        <option value="shima-seiki-12e-handoff">Shima Seiki 12E (verified Knitout handoff only)</option>
+      </select>
+    </label>
+    <label>Yarn ID
+      <input id="swatchYarn" type="text" value="merino-200tex">
+    </label>
+    <label>Needles (4–80)
+      <input id="swatchNeedles" type="number" min="4" max="80" value="32">
+    </label>
+    <label>Courses / Cam Zone
+      <input id="swatchCourses" type="number" min="4" max="50" value="12">
+    </label>
+    <label>Cam Settings (comma-separated)
+      <input id="swatchCams" type="text" value="5.0,7.0,9.0">
+    </label>
+    <button id="runSwatch" class="primary" type="button" disabled>Generate Swatch Kit</button>
+  </div>
+  <div id="swatchOut" hidden>
+    <h3>Swatch Verification &amp; Downloads</h3>
+    <div id="swatchDownloads" class="downloads"></div>
+    <div class="grid-2">
+      <div class="preview-box" id="swatchSvgBox" aria-label="CYC Swatch Vector Chart"></div>
+      <div>
+        <h4>Sealed Certificate &amp; Knitout v2 Preview</h4>
+        <pre id="swatchPre"></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="panelSection">
+  <h2>2. Measured Fully-Fashioned Panel Preview</h2>
+  <p>Draft a flat shaped panel with ribbed hem, symmetrical decreases, and anchored short-row neck shaping. Child/infant classes enforce EN 14682 drawstring bans and float/eyelet/tail caps.</p>
+  <div class="row">
+    <label>Machine
+      <select id="panelMachine">
+        <option value="kniterate-7e">Kniterate 7E</option>
+        <option value="brother-kh930-ayab">Brother KH-930 / AYAB</option>
+        <option value="hand-knit">Hand Knit</option>
+      </select>
+    </label>
+    <label>Wearer Age Class (required)
+      <select id="panelAgeClass">
+        <option value="toddler_12_36m">Toddler (12–36 mo)</option>
+        <option value="infant_0_12m">Infant (0–12 mo)</option>
+        <option value="child_3_12y">Child (3–12 y)</option>
+        <option value="adult">Adult</option>
+      </select>
+    </label>
+    <label>Hem Width (mm)
+      <input id="panelHem" type="number" min="80" max="700" value="250">
+    </label>
+    <label>Chest Width (mm)
+      <input id="panelChest" type="number" min="80" max="700" value="280">
+    </label>
+    <label>Length (mm)
+      <input id="panelLength" type="number" min="80" max="800" value="310">
+    </label>
+    <label>Rib Hem Courses
+      <input id="panelRib" type="number" min="0" max="30" value="6">
+    </label>
+    <button id="runPanel" class="primary" type="button" disabled>Draft &amp; Chart Panel</button>
+  </div>
+  <div id="panelOut" hidden>
+    <p id="panelSummary"></p>
+    <div class="grid-2">
+      <div class="preview-box" id="panelSvgBox" aria-label="Panel CYC Vector Chart"></div>
+      <div>
+        <h4>Written Instructions &amp; Residuals</h4>
+        <pre id="panelPre"></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="dyeSection">
+  <h2>3. Programmed Continuous Yarn Dyeing Optimizer</h2>
+  <p>Inverse-solve a 1D yarn dye profile so that after knitting (flatbed boustrophedon or circular tube), capillary wicking, Kubelka–Munk optical absorption, and Brownian stitch-length drift, the knitted surface reproduces a target motif. Compares all 5 dyeing regimes on the Pareto frontier.</p>
+  <div class="row">
+    <label>Dye Rig Profile
+      <select id="dyeMachine">
+        <option value="piezo-cmyk">Benchtop Piezo CMYK (4 primaries)</option>
+        <option value="dip-3bath">3-Bath Continuous Dip Rig</option>
+      </select>
+    </label>
+    <label>Wearer Age Class
+      <select id="dyeAgeClass">
+        <option value="calibration_swatch_only">Calibration Swatch Only (emits CSV/G-code)</option>
+        <option value="toddler_12_36m">Toddler (12–36 mo · requires Exp-4 fastness)</option>
+        <option value="adult">Adult (requires Exp-4 fastness)</option>
+      </select>
+    </label>
+    <label>Target Pattern Preset
+      <select id="dyePreset">
+        <option value="horizon">Two-Tone Horizon Bands</option>
+        <option value="checker">2x2 Colorblock Checker</option>
+        <option value="sunset">Warm Sunset Gradient</option>
+      </select>
+    </label>
+    <label>Knitting Mode
+      <select id="dyeMode">
+        <option value="circular">Circular Tube (single-direction)</option>
+        <option value="flatbed">Flatbed Boustrophedon (parity-alternating)</option>
+      </select>
+    </label>
+    <label>Grid Courses
+      <input id="dyeCourses" type="number" min="4" max="24" value="10">
+    </label>
+    <label>Grid Wales
+      <input id="dyeWales" type="number" min="4" max="24" value="10">
+    </label>
+    <label>Systematic Drift ε
+      <input id="dyeEps" type="number" min="0" max="0.05" step="0.0005" value="0.002">
+    </label>
+    <label>Brownian σ_η
+      <input id="dyeSigma" type="number" min="0" max="0.1" step="0.002" value="0.015">
+    </label>
+    <label>Wicking σ (mm)
+      <input id="dyeWick" type="number" min="0" max="10" step="0.2" value="1.5">
+    </label>
+    <button id="runDye" class="primary" type="button" disabled>Optimize Yarn Dye Schedule</button>
+  </div>
+
+  <div id="dyeOut" hidden>
+    <h3>Predicted Knitted Appearance &amp; Drift Metrics</h3>
+    <p id="dyeMetrics"></p>
+    <div class="grid-2">
+      <div class="preview-box">
+        <h4>Target vs. Predicted Knitted Grid</h4>
+        <div class="row">
+          <figure>
+            <canvas id="dyeTargetCanvas" width="160" height="160"></canvas>
+            <figcaption>Target Motif (straight sRGB)</figcaption>
+          </figure>
+          <figure>
+            <canvas id="dyePredCanvas" width="160" height="160"></canvas>
+            <figcaption>Predicted Knitted Fabric (Kubelka–Munk + Wicking)</figcaption>
+          </figure>
+        </div>
+      </div>
+      <div class="preview-box">
+        <h4>5-Regime Pareto Frontier</h4>
+        <table id="dyeParetoTable">
+          <thead><tr><th>Regime</th><th>P50 ΔE₀₀</th><th>P95 ΔE₀₀</th><th>Hardware</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="dyeDownloads" class="downloads"></div>
+    <details>
+      <summary>Dye Schedule CSV &amp; Controller G-Code Preview</summary>
+      <pre id="dyePre"></pre>
+    </details>
+  </div>
+</section>
+
+<p class="warning"><strong>Honesty &amp; Safety Notice:</strong> Computational verification checks kinematics, safety caps, and deterministic optics only. Every exported certificate sets <code>hardware_execution_authorized: false</code>, <code>physical_knitting_validated: false</code>, <code>physical_dyeing_validated: false</code>, and <code>fit_claimed: false</code>. Always run a physical calibration swatch and inspect needle beds before unattended operation.</p>
+</main>
+<script type="module" src="knit-page.js"></script>
+</body>
+</html>
