@@ -128,11 +128,16 @@ impl ControlledHold {
             Control::Pressure { pressure_pa } => (
                 initial_gap,
                 Some(AppliedPressure {
-                    pressure_pa,
+                    pressure_pa: if pressure_pa == 0.0 { 0.0 } else { pressure_pa },
                     normal_force_n: None,
                 }),
             ),
             Control::NormalForce { normal_force_n } => {
+                let normal_force_n = if normal_force_n == 0.0 {
+                    0.0
+                } else {
+                    normal_force_n
+                };
                 let pressure_pa = normal_force_n / area_m2;
                 if !normal_force_n.is_finite()
                     || normal_force_n < 0.0
@@ -689,5 +694,41 @@ pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
         _ => Err(invalid(
             "expected ftx-compressed-thermal-history/1, /2 or /3",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zero_hold(control: Control) -> ControlledHold {
+        ControlledHold {
+            seconds: 1.0,
+            control,
+            interface_resistance_m2_k_w: Vec::new(),
+            inside_c: 35.0,
+            outside_c: 20.0,
+            inside_resistance_m2_k_w: 0.01,
+            outside_resistance_m2_k_w: 0.05,
+        }
+    }
+
+    #[test]
+    fn controlled_hold_normalizes_negative_zero_load_and_pressure() {
+        let (_, force) = zero_hold(Control::NormalForce {
+            normal_force_n: -0.0,
+        })
+        .parameters(0.01, 0.25)
+        .unwrap();
+        let force = force.unwrap();
+        assert!(force.pressure_pa.is_sign_positive() && force.pressure_pa == 0.0);
+        let load = force.normal_force_n.unwrap();
+        assert!(load.is_sign_positive() && load == 0.0);
+
+        let (_, pressure) = zero_hold(Control::Pressure { pressure_pa: -0.0 })
+            .parameters(0.01, 0.25)
+            .unwrap();
+        let pressure = pressure.unwrap();
+        assert!(pressure.pressure_pa.is_sign_positive() && pressure.pressure_pa == 0.0);
     }
 }
