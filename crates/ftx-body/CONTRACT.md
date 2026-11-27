@@ -390,3 +390,21 @@ signed-angle winding and Jarvis-march convex-hull cross-checks in `tests/indepen
 verify all 21 `TAPE_FIELDS` functionals geometrically without establishing real-person anatomical accuracy.
 The nappy is a shape proxy, not a garment. Landmarks are heuristics
 on the body (see above), not measurements.
+
+## Open tube shells for knit shaping (`FTX-K12`)
+
+`knit_shell::build_ease_shell_from_mesh` clips triangles at the two requested horizontal planes,
+reuses shared edge/plane intersections, and returns an uncapped connected annulus. Boundary rings
+must lie on the cut planes, have consistent outward winding and pass vertex-link, connectivity,
+Euler and the existing bounded exact surface-intersection checks. Requested signed normal offsets
+are preserved; impossible offsets and nonnegative ease below the declared minimum refuse. Cut-plane
+vertices keep their exact heights after offsetting. No requested ease is silently shortened.
+
+`AnnyKnitShell` admits an explicitly supplied generic tube or an already segmented torso with its
+required real landmarks. Sleeve and full-upper-body extraction refuse until independent anatomical
+cuts exist; a global height slab cannot distinguish those regions, and absent landmarks never become
+guessed wearer dimensions. The declared minimum bounds the requested normal displacement, not
+the closest distance to the body or physical cloth clearance. Synthetic tests in
+`knit_shell::tests` check off-grid cut area/perimeters, translation, shared vertices, removed caps,
+signed offsets, both boundaries and invalid topology. These are geometric checks, not garment-fit or
+physical knitting qualification.

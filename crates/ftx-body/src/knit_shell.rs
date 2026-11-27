@@ -3,18 +3,23 @@
 //! The generic tube path preserves shared edge intersections and the actual clipping planes.
 //! A torso request requires its real landmarks and an already segmented torso tube. Full-body
 //! sleeve/armhole extraction is not implemented and refuses instead of returning a horizontal
-//! slice of unrelated anatomy. Offsets and their local inversion checks do not certify global
-//! self-collision freedom.
+//! slice of unrelated anatomy. A bounded exact intersection audit checks both the clipped and
+//! offset surfaces; local topology checks require an outward-wound annulus. These are geometric
+//! checks on the requested discrete shell, not physical cloth clearance or garment-fit evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ftx_core::intersection::validate_mesh;
 use ftx_core::shaping::{
     BoundaryRing, EaseProfile, EaseShellMesh, KnitShellRegion, ShapingSurface,
 };
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
-use crate::drape::SkinMesh;
+use crate::drape::{DEFAULT_POSE_AUDIT_PAIR_BUDGET, SkinMesh, SkinReport};
 use crate::landmarks::BodyFrames;
+
+const MAX_SHELL_VERTICES: usize = 250_000;
+const MAX_SHELL_TRIANGLES: usize = 500_000;
 
 /// Adapter exposing a supplied body region through `ShapingSurface`.
 #[derive(Clone, Debug)]
@@ -208,6 +213,12 @@ fn clip_polygon(
             } else if let Some(&index) = intersections.get(&(plane, a, b)) {
                 index
             } else {
+                if vertices.len() == MAX_SHELL_VERTICES {
+                    return Err(Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        "plane clipping exceeds the shell vertex work bound",
+                    ));
+                }
                 let p = vertices[a];
                 let q = vertices[b];
                 let denominator = q.z - p.z;
@@ -251,12 +262,16 @@ fn clip_polygon(
 /// Straddling faces are split conformingly; faces wholly on a clipping plane are omitted.
 /// The retained surface must be connected with exactly one boundary on each clipping plane.
 /// Branched anatomy and pre-existing openings inside the slab require a separate region/ring
-/// specification. Clipping planes constrain the source shell before normal offsets.
+/// specification. At the cut rings the offset normal is projected into the plane before
+/// normalization, preserving both the authored heights and requested displacement magnitude.
+/// Nonnegative ease smaller than `min_clearance_m` refuses rather than increasing the offset.
 ///
 /// # Errors
 /// `DegenerateGeometry` for a missing/ambiguous boundary, disconnected or inconsistently wound
-/// geometry, or an inverted/collapsed offset triangle. Non-representable arithmetic refuses;
-/// inward ease beyond the conservative local edge guard returns `OutOfRange`.
+/// geometry, a non-manifold vertex, a handle, self-intersection or an inverted/collapsed offset
+/// triangle. Inward winding returns `InwardWound`. Non-representable arithmetic refuses;
+/// inward ease beyond the conservative local edge guard returns `OutOfRange`. Mesh growth and
+/// exact intersection work have explicit bounds and return `BudgetExceeded` on exhaustion.
 pub fn build_ease_shell_from_mesh(
     vertices: &[Vec3],
     triangles: &[[usize; 3]],
@@ -276,17 +291,25 @@ pub fn build_ease_shell_from_mesh(
             "min_clearance_m cannot be negative",
         ));
     }
+    if radial_offset_m >= 0.0 && radial_offset_m < min_clearance_m {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "requested radial ease is below min_clearance_m; the offset will not be increased silently",
+        ));
+    }
     if z_high_m <= z_low_m {
         return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
             format!("clipping slab [{z_low_m}, {z_high_m}] m is empty"),
         ));
     }
-    for v in vertices {
-        Refusal::finite("vertex.x", v.x)?;
-        Refusal::finite("vertex.y", v.y)?;
-        Refusal::finite("vertex.z", v.z)?;
+    if vertices.len() > MAX_SHELL_VERTICES || triangles.len() > MAX_SHELL_TRIANGLES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "knit shell exceeds the vertex or triangle work bound",
+        ));
     }
+    validate_mesh(vertices, triangles)?;
     let mut clipped_vertices = vertices.to_vec();
     let mut intersections = BTreeMap::new();
     let mut kept_tris = Vec::new();
@@ -319,6 +342,12 @@ pub fn build_ease_shell_from_mesh(
         )?;
         // Sutherland-Hodgman clipping keeps this polygon convex and retains face winding.
         for i in 1..polygon.len().saturating_sub(1) {
+            if kept_tris.len() == MAX_SHELL_TRIANGLES {
+                return Err(Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "plane clipping exceeds the shell triangle work bound",
+                ));
+            }
             kept_tris.push([polygon[0], polygon[i], polygon[i + 1]]);
         }
     }
@@ -352,6 +381,7 @@ pub fn build_ease_shell_from_mesh(
         }
         compact_tris.push(indices);
     }
+    audit_open_shell(&compact_verts, &compact_tris)?;
 
     let n = compact_verts.len();
     let mut normals = vec![Vec3::ZERO; n];
@@ -385,18 +415,23 @@ pub fn build_ease_shell_from_mesh(
         min_edge[c] = min_edge[c].min(lbc).min(lca);
     }
 
-    let effective_offset = if radial_offset_m >= 0.0 {
-        radial_offset_m.max(min_clearance_m)
-    } else {
-        radial_offset_m
-    };
+    let effective_offset = radial_offset_m;
     let mut offset_verts = Vec::with_capacity(n);
     for i in 0..n {
+        if compact_verts[i].z == z_low_m || compact_verts[i].z == z_high_m {
+            normals[i].z = 0.0;
+        }
         let nn = normals[i].norm();
         if !nn.is_finite() {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
                 "shell offset normal overflows",
+            ));
+        }
+        if nn == 0.0 && effective_offset != 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "shell vertex has no usable normal for the requested offset",
             ));
         }
         let dir = if nn > 0.0 {
@@ -501,6 +536,7 @@ pub fn build_ease_shell_from_mesh(
             ));
         }
     }
+    validate_vertex_links(n, &compact_tris, &next_map)?;
 
     let mut visited = BTreeSet::new();
     let mut boundary_rings = Vec::new();
@@ -544,6 +580,29 @@ pub fn build_ease_shell_from_mesh(
                 "shell has an opening away from its clipping planes; declare anatomical rings before shaping",
             ));
         }
+        let origin = compact_verts[ring[0] as usize];
+        let oriented_area = ring
+            .iter()
+            .zip(ring.iter().cycle().skip(1))
+            .map(|(&a, &b)| {
+                (compact_verts[a as usize] - origin)
+                    .cross(compact_verts[b as usize] - origin)
+                    .z
+            })
+            .sum::<f64>();
+        Refusal::finite("cut ring oriented area", oriented_area)?;
+        if oriented_area == 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "cut-plane ring has zero enclosed area",
+            ));
+        }
+        if (is_start && oriented_area < 0.0) || (is_end && oriented_area > 0.0) {
+            return Err(Refusal::new(
+                RefusalCode::InwardWound,
+                "tube shell is wound inward",
+            ));
+        }
         let mut perimeter_m = 0.0;
         for i in 0..ring.len() {
             let p = offset_verts[ring[i] as usize];
@@ -570,6 +629,16 @@ pub fn build_ease_shell_from_mesh(
             "a tube shell requires exactly one lower and one upper boundary ring",
         ));
     }
+    let edge_count = (seen_half_edges.len() + directed_edges.len()) / 2;
+    if compact_verts.len() + compact_tris.len() != edge_count {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "a tube shell must be an annulus without handles",
+        ));
+    }
+    if effective_offset != 0.0 {
+        audit_open_shell(&offset_verts, &compact_tris)?;
+    }
     boundary_rings.sort_by_key(|ring| !ring.is_start);
 
     Ok(EaseShellMesh {
@@ -578,6 +647,78 @@ pub fn build_ease_shell_from_mesh(
         boundary_rings,
         source_body_sha256: source_body_sha256.to_string(),
     })
+}
+
+fn validate_vertex_links(
+    vertex_count: usize,
+    triangles: &[[u32; 3]],
+    boundary_next: &BTreeMap<u32, u32>,
+) -> Result<(), Refusal> {
+    let bad = |message| Refusal::new(RefusalCode::DegenerateGeometry, message);
+    let mut links = vec![Vec::new(); vertex_count];
+    for &[a, b, c] in triangles {
+        links[a as usize].push((b, c));
+        links[b as usize].push((c, a));
+        links[c as usize].push((a, b));
+    }
+    // Edge incidence alone cannot exclude two surface fans pinched at one vertex.
+    // Every link must be one cycle (interior) or one path (boundary).
+    for (v, edges) in links.iter().enumerate() {
+        let mut neighbors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        for &(a, b) in edges {
+            neighbors.entry(a).or_default().push(b);
+            neighbors.entry(b).or_default().push(a);
+        }
+        let degree_one = neighbors.values().filter(|n| n.len() == 1).count();
+        let expected = if boundary_next.contains_key(&(v as u32)) {
+            2
+        } else {
+            0
+        };
+        if neighbors.is_empty()
+            || neighbors.values().any(|n| n.is_empty() || n.len() > 2)
+            || degree_one != expected
+        {
+            return Err(bad("shell has a non-manifold vertex link"));
+        }
+        let mut reached = BTreeSet::new();
+        let mut pending = vec![*neighbors.keys().next().expect("nonempty vertex link")];
+        while let Some(neighbor) = pending.pop() {
+            if reached.insert(neighbor) {
+                pending.extend(&neighbors[&neighbor]);
+            }
+        }
+        if reached.len() != neighbors.len() {
+            return Err(bad("shell has disconnected surface fans at one vertex"));
+        }
+    }
+    Ok(())
+}
+
+fn audit_open_shell(vertices: &[Vec3], triangles: &[[u32; 3]]) -> Result<(), Refusal> {
+    // The canonical BVH/predicate audit reads only positions and triangle indices; the
+    // closed-body report is not consulted or published for this open surface.
+    let mesh = SkinMesh {
+        vertices: vertices.to_vec(),
+        triangles: triangles.iter().map(|t| t.map(|v| v as usize)).collect(),
+        source_vertex: Vec::new(),
+        trim_roots: Vec::new(),
+        report: SkinReport {
+            shells_dropped: 0,
+            triangles_dropped: 0,
+            volume: 0.0,
+            area: 0.0,
+            min_triangle_area: 0.0,
+        },
+    };
+    let audit = mesh.audit_self_intersections(DEFAULT_POSE_AUDIT_PAIR_BUDGET)?;
+    if let Some(pair) = audit.first_intersecting_pair {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            format!("knit shell triangles {} and {} intersect", pair[0], pair[1]),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -619,6 +760,102 @@ mod tests {
                 0.5 * (b - a).cross(c - a).norm()
             })
             .sum()
+    }
+
+    #[test]
+    fn offset_preserves_declared_displacement_and_cut_planes_on_a_taper() {
+        let (mut vertices, triangles) = square_tube(&[0.0, 1.0]);
+        for p in &mut vertices {
+            p.x *= 1.0 + p.z;
+            p.y *= 1.0 + p.z;
+        }
+        let source = build_ease_shell_from_mesh(
+            &vertices,
+            &triangles,
+            0.25,
+            0.75,
+            0.0,
+            0.0,
+            "synthetic-taper",
+        )
+        .unwrap();
+        for offset in [0.01, -0.001] {
+            let shell = build_ease_shell_from_mesh(
+                &vertices,
+                &triangles,
+                0.25,
+                0.75,
+                offset,
+                0.0,
+                "synthetic-taper",
+            )
+            .unwrap();
+            assert_eq!(source.triangles, shell.triangles);
+            for (p, q) in source.vertices_m.iter().zip(&shell.vertices_m) {
+                let displacement = Vec3::new(p[0] - q[0], p[1] - q[1], p[2] - q[2]).norm();
+                assert!((displacement - offset.abs()).abs() < 1e-14);
+            }
+            for (ring, height) in shell.boundary_rings.iter().zip([0.25, 0.75]) {
+                assert!(
+                    ring.vertices
+                        .iter()
+                        .all(|&v| shell.vertices_m[v as usize][2] == height)
+                );
+            }
+        }
+        let refusal = build_ease_shell_from_mesh(
+            &vertices,
+            &triangles,
+            0.25,
+            0.75,
+            0.001,
+            0.002,
+            "synthetic-taper",
+        )
+        .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::OutOfRange);
+        assert!(refusal.message.contains("will not be increased"));
+    }
+
+    #[test]
+    fn exact_audit_refuses_crossed_surfaces_and_ring_winding_refuses_inward_tubes() {
+        let (vertices, triangles) = square_tube(&[0.0, 0.5, 1.0]);
+        let inward: Vec<_> = triangles.iter().map(|&[a, b, c]| [a, c, b]).collect();
+        assert_eq!(
+            build_ease_shell_from_mesh(&vertices, &inward, 0.01, 0.99, 0.0, 0.0, "inward")
+                .unwrap_err()
+                .code,
+            RefusalCode::InwardWound,
+        );
+        let mut crossed = vertices;
+        for p in &mut crossed[4..8] {
+            p.x = -p.x;
+            p.y = -p.y;
+        }
+        let refusal =
+            build_ease_shell_from_mesh(&crossed, &triangles, 0.01, 0.99, 0.0, 0.0, "crossed")
+                .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::DegenerateGeometry);
+        assert!(refusal.message.contains("intersect"));
+    }
+
+    #[test]
+    fn interior_vertex_must_have_one_surface_fan() {
+        // Two closed tetrahedral surface fans meet only at vertex 0. Every edge still has
+        // exactly two incident faces; the local surface at their shared vertex is not a disk.
+        let triangles = [
+            [0, 1, 2],
+            [0, 3, 1],
+            [0, 2, 3],
+            [1, 3, 2],
+            [0, 4, 5],
+            [0, 6, 4],
+            [0, 5, 6],
+            [4, 6, 5],
+        ];
+        let refusal = validate_vertex_links(7, &triangles, &BTreeMap::new()).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::DegenerateGeometry);
+        assert!(refusal.message.contains("disconnected surface fans"));
     }
 
     #[test]

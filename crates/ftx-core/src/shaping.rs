@@ -29,7 +29,8 @@ pub struct EaseProfile {
     pub torso_radial_mm: f64,
     /// Radial ease at sleeves/limbs, in mm.
     pub limb_radial_mm: f64,
-    /// Minimum physical clearance enforced during positive-ease offset clamping, in mm.
+    /// Lower bound on requested nonnegative normal ease, in mm; smaller requests refuse.
+    /// This is not a closest-surface clearance measurement.
     pub min_clearance_mm: f64,
     /// Explicit consent required for negative-ease (stretched-on-body) garments.
     #[serde(default)]
@@ -57,7 +58,7 @@ pub struct BoundaryRing {
     pub name: String,
     /// True for `t = 0` start rings (cast-on hem/cuffs); false for `t = 1` end rings (neck/bind-off).
     pub is_start: bool,
-    /// Ordered CCW vertex indices around the boundary loop.
+    /// Ordered vertex indices following the oriented shell's boundary half-edges.
     pub vertices: Vec<u32>,
     /// Measured boundary perimeter in metres.
     pub perimeter_m: f64,
