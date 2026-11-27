@@ -9,8 +9,10 @@
 pub mod alter;
 pub mod doc;
 pub mod draft;
+pub mod dye;
 pub mod garmentcode_import;
 pub mod instance;
+pub mod knit;
 pub mod material_bending;
 pub mod material_bending_calibration;
 pub mod material_binding;
