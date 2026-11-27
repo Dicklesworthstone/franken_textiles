@@ -70,6 +70,12 @@ pub fn compile_knit_doc(
         Some(q.canonical_sha256()?)
     };
 
+    if doc.wearer_age_class != WearerAgeClass::CalibrationSwatchOnly
+        && let Some(q) = qualification
+    {
+        validate_qualified_gauge(doc, profile, q)?;
+    }
+
     // Group stitches deterministically by course
     let mut by_course: BTreeMap<u32, Vec<&StitchNode>> = BTreeMap::new();
     let mut min_wale = i32::MAX;
@@ -397,6 +403,75 @@ pub fn compile_knit_doc(
     })
 }
 
+fn validate_qualified_gauge(
+    doc: &KnitDoc,
+    profile: &MachineProfile,
+    qualification: &KnitSwatchQualification,
+) -> Result<(), Refusal> {
+    if !doc.gauge.relaxed_after_wash {
+        return Err(Refusal::new(
+            RefusalCode::UnqualifiedProcess,
+            "production knit sizing must use the washed and blocked swatch gauge",
+        )
+        .repair("draft with the relaxed gauge measured in the selected swatch qualification"));
+    }
+    for (field, actual, qualified) in [
+        (
+            "needle_pitch_mm",
+            doc.gauge.needle_pitch_mm,
+            profile.needle_pitch_mm,
+        ),
+        (
+            "wales_per_100mm",
+            doc.gauge.wales_per_100mm,
+            qualification.wales_per_100mm,
+        ),
+        (
+            "courses_per_100mm",
+            doc.gauge.courses_per_100mm,
+            qualification.courses_per_100mm,
+        ),
+    ] {
+        if actual != qualified {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!(
+                    "production knit {field} ({actual}) disagrees with the qualified machine/swatch value ({qualified})",
+                ),
+            )
+            .repair("use the selected machine and measured swatch values, or qualify the changed process independently"));
+        }
+    }
+    if let Some(thickness) = doc.gauge.thickness_mm
+        && thickness != qualification.thickness_mm
+    {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "production knit thickness disagrees with the selected swatch qualification",
+        )
+        .repair(
+            "retain the measured swatch thickness or leave unprovided document thickness unknown",
+        ));
+    }
+    if let Some(stitch) = doc
+        .stitches
+        .iter()
+        .find(|stitch| stitch.cam_stitch_setting.setting != qualification.cam_stitch_setting)
+    {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            format!(
+                "stitch {} uses cam setting {}, but its swatch was qualified at {}",
+                stitch.id,
+                stitch.cam_stitch_setting.setting,
+                qualification.cam_stitch_setting,
+            ),
+        )
+        .repair("use the qualified stitch-cam setting throughout this document, or qualify the other settings independently"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,6 +552,62 @@ mod tests {
         let bundle = compile_knit_doc(&doc, &prof, Some(&qual), Some("mat-123"), None).unwrap();
         assert!(bundle.vm_report.total_transfers > 0);
         bundle.cert.verify_integrity().unwrap();
+
+        // A swatch belonging to this machine is not evidence for a different sizing gauge,
+        // thickness, or cam setting. Every ordinary compiler consumer shares this admission.
+        for field in ["wales", "courses", "pitch", "thickness", "cam", "washed"] {
+            let mut changed = doc.clone();
+            match field {
+                "wales" => changed.gauge.wales_per_100mm += 1.0,
+                "courses" => changed.gauge.courses_per_100mm += 1.0,
+                "pitch" => changed.gauge.needle_pitch_mm += 0.1,
+                "thickness" => changed.gauge.thickness_mm = Some(3.0),
+                "cam" => {
+                    // Check a non-first stitch: a matching initial cam does not qualify a
+                    // different later setting that the old compiler would silently admit.
+                    changed
+                        .stitches
+                        .last_mut()
+                        .unwrap()
+                        .cam_stitch_setting
+                        .setting += 1.0;
+                }
+                "washed" => changed.gauge.relaxed_after_wash = false,
+                _ => unreachable!(),
+            }
+            let refusal =
+                compile_knit_doc(&changed, &prof, Some(&qual), Some("mat-123"), None).unwrap_err();
+            assert_eq!(
+                refusal.code,
+                if field == "washed" {
+                    RefusalCode::UnqualifiedProcess
+                } else {
+                    RefusalCode::VerificationMismatch
+                },
+                "changed {field} must not reuse the original swatch qualification",
+            );
+            assert!(!refusal.repairs.is_empty());
+        }
+        let mut unknown_thickness = doc.clone();
+        unknown_thickness.gauge.thickness_mm = None;
+        assert!(
+            compile_knit_doc(
+                &unknown_thickness,
+                &prof,
+                Some(&qual),
+                Some("mat-123"),
+                None
+            )
+            .is_ok()
+        );
+        let unchanged = compile_knit_doc(&doc, &prof, Some(&qual), Some("mat-123"), None).unwrap();
+        assert_eq!(bundle.cert.cert_sha256, unchanged.cert.cert_sha256);
+
+        // Calibration must remain able to explore several cam settings before a relaxed
+        // garment gauge exists; an optional existing qualification does not change its role.
+        let stepped = draft_calibration_swatch(&prof, "merino-180tex", 12, 4, &[6.0, 8.0]).unwrap();
+        assert!(!stepped.gauge.relaxed_after_wash);
+        assert!(compile_knit_doc(&stepped, &prof, Some(&qual), Some("mat-123"), None).is_ok());
 
         // Drawstring on child garment MUST fail closed!
         spec.has_hood_or_neck_drawstring = true;
