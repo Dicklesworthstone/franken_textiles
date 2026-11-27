@@ -38,6 +38,29 @@ pub enum Site {
         /// Signed dimensionless vertical displacement per millimetre of the scalar.
         dy_multiplier: f64,
     },
+    /// Move one control of a quadratic or cubic Bézier without moving its endpoints.
+    MoveControl {
+        /// Required literal `move_control`.
+        op: MoveControlSiteKind,
+        /// Drafted source-piece ID.
+        piece: String,
+        /// Existing drafted edge ID.
+        edge: String,
+        /// Zero-based index in authored edge direction.
+        control: usize,
+        /// Signed horizontal displacement per millimetre of the scalar.
+        dx_multiplier: f64,
+        /// Signed vertical displacement per millimetre of the scalar.
+        dy_multiplier: f64,
+    },
+}
+
+/// Explicit discriminator for a Bézier control site.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveControlSiteKind {
+    /// The canonical Bézier control move.
+    MoveControl,
 }
 
 /// Explicit discriminator for a linked vertex-move site.
@@ -80,21 +103,19 @@ impl Site {
                 }
                 [*multiplier, 0.0]
             }
-            Self::Move {
-                piece,
-                vertex,
-                dx_multiplier,
-                dy_multiplier,
-                ..
-            } => {
+            Self::MoveControl { control, .. } if *control > 1 => {
+                return Err(invalid("Bézier control index must be 0 or 1"));
+            }
+            Self::Move { piece, vertex: target, dx_multiplier, dy_multiplier, .. }
+            | Self::MoveControl { piece, edge: target, dx_multiplier, dy_multiplier, .. } => {
                 if piece.trim().is_empty()
-                    || vertex.trim().is_empty()
+                    || target.trim().is_empty()
                     || !dx_multiplier.is_finite()
                     || !dy_multiplier.is_finite()
                     || (*dx_multiplier == 0.0 && *dy_multiplier == 0.0)
                 {
                     return Err(invalid(
-                        "move sites need a piece, vertex and finite x/y multipliers, at least one nonzero",
+                        "move sites need a piece, target and finite x/y multipliers, at least one nonzero",
                     ));
                 }
                 [*dx_multiplier, *dy_multiplier]
@@ -134,6 +155,14 @@ impl Site {
                 dx_mm: displacement(value, *dx_multiplier)?,
                 dy_mm: displacement(value, *dy_multiplier)?,
             },
+            Self::MoveControl { piece, edge, control, dx_multiplier, dy_multiplier, .. } =>
+                Operation::MoveControl {
+                    piece: piece.clone(),
+                    edge: edge.clone(),
+                    control: *control,
+                    dx_mm: displacement(value, *dx_multiplier)?,
+                    dy_mm: displacement(value, *dy_multiplier)?,
+                },
         })
     }
 }

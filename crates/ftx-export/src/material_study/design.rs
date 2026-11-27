@@ -59,6 +59,19 @@ pub enum Operation {
         /// Signed vertical displacement in millimetres.
         dy_mm: f64,
     },
+    /// Move an existing Bézier control while keeping the seam endpoints fixed.
+    MoveControl {
+        /// Drafted source-piece ID.
+        piece: String,
+        /// Existing drafted edge ID.
+        edge: String,
+        /// Zero-based index in the edge's authored direction.
+        control: usize,
+        /// Signed horizontal displacement in the drafted frame, in millimetres.
+        dx_mm: f64,
+        /// Signed vertical displacement in the drafted frame, in millimetres.
+        dy_mm: f64,
+    },
     /// Explicitly slide a seam's B-side drafted endpoint using the existing bounded root search.
     TrueSeam {
         /// Existing unique seam ID; its ratio/band remains authoritative.
@@ -89,7 +102,7 @@ impl Operation {
             // The canonical root solver evaluates two endpoints, sixty bisections and the root,
             // then produces its final document. Reserve those trials even when it refuses early.
             Self::TrueSeam { .. } | Self::CapEase { .. } => 64,
-            Self::SlashSpread { .. } | Self::Move { .. } => 1,
+            Self::SlashSpread { .. } | Self::Move { .. } | Self::MoveControl { .. } => 1,
             // Canonical before/after geometry, material binding and the full retained report.
             Self::Treatment { .. } => 8,
         }
@@ -114,6 +127,8 @@ impl Operation {
                 dx_mm,
                 dy_mm,
             } => alter::move_vertex(pattern, piece, vertex, *dx_mm, *dy_mm),
+            Self::MoveControl { piece, edge, control, dx_mm, dy_mm } =>
+                alter::move_control(pattern, piece, edge, *control, *dx_mm, *dy_mm),
             Self::TrueSeam { seam, end } => alter::true_seam(pattern, seam, end),
             Self::CapEase {
                 piece,

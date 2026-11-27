@@ -187,6 +187,42 @@ fn linked_vertex_taper_changes_local_fit_and_actual_sewing_cutting_and_mass() {
 }
 
 #[test]
+fn curved_seam_search_changes_midpiece_width_without_moving_either_endpoint() {
+    use ftx_export::material_study::design::fit::Context;
+    let mut original: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut sites = Vec::new();
+    for (i, from, to, direction) in [(0, "b", "c", 1), (1, "d", "a", -1)] {
+        let panel = &mut original["pieces"][i];
+        let edge = panel["edges"].as_array_mut().unwrap().iter_mut()
+            .find(|e| e["from"] == from && e["to"] == to).unwrap();
+        edge["curve"] = json!({"type":"quad","c":[[0.5,0]]});
+        let edge_id = edge["id"].clone();
+        sites.push(json!({"op":"move_control","piece":panel["id"],"edge":edge_id,
+            "control":0,"dx_multiplier":direction,"dy_multiplier":0}));
+    }
+    let mut input = serde_json::to_value(grid_request(2)).unwrap();
+    input["design_grid"]["variables"] = json!([{"key":"bow","values_mm":[0,2],"sites":sites}]);
+    input["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([0.9,1.0,1.1]);
+    let request: Request = serde_json::from_value(input).unwrap();
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"source":"test:curve-width"});
+    let report = serde_json::to_value(request.evaluate_with_fit_body(
+        &Pattern::new(original.clone()), Some(&Context { body: &body, identity: &identity }),
+    ).unwrap()).unwrap();
+    let selected = row(&report, "grid:0001", "light-sheet");
+    assert_eq!(selected["design"]["fit"]["result"]["passed"], true, "{selected}");
+    assert_eq!(selected["design"]["fit"]["result"]["validation"]["points"][0]["finished_mm"], 21.0);
+    assert_eq!(row(&report, "grid:0000", "light-sheet")["design"]["fit"]["result"]["passed"], false);
+    let altered: Value = serde_json::from_str(selected["design"]["altered_pattern_json"].as_str().unwrap()).unwrap();
+    for i in 0..2 {
+        assert_eq!(altered["pieces"][i]["vertices"], original["pieces"][i]["vertices"]);
+        assert_eq!(altered["pieces"][i]["grain"], original["pieces"][i]["grain"]);
+    }
+    assert_eq!(selected["binding"]["status"], "available");
+    assert_eq!(selected["sewing"]["status"], "available");
+}
+
+#[test]
 fn linked_vertex_moves_retain_relative_curves_marks_and_canonical_rounding() {
     let mut original: Value = serde_json::from_str(PATTERN).unwrap();
     for piece in original["pieces"].as_array_mut().unwrap() {

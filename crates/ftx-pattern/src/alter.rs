@@ -187,6 +187,67 @@ pub fn move_vertex(doc: &Value, pid: &str, vid: &str, dx: f64, dy: f64) -> Resul
     Ok(out)
 }
 
+/// Move one quadratic or cubic Bézier control in the drafted piece's x/y frame, in mm.
+/// The control index is zero-based in the edge's authored direction. Vertices, other controls
+/// and material marks keep their authored data. Edge notches retain their arclength fractions.
+///
+/// # Errors
+/// Unknown piece, edge or control, malformed Bézier, degenerate chord or non-finite geometry.
+pub fn move_control(
+    doc: &Value,
+    pid: &str,
+    eid: &str,
+    control: usize,
+    dx: f64,
+    dy: f64,
+) -> Result<Value, Refusal> {
+    Refusal::finite("dx", dx)?;
+    Refusal::finite("dy", dy)?;
+    let mut out = doc.clone();
+    let piece = piece_mut(&mut out, pid)?;
+    let edge_index = piece["edges"]
+        .as_array()
+        .and_then(|edges| edges.iter().position(|edge| edge["id"].as_str() == Some(eid)))
+        .ok_or_else(|| invalid(format!("{pid}: no edge '{eid}'")))?;
+    let edge = &piece["edges"][edge_index];
+    let vertex = |field: &str| {
+        let id = edge[field].as_str().ok_or_else(|| invalid("edge needs vertex IDs"))?;
+        point(&piece["vertices"][id])
+    };
+    let a = vertex("from")?;
+    let b = vertex("to")?;
+    let count = match edge["curve"]["type"].as_str() {
+        Some("quad") => 1,
+        Some("cubic") => 2,
+        _ => return Err(invalid("move-control needs a quadratic or cubic Bézier edge")),
+    };
+    let controls = edge["curve"]["c"].as_array()
+        .filter(|c| c.len() == count && control < count)
+        .ok_or_else(|| invalid(format!("{pid}/{eid}: expected {count} controls and a valid zero-based control index")))?;
+    for coordinate in controls {
+        point(coordinate)?;
+    }
+    // Project the displacement as a vector, without losing precision by adding the piece origin.
+    let chord = b - a;
+    Refusal::finite("edge chord squared length", chord.norm2())?;
+    let [dt, dh] = abs_to_rel(Vec2::ZERO, chord, Vec2::new(dx, dy))
+        .map_err(|e| Refusal::new(RefusalCode::DegenerateGeometry, e.to_string()))?;
+    let relative = point(&controls[control])? + Vec2::new(dt, dh);
+    let absolute = ftx_core::curve::rel_to_abs(a, b, [relative.x, relative.y]);
+    Refusal::finite("altered control x", absolute.x)?;
+    Refusal::finite("altered control y", absolute.y)?;
+    if dx != 0.0 || dy != 0.0 {
+        piece["edges"][edge_index]["curve"]["c"][control] = point_value(relative)?;
+    }
+    history(
+        &mut out,
+        "move-control",
+        json!({"piece":pid,"edge":eid,"control":control,"dx":dx,"dy":dy}),
+        format!("Moved control {control} of {pid}/{eid} by ({dx:+.1}, {dy:+.1}) mm."),
+    )?;
+    Ok(out)
+}
+
 fn edge_ref(reference: &str) -> Result<(&str, &str), Refusal> {
     reference
         .split_once('/')
@@ -659,6 +720,27 @@ mod tests {
         assert_eq!(out["pieces"][0]["grain"], original["pieces"][0]["grain"]);
         assert!(move_vertex(&original, "q", "c", 0.0, 0.0).is_err());
         assert!(move_vertex(&original, "r", "q", 0.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn control_move_projects_mm_in_the_drafted_frame_and_preserves_endpoints() {
+        // The upward 50 mm chord makes +x an offset along its negative perpendicular.
+        let mut piece = rectangle("panel", 50.0);
+        piece["edges"][1]["curve"] = json!({"type":"cubic","c":[[0.25,0],[0.5,0.25]],"source":"sample"});
+        let source = document(vec![piece]);
+        let output = move_control(&source, "panel", "right", 1, 12.5, -6.25).unwrap();
+        let mut expected = source["pieces"].clone();
+        expected[0]["edges"][1]["curve"]["c"][1] = json!([0.375,0.0]);
+        assert_eq!(output["pieces"], expected);
+        assert_eq!(output["meta"]["history"][0]["op"], "move-control");
+        let same = move_control(&source, "panel", "right", 1, 0.0, 0.0).unwrap();
+        assert_eq!(same["pieces"], source["pieces"]);
+        assert!(move_control(&source, "panel", "bottom", 0, 1.0, 0.0).is_err());
+        assert!(move_control(&source, "panel", "right", 2, 1.0, 0.0).is_err());
+        assert!(move_control(&source, "panel", "right", 1, f64::INFINITY, 0.0).is_err());
+        let mut collapsed = source.clone();
+        collapsed["pieces"][0]["vertices"]["c"] = json!([100,0]);
+        assert!(move_control(&collapsed, "panel", "right", 0, 0.0, 0.0).is_err());
     }
 
     #[test]
