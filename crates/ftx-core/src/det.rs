@@ -545,11 +545,18 @@ pub const CBRT_ULP_BUDGET: u64 = 2;
 
 /// Real cube root `x^(1/3)`, deterministic strict mode (zero platform libm).
 ///
-/// Uses an IEEE-754 bit-level initial seed (`bits / 3 + 0x2a9f_7893_0000_0000`) with exact power-of-two
-/// pre/post-scaling (`2^±54` / `2^∓18`) for subnormals and huge values near `f64::MAX`, followed by
-/// three cubically convergent Halley iterations. Bit-identical with `/dp/frankensim` `fs_math::det::cbrt`.
+/// Built exclusively from correctly rounded IEEE-754 arithmetic (`+`, `*`, `/`) and bit-level
+/// seeding (`bits / 3 + 0x2a9f_7893_0000_0000`) with exact power-of-two pre/post-scaling
+/// (`2^108` / `2^-36` for `|x| < 1e-200`, `2^-54` / `2^18` for `|x| > 1e200`), followed by three
+/// residual Halley iterations. Lifted verbatim from `/dp/frankensim` `crates/fs-math/src/det.rs`
+/// (`FS-K01`) and locked bit-for-bit via [`tests::frankensim_cbrt_golden_hash`].
 #[must_use]
 pub fn cbrt(x: f64) -> f64 {
+    const POW2_108: f64 = f64::from_bits((1023 + 108) << 52);
+    const POW2_NEG36: f64 = f64::from_bits((1023 - 36) << 52);
+    const POW2_NEG54: f64 = f64::from_bits((1023 - 54) << 52);
+    const POW2_18: f64 = f64::from_bits((1023 + 18) << 52);
+
     if x.is_nan() {
         return f64::NAN;
     }
@@ -558,23 +565,19 @@ pub fn cbrt(x: f64) -> f64 {
     }
     let neg = x.is_sign_negative();
     let ax = x.abs();
-    const SCALE_UP: f64 = 18_014_398_509_481_984.0; // 2^54 (exact)
-    const SCALE_DOWN: f64 = 1.0 / SCALE_UP; // 2^-54 (exact)
-    const POST_DOWN: f64 = 1.0 / 262_144.0; // 2^-18 (exact)
-    const POST_UP: f64 = 262_144.0; // 2^18 (exact)
-    let (scaled, post) = if ax < f64::MIN_POSITIVE {
-        (ax * SCALE_UP, POST_DOWN)
+    let (scaled, post_scale) = if ax < 1.0e-200 {
+        (ax * POW2_108, POW2_NEG36)
     } else if ax > 1.0e200 {
-        (ax * SCALE_DOWN, POST_UP)
+        (ax * POW2_NEG54, POW2_18)
     } else {
         (ax, 1.0)
     };
     let mut y = f64::from_bits(scaled.to_bits() / 3 + 0x2a9f_7893_0000_0000);
     for _ in 0..3 {
         let y3 = y * y * y;
-        y *= (y3 + 2.0 * scaled) / (2.0 * y3 + scaled);
+        y -= y * ((y3 - scaled) / (2.0 * y3 + scaled));
     }
-    let res = y * post;
+    let res = y * post_scale;
     if neg { -res } else { res }
 }
 
@@ -952,5 +955,68 @@ mod tests {
         assert_eq!(pow(1.0, f64::NAN), 1.0);
         assert!(pow(-2.0, 0.5).is_nan());
         assert!((pow(2.5, 1.37) - 2.5_f64.powf(1.37)).abs() < 1e-14);
+    }
+
+    /// frankensim's extension-family fingerprint (`fs-math/tests/extensions_battery.rs`), proving
+    /// bit-identical lift of `tan`, `atan`, `atan2`, `erf`, `erfc`, `pow`, and `hypot`.
+    #[test]
+    fn frankensim_extensions_golden_hash() {
+        let mut acc: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |v: f64| {
+            for byte in v.to_bits().to_le_bytes() {
+                acc ^= u64::from(byte);
+                acc = acc.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        let mut seed = 0x601D_u64;
+        for _ in 0..4_000 {
+            let x = (lcg(&mut seed) - 0.5) * 900.0;
+            feed(tan(x));
+            feed(atan(x));
+            feed(atan2(x, (lcg(&mut seed) - 0.5) * 3.0));
+            feed(erf(x / 100.0));
+            feed(erfc((x / 40.0).abs()));
+            feed(pow((x / 900.0).abs() + 0.1, (lcg(&mut seed) - 0.5) * 8.0));
+            feed(hypot(x, (lcg(&mut seed) - 0.5) * 3.0));
+        }
+        assert_eq!(acc, 0x54da_4c4a_6de6_a101);
+    }
+
+    /// frankensim's `FS-K01` `cbrt` fingerprint (`fs-math/tests/extensions_battery.rs`), proving
+    /// bit-identical cube root across subnormals, tiny/huge normals, and 4,000 full-exponent samples.
+    #[test]
+    fn frankensim_cbrt_golden_hash() {
+        let mut acc: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |v: f64| {
+            for byte in v.to_bits().to_le_bytes() {
+                acc ^= u64::from(byte);
+                acc = acc.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        for edge in [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            8.0,
+            -27.0,
+            f64::from_bits(1),
+            f64::MIN_POSITIVE / 8.0,
+            f64::MIN_POSITIVE,
+            1.0e200,
+            f64::MAX,
+            -f64::MAX,
+        ] {
+            feed(cbrt(edge));
+        }
+        let mut seed = 0xCB27_601D_u64;
+        for i in 0..4_000_u64 {
+            let u = lcg(&mut seed);
+            let exp_bits = 1 + ((u * 2045.0) as u64).min(2044);
+            let mant_bits = (lcg(&mut seed) * ((1_u64 << 52) as f64)) as u64;
+            let v = f64::from_bits((exp_bits << 52) | (mant_bits & 0x000f_ffff_ffff_ffff));
+            feed(cbrt(if i.is_multiple_of(2) { v } else { -v }));
+        }
+        assert_eq!(acc, 0xf72c_2f93_3906_343a);
     }
 }
