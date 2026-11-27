@@ -112,6 +112,7 @@ fn material(after: bool) -> Material {
             BTreeMap::new()
         },
         properties,
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,

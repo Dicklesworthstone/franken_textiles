@@ -13,20 +13,22 @@ use ftx_drape::dye::{
 use ftx_export::dye::verify_and_export_dye_program_with_receipt;
 use ftx_export::knit::{
     check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
-    export_hand_knit_document, export_knit_document, export_kniterate_kc,
+    export_hand_knit_document, export_knit_document, export_kniterate_kc, export_seamed_pullover,
     export_tier_b_vendor_handoff,
 };
 use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime};
 use ftx_pattern::knit::{
     CarrierId, DrapeUncertaintyReceipt, GaugeSpec, KnitDoc, KnitSwatchQualification,
-    MachineBackendKind, MachineProfile, ParametricPanelSpec, WearerAgeClass, compile_knit_doc,
-    draft_shaped_panel,
+    MachineBackendKind, MachineProfile, ParametricPanelSpec, SeamedPulloverSpec, WearerAgeClass,
+    compile_knit_doc, draft_seamed_pullover, draft_shaped_panel,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const MAX_INPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PULLOVER_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PULLOVER_RESPONSE_BYTES: usize = 96 * 1024 * 1024;
 const SWATCH_MATERIAL_PLACEHOLDER: &str = "browser-unqualified-yarn-placeholder";
 
 /// Request payload for [`knit_swatch_json`].
@@ -84,6 +86,27 @@ pub struct KnitExportRequest {
     /// Complete sealed drape receipt, as read from disk.
     pub drape_receipt_json: Option<String>,
     /// Deterministic artifact creation date (`YYYY-MM-DDTHH:MM`).
+    #[serde(default = "default_created")]
+    pub created: String,
+}
+
+/// Complete garment drafting inputs for [`knit_pullover_json`].
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnitPulloverRequest {
+    /// Target machine ID; each of the four pieces is compiled independently.
+    pub machine: String,
+    /// Explicit finished dimensions, seam tolerance, wearer and yarn settings.
+    pub spec: SeamedPulloverSpec,
+    /// Relaxed gauge shared by the four pieces.
+    pub gauge: GaugeSpec,
+    /// Optional measured qualification retained as raw JSON across JavaScript.
+    pub qualification_json: Option<String>,
+    /// Independently selected source material identity.
+    pub material_sha256: Option<String>,
+    /// Optional JSON map from piece role to its exact sealed drape receipt.
+    pub drape_receipts_json: Option<String>,
+    /// Deterministic artifact creation date.
     #[serde(default = "default_created")]
     pub created: String,
 }
@@ -384,6 +407,84 @@ pub fn knit_export_json(request_json: &str) -> Result<String, Refusal> {
     }))
 }
 
+/// Draft, check and package a complete four-piece pullover for local download.
+/// The ZIP includes independent pattern/chart/program directories and exact manual seam groups.
+/// Production machine gates are identical to saved-document export.
+///
+/// # Errors
+/// Input/output budgets, garment geometry/seam mismatch, qualification or per-piece export failure.
+pub fn knit_pullover_json(request_json: &str) -> Result<String, Refusal> {
+    if request_json.len() > MAX_INPUT_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "pullover request exceeds 4 MiB budget",
+        ));
+    }
+    let req: KnitPulloverRequest = serde_json::from_str(request_json)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let qualification: Option<KnitSwatchQualification> = req
+        .qualification_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let receipts: std::collections::BTreeMap<String, DrapeUncertaintyReceipt> = req
+        .drape_receipts_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?
+        .unwrap_or_default();
+    let profile = resolve_knit_machine(&req.machine)?;
+    let draft = draft_seamed_pullover(&req.spec, &req.gauge, &profile)?;
+    let bundle = export_seamed_pullover(
+        &draft,
+        &profile,
+        qualification.as_ref(),
+        req.material_sha256.as_deref(),
+        &receipts,
+        &req.created,
+    )?;
+    let files: Vec<(String, Vec<u8>)> = bundle.files.into_iter().collect();
+    let total_bytes: usize = files.iter().map(|(_, bytes)| bytes.len()).sum();
+    if total_bytes > MAX_PULLOVER_ARTIFACT_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "pullover artifacts exceed 64 MiB uncompressed budget",
+        ));
+    }
+    let manifest: Vec<Value> = files
+        .iter()
+        .map(|(name, bytes)| json!({"name":name, "bytes":bytes.len(), "sha256":sha256_hex(bytes)}))
+        .collect();
+    let archive = crate::zip::zip(&files, &req.created);
+    let payload = json!({
+        "machine":profile.id,
+        "pieces":bundle.piece_certificates,
+        "files":manifest,
+        "archive_base64":encode_base64(&archive),
+        "archive_sha256":sha256_hex(&archive),
+        "seam_count":draft.seams.len(),
+        "openings":draft.openings,
+        "residuals_mm":draft.residuals_mm,
+        "backend_export_refusals":bundle.backend_export_refusals,
+        "assembly":"four separate pieces joined manually",
+        "machine_executable":false,
+        "hardware_execution_authorized":false,
+        "physical_knitting_validated":false,
+        "fit_claimed":false,
+    });
+    let output = serde_json::to_string(&payload)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    if output.len() > MAX_PULLOVER_RESPONSE_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "pullover WASM response exceeds 96 MiB budget",
+        ));
+    }
+    Ok(output)
+}
+
 /// Runs the 4-stage radiometric Kubelka–Munk + Sobol-CVaR Bertsekas L-BFGS continuous yarn dyeing
 /// optimizer and 5-regime Pareto ranker in-browser, returning predicted stitch colors, CIEDE2000
 /// percentiles, coherent horizons, and (for swatch mode) verified `.csv`/`.gcode`/cert!
@@ -658,6 +759,21 @@ pub fn web_knit_export_json(request_json: &str) -> String {
     }
 }
 
+/// Browser export wrapping [`knit_pullover_json`] with structured refusal JSON.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = knit_pullover_json)]
+pub fn web_knit_pullover_json(request_json: &str) -> String {
+    match knit_pullover_json(request_json) {
+        Ok(result) => format!(r#"{{"ok":true,"result":{result}}}"#),
+        Err(refusal) => serde_json::to_string(&KnitWasmEnvelope {
+            ok: false,
+            result: None,
+            refusal: Some(refusal),
+        })
+        .expect("structured pullover refusal serializes"),
+    }
+}
+
 /// Browser export wrapping [`dye_optimize_json`] with structured refusal JSON errors.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = dye_optimize_json)]
@@ -679,6 +795,81 @@ pub fn web_dye_optimize_json(request_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pullover_portable_export_packages_each_piece_and_refuses_unaccepted_seam_ease() {
+        let profile = MachineProfile::hand_knit(4.0);
+        let mut request = json!({
+            "machine":"hand-knit",
+            "spec":{
+                "name":"synthetic-portable-pullover",
+                "wearer_age_class":"child3_to14",
+                "chest_girth_mm":150.0,
+                "hem_girth_mm":140.0,
+                "body_length_mm":80.0,
+                "armhole_depth_mm":24.0,
+                "sleeve_length_mm":60.0,
+                "cuff_girth_mm":30.0,
+                "neck_width_mm":25.0,
+                "front_neck_depth_mm":0.0,
+                "back_neck_depth_mm":0.0,
+                "body_rib_courses":0,
+                "cuff_rib_courses":0,
+                "cam_setting":0.5 * (profile.cam_setting_range[0] + profile.cam_setting_range[1]),
+                "yarn_id":"synthetic-test-yarn",
+                "carrier_id":"1",
+                "max_seam_length_mismatch_mm":1.0,
+                "has_hood_or_neck_drawstring":false
+            },
+            "gauge":{
+                "wales_per_100mm":20.0,
+                "courses_per_100mm":25.0,
+                "needle_pitch_mm":profile.needle_pitch_mm,
+                "yarn_tex":180.0,
+                "thickness_mm":2.0,
+                "relaxed_after_wash":true
+            },
+            "created":"2026-11-27T12:00"
+        });
+        let output: Value =
+            serde_json::from_str(&knit_pullover_json(&request.to_string()).unwrap()).unwrap();
+        let req: KnitPulloverRequest = serde_json::from_value(request.clone()).unwrap();
+        let draft = draft_seamed_pullover(&req.spec, &req.gauge, &profile).unwrap();
+        let bundle = export_seamed_pullover(
+            &draft,
+            &profile,
+            None,
+            None,
+            &std::collections::BTreeMap::new(),
+            &req.created,
+        )
+        .unwrap();
+        let files: Vec<_> = bundle.files.into_iter().collect();
+        assert_eq!(
+            output["archive_base64"],
+            encode_base64(&crate::zip::zip(&files, &req.created))
+        );
+        assert_eq!(output["pieces"].as_object().unwrap().len(), 4);
+        assert_eq!(output["seam_count"], 10);
+        assert_eq!(output["openings"].as_array().unwrap().len(), 4);
+        assert_eq!(output["hardware_execution_authorized"], false);
+        assert_eq!(output["fit_claimed"], false);
+        for role in ["front", "back", "left_sleeve", "right_sleeve"] {
+            let path = format!("{role}/pattern.knit.json");
+            assert!(
+                output["files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|file| { file["name"].as_str() == Some(path.as_str()) })
+            );
+        }
+        request["spec"]["max_seam_length_mismatch_mm"] = json!(0.5);
+        assert_eq!(
+            knit_pullover_json(&request.to_string()).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+    }
 
     #[test]
     fn saved_export_zip_contains_exact_native_files_and_binds_raw_receipt() {

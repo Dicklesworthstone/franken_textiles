@@ -223,6 +223,7 @@ pub(super) fn records() -> Vec<Material> {
                 ("thermal_conductivity".into(), conductivity),
                 ("vapor_resistance".into(), vapor),
             ]),
+            knit_response: None,
             membrane_response: None, membrane_relaxation: None, thermal_response: None, optical_faces: None,
             sources: BTreeMap::from([("paper".into(), Source {
                 reference: ARTICLE.into(), accessed_on: "2026-10-18".into(),

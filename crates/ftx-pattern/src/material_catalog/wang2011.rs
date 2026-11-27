@@ -174,6 +174,7 @@ pub(super) fn records() -> Vec<Material> {
             composition_complete: true,
             structure,
             properties,
+            knit_response: None,
             membrane_response: None,
             membrane_relaxation: None,
             thermal_response: None,

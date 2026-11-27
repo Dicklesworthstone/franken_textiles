@@ -32,6 +32,7 @@ fn material() -> Material {
         form: Form::Knit,
         composition: vec![], composition_complete: false,
         structure: BTreeMap::new(), properties: BTreeMap::new(),
+        knit_response: None,
         membrane_response: None, membrane_relaxation: None, thermal_response: None,
         optical_faces: None,
         sources: BTreeMap::from([("planted".into(), Source {

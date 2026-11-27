@@ -2174,6 +2174,7 @@ mod tests {
                 composition_complete: false,
                 structure: BTreeMap::new(),
                 properties: BTreeMap::new(),
+                knit_response: None,
                 membrane_response: None,
                 membrane_relaxation: None,
                 thermal_response: None,

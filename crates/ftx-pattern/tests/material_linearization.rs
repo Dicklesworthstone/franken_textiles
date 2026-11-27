@@ -53,6 +53,7 @@ fn input() -> Input {
                 composition_complete: false,
                 structure: BTreeMap::new(),
                 properties,
+                knit_response: None,
                 membrane_response: None,
                 membrane_relaxation: None,
                 thermal_response: None,

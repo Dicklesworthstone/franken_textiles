@@ -122,6 +122,10 @@ pub struct Material {
     /// observations so consumers can use them independently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membrane_response: Option<crate::material_response::TabulatedMembrane>,
+    /// Explicit source-qualified coupled knit law; form alone never selects knit physics.
+    /// Mass, thickness, contact and scalar seam bending remain independent observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knit_response: Option<crate::material_knit::KnitResponse>,
     /// Optional Maxwell branches in parallel with the equilibrium membrane. History belongs to
     /// each simulated triangle, not this immutable source record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -342,6 +346,9 @@ impl Material {
             // estimated/interpolated response data. The consumer applies that evidence policy again.
             response.compile(&self.sources, true)?;
         }
+        if let Some(response) = &self.knit_response {
+            response.compile(self, true)?;
+        }
         Ok(())
     }
 
@@ -354,6 +361,11 @@ impl Material {
         allow_estimates: bool,
     ) -> Result<Option<crate::material_response::CompiledMembrane>, Refusal> {
         self.validate()?;
+        if self.knit_response.is_some() {
+            return Err(invalid(
+                "selected knit law requires a coupled-knit consumer; scalar/tabulated fallback is forbidden",
+            ));
+        }
         self.membrane_response
             .as_ref()
             .map(|r| r.compile(&self.sources, allow_estimates))
@@ -466,7 +478,8 @@ impl Material {
         MECHANICAL_PROPERTIES
             .iter()
             .filter(|(name, _)| {
-                let response_supplies = self.membrane_response.is_some()
+                let response_supplies = (self.membrane_response.is_some()
+                    || self.knit_response.is_some())
                     && matches!(
                         *name,
                         "warp_stiffness"
@@ -513,7 +526,13 @@ impl Material {
         self.compiled_membrane_plasticity(allow_estimates)?;
         let mut v = [0.0; 8];
         v[0] = self.mechanical_areal_density(allow_estimates)?;
-        if let Some(law) = self.compiled_membrane(allow_estimates)? {
+        if let Some(law) = self.compiled_knit(allow_estimates)? {
+            let [warp, weft, poisson, shear] = law.membrane.reference_moduli()?;
+            v[1] = warp;
+            v[2] = weft;
+            v[3] = poisson;
+            v[4] = shear;
+        } else if let Some(law) = self.compiled_membrane(allow_estimates)? {
             let [q11, q22, q12, g12] = law.origin_stiffness();
             let nu12 = q12 / q22;
             let d = 1.0 - nu12 * (q12 / q11);
@@ -701,6 +720,7 @@ mod tests {
             composition_complete: false,
             structure: BTreeMap::new(),
             properties,
+            knit_response: None,
             membrane_response: None,
             membrane_relaxation: None,
             thermal_response: None,

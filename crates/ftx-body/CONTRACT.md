@@ -391,7 +391,7 @@ verify all 21 `TAPE_FIELDS` functionals geometrically without establishing real-
 The nappy is a shape proxy, not a garment. Landmarks are heuristics
 on the body (see above), not measurements.
 
-## Open tube shells for knit shaping (`FTX-K12`)
+## Open anatomical shells for knit shaping (`FTX-K12`)
 
 `knit_shell::build_ease_shell_from_mesh` clips triangles at the two requested horizontal planes,
 reuses shared edge/plane intersections, and returns an uncapped connected annulus. Boundary rings
@@ -400,11 +400,29 @@ Euler and the existing bounded exact surface-intersection checks. Requested sign
 are preserved; impossible offsets and nonnegative ease below the declared minimum refuse. Cut-plane
 vertices keep their exact heights after offsetting. No requested ease is silently shortened.
 
-`AnnyKnitShell` admits an explicitly supplied generic tube or an already segmented torso with its
-required real landmarks. Sleeve and full-upper-body extraction refuse until independent anatomical
-cuts exist; a global height slab cannot distinguish those regions, and absent landmarks never become
-guessed wearer dimensions. The declared minimum bounds the requested normal displacement, not
-the closest distance to the body or physical cloth clearance. Synthetic tests in
+`AnnyAnatomicalShell` consumes the original `AnnyModel` and matching `PosedBody` before collider
+trim caps. It extracts a full upper body (waist hem, neck, both wrist cuffs), an independently posed
+left/right sleeve (armhole and cuff), or a torso with both armholes. The source ordered waist loop
+defines its section plane and interior witness; neck and wrist sections use the actual posed joint
+heads and axes. Armholes follow the zero contour of normalized arm-subtree influence minus all
+other influence. This is explicit rig segmentation, not an independently measured garment armhole.
+Every cut conformingly splits source triangles, identifies one closed section and removes only its
+opposite connected component. A plane may cross another limb without cropping that limb. The
+explicit `AnatomicalShellSpec` API accepts genuine caller-owned planes or source segmentation fields
+and preserves their named-opening provenance through later cuts. It refuses ambiguous witnesses,
+nonseparating cuts, missing/intersected openings, inconsistent winding, nonmanifold vertex links,
+handles and exact surface intersections. Full-upper-body regional ease interpolates the original
+arm influence weights; requested displacement and planar openings are preserved, with the existing
+conservative inward-offset admission and global exact audit before and after offset.
+
+`AnnyKnitShell` retains the older generic tube/already segmented torso API; requests requiring the
+source rig direct callers to `AnnyAnatomicalShell`. Absent landmarks never become guessed wearer
+dimensions. The declared minimum bounds the requested normal displacement, not the closest
+distance to the body or physical cloth clearance. Synthetic tests in
 `knit_shell::tests` check off-grid cut area/perimeters, translation, shared vertices, removed caps,
 signed offsets, both boundaries and invalid topology. These are geometric checks, not garment-fit or
-physical knitting qualification.
+physical knitting qualification. `knit_shell::anatomical::tests` independently checks a closed branched
+skin with cuffs below the waist, exact analytic oblique-section perimeters, source-field sleeve
+separation, named-opening loss, actual model/pose data plumbing and rigid axis rotation. No public
+Anny asset qualification, real-person anatomical accuracy or physical garment evidence is inferred
+from those synthetic fixtures.

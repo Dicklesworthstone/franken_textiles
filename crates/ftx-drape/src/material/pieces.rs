@@ -83,6 +83,7 @@ pub(super) fn resolve(
     let mut bindings = Vec::with_capacity(pieces.len());
     let mut fabrics = Vec::with_capacity(pieces.len());
     let mut responses = Vec::with_capacity(pieces.len());
+    let mut knits = Vec::with_capacity(pieces.len());
     let mut relaxations = Vec::with_capacity(pieces.len());
     let mut membrane_plasticities = Vec::with_capacity(pieces.len());
     let mut plasticities = Vec::with_capacity(pieces.len());
@@ -133,6 +134,7 @@ pub(super) fn resolve(
             piece_hashes.push(None);
             fabrics.push(None);
             responses.push(None);
+            knits.push(None);
             relaxations.push(None);
             membrane_plasticities.push(None);
             plasticities.push(None);
@@ -171,6 +173,7 @@ pub(super) fn resolve(
         bindings.push(binding);
         fabrics.push(Some(resolved.fabric));
         responses.push(resolved.response.clone());
+        knits.push(resolved.knit.clone());
         relaxations.push(resolved.relaxation.clone());
         membrane_plasticities.push(resolved.membrane_plasticity.clone());
         plasticities.push(resolved.plasticity.clone());
@@ -229,7 +232,13 @@ pub(super) fn resolve(
     base.options.validate()?;
     let mut report = json!({
         "basis":"per_piece_characterization",
-        "model":if fabrics.iter().flatten().any(|f| f.bending_response().is_some()) {"per_piece_green_strain_tensor_panel_bending"} else {"per_piece_green_strain_scalar_bending"},
+        "model": if knits.iter().any(Option::is_some) {
+            "per_piece_coupled_knit_shell"
+        } else if fabrics.iter().flatten().any(|f| f.bending_response().is_some()) {
+            "per_piece_green_strain_tensor_panel_bending"
+        } else {
+            "per_piece_green_strain_scalar_bending"
+        },
         "default_record_sha256":default_hash,
         "pieces":bindings, "records":records,
         "contact_policy":"feature-local thickness/body friction and source-bound pairwise friction; welded features use maximum-adjacent envelopes",
@@ -239,11 +248,35 @@ pub(super) fn resolve(
         "interfaces":interfaces.report,
         "self_contact_enabled":base.options.self_contact.is_some(),
         "hinge_policy":"shared curvature with each adjacent triangle's bending-area share; not an empirical seam law",
-        "panel_bending_piece_count":fabrics.iter().flatten().filter(|f| f.bending_response().is_some()).count(),
-        "panel_bending_policy":"selected panels use source-topology quadratic tensor patches; scalar seam approximation is retained independently",
+        "panel_bending_piece_count":fabrics.iter().enumerate().filter(|(i, f)| f.is_some_and(|f| f.bending_response().is_some()) || knits[*i].as_ref().is_some_and(|k| k.bending.is_some())).count(),
+        "panel_bending_policy": if knits.iter().flatten().any(|k| k.bending.is_some()) {
+            "selected panels use source-topology tensor or asymmetric physical-curvature knit patches; scalar seam approximation is retained independently"
+        } else {
+            "selected panels use source-topology quadratic tensor patches; scalar seam approximation is retained independently"
+        },
         "not_simulated":["layer generation", "conforming shell discretization", "resolved seam cross-section", "plastic set/damage"],
         "fit_claim":false
     });
+    if knits.iter().any(Option::is_some) {
+        report["coupled_knit_piece_count"] = json!(knits.iter().flatten().count());
+        report["asymmetric_knit_bending_piece_count"] = json!(
+            knits
+                .iter()
+                .flatten()
+                .filter(|k| k.bending.is_some())
+                .count()
+        );
+        report["knit_hysteresis_piece_count"] = json!(
+            knits
+                .iter()
+                .flatten()
+                .filter(|k| k.hysteresis.is_some())
+                .count()
+        );
+        report["knit_scope"] = json!(
+            "explicit source-selected shell laws; per-record evidence is preserved; no empirical garment/fit qualification or pore/rib optical inference"
+        );
+    }
     if default_hash.is_none() {
         report["unused_default_fabric"] = raw["fabric"].clone();
     }
@@ -280,6 +313,8 @@ pub(super) fn resolve(
     base.report = report;
     base.piece_fabrics = Some(fabrics);
     base.piece_responses = responses.iter().any(Option::is_some).then_some(responses);
+    // Preserve explicit empty selections: a woven cuff must never inherit a knit shell law.
+    base.piece_knits = Some(knits);
     // Keep explicit None entries: an equilibrium-only cuff must not inherit a transient shell law.
     base.piece_relaxations = Some(relaxations);
     // Explicitly elastic/Maxwell pieces never inherit another piece's permanent membrane state.

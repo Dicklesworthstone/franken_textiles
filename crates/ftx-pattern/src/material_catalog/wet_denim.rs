@@ -164,6 +164,7 @@ fn record(row: &Row) -> Material {
             ("state_scope".into(), "Single observed moisture and pressure state; no pressure interpolation, moisture interpolation, mass invariance, recovery, transient storage, drape or whole-garment validation".into()),
         ]),
         properties,
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,

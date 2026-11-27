@@ -430,6 +430,7 @@ fn record(row: &Row) -> Material {
             ("short_term_compression_recovery".into(), recovery), ("moisture_regain".into(), moisture),
             ("porosity".into(), porosity), ("thermal_conductivity_rh90".into(), humid),
         ]),
+        knit_response: None,
         membrane_response: None, membrane_relaxation: None, thermal_response: None, optical_faces: None,
         sources: BTreeMap::from([("paper".into(), Source {
             reference: ARTICLE.into(), accessed_on: "2026-10-27".into(),

@@ -3,6 +3,7 @@
 //! - `ftx knit draft` — measured flat panel or shaped torso tube with child-safety gates
 //! - `ftx knit verify` — 7-check V-bed VM & child-safety verifier for any `ftx-knit/1` document
 //! - `ftx knit export` — recompile and export a saved document with its current qualification
+//! - `ftx knit pullover` — four-piece garment with checked manual seam assembly
 //! - `ftx knit poincloux` — Rung-3 Poincloux et al. (2018) planar elastica analytical KAT curve
 //! - `ftx dye optimize` — 4-stage radiometric KM + Sobol-CVaR Bertsekas L-BFGS + 5-regime Pareto
 //! - `ftx dye verify` — physical dye-rig Capstan/dwell/Tg/accumulator/fastness verifier + `.csv`/`.gcode`/cert
@@ -20,7 +21,7 @@ use ftx_export::dye::{export_exp4_bleed_swatch_kit, verify_and_export_dye_progra
 use ftx_export::knit::{
     check_hand_knit_pdf, check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
     export_hand_knit_document, export_knit_document, export_kniterate_kc, export_knitout_v2,
-    export_tier_b_vendor_handoff, refuse_proprietary_binary_target,
+    export_seamed_pullover, export_tier_b_vendor_handoff, refuse_proprietary_binary_target,
 };
 use ftx_pattern::dye::{
     DyeMachineProfile, DyePlanUncertaintyReceipt, DyeingRegime, YarnDyeProgram,
@@ -28,8 +29,8 @@ use ftx_pattern::dye::{
 };
 use ftx_pattern::knit::{
     DrapeUncertaintyReceipt, GaugeSpec, KnitDoc, KnitSwatchQualification, MachineBackendKind,
-    MachineProfile, ParametricPanelSpec, RaglanPulloverSpec, WearerAgeClass, compile_knit_doc,
-    draft_seamless_raglan_tube, draft_shaped_panel,
+    MachineProfile, ParametricPanelSpec, RaglanPulloverSpec, SeamedPulloverSpec, WearerAgeClass,
+    compile_knit_doc, draft_seamed_pullover, draft_seamless_raglan_tube, draft_shaped_panel,
 };
 use ftx_trace::raster::load_target_raster_with_limit;
 use serde_json::{Value, json};
@@ -157,16 +158,17 @@ fn no_extra_positional(args: &Args, expected: usize, usage: &str) -> Result<(), 
     Ok(())
 }
 
-/// Dispatches `ftx knit <swatch|draft|verify|export|poincloux> ...`.
+/// Dispatches `ftx knit <swatch|draft|pullover|verify|export|poincloux> ...`.
 pub(super) fn cmd_knit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     match args.positional.get(1).map(String::as_str) {
         Some("swatch") => cmd_knit_swatch(args),
         Some("draft") => cmd_knit_draft(args),
+        Some("pullover") => cmd_knit_pullover(args),
         Some("verify") => cmd_knit_verify(args),
         Some("export") => cmd_knit_export(args),
         Some("poincloux") => cmd_knit_poincloux(args),
         _ => Err(bad_input(
-            "expected `ftx knit swatch|draft|verify|export|poincloux`",
+            "expected `ftx knit swatch|draft|pullover|verify|export|poincloux`",
         )),
     }
 }
@@ -601,6 +603,92 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         bundle.compiled.vm_report.total_transfers,
         profile.id,
         out_dir.display()
+    );
+    Ok((result, 0, text))
+}
+
+fn cmd_knit_pullover(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(
+        args,
+        "knit pullover",
+        &[
+            "gauge",
+            "machine",
+            "qual",
+            "material-sha256",
+            "drape-receipts",
+            "created",
+            "out",
+        ],
+    )?;
+    no_extra_positional(
+        args,
+        3,
+        "ftx knit pullover SPEC.json --gauge GAUGE.json --out NEW_DIR [--machine ID] [--qual SWATCH.json --material-sha256 SHA] [--drape-receipts RECEIPTS.json]",
+    )?;
+    let out_dir = PathBuf::from(
+        args.options
+            .get("out")
+            .ok_or_else(|| bad_input("`ftx knit pullover` requires --out NEW_DIR"))?,
+    );
+    let spec: SeamedPulloverSpec = serde_json::from_str(&read_utf8(
+        &PathBuf::from(&args.positional[2]),
+        "seamed pullover specification",
+    )?)
+    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let gauge: GaugeSpec = read_optional_knit_json(args, "gauge", "pullover gauge")?
+        .ok_or_else(|| bad_input("`ftx knit pullover` requires --gauge GAUGE.json"))?;
+    let profile = parse_machine(
+        args.options
+            .get("machine")
+            .map(String::as_str)
+            .unwrap_or("hand-knit"),
+    )?;
+    let qualification = read_knit_qualification(args)?;
+    let material_sha256 = expected_knit_material(args)?;
+    let receipts =
+        read_optional_knit_json(args, "drape-receipts", "per-piece pullover drape receipts")?
+            .unwrap_or_default();
+    let created = match args.options.get("created") {
+        Some(created) => created.clone(),
+        None => export::utc_minute()?,
+    };
+    let draft = draft_seamed_pullover(&spec, &gauge, &profile)?;
+    let bundle = export_seamed_pullover(
+        &draft,
+        &profile,
+        qualification.as_ref(),
+        material_sha256,
+        &receipts,
+        &created,
+    )?;
+    reserve_output(&out_dir, "knit pullover")?;
+    for piece in &draft.pieces {
+        reserve_output(&out_dir.join(piece.role.as_str()), "pullover piece")?;
+    }
+    for (name, bytes) in &bundle.files {
+        write_file(&out_dir, name, bytes)?;
+    }
+    let result = json!({
+        "machine":profile.id,
+        "pieces":bundle.piece_certificates,
+        "seam_count":draft.seams.len(),
+        "openings":draft.openings,
+        "residuals_mm":draft.residuals_mm,
+        "backend_export_refusals":bundle.backend_export_refusals,
+        "files":bundle.files.keys().collect::<Vec<_>>(),
+        "out_dir":out_dir.display().to_string(),
+        "assembly":"four separate pieces joined manually",
+        "hardware_execution_authorized":false,
+        "physical_knitting_validated":false,
+        "fit_claimed":false,
+    });
+    let text = format!(
+        "Exported four-piece pullover '{}' into {} ({} artifacts, {} checked seams). Manual assembly required.",
+        spec.name,
+        out_dir.display(),
+        bundle.files.len(),
+        draft.seams.len(),
     );
     Ok((result, 0, text))
 }

@@ -924,7 +924,14 @@ pub fn drape_observed(
         let models: std::collections::BTreeSet<_> = model
             .panel_bending_patches()
             .iter()
-            .map(crate::bending::BendingPatch::model)
+            .enumerate()
+            .map(|(i, patch)| {
+                if model.panel_knit_bending(i).is_some() {
+                    "asymmetric_knit"
+                } else {
+                    patch.model()
+                }
+            })
             .collect();
         report["panel_bending"] = json!({
             "model":if models.len() == 1 { *models.first().expect("nonempty patches") } else { "per_patch" },
@@ -956,6 +963,7 @@ pub fn drape_observed(
             "Geometric settledness does not establish a stress-free material state; permanent membrane history includes accepted sewing and draping steps."
         );
     }
+    add_knit_material_report(&mut report, &scene.solver)?;
     // Missing thermal observations must not invalidate a supported mechanical drape. Legacy reports
     // stay byte-compatible; explicit materials carry a ready-to-evaluate exchange or a refusal.
     if report["material"]["basis"] != "legacy_uncertain" {
@@ -1066,6 +1074,98 @@ fn static_equilibrium(scene: &Scene, policy: &StaticEquilibriumOptions, material
         }
     }
     report
+}
+
+// Report only triangles and patches that actually selected a knit law. A mixed woven/knit
+// scene must not inherit one global knit card, nor turn missing optical/rib data into clean flags.
+fn add_knit_material_report(
+    report: &mut Value,
+    solver: &crate::cloth::Solver,
+) -> Result<(), Refusal> {
+    let model = &solver.model;
+    let mut triangles = Vec::new();
+    let mut min_jamming_margin = 1.0_f64;
+    let mut max_principal_stretch = 0.0_f64;
+    for (i, element) in model.membranes.iter().enumerate() {
+        let Some(law) = model.coupled_knit_membrane(i) else {
+            continue;
+        };
+        let strain = element.strain(&solver.x);
+        let evaluated = law.evaluate(strain)?;
+        min_jamming_margin = min_jamming_margin.min(evaluated.jamming_margin);
+        let c11 = 1.0 + 2.0 * strain[0];
+        let c22 = 1.0 + 2.0 * strain[1];
+        let largest = 0.5 * (c11 + c22 + (c11 - c22).hypot(2.0 * strain[2]));
+        if !largest.is_finite() || largest <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "knit report requires a finite positive material stretch",
+            ));
+        }
+        max_principal_stretch = max_principal_stretch.max(largest.sqrt());
+        triangles.push(i);
+    }
+    if triangles.is_empty() {
+        return Ok(());
+    }
+    let mut knit_patches = 0;
+    let mut max_curvature_indicator_rad = 0.0_f64;
+    for (i, patch) in model.panel_bending_patches().iter().enumerate() {
+        if model.panel_knit_bending(i).is_none() {
+            continue;
+        }
+        let curvature = patch.physical_curvature(&solver.x)?;
+        let magnitude = (curvature[0] * curvature[0]
+            + curvature[1] * curvature[1]
+            + 0.5 * curvature[2] * curvature[2])
+            .sqrt();
+        let indicator = magnitude * patch.reference_area().sqrt();
+        Refusal::finite("knit curvature indicator", indicator)?;
+        max_curvature_indicator_rad = max_curvature_indicator_rad.max(indicator);
+        knit_patches += 1;
+    }
+    let history = solver.knit_hysteresis_report()?;
+    let mut flags = Vec::new();
+    if min_jamming_margin < 0.05 {
+        flags.push("knit_jamming");
+    }
+    if knit_patches > 0 && max_curvature_indicator_rad > 0.35 {
+        flags.push("knit_edge_curl");
+    }
+    if history.is_some() && solver.knit_hysteresis_max_backstrain() > 0.02 {
+        flags.push("knit_hysteresis_drift");
+    }
+    report["knit_shell"] = json!({
+        "scope":"selected coupled-knit material triangles and asymmetric-knit patches only",
+        "material_triangles":triangles,
+        "asymmetric_bending_patches":knit_patches,
+        "minimum_physical_jamming_margin":min_jamming_margin,
+        "maximum_principal_stretch":max_principal_stretch,
+        "maximum_curvature_indicator_rad":(knit_patches > 0).then_some(max_curvature_indicator_rad),
+        "curvature_basis":"physical curvature norm times square root of patch reference area; local shell indicator, not a measured free-edge curl angle",
+        "hysteresis":history,
+        "flags":flags,
+        "unavailable_assessments":["rib_transition_snap","pore_grin_through"],
+        "complete_knit_assessment":false,
+        "hardware_execution_authorized":false,
+        "physical_knitting_validated":false,
+        "fit_claimed":false,
+    });
+    for key in ["flags", "gating"] {
+        if let Some(existing) = report[key].as_array_mut() {
+            for flag in &flags {
+                if !existing.iter().any(|value| value.as_str() == Some(*flag)) {
+                    existing.push(json!(flag));
+                }
+            }
+        }
+    }
+    if !report["knit_shell"]["hysteresis"].is_null() {
+        report["material_settledness_note"] = json!(
+            "Geometric settledness does not establish recovered yarn slip or relaxed stress; knit hysteresis includes only accepted sewing and draping steps."
+        );
+    }
+    Ok(())
 }
 
 /// Preserve reference metrics; native acceptance additionally requires a quiet instantaneous tail.
@@ -2410,5 +2510,85 @@ mod self_contact_tests {
             right_abduction_deg: 35.0,
         };
         assert!(effective_arm_deg(&make_body(35.0, Some(invalid))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod knit_material_report_tests {
+    use super::*;
+    use crate::cloth::{ClothModel, Solver};
+    use crate::elements::Membrane;
+    use crate::knit::CoupledKnitMembrane;
+    use ftx_core::Vec2;
+
+    fn two_triangles() -> Solver {
+        let rest = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.1, 0.0),
+            Vec2::new(0.0, 0.1),
+            Vec2::new(0.2, 0.0),
+            Vec2::new(0.3, 0.0),
+            Vec2::new(0.2, 0.1),
+        ];
+        let x = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2], [3, 4, 5]],
+            Membrane::orthotropic(120.0, 80.0, 0.25, 40.0, 1.0),
+            1e-5,
+            0.22,
+        )
+        .unwrap();
+        Solver::new(model, x, &[[true; 3]; 6], Vec3::ZERO)
+    }
+
+    #[test]
+    fn ordinary_material_reports_do_not_gain_knit_claims() {
+        let solver = two_triangles();
+        let mut report = json!({"flags":[], "gating":[]});
+        let before = report.clone();
+        add_knit_material_report(&mut report, &solver).unwrap();
+        assert_eq!(report, before);
+    }
+
+    #[test]
+    fn knit_report_uses_selected_triangles_and_preserves_missing_observations() {
+        let mut solver = two_triangles();
+        let law = CoupledKnitMembrane::reference_stockinette_estimate();
+        solver
+            .model
+            .set_coupled_knit_membranes(&[Some(law), None])
+            .unwrap();
+        let stretch = (1.0 + 2.0 * law.e1_jam * 0.99).sqrt();
+        solver.x[1].x *= stretch;
+        // A different material's large stretch must not enter knit-specific metrics.
+        solver.x[4].x = 20.0;
+        let mut report = json!({"flags":[], "gating":[]});
+        add_knit_material_report(&mut report, &solver).unwrap();
+        assert_eq!(report["knit_shell"]["material_triangles"], json!([0]));
+        assert!(
+            (report["knit_shell"]["minimum_physical_jamming_margin"]
+                .as_f64()
+                .unwrap()
+                - 0.0199)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (report["knit_shell"]["maximum_principal_stretch"]
+                .as_f64()
+                .unwrap()
+                - stretch)
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(report["gating"], json!(["knit_jamming"]));
+        assert_eq!(report["knit_shell"]["complete_knit_assessment"], false);
+        assert!(report["knit_shell"]["hysteresis"].is_null());
+        assert!(report["knit_shell"]["maximum_curvature_indicator_rad"].is_null());
+        assert_eq!(
+            report["knit_shell"]["unavailable_assessments"],
+            json!(["rib_transition_snap", "pore_grin_through"])
+        );
     }
 }

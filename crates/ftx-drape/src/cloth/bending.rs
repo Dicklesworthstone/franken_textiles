@@ -163,32 +163,61 @@ impl ClothModel {
         weld: &[usize],
         laws: &[Option<AsymmetricKnitBending>],
     ) -> Result<(), Refusal> {
-        if laws.len() != self.membranes.len() {
+        self.set_mixed_panel_bending(
+            source_rest,
+            source_triangles,
+            weld,
+            &vec![None; laws.len()],
+            laws,
+        )
+    }
+
+    /// Bind ordinary tensor and asymmetric knit bending in one source-panel field.
+    ///
+    /// Both selectors use retained membrane-triangle order. A triangle may select either law;
+    /// unselected panels retain scalar hinges, and seam hinges retain their separate scalar law.
+    /// The patch-order knit selector includes ordinary tensor patches as explicit empty slots.
+    ///
+    /// # Errors
+    /// Overlapping laws, mismatched selectors, invalid laws/source geometry, or a second binding.
+    /// A refusal leaves the model unchanged.
+    pub fn set_mixed_panel_bending(
+        &mut self,
+        source_rest: &[Vec2],
+        source_triangles: &[[usize; 3]],
+        weld: &[usize],
+        ordinary: &[Option<BendingTensor>],
+        knit: &[Option<AsymmetricKnitBending>],
+    ) -> Result<(), Refusal> {
+        if ordinary.len() != self.membranes.len() || knit.len() != self.membranes.len() {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
-                "one asymmetric knit bending slot per membrane triangle is required",
+                "one ordinary and knit bending slot per membrane triangle is required",
             ));
         }
-        let mut tensors = Vec::with_capacity(laws.len());
-        let mut patch_laws = Vec::new();
-        for law in laws {
-            if let Some(k) = law {
+        let mut tensors = Vec::with_capacity(knit.len());
+        for (ordinary, knit) in ordinary.iter().zip(knit) {
+            if ordinary.is_some() && knit.is_some() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "a source triangle cannot bind both ordinary and asymmetric knit bending",
+                ));
+            }
+            tensors.push(if let Some(k) = knit {
                 k.validate()?;
                 let d11 = 0.5 * (k.d_plus[0] + k.d_minus[0]);
                 let d22 = 0.5 * (k.d_plus[1] + k.d_minus[1]);
-                let tensor = BendingTensor::new(d11, d22, k.d12, k.d66)?.normal_projected();
-                tensors.push(Some(tensor));
-                patch_laws.push(Some(*k));
+                Some(BendingTensor::new(d11, d22, k.d12, k.d66)?.normal_projected())
             } else {
-                tensors.push(None);
-            }
+                *ordinary
+            });
         }
         self.set_panel_bending(source_rest, source_triangles, weld, &tensors)?;
-        if !patch_laws.is_empty()
+        if knit.iter().any(Option::is_some)
             && let Some(field) = &mut self.panel_bending
         {
-            field.heterogeneous |= laws.windows(2).any(|pair| pair[0] != pair[1]);
-            field.knit_laws = Some(patch_laws);
+            field.heterogeneous |= knit.windows(2).any(|pair| pair[0] != pair[1]);
+            field.knit_laws = Some(field.triangles.iter().map(|&i| knit[i]).collect());
         }
         Ok(())
     }

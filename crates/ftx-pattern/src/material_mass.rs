@@ -212,6 +212,15 @@ impl Material {
                 check(&q.conditions)?;
             }
         }
+        if let Some(response) = &self.knit_response {
+            check(&response.membrane.conditions)?;
+            if let Some(law) = &response.bending {
+                check(&law.conditions)?;
+            }
+            if let Some(law) = &response.hysteresis {
+                check(&law.conditions)?;
+            }
+        }
         if let Some(response) = &self.membrane_response {
             for conditions in [
                 &response.warp.conditions,
