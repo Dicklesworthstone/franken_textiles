@@ -100,5 +100,7 @@ must account for any take-up from the chosen joining method. Sleeve-head width i
 derived from armhole matching; upper-arm fit and head passage require independent
 checking. This is a manually seamed garment, with separate machine programs for
 its pieces. It does not supply seamless sleeve branching or automatic sewing.
-The existing explicit Kniterate KCode refusal remains visible in each affected
-piece bundle, and no export authorizes hardware execution or claims physical fit.
+Representable Kniterate programs include actual KCode and an independent read-back
+and nominal take-down report for each piece. Unsupported machine operations or
+fractional cam dials retain an explicit backend refusal with the reviewed Knitout.
+No export authorizes hardware execution or claims physical fit.

@@ -1,6 +1,6 @@
 //! Knitting machine & human hand-knit exporters (`FTX-K06`, `FTX-K07`):
 //! - Verified CMU Knitout v2 (`.k`) + sealed `ftx-machine-cert/1` + `Exp-3` calibration swatch kits;
-//! - Explicit Kniterate `.kc` refusal until an actual pass-oriented KCode backend is implemented;
+//! - Native/WASM pass-oriented Kniterate `.kc` with independent raster/control read-back;
 //! - Brother KH-930 / KH-270 AYAB 1-bit indexed PNG + synchronized manual-carriage checklist;
 //! - Human hand-knit pure-vector CYC SVG & PDF charts with dedicated acceptance checks;
 //! - Fail-closed Tier-B proprietary refusal (`OpaqueProprietaryTarget`) for Shima/Stoll binaries.
@@ -16,7 +16,11 @@ pub use ayab::{
 pub use hand_knit::{
     HandKnitExportBundle, check_hand_knit_pdf, check_hand_knit_svg, export_hand_knit_document,
 };
-pub use kniterate::{KniterateExportBundle, export_kniterate_kc, verify_kniterate_kc_roundtrip};
+pub use kniterate::{
+    KCodeReadback, KCodeTakedownReport, KCodeVerification, KniterateExportBundle,
+    export_kniterate_kc, read_kniterate_kc, verify_kniterate_kc_roundtrip,
+    verify_kniterate_takedown,
+};
 pub use knitout::{
     KnitoutExportBundle, SwatchKitBundle, TierBVendorHandoff, VENDOR_HANDOFF_SCHEMA,
     VendorHandoffManifest, export_calibration_swatch_kit, export_knitout_v2,
@@ -41,6 +45,8 @@ pub struct KnitDocumentExportBundle {
     pub files: BTreeMap<String, Vec<u8>>,
     /// A target conversion that remains unavailable; verified review artifacts still exist.
     pub backend_export_refusal: Option<Refusal>,
+    /// Exact KCode byte/source binding when the Kniterate target was representable.
+    pub kcode_verification: Option<KCodeVerification>,
 }
 
 /// Compiles a saved knit document and prepares its target-specific files and printable charts.
@@ -130,9 +136,15 @@ pub fn export_knit_document(
         files.insert("drape_receipt.json".into(), json_bytes(receipt)?);
     }
     let mut backend_export_refusal = None;
+    let mut kcode_verification = None;
     match profile.backend_kind {
         MachineBackendKind::KniterateKc => match export_kniterate_kc(&compiled, profile) {
             Ok(kc) => {
+                files.insert(
+                    "kcode_verification.json".into(),
+                    json_bytes(&kc.verification)?,
+                );
+                kcode_verification = Some(kc.verification);
                 files.insert("program.kc".into(), kc.kc_text.into_bytes());
             }
             Err(refusal) if refusal.code == RefusalCode::UnqualifiedProcess => {
@@ -167,6 +179,7 @@ pub fn export_knit_document(
         compiled,
         files,
         backend_export_refusal,
+        kcode_verification,
     })
 }
 
@@ -284,10 +297,7 @@ mod document_tests {
     #[test]
     fn saved_document_exports_all_target_artifacts_deterministically() {
         for (profile, target) in [
-            (
-                MachineProfile::kniterate_7e(),
-                "backend_export_refusal.json",
-            ),
+            (MachineProfile::kniterate_7e(), "program.kc"),
             (MachineProfile::brother_kh930_ayab(), "pattern_ayab.png"),
             (MachineProfile::hand_knit(4.0), "chart.pdf"),
             (
@@ -295,7 +305,10 @@ mod document_tests {
                 "vendor_handoff_manifest.json",
             ),
         ] {
-            let cam = (profile.cam_setting_range[0] + profile.cam_setting_range[1]) * 0.5;
+            let mut cam = (profile.cam_setting_range[0] + profile.cam_setting_range[1]) * 0.5;
+            if profile.backend_kind == MachineBackendKind::KniterateKc {
+                cam = cam.floor();
+            }
             let doc = draft_calibration_swatch(&profile, "synthetic-yarn", 8, 4, &[cam]).unwrap();
             let export = || {
                 export_knit_document(&doc, &profile, None, None, None, "2026-11-27T12:00").unwrap()

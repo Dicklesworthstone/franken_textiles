@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn full_tier_a_and_tier_b_knitting_export_suite_passes() {
-        // 1. Kniterate 7E verified swatch handoff; executable KCode stays unavailable.
+        // 1. Kniterate 7E actual pass-format swatch with independent read-back.
         let kniterate = MachineProfile::kniterate_7e();
         let kit = export_calibration_swatch_kit(
             &kniterate,
@@ -960,10 +960,13 @@ mod tests {
         let compiled =
             compile_knit_doc(&kit.doc, &kniterate, None, Some("mat-sha-test"), None).unwrap();
         assert!(kit.knitout.knitout_text.starts_with(";!knitout-2"));
+        let kcode = export_kniterate_kc(&compiled, &kniterate).unwrap();
+        assert!(kcode.kc_text.starts_with("HOME\nRACK:0\n"));
         assert_eq!(
-            export_kniterate_kc(&compiled, &kniterate).unwrap_err().code,
-            RefusalCode::UnqualifiedProcess
+            kcode.verification.program_sha256,
+            compiled.cert.program_sha256
         );
+        assert!(!kcode.verification.hardware_execution_authorized);
 
         // 2. Brother KH-930 AYAB 1-bit PNG + synchronized checklist
         let kh930 = MachineProfile::brother_kh930_ayab();
