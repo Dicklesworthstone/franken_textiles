@@ -19,6 +19,7 @@ mod loaded_insulation;
 mod mit;
 mod neoprene;
 mod nist;
+pub mod poincloux;
 mod sportswear;
 mod thermal_apparel;
 mod wang2011;
