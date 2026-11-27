@@ -368,6 +368,49 @@ pub fn export_hand_knit_document(
         instr,
         "The guide below lists source stitch operations in increasing wale order. Bed names do not imply right/wrong sides or a working direction; follow the pattern's flat or circular construction and chart legend. Gaps are no-stitch cells.\n"
     );
+    if let Some(finishing) = doc.metadata.get("manual_finishing") {
+        let _ = writeln!(
+            instr,
+            "## Construction and finishing\n\n{}\n",
+            ascii_text(finishing)
+        );
+    }
+    if let Some(start) = doc
+        .metadata
+        .get("shoulder_start_course")
+        .and_then(|value| value.parse::<u32>().ok())
+        .and_then(|course| course.checked_add(1))
+    {
+        let _ = writeln!(
+            instr,
+            "Start separate shoulder sections at chart course {start}. Keep the neckline loops on hold; use a separate yarn supply for each shoulder."
+        );
+        for (side, key) in [
+            ("Left", "left_shoulder_carrier"),
+            ("Right", "right_shoulder_carrier"),
+        ] {
+            if let Some(carrier) = doc.metadata.get(key) {
+                let direction_key = format!("shoulder_initial_direction_{carrier}");
+                let direction = match doc.metadata.get(&direction_key).map(String::as_str) {
+                    Some("plus") => "increasing wale order",
+                    Some("minus") => "decreasing wale order",
+                    _ => "the direction given in the source pattern",
+                };
+                let _ = writeln!(
+                    instr,
+                    "{side} shoulder: carrier {}, first pass in {direction}; alternate direction on subsequent courses.",
+                    ascii_text(carrier)
+                );
+            }
+        }
+        if let Some(ids) = doc.metadata.get("held_neck_stitch_ids") {
+            let _ = writeln!(
+                instr,
+                "Held neckline source stitch IDs: {}.\n",
+                ascii_text(ids)
+            );
+        }
+    }
     for course in 0..=max_c {
         for &bed in &beds {
             let mut counts: Vec<(LoopKind, usize)> = Vec::new();
@@ -690,7 +733,76 @@ mod tests {
         refuse_proprietary_binary_target,
     };
     use ftx_core::RefusalCode;
-    use ftx_pattern::knit::{MachineProfile, compile_knit_doc, draft_calibration_swatch};
+    use ftx_pattern::knit::{
+        CarrierId, GaugeSpec, MachineProfile, ParametricPanelSpec, WearerAgeClass,
+        compile_knit_doc, draft_calibration_swatch, draft_shaped_panel,
+    };
+
+    #[test]
+    fn open_neck_instructions_include_the_actual_held_loops_and_shoulder_carriers() {
+        let profile = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 24.0,
+            courses_per_100mm: 32.0,
+            needle_pitch_mm: profile.needle_pitch_mm,
+            yarn_tex: Some(180.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        let doc = draft_shaped_panel(
+            &ParametricPanelSpec {
+                name: "open_neck_panel".to_string(),
+                wearer_age_class: WearerAgeClass::Child3To14,
+                hem_width_mm: 180.0,
+                chest_width_mm: 180.0,
+                length_mm: 120.0,
+                armhole_depth_mm: 40.0,
+                armhole_inset_total_mm: 30.0,
+                neck_width_mm: 60.0,
+                neck_depth_mm: 20.0,
+                rib_hem_courses: 4,
+                cam_setting: 8.0,
+                yarn_id: "test-yarn".to_string(),
+                carrier_id: CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &profile,
+        )
+        .unwrap();
+        let exported = export_hand_knit_document(&doc, "2026-11-27T08:00").unwrap();
+        let guide = &exported.instructions_text;
+        assert!(guide.contains(&doc.metadata["manual_finishing"]));
+        let start: u32 = doc.metadata["shoulder_start_course"].parse().unwrap();
+        assert!(guide.contains(&format!(
+            "Start separate shoulder sections at chart course {}",
+            start + 1
+        )));
+        assert!(guide.contains(&format!(
+            "Left shoulder: carrier {}, first pass in increasing wale order",
+            doc.metadata["left_shoulder_carrier"]
+        )));
+        assert!(guide.contains(&format!(
+            "Right shoulder: carrier {}, first pass in decreasing wale order",
+            doc.metadata["right_shoulder_carrier"]
+        )));
+        let held_ids = &doc.metadata["held_neck_stitch_ids"];
+        assert!(guide.contains(&format!("Held neckline source stitch IDs: {held_ids}.")));
+        for id in held_ids.split(',').map(|id| id.parse::<u32>().unwrap()) {
+            let source = doc.stitches.iter().find(|stitch| stitch.id == id).unwrap();
+            assert_eq!(source.course, start - 1);
+            assert!(
+                doc.stitches
+                    .iter()
+                    .all(|stitch| stitch.parents.iter().all(|parent| parent.stitch_id != id))
+            );
+            assert!(
+                exported
+                    .svg_text
+                    .contains(&format!("id=\"hand-knit-stitch-{id}\""))
+            );
+        }
+    }
 
     #[test]
     fn front_and_back_stitches_survive_each_chart_and_written_course() {
