@@ -696,9 +696,10 @@ mod tests {
         .to_string();
         let out: Value = serde_json::from_str(&knit_swatch_json(&req).unwrap()).unwrap();
         assert_eq!(
-            out["cert"]["material_sha256"].as_str(),
+            out["qualification_template"]["material_sha256"].as_str(),
             Some(SWATCH_MATERIAL_PLACEHOLDER)
         );
+        assert_eq!(out["cert"]["automated_carriage_control"], false);
         let b64 = out["ayab_png_base64"].as_str().unwrap();
         let png = decode_base64(b64);
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
