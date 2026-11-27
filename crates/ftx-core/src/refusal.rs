@@ -156,10 +156,27 @@ mod tests {
         assert_eq!(serde_json::from_value::<Refusal>(j).unwrap(), r);
         for code in [
             RefusalCode::NonFinite,
+            RefusalCode::DegenerateGeometry,
+            RefusalCode::InvalidDocument,
+            RefusalCode::UnknownParameter,
+            RefusalCode::OutOfRange,
+            RefusalCode::Unscaled,
+            RefusalCode::NoRoot,
+            RefusalCode::NotConverged,
             RefusalCode::BudgetExceeded,
+            RefusalCode::InwardWound,
+            RefusalCode::IntersectingStart,
+            RefusalCode::IntersectingTrajectory,
             RefusalCode::Io,
+            RefusalCode::UnqualifiedProcess,
+            RefusalCode::OpaqueProprietaryTarget,
+            RefusalCode::MachineStateInfeasible,
+            RefusalCode::MaterialProcessHazard,
+            RefusalCode::VerificationMismatch,
         ] {
-            assert_eq!(serde_json::to_value(code).unwrap(), code.as_str());
+            let v = serde_json::to_value(code).unwrap();
+            assert_eq!(v, code.as_str());
+            assert_eq!(serde_json::from_value::<RefusalCode>(v).unwrap(), code);
         }
     }
 
