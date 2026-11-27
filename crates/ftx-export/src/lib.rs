@@ -13,6 +13,7 @@ pub mod cutter;
 pub mod cutting;
 pub mod dst;
 pub mod dxf;
+pub mod dye;
 pub mod gc;
 pub mod geom;
 pub mod hpgl;
