@@ -27,8 +27,8 @@ use std::collections::BTreeMap;
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::knit::{
-    CompiledKnitBundle, DrapeUncertaintyReceipt, KnitDoc, KnitSwatchQualification,
-    MachineBackendKind, MachineProfile, compile_knit_doc,
+    CompiledKnitBundle, DrapeUncertaintyReceipt, KnitDoc, KnitMachineCert, KnitSwatchQualification,
+    MachineBackendKind, MachineProfile, SeamedPulloverDraft, compile_knit_doc,
 };
 
 /// A complete, verified export of one saved knit document. Native and browser clients write
@@ -170,6 +170,105 @@ pub fn export_knit_document(
     })
 }
 
+/// All four independent pullover programs plus checked seam accounting and assembly instructions.
+#[derive(Clone, Debug)]
+pub struct SeamedPulloverExportBundle {
+    /// Ordered, relative artifact paths. Each piece owns its own subdirectory and certificate.
+    pub files: BTreeMap<String, Vec<u8>>,
+    /// Certificates indexed by the stable piece roles.
+    pub piece_certificates: BTreeMap<String, KnitMachineCert>,
+    /// Unavailable target conversions, retained independently for every affected piece.
+    pub backend_export_refusals: BTreeMap<String, Refusal>,
+}
+
+/// Prepare a complete four-piece pullover without exposing partially validated output.
+/// Every piece passes the ordinary document compiler, qualification, chart and target checks.
+/// Optional receipts are keyed by `front`, `back`, `left_sleeve`, or `right_sleeve`; a receipt
+/// for one piece cannot qualify another. Manual joining never becomes whole-garment machine code.
+///
+/// # Errors
+/// Invalid assembly/seam accounting, unknown receipt roles, or any per-piece export refusal.
+pub fn export_seamed_pullover(
+    draft: &SeamedPulloverDraft,
+    profile: &MachineProfile,
+    qualification: Option<&KnitSwatchQualification>,
+    expected_material_sha256: Option<&str>,
+    drape_receipts: &BTreeMap<String, DrapeUncertaintyReceipt>,
+    created: &str,
+) -> Result<SeamedPulloverExportBundle, Refusal> {
+    draft.validate()?;
+    for role in drape_receipts.keys() {
+        if !draft.pieces.iter().any(|piece| piece.role.as_str() == role) {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("pullover drape receipt names unknown piece {role}"),
+            ));
+        }
+    }
+    let mut files = BTreeMap::new();
+    let mut piece_certificates = BTreeMap::new();
+    let mut backend_export_refusals = BTreeMap::new();
+    let mut piece_manifest = Vec::new();
+    for piece in &draft.pieces {
+        let role = piece.role.as_str();
+        let bundle = export_knit_document(
+            &piece.doc,
+            profile,
+            qualification,
+            expected_material_sha256,
+            drape_receipts.get(role),
+            created,
+        )?;
+        piece_manifest.push(serde_json::json!({
+            "role":role,
+            "pattern_sha256":piece.doc.canonical_sha256()?,
+            "certificate_sha256":bundle.compiled.cert.cert_sha256,
+            "directory":role,
+        }));
+        piece_certificates.insert(role.to_owned(), bundle.compiled.cert);
+        if let Some(refusal) = bundle.backend_export_refusal {
+            backend_export_refusals.insert(role.to_owned(), refusal);
+        }
+        for (name, bytes) in bundle.files {
+            files.insert(format!("{role}/{name}"), bytes);
+        }
+    }
+    files.insert("garment.knit.json".into(), json_bytes(draft)?);
+    files.insert(
+        "assembly.json".into(),
+        json_bytes(&serde_json::json!({
+            "schema":"ftx-knit-pullover-assembly/1",
+            "pieces":piece_manifest,
+            "seams":draft.seams,
+            "openings":draft.openings,
+            "residuals_mm":draft.residuals_mm,
+            "instructions":draft.instructions,
+            "assembly":"four independently knitted pieces, joined manually",
+            "hardware_execution_authorized":false,
+            "physical_knitting_validated":false,
+            "fit_claimed":false,
+        }))?,
+    );
+    let mut instructions = String::from(
+        "Four-piece seamed pullover\n\nKnit each piece from its own checked program or chart.\n\n",
+    );
+    for (i, instruction) in draft.instructions.iter().enumerate() {
+        instructions.push_str(&format!("{}. {instruction}\n", i + 1));
+    }
+    instructions.push_str(
+        "\nUse assembly.json for exact stitch/row groups and reported seam-length residuals.\nEach piece's instructions.txt retains its held neckline loops and manual finishing.\nA checked digital assembly does not establish physical garment fit or authorize machine execution.\n",
+    );
+    files.insert(
+        "assembly_instructions.txt".into(),
+        instructions.into_bytes(),
+    );
+    Ok(SeamedPulloverExportBundle {
+        files,
+        piece_certificates,
+        backend_export_refusals,
+    })
+}
+
 fn json_bytes(value: &impl serde::Serialize) -> Result<Vec<u8>, Refusal> {
     serde_json::to_vec_pretty(value)
         .map_err(|error| Refusal::new(RefusalCode::InvalidDocument, error.to_string()))
@@ -291,6 +390,89 @@ mod document_tests {
         assert_eq!(
             export(&gated, "synthetic-material").unwrap_err().code,
             RefusalCode::UnqualifiedProcess
+        );
+    }
+}
+
+#[cfg(test)]
+mod pullover_tests {
+    use super::*;
+    use ftx_pattern::knit::{
+        CarrierId, GaugeSpec, SeamedPulloverSpec, WearerAgeClass, draft_seamed_pullover,
+    };
+
+    fn garment() -> (SeamedPulloverDraft, MachineProfile) {
+        let profile = MachineProfile::hand_knit(4.0);
+        let gauge = GaugeSpec {
+            wales_per_100mm: 20.0,
+            courses_per_100mm: 25.0,
+            needle_pitch_mm: profile.needle_pitch_mm,
+            yarn_tex: Some(180.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        let spec = SeamedPulloverSpec {
+            name: "synthetic-export-pullover".into(),
+            wearer_age_class: WearerAgeClass::Child3To14,
+            chest_girth_mm: 600.0,
+            hem_girth_mm: 560.0,
+            body_length_mm: 320.0,
+            armhole_depth_mm: 96.0,
+            sleeve_length_mm: 240.0,
+            cuff_girth_mm: 120.0,
+            neck_width_mm: 100.0,
+            front_neck_depth_mm: 0.0,
+            back_neck_depth_mm: 0.0,
+            body_rib_courses: 0,
+            cuff_rib_courses: 0,
+            cam_setting: 0.5 * (profile.cam_setting_range[0] + profile.cam_setting_range[1]),
+            yarn_id: "synthetic-test-yarn".into(),
+            carrier_id: CarrierId("1".into()),
+            max_seam_length_mismatch_mm: 1.0,
+            has_hood_or_neck_drawstring: false,
+        };
+        (
+            draft_seamed_pullover(&spec, &gauge, &profile).unwrap(),
+            profile,
+        )
+    }
+
+    #[test]
+    fn pullover_bundle_keeps_all_four_verified_documents_and_manual_assembly() {
+        let (draft, profile) = garment();
+        let receipts = BTreeMap::new();
+        let bundle =
+            export_seamed_pullover(&draft, &profile, None, None, &receipts, "2026-11-27T12:00")
+                .unwrap();
+        assert_eq!(bundle.piece_certificates.len(), 4);
+        assert!(bundle.backend_export_refusals.is_empty());
+        let saved: SeamedPulloverDraft =
+            serde_json::from_slice(&bundle.files["garment.knit.json"]).unwrap();
+        saved.validate().unwrap();
+        assert_eq!(saved, draft);
+        let assembly: serde_json::Value =
+            serde_json::from_slice(&bundle.files["assembly.json"]).unwrap();
+        assert_eq!(assembly["seams"].as_array().unwrap().len(), 10);
+        assert_eq!(assembly["openings"].as_array().unwrap().len(), 4);
+        assert_eq!(assembly["hardware_execution_authorized"], false);
+        assert_eq!(assembly["fit_claimed"], false);
+        for piece in &draft.pieces {
+            let role = piece.role.as_str();
+            let standalone =
+                export_knit_document(&piece.doc, &profile, None, None, None, "2026-11-27T12:00")
+                    .unwrap();
+            for (name, bytes) in standalone.files {
+                assert_eq!(bundle.files[&format!("{role}/{name}")], bytes);
+            }
+            bundle.piece_certificates[role].verify_integrity().unwrap();
+        }
+        let mut stale = draft;
+        stale.seams[0].groups[0].a_indices[1] += 1;
+        assert_eq!(
+            export_seamed_pullover(&stale, &profile, None, None, &receipts, "2026-11-27T12:00",)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
         );
     }
 }

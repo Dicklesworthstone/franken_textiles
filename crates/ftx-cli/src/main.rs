@@ -207,6 +207,7 @@ const USAGE: &str = "usage:
   ftx knit draft --age-class infant|child|adult --out DIR [--style panel|tube] [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--has-drawstring] [--json]
   ftx knit verify PATTERN.knit.json [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--json]
   ftx knit export PATTERN.knit.json --out DIR [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--created YYYY-MM-DDTHH:MM] [--json]
+  ftx knit pullover SPEC.json --gauge GAUGE.json --out DIR [--machine hand-knit|ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipts RECEIPTS.json] [--json]
   ftx knit poincloux [--mu MU] [--json]
   ftx dye swatch --out DIR [--machine piezo-cmyk|dip-3bath] [--yarn ID] [--json]
   ftx dye optimize --out DIR [--machine piezo-cmyk|dip-3bath] [--age-class infant|child|adult|swatch] [--regime stripes|pooling|fiducial|inline|jacquard] [--circular] [--image PNG] [--courses N] [--wales N] [--cells N] [--max-iters N] [--dye-qual Q.json] [--json]
