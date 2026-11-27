@@ -127,8 +127,13 @@ impl Operation {
                 dx_mm,
                 dy_mm,
             } => alter::move_vertex(pattern, piece, vertex, *dx_mm, *dy_mm),
-            Self::MoveControl { piece, edge, control, dx_mm, dy_mm } =>
-                alter::move_control(pattern, piece, edge, *control, *dx_mm, *dy_mm),
+            Self::MoveControl {
+                piece,
+                edge,
+                control,
+                dx_mm,
+                dy_mm,
+            } => alter::move_control(pattern, piece, edge, *control, *dx_mm, *dy_mm),
             Self::TrueSeam { seam, end } => alter::true_seam(pattern, seam, end),
             Self::CapEase {
                 piece,

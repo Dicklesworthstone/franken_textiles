@@ -4991,10 +4991,11 @@ test('heat histories display chronological ledgers and withdraw final selections
   assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true); assert.equal(p.live.size,0);
 });
 
-test('mixed pressure and gap heat histories show the prescribed boundary and retain exact reusable selections', async () => {
+test('mixed pressure, gap and plate load heat histories show the prescribed boundary and retain exact reusable selections', async () => {
   const p = await pageModule(); await p.load();
   const input = {schema:'ftx-compressed-thermal-history/3',legs:[{holds:[
-    {control:{kind:'pressure',pressure_pa:250}}, {control:{kind:'gap',gap_m:0.01}}]}]};
+    {control:{kind:'pressure',pressure_pa:250}}, {control:{kind:'gap',gap_m:0.01}},
+    {control:{kind:'normal_force',normal_force_n:62.5}}]}]};
   const request = ' '+JSON.stringify(input)+'\n';
   p.select('compressionRequest',request); p.e.compressionRequest.handlers.change();
   p.e.compressionLayer.value='fill'; await p.e.pressure.onclick();
@@ -5003,7 +5004,7 @@ test('mixed pressure and gap heat histories show the prescribed boundary and ret
   const report={schema:'ftx-compressed-thermal-history-report/3',input,chosen_layer_id:'fill',
     selection:JSON.parse(selection),selection_json:selection,inspection:{snapshot:{id:'compressed-fill'},capabilities:{}},
     initial_compression:{external_work_j:0},final_compression:{reference_mass_kg:0.025},transitions:[],
-    no_claim:'Synthetic display test only',steps:[250,500].map((pressure_pa,i)=>({elapsed_s:10*(i+1),
+    no_claim:'Synthetic display test only',steps:[250,500,625].map((pressure_pa,i)=>({elapsed_s:10*(i+1),
       pressure_pa,thickness_m:i?0.01:0.015,temperature_c:[10+i],
       ...(i?{}:{prescribed_pressure_pa:250}),cumulative_external_work_j:0.15625,
       cumulative_inside_heat_j:20,cumulative_outside_heat_j:5,cumulative_stored_change_j:15,
@@ -5016,7 +5017,9 @@ test('mixed pressure and gap heat histories show the prescribed boundary and ret
     ['10','Pressure: 250 Pa','250','0.015','10','0.15625','20','5','15','0']);
   assert.deepEqual(plain(t.children[3].children.map(n=>n.textContent)),
     ['20','Gap: 0.01 m','500','0.01','11','0.15625','20','5','15','0']);
-  assert.match(visibleText(s),/Each hold prescribes either pressure or gap/);
+  assert.deepEqual(plain(t.children[4].children.map(n=>n.textContent)),
+    ['30','Plate load: 62.5 N','625','0.01','12','0.15625','20','5','15','0']);
+  assert.match(visibleText(s),/Plate loads use the stack’s fixed contact area/);
   assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
   const link=descendants(s).find(n=>n.download==='compression-thermal-report.json');
   assert.equal(await p.blobs.get(link.href).text(),raw);

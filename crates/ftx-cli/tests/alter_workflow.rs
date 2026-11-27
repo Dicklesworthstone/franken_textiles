@@ -122,7 +122,8 @@ fn reference_operations_save_history_without_touching_the_source() {
 fn control_moves_save_the_same_curve_and_history_through_native_and_portable_paths() {
     let (dir, input) = workspace();
     let original = std::fs::read_to_string(dir.join("source.json")).unwrap();
-    let edit = json!({"op":"move-control","piece":"sleeve","edge":"cap_f","control":1,"dx":2,"dy":0});
+    let edit =
+        json!({"op":"move-control","piece":"sleeve","edge":"cap_f","control":1,"dx":2,"dy":0});
     run(
         &dir,
         &[
@@ -152,7 +153,8 @@ fn control_moves_save_the_same_curve_and_history_through_native_and_portable_pat
     );
     let saved = saved(&dir, "revised.json");
     let expected =
-        ftx_pattern::alter::move_control(&input["pattern"], "sleeve", "cap_f", 1, 2.0, 0.0).unwrap();
+        ftx_pattern::alter::move_control(&input["pattern"], "sleeve", "cap_f", 1, 2.0, 0.0)
+            .unwrap();
     assert_eq!(saved["meta"]["history"], expected["meta"]["history"]);
     assert_ne!(saved["pieces"], input["pattern"]["pieces"]);
     assert_eq!(saved["pieces"], expected["pieces"]);

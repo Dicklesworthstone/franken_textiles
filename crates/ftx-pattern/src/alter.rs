@@ -207,11 +207,17 @@ pub fn move_control(
     let piece = piece_mut(&mut out, pid)?;
     let edge_index = piece["edges"]
         .as_array()
-        .and_then(|edges| edges.iter().position(|edge| edge["id"].as_str() == Some(eid)))
+        .and_then(|edges| {
+            edges
+                .iter()
+                .position(|edge| edge["id"].as_str() == Some(eid))
+        })
         .ok_or_else(|| invalid(format!("{pid}: no edge '{eid}'")))?;
     let edge = &piece["edges"][edge_index];
     let vertex = |field: &str| {
-        let id = edge[field].as_str().ok_or_else(|| invalid("edge needs vertex IDs"))?;
+        let id = edge[field]
+            .as_str()
+            .ok_or_else(|| invalid("edge needs vertex IDs"))?;
         point(&piece["vertices"][id])
     };
     let a = vertex("from")?;
@@ -219,11 +225,20 @@ pub fn move_control(
     let count = match edge["curve"]["type"].as_str() {
         Some("quad") => 1,
         Some("cubic") => 2,
-        _ => return Err(invalid("move-control needs a quadratic or cubic Bézier edge")),
+        _ => {
+            return Err(invalid(
+                "move-control needs a quadratic or cubic Bézier edge",
+            ));
+        }
     };
-    let controls = edge["curve"]["c"].as_array()
+    let controls = edge["curve"]["c"]
+        .as_array()
         .filter(|c| c.len() == count && control < count)
-        .ok_or_else(|| invalid(format!("{pid}/{eid}: expected {count} controls and a valid zero-based control index")))?;
+        .ok_or_else(|| {
+            invalid(format!(
+                "{pid}/{eid}: expected {count} controls and a valid zero-based control index"
+            ))
+        })?;
     for coordinate in controls {
         point(coordinate)?;
     }
@@ -726,11 +741,12 @@ mod tests {
     fn control_move_projects_mm_in_the_drafted_frame_and_preserves_endpoints() {
         // The upward 50 mm chord makes +x an offset along its negative perpendicular.
         let mut piece = rectangle("panel", 50.0);
-        piece["edges"][1]["curve"] = json!({"type":"cubic","c":[[0.25,0],[0.5,0.25]],"source":"sample"});
+        piece["edges"][1]["curve"] =
+            json!({"type":"cubic","c":[[0.25,0],[0.5,0.25]],"source":"sample"});
         let source = document(vec![piece]);
         let output = move_control(&source, "panel", "right", 1, 12.5, -6.25).unwrap();
         let mut expected = source["pieces"].clone();
-        expected[0]["edges"][1]["curve"]["c"][1] = json!([0.375,0.0]);
+        expected[0]["edges"][1]["curve"]["c"][1] = json!([0.375, 0.0]);
         assert_eq!(output["pieces"], expected);
         assert_eq!(output["meta"]["history"][0]["op"], "move-control");
         let same = move_control(&source, "panel", "right", 1, 0.0, 0.0).unwrap();
@@ -739,7 +755,7 @@ mod tests {
         assert!(move_control(&source, "panel", "right", 2, 1.0, 0.0).is_err());
         assert!(move_control(&source, "panel", "right", 1, f64::INFINITY, 0.0).is_err());
         let mut collapsed = source.clone();
-        collapsed["pieces"][0]["vertices"]["c"] = json!([100,0]);
+        collapsed["pieces"][0]["vertices"]["c"] = json!([100, 0]);
         assert!(move_control(&collapsed, "panel", "right", 0, 0.0, 0.0).is_err());
     }
 

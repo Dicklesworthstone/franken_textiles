@@ -136,7 +136,9 @@ fn check_destination(path: &str) -> Result<(), Refusal> {
     match std::fs::symlink_metadata(out) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(Refusal::new(RefusalCode::Io, format!("{path}: {e}"))),
-        Ok(_) => Err(super::invalid(format!("adopted pattern output already exists: {path}"))),
+        Ok(_) => Err(super::invalid(format!(
+            "adopted pattern output already exists: {path}"
+        ))),
     }
 }
 
@@ -158,7 +160,10 @@ fn publish_pattern(
     }
     // link() publishes complete bytes and atomically refuses concurrent or existing outputs.
     // The temporary file is owned by this call only after create_new succeeds.
-    let suffix = if out.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("tmp")) {
+    let suffix = if out
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
+    {
         "stage"
     } else {
         "tmp"
@@ -177,7 +182,9 @@ fn publish_pattern(
         let _ = fs::remove_file(stage);
         return published.map_err(io);
     }
-    Err(super::invalid("could not reserve a staging file for the adopted pattern"))
+    Err(super::invalid(
+        "could not reserve a staging file for the adopted pattern",
+    ))
 }
 
 // Accept only a fresh result from one of the evaluators below. The stored JSON string
@@ -202,7 +209,9 @@ fn adopt(report: &mut Value, key: &str, path: &str) -> Result<(), Refusal> {
         .ok_or_else(|| super::invalid("binding omitted its exact pattern"))?;
     let digest = ftx_core::receipt::sha256_hex(pattern.as_bytes());
     if binding["pattern_sha256"].as_str() != Some(digest.as_str()) {
-        return Err(super::invalid("bound pattern does not match its study digest"));
+        return Err(super::invalid(
+            "bound pattern does not match its study digest",
+        ));
     }
     publish_pattern(path, |file| file.write_all(pattern.as_bytes()))?;
     report["adopted_pattern"] = serde_json::json!({
@@ -219,7 +228,11 @@ pub(super) fn study_command(
     let destination = match (key, out) {
         (None, None) => None,
         (Some(key), Some(path)) if !key.trim().is_empty() && !path.is_empty() => Some((key, path)),
-        _ => return Err(super::invalid("use --adopt KEY together with --out NEW-PATTERN.json")),
+        _ => {
+            return Err(super::invalid(
+                "use --adopt KEY together with --out NEW-PATTERN.json",
+            ));
+        }
     };
     if let Some((_, path)) = destination {
         check_destination(path)?;
@@ -229,10 +242,19 @@ pub(super) fn study_command(
         ["study-on-body", pattern, request, body, model] => {
             super::scenario::manufacturing(pattern, request, body, model)
         }
-        ["scenario-study", pattern, request, scenario, measurements, model] => {
-            super::scenario::run(pattern, request, scenario, measurements, model)
+        [
+            "scenario-study",
+            pattern,
+            request,
+            scenario,
+            measurements,
+            model,
+        ] => super::scenario::run(pattern, request, scenario, measurements, model),
+        _ => {
+            return Err(super::invalid(
+                "expected study PATTERN REQUEST, study-on-body PATTERN REQUEST BODY MODEL, or scenario-study PATTERN REQUEST SCENARIO MEASUREMENTS MODEL",
+            ));
         }
-        _ => return Err(super::invalid("expected study PATTERN REQUEST, study-on-body PATTERN REQUEST BODY MODEL, or scenario-study PATTERN REQUEST SCENARIO MEASUREMENTS MODEL")),
     }?;
     if let Some((key, path)) = destination {
         adopt(&mut report, key, path)?;

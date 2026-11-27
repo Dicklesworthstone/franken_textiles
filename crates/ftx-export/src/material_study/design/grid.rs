@@ -106,8 +106,20 @@ impl Site {
             Self::MoveControl { control, .. } if *control > 1 => {
                 return Err(invalid("Bézier control index must be 0 or 1"));
             }
-            Self::Move { piece, vertex: target, dx_multiplier, dy_multiplier, .. }
-            | Self::MoveControl { piece, edge: target, dx_multiplier, dy_multiplier, .. } => {
+            Self::Move {
+                piece,
+                vertex: target,
+                dx_multiplier,
+                dy_multiplier,
+                ..
+            }
+            | Self::MoveControl {
+                piece,
+                edge: target,
+                dx_multiplier,
+                dy_multiplier,
+                ..
+            } => {
                 if piece.trim().is_empty()
                     || target.trim().is_empty()
                     || !dx_multiplier.is_finite()
@@ -155,14 +167,20 @@ impl Site {
                 dx_mm: displacement(value, *dx_multiplier)?,
                 dy_mm: displacement(value, *dy_multiplier)?,
             },
-            Self::MoveControl { piece, edge, control, dx_multiplier, dy_multiplier, .. } =>
-                Operation::MoveControl {
-                    piece: piece.clone(),
-                    edge: edge.clone(),
-                    control: *control,
-                    dx_mm: displacement(value, *dx_multiplier)?,
-                    dy_mm: displacement(value, *dy_multiplier)?,
-                },
+            Self::MoveControl {
+                piece,
+                edge,
+                control,
+                dx_multiplier,
+                dy_multiplier,
+                ..
+            } => Operation::MoveControl {
+                piece: piece.clone(),
+                edge: edge.clone(),
+                control: *control,
+                dx_mm: displacement(value, *dx_multiplier)?,
+                dy_mm: displacement(value, *dy_multiplier)?,
+            },
         })
     }
 }

@@ -528,31 +528,58 @@ fn both_native_commands_expand_design_material_pairs_and_preserve_exact_replay()
         let report = run(main, &dir);
         assert_eq!(report, expected);
         let rows = report["alternatives"].as_array().unwrap();
-        let chosen = rows.iter().find(|row| {
-            row["design"]["geometry_changed"] == true
-                && row["binding"]["status"] == "available"
-                && report.get("comparison").is_none_or(|comparison| {
-                    comparison["alternatives"].as_array().unwrap().iter().any(|candidate| {
-                        candidate["key"] == row["key"] && candidate["eligible"] == true
+        let chosen = rows
+            .iter()
+            .find(|row| {
+                row["design"]["geometry_changed"] == true
+                    && row["binding"]["status"] == "available"
+                    && report.get("comparison").is_none_or(|comparison| {
+                        comparison["alternatives"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|candidate| {
+                                candidate["key"] == row["key"] && candidate["eligible"] == true
+                            })
                     })
-                })
-        }).expect("fixture must include an admissible altered pattern");
+            })
+            .expect("fixture must include an admissible altered pattern");
         let key = chosen["key"].as_str().unwrap();
         let out = format!("adopted-{main}.json");
         let flags = ["--adopt", key, "--out", &out];
         let saved = study_output(main, &dir, &flags);
-        assert!(saved.status.success(), "{}", String::from_utf8_lossy(&saved.stderr));
+        assert!(
+            saved.status.success(),
+            "{}",
+            String::from_utf8_lossy(&saved.stderr)
+        );
         let result: Value = serde_json::from_slice(&saved.stdout).unwrap();
         let result = result.get("result").unwrap_or(&result);
         assert_eq!(result["adopted_pattern"]["key"], key);
-        assert_eq!(result["adopted_pattern"]["pattern_sha256"], chosen["binding"]["result"]["pattern_sha256"]);
-        let expected_bytes = chosen["binding"]["result"]["pattern_json"].as_str().unwrap();
+        assert_eq!(
+            result["adopted_pattern"]["pattern_sha256"],
+            chosen["binding"]["result"]["pattern_sha256"]
+        );
+        let expected_bytes = chosen["binding"]["result"]["pattern_json"]
+            .as_str()
+            .unwrap();
         assert_eq!(fs::read_to_string(dir.join(&out)).unwrap(), expected_bytes);
         assert!(!study_output(main, &dir, &flags).status.success());
         assert_eq!(fs::read_to_string(dir.join(&out)).unwrap(), expected_bytes);
-        let refused = rows.iter().find(|row| row["binding"]["status"] == "refused").unwrap();
+        let refused = rows
+            .iter()
+            .find(|row| row["binding"]["status"] == "refused")
+            .unwrap();
         for denied in [refused["key"].as_str().unwrap(), "no-such-alternative"] {
-            assert!(!study_output(main, &dir, &["--adopt", denied, "--out", "refused/pattern.json"]).status.success());
+            assert!(
+                !study_output(
+                    main,
+                    &dir,
+                    &["--adopt", denied, "--out", "refused/pattern.json"]
+                )
+                .status
+                .success()
+            );
         }
         assert!(!dir.join("refused").exists());
         for row in report["alternatives"].as_array().unwrap() {
@@ -1086,7 +1113,11 @@ fn both_study_binaries_compare_real_stock_without_losing_independent_roll_result
     assert_eq!(expected["hardware_execution_authorized"], false);
     for main in [false, true] {
         assert_eq!(run(main, &dir), expected);
-        let denied = study_output(main, &dir, &["--adopt", "roll", "--out", "excluded/pattern.json"]);
+        let denied = study_output(
+            main,
+            &dir,
+            &["--adopt", "roll", "--out", "excluded/pattern.json"],
+        );
         assert!(!denied.status.success());
         assert!(!dir.join("excluded").exists());
     }

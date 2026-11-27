@@ -193,33 +193,100 @@ fn curved_seam_search_changes_midpiece_width_without_moving_either_endpoint() {
     let mut sites = Vec::new();
     for (i, from, to, direction) in [(0, "b", "c", 1), (1, "d", "a", -1)] {
         let panel = &mut original["pieces"][i];
-        let edge = panel["edges"].as_array_mut().unwrap().iter_mut()
-            .find(|e| e["from"] == from && e["to"] == to).unwrap();
+        let edge = panel["edges"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["from"] == from && e["to"] == to)
+            .unwrap();
         edge["curve"] = json!({"type":"quad","c":[[0.5,0]]});
         let edge_id = edge["id"].clone();
-        sites.push(json!({"op":"move_control","piece":panel["id"],"edge":edge_id,
-            "control":0,"dx_multiplier":direction,"dy_multiplier":0}));
+        sites.push(
+            json!({"op":"move_control","piece":panel["id"],"edge":edge_id,
+            "control":0,"dx_multiplier":direction,"dy_multiplier":0}),
+        );
     }
     let mut input = serde_json::to_value(grid_request(2)).unwrap();
     input["design_grid"]["variables"] = json!([{"key":"bow","values_mm":[0,2],"sites":sites}]);
-    input["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([0.9,1.0,1.1]);
-    let request: Request = serde_json::from_value(input).unwrap();
+    input["design_fit"]["fit_spec"]["points"][0]["target_mm"] = json!([0.9, 1.0, 1.1]);
+    let request: Request = serde_json::from_value(input.clone()).unwrap();
     let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
     let identity = json!({"source":"test:curve-width"});
-    let report = serde_json::to_value(request.evaluate_with_fit_body(
-        &Pattern::new(original.clone()), Some(&Context { body: &body, identity: &identity }),
-    ).unwrap()).unwrap();
+    let report = serde_json::to_value(
+        request
+            .evaluate_with_fit_body(
+                &Pattern::new(original.clone()),
+                Some(&Context {
+                    body: &body,
+                    identity: &identity,
+                }),
+            )
+            .unwrap(),
+    )
+    .unwrap();
     let selected = row(&report, "grid:0001", "light-sheet");
-    assert_eq!(selected["design"]["fit"]["result"]["passed"], true, "{selected}");
-    assert_eq!(selected["design"]["fit"]["result"]["validation"]["points"][0]["finished_mm"], 21.0);
-    assert_eq!(row(&report, "grid:0000", "light-sheet")["design"]["fit"]["result"]["passed"], false);
-    let altered: Value = serde_json::from_str(selected["design"]["altered_pattern_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        selected["design"]["fit"]["result"]["passed"], true,
+        "{selected}"
+    );
+    assert_eq!(
+        selected["design"]["fit"]["result"]["validation"]["points"][0]["finished_mm"],
+        21.0
+    );
+    assert_eq!(
+        row(&report, "grid:0000", "light-sheet")["design"]["fit"]["result"]["passed"],
+        false
+    );
+    let altered: Value =
+        serde_json::from_str(selected["design"]["altered_pattern_json"].as_str().unwrap()).unwrap();
     for i in 0..2 {
-        assert_eq!(altered["pieces"][i]["vertices"], original["pieces"][i]["vertices"]);
-        assert_eq!(altered["pieces"][i]["grain"], original["pieces"][i]["grain"]);
+        assert_eq!(
+            altered["pieces"][i]["vertices"],
+            original["pieces"][i]["vertices"]
+        );
+        assert_eq!(
+            altered["pieces"][i]["grain"],
+            original["pieces"][i]["grain"]
+        );
     }
     assert_eq!(selected["binding"]["status"], "available");
     assert_eq!(selected["sewing"]["status"], "available");
+
+    // The same fitted curve must replay through adaptive discovery and material binding.
+    input.as_object_mut().unwrap().remove("design_grid");
+    input["design_adaptive"] = json!({
+        "objective":"fit_band_violation_mm",
+        "variables":[{"key":"bow","bounds_mm":[0,4],"initial_mm":0,
+            "initial_step_mm":2,"minimum_step_mm":0.25,"sites":sites}],
+        "max_evaluations":16,"max_designs":1
+    });
+    let adaptive: Request = serde_json::from_value(input).unwrap();
+    let report = serde_json::to_value(
+        adaptive
+            .evaluate_with_fit_body(
+                &Pattern::new(original),
+                Some(&Context {
+                    body: &body,
+                    identity: &identity,
+                }),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let found = report["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["design"]["material_key"] == "light-sheet"
+                && row["design"]["fit"]["result"]["passed"] == true
+        })
+        .expect("adaptive search should discover the qualified curved seam");
+    assert_eq!(found["binding"]["status"], "available");
+    assert_eq!(
+        found["binding"]["result"]["pattern_json"],
+        selected["binding"]["result"]["pattern_json"]
+    );
 }
 
 #[test]
