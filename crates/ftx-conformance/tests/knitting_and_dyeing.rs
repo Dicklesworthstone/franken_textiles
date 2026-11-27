@@ -17,9 +17,10 @@ use ftx_core::shaping::{BoundaryRing, EaseShellMesh};
 use ftx_core::{RefusalCode, TargetRaster, Vec3};
 use ftx_drape::dye::{
     CapillaryTransportConfig, CieLab, CieXyz, DriftParameters, DyeInverseConfig, DyeOpticsModel,
-    KnitStitchMap, ciede2000_exact, ciede2000_sq_smooth_grad, coherent_open_loop_horizons,
-    forward_capillary_transport, linear_xyz_to_lab, optimize_yarn_dye_program,
-    rank_five_regime_pareto, srgb_u8_to_xyz_d65, vjp_capillary_transport,
+    DyeUncertaintyContext, KnitStitchMap, ciede2000_exact, ciede2000_sq_smooth_grad,
+    coherent_open_loop_horizons, forward_capillary_transport, linear_xyz_to_lab,
+    optimize_yarn_dye_program, optimize_yarn_dye_program_with_context, rank_five_regime_pareto,
+    srgb_u8_to_xyz_d65, vjp_capillary_transport,
 };
 use ftx_drape::knit::{
     AsymmetricKnitBending, CoupledKnitMembrane, KnitHysteresisBank, LocalAuditPatchInput,
@@ -27,16 +28,17 @@ use ftx_drape::knit::{
     calibrate_knit_prior_to_uniaxial_strips, cayley_hamilton_inv_sqrt_2x2,
     poincloux_uniaxial_curve,
 };
-use ftx_export::dye::verify_and_export_dye_program;
+use ftx_export::dye::{verify_and_export_dye_program, verify_and_export_dye_program_with_receipt};
 use ftx_export::knit::{
-    check_hand_knit_pdf, check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
-    export_hand_knit_document, export_kniterate_kc, export_knitout_v2,
-    refuse_proprietary_binary_target,
+    TierBProprietaryTarget, VendorHandoffManifest, check_hand_knit_pdf, check_hand_knit_svg,
+    export_brother_ayab, export_calibration_swatch_kit, export_hand_knit_document,
+    export_kniterate_kc, export_knitout_v2, export_tier_b_vendor_handoff,
+    refuse_proprietary_binary_target, verify_tier_b_handoff_bundle,
 };
 use ftx_pattern::dye::{
-    DYE_PROGRAM_SCHEMA, DancerAccumulatorSpec, DyeMachineProfile, DyeSegment, DyeingRegime,
-    IntakeEvent, IntakeEventKind, OpticalMeasurementBasis, Regime3IntakeTimeline, YarnDyeProgram,
-    YarnDyeingQualification,
+    DYE_PROGRAM_SCHEMA, DYE_UNCERTAINTY_SCHEMA, DancerAccumulatorSpec, DyeMachineProfile,
+    DyePlanUncertaintyReceipt, DyeSegment, DyeingRegime, IntakeEvent, IntakeEventKind,
+    OpticalMeasurementBasis, Regime3IntakeTimeline, YarnDyeProgram, YarnDyeingQualification,
 };
 use ftx_pattern::knit::{
     AutoKnitConfig, Bed, CarrierId, GaugeSpec, KNITOUT_SCHEMA, KnitSafetyContext,
@@ -221,10 +223,69 @@ fn knitting_end_to_end_swatch_panel_tube_and_format_boundaries() {
         .expect_err("EN 14682 must refuse child drawstring in hand-knit chart export");
     assert_eq!(err_hand_drawstring.code, RefusalCode::MaterialProcessHazard);
 
-    // 5. Tier-B proprietary target fails closed
-    let shima = MachineProfile::shima_seiki_12e_handoff();
-    let err_tier_b = refuse_proprietary_binary_target(&shima, "DAT").unwrap_err();
-    assert_eq!(err_tier_b.code, RefusalCode::OpaqueProprietaryTarget);
+    // 5. Tier-B proprietary targets (Shima .dat & Stoll SINTRAL) refuse direct binary emission
+    //    with exact ranked repair text and emit sealed, VM-verifiable Knitout v2 vendor handoffs.
+    let expected_repair = "Export verified Knitout v2 + vendor handoff manifest for licensed Shima SDS-ONE APEX / Stoll M1plus compilation.";
+    for (profile, target, fmt) in [
+        (
+            MachineProfile::shima_seiki_12e_handoff(),
+            TierBProprietaryTarget::ShimaSeikiDat,
+            ".dat",
+        ),
+        (
+            MachineProfile::stoll_12e_handoff(),
+            TierBProprietaryTarget::StollSintral,
+            "SINTRAL",
+        ),
+    ] {
+        assert_eq!(target.withheld_format(), fmt);
+        let err_tier_b = refuse_proprietary_binary_target(&profile, fmt).unwrap_err();
+        assert_eq!(err_tier_b.code, RefusalCode::OpaqueProprietaryTarget);
+        assert_eq!(
+            err_tier_b.repairs.first().map(String::as_str),
+            Some(expected_repair)
+        );
+
+        let tb_doc =
+            draft_calibration_swatch(&profile, "merino-120tex", 18, 6, &[5.0, 6.0]).unwrap();
+        let tb_compiled =
+            compile_knit_doc(&tb_doc, &profile, None, Some("mat-tierb-sha"), None).unwrap();
+        let handoff = export_tier_b_vendor_handoff(&tb_compiled, &profile, fmt).unwrap();
+        assert!(!handoff.manifest.machine_executable);
+        assert!(!handoff.manifest.hardware_execution_authorized);
+        assert!(!handoff.manifest.physical_knitting_validated);
+        assert!(!handoff.manifest.fit_claimed);
+        assert_eq!(handoff.manifest_sha256, handoff.manifest.manifest_sha256);
+
+        let tb_ctx = KnitSafetyContext {
+            wearer_age_class: WearerAgeClass::CalibrationSwatchOnly,
+            blocked_wale_pitch_mm: 100.0 / tb_doc.gauge.wales_per_100mm,
+            source_doc: Some(&tb_doc),
+            speed_fraction: Some(0.50),
+            takedown_fraction: Some(0.60),
+        };
+        let vm_report = verify_tier_b_handoff_bundle(&handoff, &profile, &tb_ctx).unwrap();
+        assert_eq!(vm_report.program_sha256, handoff.knitout.knitout_sha256);
+
+        let mut tampered_manifest = handoff.manifest.clone();
+        tampered_manifest.physical_knitting_validated = true;
+        assert_eq!(
+            tampered_manifest.verify_integrity().unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+        let mut tampered_bundle = handoff;
+        tampered_bundle.manifest.fit_claimed = true;
+        assert_eq!(
+            verify_tier_b_handoff_bundle(&tampered_bundle, &profile, &tb_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+        // JSON round-trip check
+        let rt: VendorHandoffManifest =
+            serde_json::from_str(&tampered_bundle.manifest_json).unwrap();
+        rt.verify_integrity().unwrap();
+    }
 
     // 6. The supported shaped torso tube compiles deterministically, with both beds retained.
     let raglan = RaglanPulloverSpec {
@@ -620,11 +681,133 @@ fn dye_optics_transport_vjp_inverse_cvar_and_verifier_end_to_end() {
     let pareto = rank_five_regime_pareto(&target, &stitch_map, &machine, drift, 4);
     assert_eq!(pareto.len(), 5);
 
-    // 5. Swatch verification & export produces CSV + G-code + sealed cert
-    let bundle = verify_and_export_dye_program(&res1.program, &machine, None, None).unwrap();
+    // 5. Swatch verification & export produces CSV + G-code + sealed cert + linked Seam-4 receipt
+    assert_eq!(res1.uncertainty_receipt.schema, DYE_UNCERTAINTY_SCHEMA);
+    assert_eq!(
+        res1.uncertainty_receipt.payload_sha256,
+        res2.uncertainty_receipt.payload_sha256
+    );
+    assert!(!res1.uncertainty_receipt.four_claims.color_fidelity_claimed);
+    assert!(
+        !res1
+            .uncertainty_receipt
+            .four_claims
+            .visual_realization_swatch_verified
+    );
+    assert!(
+        !res1
+            .uncertainty_receipt
+            .four_claims
+            .hardware_execution_authorized
+    );
+    assert!(
+        !res1
+            .uncertainty_receipt
+            .four_claims
+            .physical_dyeing_validated
+    );
+    assert!(!res1.uncertainty_receipt.four_claims.fit_claimed);
+    res1.uncertainty_receipt.verify_integrity().unwrap();
+
+    let bundle = verify_and_export_dye_program_with_receipt(
+        &res1.program,
+        &machine,
+        None,
+        None,
+        Some(&res1.uncertainty_receipt),
+    )
+    .unwrap();
     assert!(!bundle.cert.hardware_execution_authorized);
     assert!(!bundle.cert.physical_dyeing_validated);
+    assert_eq!(
+        bundle.cert.uncertainty_receipt_sha256.as_deref(),
+        Some(res1.uncertainty_receipt.payload_sha256.as_str())
+    );
     assert!(bundle.controller_gcode.contains("G1 E"));
+    bundle.cert.verify_integrity().unwrap();
+
+    let mut tampered_receipt = res1.uncertainty_receipt.clone();
+    tampered_receipt.four_claims.color_fidelity_claimed = true;
+    assert_eq!(
+        verify_and_export_dye_program_with_receipt(
+            &res1.program,
+            &machine,
+            None,
+            None,
+            Some(&tampered_receipt),
+        )
+        .unwrap_err()
+        .code,
+        RefusalCode::VerificationMismatch
+    );
+
+    // 5b. Calibrated scanner + Measured Exp-4 qualification links Seam-4 receipt end-to-end
+    let cal_qual = YarnDyeingQualification {
+        id: "dq-conformance-scanner".to_string(),
+        material_sha256: "cotton-120tex-sha".to_string(),
+        dye_machine_sha256: machine.canonical_sha256().unwrap(),
+        yarn_lot_id: "lot-y1".to_string(),
+        dye_lot_id: "lot-d1".to_string(),
+        wick_dispersion_mm: 2.0,
+        shrinkage_axial_pct: 2.0,
+        wet_tenacity_retention_ratio: 0.92,
+        yarn_breaking_force_n: 8.5,
+        yarn_tg_c: None,
+        optical_measurement_basis: OpticalMeasurementBasis::CalibratedChartScanner,
+        washing_off_validated: true,
+        iso_105_c06_grade: Some(4.5),
+        iso_105_x12_wet_rub_grade: Some(4.5),
+        saliva_fastness_validated: true,
+        evidence: Evidence::Measured,
+        source: Source {
+            reference: "local:conformance_exp4_scanner".to_string(),
+            accessed_on: "2026-11-27".to_string(),
+            note: "Calibrated chart scanner Exp-4 coupon".to_string(),
+        },
+        method: "reactive fixation + soap wash + IT8 scanner".to_string(),
+        conditioning: BTreeMap::new(),
+        allow_estimates: false,
+    };
+    let mut cal_inv_cfg = inv_cfg.clone();
+    cal_inv_cfg.wearer_age_class = WearerAgeClass::Adult;
+    let cal_ctx = DyeUncertaintyContext::from_qualification(&cal_qual).unwrap();
+    let cal_res = optimize_yarn_dye_program_with_context(
+        &target,
+        &stitch_map,
+        &machine,
+        &optics,
+        &opt_tr_cfg,
+        &cal_inv_cfg,
+        &cal_ctx,
+    )
+    .unwrap();
+    assert!(
+        cal_res
+            .uncertainty_receipt
+            .four_claims
+            .color_fidelity_claimed
+    );
+    assert!(
+        !cal_res
+            .uncertainty_receipt
+            .four_claims
+            .visual_realization_swatch_verified
+    );
+    let receipt_json = serde_json::to_string(&cal_res.uncertainty_receipt).unwrap();
+    let receipt_rt: DyePlanUncertaintyReceipt = serde_json::from_str(&receipt_json).unwrap();
+    receipt_rt.verify_integrity().unwrap();
+    let cal_bundle = verify_and_export_dye_program_with_receipt(
+        &cal_res.program,
+        &machine,
+        Some(&cal_qual),
+        Some("cotton-120tex-sha"),
+        Some(&receipt_rt),
+    )
+    .unwrap();
+    assert_eq!(
+        cal_bundle.cert.uncertainty_receipt_sha256.as_deref(),
+        Some(receipt_rt.payload_sha256.as_str())
+    );
 
     // 6. Infant wearable refuses without Exp-4 receipt and without saliva fastness, passes when complete
     let mut infant_prog = res1.program.clone();

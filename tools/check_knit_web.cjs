@@ -54,7 +54,7 @@ for (const selectId of ["panelAgeClass", "dyeAgeClass"]) {
 assert(page.includes("relaxed_after_wash"), "knit-page.js must send GaugeSpec.relaxed_after_wash");
 assert(page.includes("needle_pitch_mm"), "knit-page.js must send GaugeSpec.needle_pitch_mm");
 assert(!page.includes("measured_after_wash_block"), "knit-page.js must not send unknown GaugeSpec field measured_after_wash_block");
-assert(page.includes("regime1_a_stripes") && page.includes("regime1_b_circular_pooling") && page.includes("regime2_fiducial_synced"), "knit-page.js must send valid DyeingRegime variants");
+assert(page.includes("regime1_a_stripes") && page.includes("regime1_b_circular_pooling"), "knit-page.js must send valid DyeingRegime variants");
 assert(!page.includes("regime2_b_planned_pooling"), "knit-page.js must not send invalid DyeingRegime regime2_b_planned_pooling");
 const validRegimes = new Set([
   "auto",
@@ -234,13 +234,24 @@ workerInstance.onmessage({
       predicted_stitch_srgb: Array.from({ length: 16 }, () => [100, 120, 140]),
       pareto_regimes: [{ regime: "stripes", feasible: true, expected_delta_e00_p95: 2.3, complexity_rank: 1, rationale: "ok" }],
       program: { name: "test" },
+      uncertainty_receipt: {
+        schema: "ftx-dye-uncertainty/1",
+        four_claims: { color_fidelity_claimed: false },
+        gating_flags: ["uncalibrated_optics"],
+      },
       controller_gcode: null,
       controller_export_refusal: { code: "material_process_hazard", message: "oven dwell below minimum" },
     },
   },
 });
 assert.match(elMap.dyePre.textContent, /Controller export refused \[material_process_hazard\]: oven dwell below minimum/);
-assert.equal(activeUrls.size, 1);
+assert.match(elMap.dyeMetrics.textContent, /color_fidelity_claimed=false/);
+assert.match(elMap.dyeMetrics.textContent, /uncalibrated_optics/);
+assert(
+  elMap.dyeDownloads.children.some((a) => a.download === "dye_uncertainty_receipt.json"),
+  "dye result with uncertainty_receipt must render dye_uncertainty_receipt.json download link"
+);
+assert.equal(activeUrls.size, 2);
 
 // Stale refusal for req1 must NOT overwrite req2's clean status or raise error banner.
 workerInstance.onmessage({
@@ -301,14 +312,25 @@ for (const unsafeSvg of [
   assert.match(elMap.error.textContent, /Refused malformed or unsafe SVG/);
 }
 
-// Flatbed checker in auto regime must pick regime2_fiducial_synced rather than circular pooling.
+// Auto regime chooses regime1_a_stripes for 1D sunset gradient, regime1_b_circular_pooling for flatbed checker
+// (compatible with built-in sensorless dye rigs), and passes explicit regime2_fiducial_synced through verbatim.
+elMap.dyePreset.value = "sunset";
+elMap.dyeMode.value = "flatbed";
+elMap.dyeRegime.value = "auto";
+elMap.runDye.handlers.click();
+assert.equal(posted.at(-1).payload.regime, "regime1_a_stripes");
+
 elMap.dyePreset.value = "checker";
 elMap.dyeMode.value = "flatbed";
 elMap.dyeRegime.value = "auto";
 elMap.runDye.handlers.click();
 const flatbedReq = posted.at(-1);
 assert.equal(flatbedReq.payload.is_circular, false);
-assert.equal(flatbedReq.payload.regime, "regime2_fiducial_synced");
+assert.equal(flatbedReq.payload.regime, "regime1_b_circular_pooling");
+
+elMap.dyeRegime.value = "regime2_fiducial_synced";
+elMap.runDye.handlers.click();
+assert.equal(posted.at(-1).payload.regime, "regime2_fiducial_synced");
 
 // Kniterate retains useful Knitout and source identity without offering an unqualified .kc file.
 elMap.swatchCams.value = "5.0,7.0";
@@ -378,6 +400,31 @@ workerInstance.onmessage({
 assert(
   elMap.swatchDownloads.children.some((a) => a.download === "swatch_ayab.png"),
   "Brother AYAB swatch must render swatch_ayab.png download link"
+);
+
+// Tier-B Stoll 12E swatch renders vendor_handoff_manifest.json download link.
+elMap.swatchMachine.value = "stoll-12e-handoff";
+elMap.swatchCams.value = "10.0,12.0";
+elMap.runSwatch.handlers.click();
+const stollReq = posted.at(-1);
+workerInstance.onmessage({
+  data: {
+    type: "result",
+    kind: "swatch",
+    request: stollReq.request,
+    result: {
+      knitout_text: ";!knitout-2\n",
+      machine_executable: false,
+      vendor_handoff_manifest: { schema: "ftx-vendor-handoff/1", machine_executable: false },
+      chart_svg: "<svg></svg>",
+      cert: { hardware_execution_authorized: false },
+      qualification_template: {},
+    },
+  },
+});
+assert(
+  elMap.swatchDownloads.children.some((a) => a.download === "vendor_handoff_manifest.json"),
+  "Tier-B swatch must render vendor_handoff_manifest.json download link"
 );
 
 // A supported straight-top panel preserves actual dimensions and does not invent a neckline.

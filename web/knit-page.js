@@ -17,6 +17,7 @@ const PANEL_MACHINE_DEFAULTS = {
   "brother-kh270-ayab": { needle_pitch_mm: 9.0, carrier_id: "A", cam_setting: 6.0 },
   "hand-knit": { needle_pitch_mm: 4.0, carrier_id: "1", cam_setting: 7.0 },
   "shima-seiki-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
+  "stoll-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 11.0 },
 };
 
 function showError(msg) {
@@ -173,6 +174,9 @@ function renderSwatch(res) {
   if (res.ayab_checklist) {
     makeDownload(dl, "ayab_session_checklist.json", JSON.stringify(res.ayab_checklist, null, 2), "application/json");
   }
+  if (res.vendor_handoff_manifest) {
+    makeDownload(dl, "vendor_handoff_manifest.json", JSON.stringify(res.vendor_handoff_manifest, null, 2), "application/json");
+  }
   makeDownload(dl, "swatch_chart.svg", res.chart_svg, "image/svg+xml");
   makeDownload(dl, "swatch_cert.json", JSON.stringify(res.cert, null, 2), "application/json");
   makeDownload(dl, "swatch_qualification_template.json", JSON.stringify(res.qualification_template, null, 2), "application/json");
@@ -209,10 +213,17 @@ function renderPanel(res) {
 function renderDye(res, targetPixels, targetW, targetH) {
   const out = document.getElementById("dyeOut");
   const [courses, wales] = res.grid;
+  const receipt = res.uncertainty_receipt;
+  const receiptSuffix = receipt
+    ? ` · color_fidelity_claimed=${Boolean(receipt.four_claims?.color_fidelity_claimed)}` +
+      (Array.isArray(receipt.gating_flags) && receipt.gating_flags.length
+        ? ` · flags=${receipt.gating_flags.join(", ")}`
+        : "")
+    : "";
   document.getElementById("dyeMetrics").textContent =
     `CIEDE2000 p50=${res.delta_e00_p50.toFixed(2)}, p95=${res.delta_e00_p95.toFixed(2)} · gamut floor=${res.gamut_floor_delta_e00.toFixed(2)} · ` +
     `coherent horizon: circular=${res.coherent_horizon_circular_stitches} st / flatbed=${res.coherent_horizon_flatbed_stitches} st · ` +
-    `iterations=${res.iterations}`;
+    `iterations=${res.iterations}${receiptSuffix}`;
 
   drawGridCanvas(document.getElementById("dyeTargetCanvas"), targetW, targetH, targetPixels);
   // Flip courses so course 0 is at the bottom of the knitted fabric canvas
@@ -254,6 +265,9 @@ function renderDye(res, targetPixels, targetW, targetH) {
   const dl = document.getElementById("dyeDownloads");
   clearDownloads(dl);
   makeDownload(dl, "dye_program.json", JSON.stringify(res.program, null, 2), "application/json");
+  if (res.uncertainty_receipt) {
+    makeDownload(dl, "dye_uncertainty_receipt.json", JSON.stringify(res.uncertainty_receipt, null, 2), "application/json");
+  }
   if (res.schedule_csv) makeDownload(dl, "dye_schedule.csv", res.schedule_csv, "text/csv");
   if (res.controller_gcode) makeDownload(dl, "dye_controller.gcode", res.controller_gcode, "text/plain");
   if (res.cert) makeDownload(dl, "dye_cert.json", JSON.stringify(res.cert, null, 2), "application/json");
@@ -454,11 +468,9 @@ runDyeBtn.addEventListener("click", () => {
   const isCircular = document.getElementById("dyeMode").value === "circular";
   const selectedRegime = document.getElementById("dyeRegime")?.value || "auto";
   const regime = selectedRegime === "auto"
-    ? (preset === "horizon"
+    ? ((preset === "horizon" || preset === "sunset")
       ? "regime1_a_stripes"
-      : isCircular
-        ? "regime1_b_circular_pooling"
-        : "regime2_fiducial_synced")
+      : "regime1_b_circular_pooling")
     : selectedRegime;
   const pixels = buildPresetPixels(preset, wales, courses);
   const request = ++reqId;

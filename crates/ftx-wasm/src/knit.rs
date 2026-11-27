@@ -9,10 +9,10 @@ use ftx_drape::dye::{
     CapillaryTransportConfig, DriftParameters, DyeInverseConfig, DyeOpticsModel, KnitStitchMap,
     optimize_yarn_dye_program, rank_five_regime_pareto, srgb_u8_to_xyz_d65,
 };
-use ftx_export::dye::verify_and_export_dye_program;
+use ftx_export::dye::verify_and_export_dye_program_with_receipt;
 use ftx_export::knit::{
     check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
-    export_hand_knit_document, export_kniterate_kc,
+    export_hand_knit_document, export_kniterate_kc, export_tier_b_vendor_handoff,
 };
 use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime};
 use ftx_pattern::knit::{
@@ -30,7 +30,7 @@ const SWATCH_MATERIAL_PLACEHOLDER: &str = "browser-unqualified-yarn-placeholder"
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KnitSwatchRequest {
-    /// Target machine ID (`"kniterate-7e"`, `"brother-kh930-ayab"`, `"brother-kh270-ayab"`, `"shima-seiki-12e-handoff"`, `"hand-knit"`).
+    /// Target machine ID (`"kniterate-7e"`, `"brother-kh930-ayab"`, `"brother-kh270-ayab"`, `"shima-seiki-12e-handoff"`, `"stoll-12e-handoff"`, `"hand-knit"`).
     pub machine: String,
     /// Yarn identifier label.
     pub yarn_id: String,
@@ -130,12 +130,13 @@ pub fn resolve_knit_machine(id: &str) -> Result<MachineProfile, Refusal> {
         "shima-seiki-12e-handoff" | "shima-12e" | "shima" => {
             Ok(MachineProfile::shima_seiki_12e_handoff())
         }
+        "stoll-12e-handoff" | "stoll-12e" | "stoll" => Ok(MachineProfile::stoll_12e_handoff()),
         "hand-knit" | "hand" => Ok(MachineProfile::hand_knit(4.0)),
         _ => Err(Refusal::new(
             RefusalCode::UnknownParameter,
             format!("unknown knitting machine profile '{id}'"),
         )
-        .repair("choose one of: kniterate-7e, brother-kh930-ayab, brother-kh270-ayab, shima-seiki-12e-handoff, hand-knit")),
+        .repair("choose one of: kniterate-7e, brother-kh930-ayab, brother-kh270-ayab, shima-seiki-12e-handoff, stoll-12e-handoff, hand-knit")),
     }
 }
 
@@ -215,6 +216,16 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
     } else {
         None
     };
+    let vendor_handoff_manifest = if profile.backend_kind.is_opaque_proprietary() {
+        let fmt = match profile.backend_kind {
+            MachineBackendKind::ShimaSeikiHandoff => ".dat",
+            MachineBackendKind::StollHandoff => "SINTRAL",
+            _ => "proprietary",
+        };
+        Some(export_tier_b_vendor_handoff(&compiled, &profile, fmt)?.manifest)
+    } else {
+        None
+    };
 
     let payload = json!({
         "machine": profile,
@@ -226,6 +237,7 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
         "ayab_checklist": ayab.as_ref().map(|b| &b.checklist),
         "ayab_png_base64": ayab.as_ref().map(|b| encode_base64(&b.png_bytes)),
         "ayab_png_sha256": ayab.as_ref().map(|b| &b.png_sha256),
+        "vendor_handoff_manifest": vendor_handoff_manifest,
         "chart_svg": hand.svg_text,
         "instructions_text": hand.instructions_text,
         "svg_checks_passed": svg_checks.iter().all(|c| c.ok),
@@ -391,7 +403,13 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
     // Surface any physical hazard refusal explicitly rather than swallowing it behind `.ok()`.
     let (verified_export, controller_export_refusal) =
         if req.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
-            match verify_and_export_dye_program(&opt.program, &machine, None, None) {
+            match verify_and_export_dye_program_with_receipt(
+                &opt.program,
+                &machine,
+                None,
+                None,
+                Some(&opt.uncertainty_receipt),
+            ) {
                 Ok(bundle) => (Some(bundle), None),
                 Err(refusal) => (None, Some(refusal)),
             }
@@ -425,6 +443,7 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
         "predicted_stitch_srgb": predicted_grid,
         "pareto_regimes": pareto,
         "program": opt.program,
+        "uncertainty_receipt": opt.uncertainty_receipt,
         "schedule_csv": verified_export.as_ref().map(|b| &b.schedule_csv),
         "controller_gcode": verified_export.as_ref().map(|b| &b.controller_gcode),
         "cert": verified_export.as_ref().map(|b| &b.cert),
@@ -444,15 +463,14 @@ pub fn default_carrier() -> CarrierId {
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    let mut chunks = bytes.chunks_exact(3);
-    for chunk in &mut chunks {
+    let (chunks, rem) = bytes.as_chunks::<3>();
+    for chunk in chunks {
         let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
         out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
         out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
         out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
         out.push(TABLE[(n & 0x3f) as usize] as char);
     }
-    let rem = chunks.remainder();
     if rem.len() == 1 {
         let n = u32::from(rem[0]) << 16;
         out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
@@ -704,10 +722,10 @@ mod tests {
                     _ => None,
                 }
             };
-            let bytes = input.as_bytes();
-            assert_eq!(bytes.len() % 4, 0);
-            let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-            for chunk in bytes.chunks_exact(4) {
+            let (chunks, rem) = input.as_bytes().as_chunks::<4>();
+            assert!(rem.is_empty());
+            let mut out = Vec::with_capacity(chunks.len() * 3);
+            for chunk in chunks {
                 let a = val(chunk[0]).unwrap();
                 let b = val(chunk[1]).unwrap();
                 out.push((a << 2) | (b >> 4));
@@ -745,6 +763,30 @@ mod tests {
         assert_eq!(
             out["ayab_checklist"]["png_sha256"].as_str(),
             Some(sha.as_str())
+        );
+
+        // Tier-B Stoll 12E swatch emits verified Knitout v2 + vendor_handoff_manifest (machine_executable=false).
+        let stoll_req = json!({
+            "machine": "stoll-12e-handoff",
+            "yarn_id": "merino-120tex",
+            "needles": 16,
+            "courses_per_zone": 6,
+            "cam_settings": [10.0, 12.0]
+        })
+        .to_string();
+        let stoll_out: Value =
+            serde_json::from_str(&knit_swatch_json(&stoll_req).unwrap()).unwrap();
+        assert_eq!(
+            stoll_out["vendor_handoff_manifest"]["machine_executable"],
+            false
+        );
+        assert_eq!(
+            stoll_out["vendor_handoff_manifest"]["hardware_execution_authorized"],
+            false
+        );
+        assert_eq!(
+            stoll_out["vendor_handoff_manifest"]["withheld_binary_format"],
+            "SINTRAL"
         );
     }
 
@@ -786,7 +828,7 @@ mod tests {
         let req = json!({
             "machine": "piezo-cmyk",
             "wearer_age_class": "calibration_swatch_only",
-            "regime": "regime2_fiducial_synced",
+            "regime": "regime1_b_circular_pooling",
             "width": 6,
             "height": 6,
             "srgb_u8": pixels,
@@ -799,6 +841,19 @@ mod tests {
         })
         .to_string();
         let out: Value = serde_json::from_str(&dye_optimize_json(&req).unwrap()).unwrap();
+        assert!(out["controller_export_refusal"].is_null());
+        assert_eq!(
+            out["uncertainty_receipt"]["four_claims"]["color_fidelity_claimed"],
+            false
+        );
+        assert_eq!(
+            out["uncertainty_receipt"]["drift_ledger"]["topology_multiplier"],
+            2.0
+        );
+        assert_eq!(
+            out["cert"]["uncertainty_receipt_sha256"].as_str(),
+            out["uncertainty_receipt"]["payload_sha256"].as_str()
+        );
         let grid = out["predicted_stitch_srgb"].as_array().unwrap();
         assert_eq!(grid.len(), 24);
         for c in 0..4 {
@@ -811,5 +866,29 @@ mod tests {
                 "course {c} should be bluer on the left than the right (left={left:?}, right={right:?})"
             );
         }
+
+        // Requesting Regime II optical fiducial sync on sensorless piezo-cmyk must refuse controller export explicitly.
+        let sensorless_req = json!({
+            "machine": "piezo-cmyk",
+            "wearer_age_class": "calibration_swatch_only",
+            "regime": "regime2_fiducial_synced",
+            "width": 6,
+            "height": 6,
+            "srgb_u8": pixels,
+            "grid": [4, 6],
+            "is_circular": false,
+            "drift_eps": 0.0,
+            "drift_sigma_eta": 0.0,
+            "wick_mm": 0.2,
+            "max_iters": 8
+        })
+        .to_string();
+        let sensorless_out: Value =
+            serde_json::from_str(&dye_optimize_json(&sensorless_req).unwrap()).unwrap();
+        assert!(sensorless_out["cert"].is_null());
+        assert_eq!(
+            sensorless_out["controller_export_refusal"]["code"],
+            "machine_state_infeasible"
+        );
     }
 }

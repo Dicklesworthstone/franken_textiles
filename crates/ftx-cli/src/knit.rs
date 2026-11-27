@@ -10,17 +10,21 @@ use std::path::PathBuf;
 
 use ftx_core::{Refusal, RefusalCode, TargetRaster};
 use ftx_drape::dye::{
-    CapillaryTransportConfig, DriftParameters, DyeInverseConfig, DyeOpticsModel, KnitStitchMap,
-    optimize_yarn_dye_program, rank_five_regime_pareto, srgb_u8_to_xyz_d65,
+    CapillaryTransportConfig, DriftParameters, DyeInverseConfig, DyeOpticsModel,
+    DyeUncertaintyContext, KnitStitchMap, optimize_yarn_dye_program_with_context,
+    rank_five_regime_pareto, srgb_u8_to_xyz_d65,
 };
 use ftx_drape::knit::{PoinclouxParams, poincloux_uniaxial_curve};
-use ftx_export::dye::{export_exp4_bleed_swatch_kit, verify_and_export_dye_program};
+use ftx_export::dye::{export_exp4_bleed_swatch_kit, verify_and_export_dye_program_with_receipt};
 use ftx_export::knit::{
     check_hand_knit_pdf, check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
     export_hand_knit_document, export_kniterate_kc, export_knitout_v2,
     export_tier_b_vendor_handoff, refuse_proprietary_binary_target,
 };
-use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime, YarnDyeProgram, YarnDyeingQualification};
+use ftx_pattern::dye::{
+    DyeMachineProfile, DyePlanUncertaintyReceipt, DyeingRegime, YarnDyeProgram,
+    YarnDyeingQualification,
+};
 use ftx_pattern::knit::{
     GaugeSpec, KnitDoc, KnitSwatchQualification, MachineBackendKind, MachineProfile,
     ParametricPanelSpec, RaglanPulloverSpec, WearerAgeClass, compile_knit_doc,
@@ -897,7 +901,21 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
         systematic_eps: opt_f64(args, "drift-eps", 0.002)?,
         stochastic_sigma_eta: opt_f64(args, "drift-sigma", 0.015)?,
     };
-    let wick_mm = opt_f64(args, "wick-mm", 1.5)?;
+    let qual: Option<YarnDyeingQualification> = match args.options.get("dye-qual") {
+        Some(path) => {
+            let p = PathBuf::from(path);
+            let txt = read_utf8(&p, "yarn dyeing qualification")?;
+            Some(
+                serde_json::from_str(&txt)
+                    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
+            )
+        }
+        None => None,
+    };
+    let wick_mm = match args.options.get("wick-mm") {
+        Some(_) => opt_f64(args, "wick-mm", 1.5)?,
+        None => qual.as_ref().map_or(1.5, |q| q.wick_dispersion_mm),
+    };
     Refusal::finite("drift-eps", drift.systematic_eps)?;
     Refusal::finite("drift-sigma", drift.stochastic_sigma_eta)?;
     Refusal::finite("wick-mm", wick_mm)?;
@@ -949,6 +967,7 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
             format!("--cells {n_cells} must be within 1..=2048"),
         ));
     }
+    let shrinkage_axial_frac = qual.as_ref().map_or(0.02, |q| q.shrinkage_axial_pct * 0.01);
     let tr_cfg = CapillaryTransportConfig {
         ds_m: stitch_map.total_yarn_length_m / (n_cells as f64),
         sigma_wick_m: wick_mm * 0.001,
@@ -959,7 +978,7 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .map(|p| p.rf_retardation)
             .collect(),
         fixation_efficiency: vec![0.94; n_p],
-        shrinkage_axial_frac: 0.02,
+        shrinkage_axial_frac,
     };
     let inv_cfg = DyeInverseConfig {
         name: args
@@ -985,21 +1004,26 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ciede_eps_c: 1e-4,
         drift,
     };
-    let opt =
-        optimize_yarn_dye_program(&target, &stitch_map, &machine, &optics, &tr_cfg, &inv_cfg)?;
-    let pareto = rank_five_regime_pareto(&target, &stitch_map, &machine, drift, 4);
-
-    let qual: Option<YarnDyeingQualification> = match args.options.get("dye-qual") {
-        Some(path) => {
-            let p = PathBuf::from(path);
-            let txt = read_utf8(&p, "yarn dyeing qualification")?;
-            Some(
-                serde_json::from_str(&txt)
-                    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
-            )
-        }
-        None => None,
+    // `cmd_dye_optimize` currently solves against `DyeOpticsModel::synthetic_cmyk_cotton()` rather than
+    // measured spectral K/S cards from the qualification record, so keep optical_measurement_basis
+    // UnqualifiedUncalibrated and evidence Estimate even when binding `qualification_sha256`.
+    let uncertainty_ctx = DyeUncertaintyContext {
+        qualification_sha256: qual
+            .as_ref()
+            .map(YarnDyeingQualification::canonical_sha256)
+            .transpose()?,
+        ..DyeUncertaintyContext::default()
     };
+    let opt = optimize_yarn_dye_program_with_context(
+        &target,
+        &stitch_map,
+        &machine,
+        &optics,
+        &tr_cfg,
+        &inv_cfg,
+        &uncertainty_ctx,
+    )?;
+    let pareto = rank_five_regime_pareto(&target, &stitch_map, &machine, drift, 4);
 
     let out_dir = PathBuf::from(
         args.options
@@ -1008,15 +1032,18 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
     );
     let prog_json = serde_json::to_string_pretty(&opt.program)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let receipt_json = serde_json::to_string_pretty(&opt.uncertainty_receipt)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     let pareto_json = serde_json::to_string_pretty(&pareto)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     let controller_bundle =
         if wearer_age_class == WearerAgeClass::CalibrationSwatchOnly || qual.is_some() {
-            Some(verify_and_export_dye_program(
+            Some(verify_and_export_dye_program_with_receipt(
                 &opt.program,
                 &machine,
                 qual.as_ref(),
                 None,
+                Some(&opt.uncertainty_receipt),
             )?)
         } else {
             None
@@ -1024,6 +1051,11 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
     reserve_output(&out_dir, "dye optimize")?;
     write_file(&out_dir, "dye_program.json", prog_json.as_bytes())?;
+    write_file(
+        &out_dir,
+        "dye_uncertainty_receipt.json",
+        receipt_json.as_bytes(),
+    )?;
     write_file(&out_dir, "pareto_regimes.json", pareto_json.as_bytes())?;
 
     let emitted_controller = if let Some(bundle) = controller_bundle {
@@ -1048,6 +1080,8 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "unreproducible_energy_fraction": opt.unreproducible_energy_fraction,
         "coherent_horizon_circular": opt.coherent_horizons.0,
         "coherent_horizon_flatbed": opt.coherent_horizons.1,
+        "uncertainty_receipt_sha256": opt.uncertainty_receipt.payload_sha256,
+        "uncertainty_receipt": opt.uncertainty_receipt,
         "emitted_controller_files": emitted_controller,
         "pareto_regimes": pareto,
         "out_dir": out_dir.display().to_string(),
@@ -1067,11 +1101,15 @@ fn cmd_dye_optimize(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_dye_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "dye verify", &["machine", "dye-qual", "out"])?;
+    known_options(
+        args,
+        "dye verify",
+        &["machine", "dye-qual", "receipt", "out"],
+    )?;
     no_extra_positional(
         args,
         3,
-        "ftx dye verify PROGRAM.json [--machine ID] [--dye-qual Q.json] [--out NEW_DIR] [--json]",
+        "ftx dye verify PROGRAM.json [--machine ID] [--dye-qual Q.json] [--receipt RECEIPT.json] [--out NEW_DIR] [--json]",
     )?;
     let prog_path = PathBuf::from(&args.positional[2]);
     let txt = read_utf8(&prog_path, "dye program document")?;
@@ -1094,7 +1132,24 @@ fn cmd_dye_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         None => None,
     };
-    let bundle = verify_and_export_dye_program(&prog, &machine, qual.as_ref(), None)?;
+    let receipt: Option<DyePlanUncertaintyReceipt> = match args.options.get("receipt") {
+        Some(path) => {
+            let p = PathBuf::from(path);
+            let rtxt = read_utf8(&p, "dye plan uncertainty receipt")?;
+            Some(
+                serde_json::from_str(&rtxt)
+                    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
+            )
+        }
+        None => None,
+    };
+    let bundle = verify_and_export_dye_program_with_receipt(
+        &prog,
+        &machine,
+        qual.as_ref(),
+        None,
+        receipt.as_ref(),
+    )?;
     if let Some(out) = args.options.get("out") {
         let out_dir = PathBuf::from(out);
         reserve_output(&out_dir, "dye verify")?;
@@ -1331,6 +1386,11 @@ mod tests {
         let (dye_val, dye_code, _) = cmd_dye(&dye_args).unwrap();
         assert_eq!(dye_code, 0);
         assert_eq!(dye_val["emitted_controller_files"], true);
+        assert!(dye_dir.join("dye_uncertainty_receipt.json").is_file());
+        assert_eq!(
+            dye_val["uncertainty_receipt"]["four_claims"]["color_fidelity_claimed"],
+            false
+        );
         let dye_verify_args = parse(
             &[
                 "dye",
@@ -1338,6 +1398,11 @@ mod tests {
                 dye_dir.join("dye_program.json").to_str().unwrap(),
                 "--machine",
                 "piezo-cmyk",
+                "--receipt",
+                dye_dir
+                    .join("dye_uncertainty_receipt.json")
+                    .to_str()
+                    .unwrap(),
             ]
             .map(String::from),
         )
@@ -1345,6 +1410,112 @@ mod tests {
         let (dv_val, dv_code, _) = cmd_dye(&dye_verify_args).unwrap();
         assert_eq!(dv_code, 0);
         assert_eq!(dv_val["verified"], true);
+        assert_eq!(
+            dv_val["cert"]["uncertainty_receipt_sha256"].as_str(),
+            dye_val["uncertainty_receipt_sha256"].as_str()
+        );
+
+        let mut tampered_receipt: Value = serde_json::from_str(
+            &std::fs::read_to_string(dye_dir.join("dye_uncertainty_receipt.json")).unwrap(),
+        )
+        .unwrap();
+        tampered_receipt["four_claims"]["color_fidelity_claimed"] = json!(true);
+        let tampered_receipt_path = root.join("tampered_dye_receipt.json");
+        std::fs::write(
+            &tampered_receipt_path,
+            serde_json::to_string_pretty(&tampered_receipt).unwrap(),
+        )
+        .unwrap();
+        let bad_verify_args = parse(
+            &[
+                "dye",
+                "verify",
+                dye_dir.join("dye_program.json").to_str().unwrap(),
+                "--machine",
+                "piezo-cmyk",
+                "--receipt",
+                tampered_receipt_path.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_dye(&bad_verify_args).unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Adult `dye optimize --dye-qual` binds qualification_sha256 and uses measured wick/shrinkage
+        // while keeping `color_fidelity_claimed = false` because CLI still uses synthetic K/S optics.
+        let piezo = DyeMachineProfile::benchtop_piezo_cmyk();
+        let adult_qual = YarnDyeingQualification {
+            id: "dq-cli-adult".to_string(),
+            material_sha256: "cotton-120tex-sha".to_string(),
+            dye_machine_sha256: piezo.canonical_sha256().unwrap(),
+            yarn_lot_id: "lot-1".to_string(),
+            dye_lot_id: "dye-1".to_string(),
+            wick_dispersion_mm: 1.8,
+            shrinkage_axial_pct: 4.5,
+            wet_tenacity_retention_ratio: 0.92,
+            yarn_breaking_force_n: 8.5,
+            yarn_tg_c: None,
+            optical_measurement_basis:
+                ftx_pattern::dye::OpticalMeasurementBasis::SpectrophotometerD65_10Deg,
+            washing_off_validated: true,
+            iso_105_c06_grade: Some(4.5),
+            iso_105_x12_wet_rub_grade: Some(4.5),
+            saliva_fastness_validated: true,
+            evidence: ftx_pattern::materials::Evidence::Measured,
+            source: ftx_pattern::materials::Source {
+                reference: "local:cli_exp4_test".to_string(),
+                accessed_on: "2026-11-27".to_string(),
+                note: "synthetic test fixture".to_string(),
+            },
+            method: "steam fix + wash".to_string(),
+            conditioning: std::collections::BTreeMap::new(),
+            allow_estimates: false,
+        };
+        let adult_qual_path = root.join("adult_dye_qual.json");
+        std::fs::write(
+            &adult_qual_path,
+            serde_json::to_string_pretty(&adult_qual).unwrap(),
+        )
+        .unwrap();
+        let adult_dye_dir = root.join("dye-adult");
+        let adult_dye_args = parse(
+            &[
+                "dye",
+                "optimize",
+                "--age-class",
+                "adult",
+                "--dye-qual",
+                adult_qual_path.to_str().unwrap(),
+                "--courses",
+                "4",
+                "--wales",
+                "4",
+                "--max-iters",
+                "4",
+                "--out",
+                adult_dye_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (adult_dye_val, adult_dye_code, _) = cmd_dye(&adult_dye_args).unwrap();
+        assert_eq!(adult_dye_code, 0);
+        assert_eq!(adult_dye_val["emitted_controller_files"], true);
+        assert_eq!(
+            adult_dye_val["uncertainty_receipt"]["four_claims"]["color_fidelity_claimed"],
+            false
+        );
+        assert_eq!(
+            adult_dye_val["uncertainty_receipt"]["dressed_appearance"]["differential_shrinkage_stretch_perturbation_flagged"],
+            true
+        );
+        assert_eq!(
+            adult_dye_val["uncertainty_receipt"]["qualification_sha256"].as_str(),
+            Some(adult_qual.canonical_sha256().unwrap().as_str())
+        );
 
         // Brother KH-930 AYAB swatch emits 1-bit PNG + checklist and seals matching cert.json.
         let ayab_dir = root.join("ayab-swatch");
