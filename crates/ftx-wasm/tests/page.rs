@@ -339,6 +339,37 @@ fn direct_alteration_targets_include_real_mirrored_and_unfolded_edges_and_text_b
             .iter()
             .any(|s| s["id"] == "side_R")
     );
+    let front = targets["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "front")
+        .unwrap();
+    let controls = front["controls"].as_array().unwrap();
+    assert!(
+        !controls.is_empty(),
+        "curved bolero front must expose controls"
+    );
+    let first = &controls[0];
+    let moved: Value = serde_json::from_str(
+        &ftx_wasm::alteration::apply(
+            &source,
+            &json!({
+                "op": "move-control",
+                "piece": "front",
+                "edge": first["edge"],
+                "control": first["control"],
+                "dx": 2.0,
+                "dy": -1.5
+            })
+            .to_string(),
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(moved["why"].as_str().unwrap().contains("Moved control"));
+    assert_eq!(moved["targets"]["pieces"], targets["pieces"]);
     assert!(ftx_wasm::alteration::targets(&" ".repeat(4 * 1024 * 1024 + 1)).is_err());
     assert!(ftx_wasm::alteration::apply(&source, &" ".repeat(16 * 1024 + 1), None).is_err());
 }

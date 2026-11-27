@@ -1419,8 +1419,10 @@ class Element {
 }
 async function pageModule({roundToken=null,traceToken=null}={}) {
   const html = read('materials.html');
-  const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignControls','guidedDesignAfterSeams','guidedDesignMaterials'])
+  const ids = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
+  assert.equal(new Set(ids).size, ids.length, 'materials.html must not contain duplicate element IDs');
+  const e = Object.fromEntries(ids.map(id => [id, new Element()]));
+  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignCurveControls','guidedDesignAfterSeams','guidedDesignMaterials'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';e.elasticHoldSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -5970,7 +5972,10 @@ test('drafting worker discards refused replacements, frees failed rounds and che
 // The original inline workshop script, using a small DOM transport double. These tests inspect
 // source/result association and handle lifetime, not browser rendering or computed garment physics.
 function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyToken=null,initialize=true,audit=false}={}) {
-  const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
+  const html=read('index.html');
+  const ids=[...html.matchAll(/id="([^"]+)"/g)].map(m=>m[1]);
+  assert.equal(new Set(ids).size,ids.length,'index.html must not contain duplicate element IDs');
+  const e=Object.fromEntries(ids.map(id=>[id,new Element()]));
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';e.elasticHoldSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
   e.drapeArmLeft.value='35';e.drapeArmRight.value='35';
@@ -6031,7 +6036,8 @@ function draftingPage({traceToken=null,materialToken=null,photoToken=null,bodyTo
     selectProgram:value=>programs.find(p=>p.value===value).handlers.change(),hasOpener:()=>!!context.window.opener};
 }
 const alterationTargets = {
-  pieces:[{id:'front',vertices:['a','b'],edges:['hem','armhole']},{id:'sleeve',vertices:['ua','top'],edges:['cap','hem']}],
+  pieces:[{id:'front',vertices:['a','b'],edges:['hem','armhole'],controls:[{edge:'armhole',control:0},{edge:'armhole',control:1}]},
+    {id:'sleeve',vertices:['ua','top'],edges:['cap','hem'],controls:[]}],
   instances:[{id:'front.R',piece:'front',edges:['hem','armhole']},{id:'front.L',piece:'front',edges:['hem','armhole']},
     {id:'sleeve.R',piece:'sleeve',edges:['cap','hem']}],
   seams:[{id:'cap_front',a:'front.R/armhole',b:'sleeve.R/cap'},{id:'cap_back',a:'front.L/armhole',b:'sleeve.R/hem'}]
@@ -6041,7 +6047,7 @@ const alterationFit=' {"schema":"fabric-fit/1","probe":1.0,"sequence":1844674407
 async function currentAlterationPage() {
   const p=draftingPage();await p.e.go.handlers.click();
   p.result(undefined,{alterationSources:{pattern:alterationPattern,fit:alterationFit,targets:alterationTargets}});
-  for(const id of ['alterAt','alterAdd','alterDx','alterDy'])p.e[id].value='0';
+  for(const id of ['alterAt','alterAdd','alterDx','alterDy','alterControlDx','alterControlDy'])p.e[id].value='0';
   p.e.alterAxis.value='x';p.e.alterEnd.value='end';p.e.alterRatio.value='1.06';
   return p;
 }
@@ -6082,10 +6088,12 @@ test('direct alteration worker retains original sources, rejects stale rounds an
   assert.equal(trapped.type,'error');assert.equal(trapped.fatal,true);
   assert.equal((await send({type:'run',request:14,req:'{}'})).fatal,true,'A target catalogue trap invalidates the entire module');
 });
-test('primary direct alterations guide all five native operations and recheck exact accepted pattern and fit text',async()=>{
+test('primary direct alterations guide all six native operations and recheck exact accepted pattern and fit text',async()=>{
   for(const [op,inputs,want] of [
     ['slash-spread',{alterAdd:'12',alterAt:'80'},{op:'slash-spread',piece:'front',axis:'x',at:80,add:12}],
     ['move',{alterDx:'3.5',alterDy:'-2'},{op:'move',piece:'front',vertex:'a',dx:3.5,dy:-2}],
+    ['move-control',{alterControl:JSON.stringify(['armhole',1]),alterControlDx:'-1.5',alterControlDy:'2.25'},
+      {op:'move-control',piece:'front',edge:'armhole',control:1,dx:-1.5,dy:2.25}],
     ['true-seam',{alterEnd:'start'},{op:'true-seam',seam:'cap_front',end:'start'}],
     ['cap-ease',{alterPiece:'sleeve'},{op:'cap-ease',piece:'sleeve',seams:['cap_front','cap_back'],target:1.06}],
     ['transfer-curve',{}, {op:'transfer-curve',from:'front.R/hem',to:'front/hem'}],
@@ -6111,6 +6119,23 @@ test('primary direct alterations guide all five native operations and recheck ex
     p.e.undoAlter.handlers.click();await new Promise(resolve=>setImmediate(resolve));
     assert.ok(p.messages.findLast(m=>m.type==='run').req.includes('"pattern":'+alterationPattern));
     assert.equal(p.e.undoAlter.disabled,true);
+  }
+  const p=await currentAlterationPage();
+  p.e.alterOperation.value='move-control';p.dispatch('alterOperation','change');
+  assert.equal(p.e.alterApply.disabled,false);
+  p.e.alterPiece.value='sleeve';p.dispatch('alterPiece','change');
+  assert.equal(p.e.alterControl.disabled,true);
+  assert.equal(p.e.alterApply.disabled,true);
+  assert.match(p.e.alterControlNote.textContent,/no quadratic or cubic/);
+});
+test('all web workbench HTML files have unique element IDs',()=>{
+  for(const name of ['index.html','materials.html','photo.html','trace.html']) {
+    const html=read(name), seen=new Set(), dups=[];
+    for(const m of html.matchAll(/\bid="([^"]+)"/g)) {
+      if(seen.has(m[1])) dups.push(m[1]);
+      seen.add(m[1]);
+    }
+    assert.deepEqual(dups,[],`${name} has duplicate element IDs: ${dups.join(', ')}`);
   }
 });
 test('primary alteration refusals, edited controls and changed source patterns cannot adopt stale candidates',async()=>{
@@ -10090,6 +10115,25 @@ async function coupledDesignSetup() {
 }
 
 
+test('web workbenches keep unique HTML element IDs and every materials-page.js $() target exists', () => {
+  for (const file of ['materials.html', 'index.html', 'photo.html', 'trace.html']) {
+    const html = read(file);
+    const seen = new Set();
+    const duplicates = [];
+    for (const [, id] of html.matchAll(/\bid\s*=\s*"([^"]+)"/g)) {
+      if (seen.has(id)) duplicates.push(id);
+      seen.add(id);
+    }
+    assert.deepEqual(duplicates, [], `${file} must not declare duplicate DOM IDs`);
+  }
+  const materialsHtml = read('materials.html');
+  const materialsIds = new Set([...materialsHtml.matchAll(/\bid\s*=\s*"([^"]+)"/g)].map(m => m[1]));
+  const pageJs = read('materials-page.js');
+  const missing = [...new Set([...pageJs.matchAll(/\$\(\s*"([A-Za-z0-9_-]+)"\s*\)/g)].map(m => m[1]))]
+    .filter(id => !materialsIds.has(id));
+  assert.deepEqual(missing, [], 'every $() target in materials-page.js must exist in materials.html');
+});
+
 test('guided curve shaping keeps the selected cubic handle across edits and source replacement clears it',async()=>{
   const pattern=JSON.parse(coupledDesignPattern);
   pattern.pieces[0].edges=[
@@ -10103,7 +10147,9 @@ test('guided curve shaping keeps the selected cubic handle across edits and sour
   guidedDesignField(p,'guidedDesignDx','-0.5');
   guidedDesignField(p,'guidedDesignDy','1');
   guidedDesignField(p,'guidedDesignValues','0,4');
-  const selector=p.e.guidedDesignControls;
+  const selector=p.e.guidedDesignCurveControls;
+  assert.notEqual(selector,p.e.guidedDesignControls);
+  assert.equal(p.e.guidedDesignControls.children.length,0);
   assert.deepEqual(selector.children.map(o=>JSON.parse(o.value)),[
     ['front','side',0],['front','side',1],['lining','neck',0]
   ]);

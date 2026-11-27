@@ -56,8 +56,25 @@ fn catalogue(value: &Value, pattern: &Pattern) -> Value {
         .into_iter()
         .flatten()
         .map(|p| {
+            let controls: Vec<_> = p["edges"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|e| {
+                    let count = match e["curve"]["type"].as_str() {
+                        Some("quad") => 1,
+                        Some("cubic") => 2,
+                        _ => 0,
+                    };
+                    let valid = e["curve"]["c"].as_array().is_some_and(|c| c.len() == count);
+                    let edge_id = e["id"].as_str();
+                    (0..if valid && edge_id.is_some() { count } else { 0 })
+                        .map(move |control| json!({"edge": edge_id.unwrap_or_default(), "control": control}))
+                })
+                .collect();
             json!({"id":p["id"], "vertices":p["vertices"].as_object().map(|v|v.keys().collect::<Vec<_>>()),
-                "edges":p["edges"].as_array().map(|e|e.iter().map(|v|&v["id"]).collect::<Vec<_>>())})
+                "edges":p["edges"].as_array().map(|e|e.iter().map(|v|&v["id"]).collect::<Vec<_>>()),
+                "controls":controls})
         })
         .collect();
     let instances: Vec<_> = pattern

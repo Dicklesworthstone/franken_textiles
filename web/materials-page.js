@@ -520,7 +520,7 @@ function controls() {
   $("studyPieces").disabled = $("studyTarget").disabled || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
-  for (const id of ["guidedDesignPieces", "guidedDesignVertices", "guidedDesignControls", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
+  for (const id of ["guidedDesignPieces", "guidedDesignVertices", "guidedDesignCurveControls", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
     "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) {
     $(id).disabled = !source || !$("guidedDesign").checked;
   }
@@ -558,7 +558,7 @@ function controls() {
   $("guidedDesignVertexField").hidden = !movingVertices;
   $("guidedDesignControlField").hidden = !movingControls;
   $("guidedDesignControlStatus").hidden = !movingControls || !guidedControlProblem;
-  $("guidedDesignControls").disabled ||= !movingControls || !!guidedControlProblem;
+  $("guidedDesignCurveControls").disabled ||= !movingControls || !!guidedControlProblem;
   if (source && $("guidedDesign").checked && movingVertices) ensureGuidedDesignVertices();
   $("guidedDesignVertexStatus").hidden = !movingVertices || !guidedDesignVertexProblem;
   $("guidedDesignSlash").hidden = moving; $("guidedDesignMove").hidden = !moving;
@@ -8552,7 +8552,7 @@ $("clearGuidedInventory").onclick = () => {
 };
 $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
-  "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", "guidedDesignControls", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
+  "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", "guidedDesignCurveControls", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
   "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations", "guidedDesignDomainRestarts",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedStudyMixed", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
@@ -8582,7 +8582,7 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
         { key, source: cases.original, invalidated: false } : null;
       refreshGuidedDesignCases();
     }
-    if (Object.values(guidedDesignFields).includes(id) || ["guidedDesignPieces", "guidedDesignVertices", "guidedDesignControls"].includes(id)) {
+    if (Object.values(guidedDesignFields).includes(id) || ["guidedDesignPieces", "guidedDesignVertices", "guidedDesignCurveControls"].includes(id)) {
       if (guidedDesignVariables.length) guidedDesignVariables[guidedDesignCurrent] = captureGuidedDesignVariable();
       showGuidedDesignVariables();
     }
@@ -8852,7 +8852,7 @@ function curveControlCount(edge) {
 function ensureGuidedControls() {
   if (!source || guidedControlSource === source) return;
   guidedControlSource = source;
-  const picker = $("guidedDesignControls");
+  const picker = $("guidedDesignCurveControls");
   picker.replaceChildren();
   guidedControlProblem = "";
   let count = 0;
@@ -8877,7 +8877,8 @@ function ensureGuidedControls() {
 function captureGuidedDesignVariable() {
   return { ...Object.fromEntries(Object.entries(guidedDesignFields).map(([field, id]) => [field, $(id).value])),
     pieces: Array.from($("guidedDesignPieces").selectedOptions, option => option.value),
-    controls: Array.from($("guidedDesignControls").selectedOptions, option => option.value),
+    controls: guidedControlProblem ? [...(guidedDesignVariables[guidedDesignCurrent]?.controls || [])] :
+      Array.from($("guidedDesignCurveControls").selectedOptions, option => option.value),
     vertices: guidedDesignVertexProblem ? [...(guidedDesignVariables[guidedDesignCurrent]?.vertices || [])] :
       Array.from($("guidedDesignVertices").selectedOptions, option => option.value) };
 }
@@ -8886,7 +8887,7 @@ function loadGuidedDesignVariable() {
   for (const [field, id] of Object.entries(guidedDesignFields)) $(id).value = draft[field];
   if (draft.kind === "move") ensureGuidedDesignVertices();
   if (draft.kind === "move_control") ensureGuidedControls();
-  for (const [id, selected] of [["guidedDesignPieces", draft.pieces], ["guidedDesignVertices", draft.vertices], ["guidedDesignControls", draft.controls]]) {
+  for (const [id, selected] of [["guidedDesignPieces", draft.pieces], ["guidedDesignVertices", draft.vertices], ["guidedDesignCurveControls", draft.controls]]) {
     const values = new Set(selected);
     for (const option of $(id).children) option.selected = values.has(option.value);
   }
@@ -8966,7 +8967,11 @@ function guidedDesignVariableInputs(mode) {
       if (guidedControlProblem) throw Error(guidedControlProblem);
       const dx = finite(draft.dx, `horizontal multiplier for ${draft.key}`), dy = finite(draft.dy, `vertical multiplier for ${draft.key}`);
       sites = draft.controls.map(raw => {
-        const [piece, edge, control] = JSON.parse(raw);
+        const triple = JSON.parse(raw);
+        if (!Array.isArray(triple) || triple.length !== 3 || typeof triple[0] !== "string" || typeof triple[1] !== "string") {
+          throw Error("Choose an existing control on an original curved edge.");
+        }
+        const [piece, edge, control] = triple;
         const original = source.pieces.find(item => item.id === piece)?.edges?.find(item => item.id === edge);
         if (!Number.isInteger(control) || control < 0 || control >= curveControlCount(original)) {
           throw Error("Choose an existing control on an original curved edge.");
@@ -9016,7 +9021,7 @@ function resetGuidedDesign() {
   ++guidedDesignAfterRead;
   $("guidedDesign").checked = false;
   $("guidedDesignPieces").replaceChildren();
-  $("guidedDesignVertices").replaceChildren(); $("guidedDesignControls").replaceChildren();
+  $("guidedDesignVertices").replaceChildren(); $("guidedDesignCurveControls").replaceChildren();
   guidedControlSource = null; guidedControlProblem = "";
   $("guidedDesignControlStatus").textContent = ""; $("guidedDesignControlStatus").hidden = true;
   guidedDesignAfter.length = 0; guidedDesignAfterSource = null; guidedDesignAfterProblem = "";

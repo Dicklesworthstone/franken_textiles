@@ -339,6 +339,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       seams, fit and exports again with the current body inputs.</p>
     <p class="row"><label>Operation <select id="alterOperation">
       <option value="slash-spread">Slash and spread</option><option value="move">Move a vertex</option>
+      <option value="move-control">Move a curve control</option>
       <option value="true-seam">True a seam</option><option value="cap-ease">Adjust sleeve-cap ease</option>
       <option value="transfer-curve">Transfer curve shape</option></select></label>
       <label id="alterPieceBox">Drafted piece <select id="alterPiece"></select></label></p>
@@ -353,6 +354,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <label>Horizontal change (mm) <input id="alterDx" type="number" step="any" value="0"></label>
       <label>Vertical change (mm) <input id="alterDy" type="number" step="any" value="0"></label>
       <small>Connected curves and physical copies follow the vertex. Separate drawn marks do not move.</small>
+    </div>
+    <div id="alterMoveControl" class="hidden row">
+      <label>Curve control <select id="alterControl"></select></label>
+      <label>Horizontal change (mm) <input id="alterControlDx" type="number" step="any" value="0"></label>
+      <label>Vertical change (mm) <input id="alterControlDy" type="number" step="any" value="0"></label>
+      <small id="alterControlNote">Moves one quadratic or cubic Bézier control in the drafted piece frame while keeping endpoints fixed.</small>
     </div>
     <div id="alterTrue" class="hidden row">
       <label>Seam <select id="alterSeam"></select></label>
@@ -1348,6 +1355,12 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     const piece = alterationBase?.targets.pieces.find(p => p.id === $("alterPiece").value);
     alterationOptions("alterVertex", (piece?.vertices || []).map(v => [v,v]));
     alterationOptions("alterTargetEdge", (piece?.edges || []).map(v => [v,v]));
+    const controls = Array.isArray(piece?.controls) ? piece.controls : [];
+    alterationOptions("alterControl", controls.map(c => [JSON.stringify([c.edge, c.control]), `${c.edge} / control ${c.control + 1}`]));
+    $("alterControl").disabled = !controls.length;
+    $("alterControlNote").textContent = controls.length
+      ? "Moves one quadratic or cubic Bézier control in the drafted piece frame while keeping endpoints fixed."
+      : "This piece has no quadratic or cubic Bézier controls.";
   }
   function alterationSourceOptions() {
     const targets = alterationSourceTargets || alterationBase?.targets;
@@ -1358,10 +1371,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   function alterationControls() {
     $("alterSection").classList.toggle("hidden", !alterationBase);
     const op = $("alterOperation").value || "slash-spread";
-    $("alterApply").disabled = !ready || dead || !alterationBase || alterationBusy || (op === "transfer-curve" && alterationSourceBusy);
+    const missingControl = op === "move-control" && !$("alterControl").value;
+    $("alterApply").disabled = !ready || dead || !alterationBase || alterationBusy || (op === "transfer-curve" && alterationSourceBusy) || missingControl;
     $("alterOperation").value = op;
     $("alterPieceBox").classList.toggle("hidden", op === "true-seam");
-    for (const [id, name] of [["alterSpread","slash-spread"],["alterMove","move"],["alterTrue","true-seam"],["alterCap","cap-ease"],["alterTransfer","transfer-curve"]]) {
+    for (const [id, name] of [["alterSpread","slash-spread"],["alterMove","move"],["alterMoveControl","move-control"],["alterTrue","true-seam"],["alterCap","cap-ease"],["alterTransfer","transfer-curve"]]) {
       $(id).classList.toggle("hidden", op !== name);
     }
   }
@@ -1390,12 +1404,18 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     };
     if (op === "slash-spread") return {op,piece,axis:$("alterAxis").value || "x",at:number("alterAt"),add:number("alterAdd")};
     if (op === "move") return {op,piece,vertex:$("alterVertex").value,dx:number("alterDx"),dy:number("alterDy")};
+    if (op === "move-control") {
+      const raw = $("alterControl").value;
+      if (!raw) throw Error("Choose a piece with a quadratic or cubic Bézier control.");
+      const [edge, control] = JSON.parse(raw);
+      return {op,piece,edge,control,dx:number("alterControlDx"),dy:number("alterControlDy")};
+    }
     if (op === "true-seam") return {op,seam:$("alterSeam").value,end:$("alterEnd").value || "end"};
     if (op === "cap-ease") return {op,piece,seams:Array.from($("alterCapSeams").selectedOptions).map(o=>o.value),target:number("alterRatio")};
     if (op === "transfer-curve") return {op,from:$("alterSourceInstance").value+"/"+$("alterSourceEdge").value,to:piece+"/"+$("alterTargetEdge").value};
     throw Error("Choose an alteration operation.");
   }
-  for (const id of ["alterOperation","alterPiece","alterAxis","alterAt","alterAdd","alterVertex","alterDx","alterDy","alterSeam","alterEnd","alterCapSeams","alterRatio","alterSourceInstance","alterSourceEdge","alterTargetEdge"]) {
+  for (const id of ["alterOperation","alterPiece","alterAxis","alterAt","alterAdd","alterVertex","alterDx","alterDy","alterControl","alterControlDx","alterControlDy","alterSeam","alterEnd","alterCapSeams","alterRatio","alterSourceInstance","alterSourceEdge","alterTargetEdge"]) {
     for (const event of ["input","change"]) $(id).addEventListener(event, () => {
       alterationEdited();
       if (id === "alterPiece") alterationPieceOptions();
