@@ -556,6 +556,29 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         doc.validate().unwrap();
+        let sha_before = doc.canonical_sha256().unwrap();
+        let mut json_val = serde_json::to_value(&doc).unwrap();
+        let roundtripped: KnitDoc = serde_json::from_value(json_val.clone()).unwrap();
+        assert_eq!(roundtripped, doc);
+        assert_eq!(roundtripped.canonical_sha256().unwrap(), sha_before);
+
+        // Unknown field rejected by deny_unknown_fields on KnitDoc.
+        let mut with_unknown = json_val.clone();
+        with_unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("phantom_field".to_string(), serde_json::json!(1));
+        assert!(serde_json::from_value::<KnitDoc>(with_unknown).is_err());
+
+        // Missing non-defaulting wearer_age_class fails closed.
+        json_val.as_object_mut().unwrap().remove("wearer_age_class");
+        assert!(serde_json::from_value::<KnitDoc>(json_val).is_err());
+
+        // Mutating doc changes canonical SHA-256.
+        let mut tampered = doc.clone();
+        tampered.name = "tampered".to_string();
+        assert_ne!(tampered.canonical_sha256().unwrap(), sha_before);
+
         doc.stitches[1].bed = Bed::FrontSlider;
         let err = doc.validate().unwrap_err();
         assert_eq!(err.code, RefusalCode::MachineStateInfeasible);
