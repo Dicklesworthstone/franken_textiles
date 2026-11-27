@@ -80,6 +80,7 @@ pub(super) fn records() -> Vec<Material> {
                     "Results Table 1: Force at Break (Standard); original instrument-reported break criterion, distinct from maximum force")),
                 ("tensile_displacement_at_break".into(), displacement),
             ]),
+            knit_response: None,
             membrane_response: None, membrane_relaxation: None, thermal_response: None,
             optical_faces: None,
             sources: BTreeMap::from([

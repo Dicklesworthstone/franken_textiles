@@ -87,6 +87,7 @@ fn input() -> Input {
             form: Form::Woven,
             composition: vec![], composition_complete: false,
             structure: BTreeMap::new(), properties: BTreeMap::new(),
+            knit_response: None,
             membrane_response: None, membrane_relaxation: None, thermal_response: None,
             optical_faces: None, sources,
         },

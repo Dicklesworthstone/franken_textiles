@@ -261,6 +261,45 @@ impl Solver {
         ))
     }
 
+    /// Accepted knit yarn-slip state and dissipation in retained material-triangle order.
+    ///
+    /// Reading the report never advances the play operators. The selected source records remain
+    /// in the ordinary material report; these entries identify exactly which solver triangles
+    /// carry history, including sewing and subsequent body-motion continuation.
+    ///
+    /// # Errors
+    /// Changed material/topology or invalid current strain.
+    pub fn knit_hysteresis_report(&self) -> Result<Option<serde_json::Value>, Refusal> {
+        let Some(field) = &self.knit_hysteresis else {
+            return Ok(None);
+        };
+        field.check(&self.model, &self.x)?;
+        let elements: Vec<_> = field
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(triangle, entry)| {
+                entry.as_ref().map(|bound| {
+                    serde_json::json!({
+                        "triangle": triangle,
+                        "play_backstrain": bound.state.play_backstrain,
+                        "dissipated_work_j": bound.dissipated_j
+                    })
+                })
+            })
+            .collect();
+        Ok(Some(serde_json::json!({
+            "model": "parallel_prandtl_ishlinskii_huber",
+            "accepted_steps": field.steps,
+            "dissipated_work_j": field.dissipated_j,
+            "max_backstrain": field.max_backstrain(),
+            "elements": elements,
+            "initialization": "pristine_zero_backstrain",
+            "update_policy": "converged accepted implicit-Euler steps only",
+            "scope": "source-selected additive yarn-slip model; excludes numerical damping, contact friction, damage and thermal feedback"
+        })))
+    }
+
     /// Peak Euclidean play back-strain norm across all bound knit hysteresis elements (`0.0` if none).
     #[must_use]
     pub fn knit_hysteresis_max_backstrain(&self) -> f64 {

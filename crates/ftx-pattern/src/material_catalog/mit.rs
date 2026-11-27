@@ -526,6 +526,7 @@ pub(super) fn raw_records() -> Vec<Material> {
                 ("areal_density".into(), q(weight, "oz/yd2", "Source column F as reported, including cached density*thickness*16*36*36 formula results; independent measurement status unknown; source rounding preserved")),
                 ("specimen_flexural_rigidity".into(), q(bending, "lbf*in2", "Source column C; specimen EI, unknown coupon width/geometry; no sheet N*m conversion")),
             ]),
+            knit_response: None,
             membrane_response: None, membrane_relaxation: None, thermal_response: None, optical_faces: None,
             sources: BTreeMap::from([
                 ("workbook".into(), Source { reference: ARCHIVE.into(), accessed_on: "2026-10-21".into(),
@@ -574,6 +575,7 @@ pub(super) fn records() -> Vec<Material> {
                 ("areal_density".into(), q(weight, "oz/yd2", "Lowell ACMTRL measurement reported in MIT summary table; test standard not given")),
                 ("specimen_flexural_rigidity".into(), q(bending, "lbf*in2", "Reported bending stiffness of test specimen; coupon width/geometry absent, so no sheet-rigidity conversion")),
             ]),
+            knit_response: None,
             membrane_response: None, membrane_relaxation: None, thermal_response: None, optical_faces: None,
             sources: BTreeMap::from([
                 ("table".into(), Source { reference: TABLE.into(), accessed_on: "2026-10-14".into(),

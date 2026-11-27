@@ -383,6 +383,7 @@ fn record(row: &Row, washed: bool) -> Material {
         composition_complete: false,
         structure,
         properties,
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,

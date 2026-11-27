@@ -325,6 +325,7 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
             ("shrinkage_warp".into(), input.shrinkage_warp.clone()),
             ("shrinkage_weft".into(), input.shrinkage_weft.clone()),
         ]),
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,

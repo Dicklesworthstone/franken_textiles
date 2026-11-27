@@ -276,6 +276,7 @@ pub(super) fn records() -> Vec<Material> {
                     "fabric_catalog.csv areal_density_g_m2, checked against instrument Weight(gsm); paper section 3.1 balance resolution 0.001 g")),
                 ("reported_thickness".into(), reported_thickness),
             ]),
+            knit_response: None,
             membrane_response: None, membrane_relaxation: None,
             thermal_response: None, optical_faces: None,
             sources: BTreeMap::from([

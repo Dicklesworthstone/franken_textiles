@@ -220,6 +220,7 @@ fn record(row: &Row) -> Material {
             ("thread_density_weft".into(), weft),
             ("abrasion_cycles".into(), abrasion),
         ]),
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,

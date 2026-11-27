@@ -1,0 +1,75 @@
+{
+  "id": "synthetic-coupled-knit",
+  "allow_estimates": true,
+  "record": {
+    "id": "synthetic-coupled-knit",
+    "name": "Synthetic coupled knit with curl and frictional history; not measured textile data",
+    "form": "knit",
+    "structure": {
+      "construction": "synthetic stockinette software fixture",
+      "scope": "Explicit estimated constitutive inputs only; no measured knitting, RVE or garment-fit qualification"
+    },
+    "properties": {
+      "areal_density": {
+        "value": 0.2, "unit": "kg/m2", "evidence": "estimate", "source": "synthetic",
+        "method": "Independent synthetic reference sheet mass",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      },
+      "thickness": {
+        "value": 0.0006, "unit": "m", "evidence": "estimate", "source": "synthetic",
+        "method": "Independent synthetic contact thickness",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      },
+      "bending_rigidity": {
+        "value": 0.00003, "unit": "N*m", "evidence": "estimate", "source": "synthetic",
+        "method": "Independent scalar seam-hinge approximation, not the interior knit bending law",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      },
+      "friction_skin": {
+        "value": 0.2, "unit": "1", "evidence": "estimate", "source": "synthetic",
+        "method": "Independent synthetic sheet/body interface",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      },
+      "friction_self": {
+        "value": 0.3, "unit": "1", "evidence": "estimate", "source": "synthetic",
+        "method": "Independent synthetic same-sheet interface",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      }
+    },
+    "knit_response": {
+      "model": "coupled_knit_shell/1",
+      "membrane": {
+        "parameters": {
+          "q11": 180.0, "q22": 95.0, "q12": 32.0, "q66": 48.0,
+          "c1111": 900.0, "c2222": 420.0, "c1122": 180.0,
+          "e1_jam": 0.45, "e2_jam": 0.75, "gamma_jam": 0.65, "kappa_jam": 1.5
+        },
+        "source": "synthetic", "evidence": "estimate",
+        "method": "Authored numerical model fixture; coefficients are not a measured or RVE-fitted material",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      },
+      "bending": {
+        "parameters": {
+          "d_plus": [0.000042, 0.000026], "d_minus": [0.000031, 0.000019],
+          "d12": 0.0000045, "d66": 0.000014, "kappa0": [12.0, -18.0, 0.0], "delta_kappa": 2.0
+        },
+        "source": "synthetic", "evidence": "estimate",
+        "method": "Authored numerical physical-curvature model; kappa0 uses engineering twist",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      },
+      "hysteresis": {
+        "parameters": {"thresholds": [0.02, 0.08], "weights": [12.0, 28.0], "huber_eps": 0.001},
+        "source": "synthetic", "evidence": "estimate",
+        "method": "Authored numerical frictional play bank; no measured cyclic recovery claim",
+        "conditions": {"specimen": "synthetic-knit-coupon", "conditioning": "synthetic dry reference state"}
+      }
+    },
+    "sources": {
+      "synthetic": {
+        "reference": "test:coupled-knit-material",
+        "accessed_on": "2026-11-27",
+        "note": "All values are explicit synthetic estimates for software and numerical regressions. No measured textile, physical knitting, hardware authorization or real-person fit is established."
+      }
+    }
+  }
+}

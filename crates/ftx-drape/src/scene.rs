@@ -879,6 +879,8 @@ pub fn build_scene_with_options(
         None,
         None,
         None,
+        None,
+        None,
         options,
         None,
     )
@@ -973,6 +975,8 @@ pub(crate) fn build_scene_resolved_with_options(
             material.piece_fabrics.as_deref(),
             material.response.as_ref(),
             material.piece_responses.as_deref(),
+            material.knit.as_ref(),
+            material.piece_knits.as_deref(),
             material.contact_materials.as_ref(),
             start,
             options,
@@ -981,6 +985,7 @@ pub(crate) fn build_scene_resolved_with_options(
         // Constitutive memory binds to the selected strain transform. Apply it to every start
         // candidate before initialization, including contact-driven fallback rebuilds.
         scene.solver.model.compression_model = material.options.compression_model;
+        scene.solver.model.check_membrane_domains(&scene.solver.x)?;
         Ok::<_, Refusal>(scene)
     };
     let mut scene = build(mesh, None, Some(&mut relaxation))?;
@@ -1065,6 +1070,28 @@ pub(crate) fn build_scene_resolved_with_options(
             Err(e) => return Err(e),
             Ok(()) => {}
         }
+    }
+    if material
+        .knit
+        .as_ref()
+        .is_some_and(|k| k.hysteresis.is_some())
+        || material
+            .piece_knits
+            .as_ref()
+            .is_some_and(|v| v.iter().flatten().any(|k| k.hysteresis.is_some()))
+    {
+        let laws: Vec<_> = material_triangle_field(
+            pattern,
+            &scene,
+            &material.knit,
+            material.piece_knits.as_deref(),
+        )?
+        .into_iter()
+        .map(|k| k.and_then(|k| k.hysteresis))
+        .collect();
+        // Bind pristine history only after start recovery has selected its accepted candidate.
+        // This snapshots the actual coupled law, retained rest frame and compression transform.
+        scene.solver = scene.solver.with_knit_hysteresis(&laws)?;
     }
     if material.relaxation.is_some()
         || material
@@ -1153,6 +1180,8 @@ fn build_scene_inner(
     piece_fabrics: Option<&[Option<Fabric>]>,
     response: Option<&ftx_pattern::material_response::CompiledMembrane>,
     piece_responses: Option<&[Option<ftx_pattern::material_response::CompiledMembrane>]>,
+    knit: Option<&crate::material::KnitMaterial>,
+    piece_knits: Option<&[Option<crate::material::KnitMaterial>]>,
     contact_materials: Option<&crate::material::ContactMaterials>,
     start_override: Option<StartState>,
     options: SceneBuildOptions,
@@ -1201,6 +1230,21 @@ fn build_scene_inner(
                     .collect::<Result<_, Refusal>>()
             })
             .transpose()?;
+    let instance_knits = piece_knits
+        .map(|laws| {
+            mesh.instances
+                .iter()
+                .map(|id| {
+                    let instance = pattern
+                        .instance(id)
+                        .ok_or_else(|| bad(format!("no instance {id}")))?;
+                    laws.get(instance.piece_index)
+                        .cloned()
+                        .ok_or_else(|| bad(format!("no knit law slot for instance {id}")))
+                })
+                .collect::<Result<Vec<_>, Refusal>>()
+        })
+        .transpose()?;
     let mut casing_instances = BTreeSet::new();
     for casing in elastics {
         if !casing.length.is_finite()
@@ -1281,6 +1325,8 @@ fn build_scene_inner(
     let mut triangle_owner = Vec::new();
     let mut source_triangles = Vec::new();
     let mut tri_bending = Vec::new();
+    let mut tri_knit_membranes = Vec::new();
+    let mut tri_knit_bending = Vec::new();
     let low = GATHER_COMPRESSION.min(compression);
     // A gathered seam that declares its own band of pleats replaces the weights and the floor (spec 04 §5.4).
     let relief = crate::start::gather_relief(&mesh);
@@ -1303,6 +1349,15 @@ fn build_scene_inner(
         };
         tri_bending.push(sheet.bending_response());
         tri_domains.push(sheet.strain_domain());
+        let knit_law = match &instance_knits {
+            Some(field) => field
+                .get(owner)
+                .ok_or_else(|| bad("invalid knit triangle owner".into()))?
+                .as_ref(),
+            None => knit,
+        };
+        tri_knit_membranes.push(knit_law.map(|k| k.membrane));
+        tri_knit_bending.push(knit_law.and_then(|k| k.bending));
         if let Some(field) = &instance_fabrics {
             if f.iter().any(|&v| mesh.owner[v] != owner) {
                 return Err(bad(
@@ -1358,11 +1413,20 @@ fn build_scene_inner(
     };
     model.set_compression(&tri_compression)?;
     model.set_membrane_domains(&tri_domains)?;
-    if tri_bending.iter().any(Option::is_some) {
-        model.set_panel_bending(&rest, &source_triangles, &weld, &tri_bending)?;
+    if tri_bending.iter().any(Option::is_some) || tri_knit_bending.iter().any(Option::is_some) {
+        model.set_mixed_panel_bending(
+            &rest,
+            &source_triangles,
+            &weld,
+            &tri_bending,
+            &tri_knit_bending,
+        )?;
     }
     if !tri_responses.is_empty() {
         model.set_membrane_responses(&tri_responses)?;
+    }
+    if tri_knit_membranes.iter().any(Option::is_some) {
+        model.set_coupled_knit_membranes(&tri_knit_membranes)?;
     }
     model.check_membrane_domains(&x)?;
     let mut crease_map: BTreeMap<(usize, usize), f64> = BTreeMap::new();

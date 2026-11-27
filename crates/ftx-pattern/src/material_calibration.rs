@@ -699,6 +699,7 @@ mod tests {
                 ("poisson_warp_weft".into(), quantity(0.2, "1")),
                 ("shear_stiffness".into(), quantity(150.0, "N/m")),
             ]),
+            knit_response: None,
             membrane_response: None,
             membrane_relaxation: Some(Relaxation {
                 model: "green_maxwell/1".into(),

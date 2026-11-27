@@ -421,7 +421,9 @@ fn check_capability(m: &ResolvedMaterial, capability: Capability) -> Result<(), 
     match capability {
         Capability::Mechanics => {
             m.mechanics()?;
-            m.membrane_response()?;
+            if m.coupled_knit()?.is_none() {
+                m.membrane_response()?;
+            }
             m.membrane_relaxation()?;
             m.membrane_plasticity()?;
             m.bending_response()?;

@@ -120,6 +120,7 @@ pub fn linearize(input: &Input) -> Result<Report, Refusal> {
         ));
     }
     if material.membrane_response.is_some()
+        || material.knit_response.is_some()
         || material.membrane_relaxation.is_some()
         || material.structure.contains_key("membrane_plasticity_model")
         || material.structure.contains_key("membrane_damage_model")

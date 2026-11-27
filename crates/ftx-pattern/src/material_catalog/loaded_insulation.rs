@@ -173,6 +173,7 @@ fn record(row: &Row, compressed: bool) -> Material {
         composition_complete: row.polyester,
         structure,
         properties,
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,

@@ -158,6 +158,7 @@ pub fn import(record: &legacy::Textile) -> Result<Material, Refusal> {
         composition_complete: !record.composition.is_empty(),
         structure,
         properties,
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,

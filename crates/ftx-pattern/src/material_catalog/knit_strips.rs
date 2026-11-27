@@ -588,6 +588,7 @@ fn record(specimen: &str, fabric: &Fabric, curves: &[(&str, &str, [Option<f64>; 
                 ("mechanical_scope".into(), "Measured clamped-strip force screening; no homogeneous F, membrane tensor, shear modulus, bending law, recovery model or garment fit follows".into()),
                 ("retention".into(), "Original nine force-curve CSVs, full metadata and MIT notice retained; no photos or geometry assets bundled".into()),
             ]),
+            knit_response: None,
             properties, sources, membrane_response: None, membrane_relaxation: None,
             thermal_response: None, optical_faces: None,
         }

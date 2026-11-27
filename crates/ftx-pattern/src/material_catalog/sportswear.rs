@@ -157,6 +157,7 @@ fn material(yarn: usize, suffix: &str, name: &str, form: Form) -> Material {
             ("mechanical_scope".into(), "No sheet membrane, bending, contact, damage or seam law is inferred from yarn tensile data or construction".into()),
         ]),
         properties: BTreeMap::new(),
+        knit_response: None,
         membrane_response: None, membrane_relaxation: None, thermal_response: None,
         optical_faces: None,
         sources: BTreeMap::from([("paper".into(), Source {

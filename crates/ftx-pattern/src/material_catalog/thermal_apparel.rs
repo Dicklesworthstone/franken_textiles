@@ -188,6 +188,7 @@ pub(super) fn records() -> Vec<Material> {
                 ("thickness".into(), thickness),
                 ("thermal_resistance".into(), resistance),
             ]),
+            knit_response: None,
             membrane_response: None, membrane_relaxation: None, thermal_response: None,
             optical_faces: None,
             sources: BTreeMap::from([("paper".into(), Source {

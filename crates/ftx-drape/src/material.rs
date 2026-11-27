@@ -14,6 +14,7 @@ use ftx_pattern::{Grain, Pattern, truthy};
 use serde_json::{Value, json};
 
 use crate::elements::Membrane;
+use crate::knit::{AsymmetricKnitBending, CoupledKnitMembrane, KnitHysteresisBank};
 use crate::run::DrapeOptions;
 
 pub(crate) mod interfaces;
@@ -190,6 +191,58 @@ fn check_grains(pattern: &Pattern, fabric: &Fabric) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Solver laws compiled from the same admitted source record as mass, contact and grain.
+#[derive(Clone)]
+pub(crate) struct KnitMaterial {
+    pub membrane: CoupledKnitMembrane,
+    pub bending: Option<AsymmetricKnitBending>,
+    pub hysteresis: Option<KnitHysteresisBank>,
+}
+
+impl KnitMaterial {
+    fn from_compiled(law: &ftx_pattern::material_knit::CompiledKnit) -> Result<Self, Refusal> {
+        let m = &law.membrane;
+        let membrane = CoupledKnitMembrane {
+            q11: m.q11,
+            q22: m.q22,
+            q12: m.q12,
+            q66: m.q66,
+            c1111: m.c1111,
+            c2222: m.c2222,
+            c1122: m.c1122,
+            e1_jam: m.e1_jam,
+            e2_jam: m.e2_jam,
+            gamma_jam: m.gamma_jam,
+            kappa_jam: m.kappa_jam,
+        };
+        let bending = law.bending.as_ref().map(|b| AsymmetricKnitBending {
+            d_plus: b.d_plus,
+            d_minus: b.d_minus,
+            d12: b.d12,
+            d66: b.d66,
+            kappa0: b.kappa0,
+            delta_kappa: b.delta_kappa,
+        });
+        let hysteresis = law.hysteresis.as_ref().map(|h| KnitHysteresisBank {
+            thresholds: h.thresholds.clone(),
+            weights: h.weights.clone(),
+            huber_eps: h.huber_eps,
+        });
+        membrane.validate()?;
+        if let Some(b) = bending {
+            b.validate()?;
+        }
+        if let Some(h) = &hysteresis {
+            h.validate()?;
+        }
+        Ok(Self {
+            membrane,
+            bending,
+            hysteresis,
+        })
+    }
+}
+
 /// The physical/numerical inputs and their report are resolved together, before building any mesh.
 pub struct MaterialInputs {
     /// Effective membrane, mass and bending parameters.
@@ -202,6 +255,8 @@ pub struct MaterialInputs {
     pub(crate) piece_fabrics: Option<Vec<Option<Fabric>>>,
     pub(crate) response: Option<CompiledMembrane>,
     pub(crate) piece_responses: Option<Vec<Option<CompiledMembrane>>>,
+    pub(crate) knit: Option<KnitMaterial>,
+    pub(crate) piece_knits: Option<Vec<Option<KnitMaterial>>>,
     pub(crate) relaxation: Option<CompiledRelaxation>,
     pub(crate) piece_relaxations: Option<Vec<Option<CompiledRelaxation>>>,
     pub(crate) membrane_plasticity: Option<PlasticMembrane>,
@@ -248,6 +303,25 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
             "uncalibrated construction mass/bending multipliers cannot override a characterized material record",
         ));
     }
+    let active_knits = inputs
+        .piece_knits
+        .as_deref()
+        .unwrap_or_else(|| std::slice::from_ref(&inputs.knit));
+    let has_knit_bending = active_knits.iter().flatten().any(|k| k.bending.is_some());
+    let has_knit_history = active_knits
+        .iter()
+        .flatten()
+        .any(|k| k.hysteresis.is_some());
+    if has_knit_history && inputs.options.integrator != crate::TimeIntegrator::ImplicitEuler {
+        return Err(invalid(
+            "knit yarn-slip history requires ImplicitEuler; other integrators have no accepted-history contract",
+        ));
+    }
+    if has_knit_bending && inputs.options.damping.rayleigh_bending_s > 0.0 {
+        return Err(invalid(
+            "Rayleigh bending damping is not characterized for asymmetric physical-curvature knit bending",
+        ));
+    }
     let has_panel_bending = inputs.piece_fabrics.as_ref().map_or_else(
         || inputs.fabric.panel_bending.is_some(),
         |pieces| {
@@ -256,7 +330,9 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
                 .any(|f| f.is_some_and(|fab| fab.panel_bending.is_some()))
         },
     );
-    if has_panel_bending && inputs.options.bending_model == crate::BendingModel::DiscreteShells {
+    if (has_panel_bending || has_knit_bending)
+        && inputs.options.bending_model == crate::BendingModel::DiscreteShells
+    {
         return Err(invalid(
             "orthotropic panel-bending patches do not implement BendingModel::DiscreteShells",
         )
@@ -287,6 +363,8 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             piece_fabrics: None,
             response: None,
             piece_responses: None,
+            knit: None,
+            piece_knits: None,
             relaxation: None,
             piece_relaxations: None,
             membrane_plasticity: None,
@@ -301,7 +379,21 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
     let retained_liquid = record
         .material()
         .retained_liquid_mass(record.allows_estimates())?;
-    let response = record.membrane_response()?;
+    let knit_response = record.coupled_knit()?;
+    let response = if knit_response.is_some() {
+        None
+    } else {
+        record.membrane_response()?
+    };
+    let knit = knit_response
+        .as_ref()
+        .map(KnitMaterial::from_compiled)
+        .transpose()?;
+    if knit.is_some() && retained_liquid.is_some() {
+        return Err(invalid(
+            "retained-liquid mechanical binding is not implemented for coupled knit shell materials",
+        ));
+    }
     let relaxation = record.membrane_relaxation()?;
     let membrane_plasticity = record.membrane_plasticity()?;
     let plasticity = record.bending_plasticity()?;
@@ -348,7 +440,15 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         "damage/fire",
         "robotic sewing",
     ];
-    if fabric.panel_bending.is_none() {
+    let knit_bending = knit.as_ref().and_then(|k| k.bending);
+    if knit_bending.is_some() {
+        not_simulated.extend([
+            "conforming shell discretization",
+            "measured seam bending",
+            "yarn migration and damage",
+            "pore-opening and rib-flattening optics",
+        ]);
+    } else if fabric.panel_bending.is_none() {
         not_simulated.push("directional bending");
     } else {
         not_simulated.extend([
@@ -382,13 +482,27 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         report: json!({
             "basis":"characterized_record", "record":record, "record_sha256":record.sha256(),
             "mechanics":mechanics,
-            "model": match (response.is_some(),fabric.panel_bending.is_some()) {
-                (false,false)=>"orthotropic_green_strain_scalar_bending",
-                (true,false)=>"tabulated_green_strain_scalar_bending",
-                (false,true)=>"orthotropic_green_strain_tensor_panel_bending",
-                (true,true)=>"tabulated_green_strain_tensor_panel_bending"
+            "model": if knit.is_some() {
+                if knit_bending.is_some() {
+                    "coupled_knit_green_strain_asymmetric_physical_curvature"
+                } else if fabric.panel_bending.is_some() {
+                    "coupled_knit_green_strain_tensor_panel_bending"
+                } else {
+                    "coupled_knit_green_strain_scalar_bending"
+                }
+            } else {
+                match (response.is_some(),fabric.panel_bending.is_some()) {
+                    (false,false)=>"orthotropic_green_strain_scalar_bending",
+                    (true,false)=>"tabulated_green_strain_scalar_bending",
+                    (false,true)=>"orthotropic_green_strain_tensor_panel_bending",
+                    (true,true)=>"tabulated_green_strain_tensor_panel_bending"
+                }
             },
-            "bending_model":fabric.panel_bending.map_or("scalar_hinges", |law| law.model()),
+            "bending_model": if knit_bending.is_some() {
+                "asymmetric_knit_physical_curvature"
+            } else {
+                fabric.panel_bending.map_or("scalar_hinges", |law| law.model())
+            },
             "panel_bending_matrix_nm":fabric.panel_bending.map(|p| p.matrix()),
             "bending_scope":"explicit tensor replaces interior source-panel hinges; scalar bending_rigidity remains the separate seam approximation",
             "nonlinear_strain_range": response.as_ref().map(CompiledMembrane::strain_range),
@@ -406,6 +520,8 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         piece_fabrics: None,
         response,
         piece_responses: None,
+        knit,
+        piece_knits: None,
         relaxation,
         piece_relaxations: None,
         membrane_plasticity,
@@ -415,6 +531,22 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         contact_materials: None,
         mechanics: Some(mechanics),
     };
+    if let Some(law) = &knit_response {
+        inputs.report["knit_response"] = json!({
+            "model": "coupled_knit_shell/1",
+            "law_sha256": law.fingerprint(),
+            "evidence": law.evidence(),
+            "membrane": law.membrane,
+            "bending": law.bending,
+            "hysteresis": law.hysteresis,
+            "axes": "u follows the explicit grain/wale axis; v is the course axis; shear and twist use engineering components",
+            "bending_scope": "physical material curvature with signed material-normal preference; scalar seam hinges remain separate",
+            "history_initialization": "pristine zero backstrain; accepted converged implicit-Euler steps only",
+            "qualification": "source evidence is preserved; this model selection does not establish physical garment or fit validation"
+        });
+        inputs.report["membrane_stiffness_basis"] =
+            json!("coupled equilibrium Green-strain law; optional additive yarn-slip history");
+    }
     if let Some(range) = inputs
         .response
         .as_ref()

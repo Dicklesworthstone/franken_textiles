@@ -394,6 +394,7 @@ fn record(row: &Row) -> Material {
             ("thermal_model_scope".into(), "Measured reference dry Rct only. Figures 2 and 4 estimate loaded resistance from cross-sample regression; those estimates are not imported.".into()),
         ]),
         properties,
+        knit_response: None,
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,
