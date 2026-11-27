@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 use super::{Args, bad_input, export, known_options, reserve_output, workspace};
 
 const MAX_KNIT_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const SWATCH_MATERIAL_PLACEHOLDER: &str = "unmeasured-yarn-lot-placeholder";
 
 /// Boolean flags accepted by `ftx knit` and `ftx dye` without a following value.
 pub(super) const BOOLEAN_OPTIONS: &[&str] =
@@ -212,12 +213,24 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let kit = export_calibration_swatch_kit(
         &profile,
         yarn_id,
-        "unmeasured-yarn-lot-placeholder",
+        SWATCH_MATERIAL_PLACEHOLDER,
         needles,
         courses_per_zone,
         &cams,
     )?;
-    let compiled = compile_knit_doc(&kit.doc, &profile, None, None, None)?;
+    let compiled = compile_knit_doc(
+        &kit.doc,
+        &profile,
+        None,
+        Some(SWATCH_MATERIAL_PLACEHOLDER),
+        None,
+    )?;
+    if compiled.cert.cert_sha256 != kit.knitout.cert.cert_sha256 {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "calibration swatch kit certificate digest disagreed with compiled bundle",
+        ));
+    }
     let hand = export_hand_knit_document(&kit.doc, &created)?;
     let svg_checks = check_hand_knit_svg(&hand.svg_text, "swatch_chart.svg");
     let pdf_checks = check_hand_knit_pdf(&hand.pdf_bytes, "swatch_chart.pdf");
@@ -495,6 +508,14 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
     reserve_output(&out_dir, "knit draft")?;
 
+    let mut files = vec![
+        "pattern.knit.json".to_string(),
+        "program.k".to_string(),
+        "cert.json".to_string(),
+        "chart.svg".to_string(),
+        "chart.pdf".to_string(),
+        "instructions.txt".to_string(),
+    ];
     write_file(&out_dir, "pattern.knit.json", doc_json.as_bytes())?;
     write_file(&out_dir, "program.k", knitout.knitout_text.as_bytes())?;
     write_file(&out_dir, "cert.json", knitout.cert_json.as_bytes())?;
@@ -508,6 +529,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
     if let Some(kc) = kc {
         write_file(&out_dir, "program.kc", kc.kc_text.as_bytes())?;
+        files.push("program.kc".to_string());
     } else if let Some(ayab) = ayab {
         write_file(&out_dir, "pattern_ayab.png", &ayab.png_bytes)?;
         write_file(
@@ -515,17 +537,24 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "ayab_session_checklist.json",
             ayab.checklist_json.as_bytes(),
         )?;
+        files.push("pattern_ayab.png".to_string());
+        files.push("ayab_session_checklist.json".to_string());
     }
 
     let result = json!({
         "style": style,
         "machine": profile.id,
+        "wearer_age_class": doc.wearer_age_class,
         "stitches": doc.stitches.len(),
         "transfers": compiled.vm_report.total_transfers,
         "max_float_mm": compiled.vm_report.max_float_mm,
+        "files": files,
         "metadata": doc.metadata,
         "cert": compiled.cert,
         "out_dir": out_dir.display().to_string(),
+        "hardware_execution_authorized": false,
+        "physical_knitting_validated": false,
+        "fit_claimed": false,
     });
     let text = format!(
         "Drafted & verified {style} knit ({} stitches, {} transfers) for {} -> {}",
@@ -1133,6 +1162,91 @@ mod tests {
         let (dv_val, dv_code, _) = cmd_dye(&dye_verify_args).unwrap();
         assert_eq!(dv_code, 0);
         assert_eq!(dv_val["verified"], true);
+
+        // Brother KH-930 AYAB swatch emits 1-bit PNG + checklist and seals matching cert.json.
+        let ayab_dir = root.join("ayab-swatch");
+        let ayab_args = parse(
+            &[
+                "knit",
+                "swatch",
+                "--machine",
+                "brother-kh930",
+                "--needles",
+                "16",
+                "--courses-per-zone",
+                "6",
+                "--cams",
+                "4.0,6.0",
+                "--created",
+                "2026-11-27T12:00",
+                "--out",
+                ayab_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (ayab_val, ayab_code, _) = cmd_knit(&ayab_args).unwrap();
+        assert_eq!(ayab_code, 0);
+        assert!(ayab_dir.join("swatch_ayab.png").is_file());
+        assert!(ayab_dir.join("ayab_session_checklist.json").is_file());
+        let cert_json: Value =
+            serde_json::from_str(&std::fs::read_to_string(ayab_dir.join("cert.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            cert_json["material_sha256"].as_str(),
+            Some(SWATCH_MATERIAL_PLACEHOLDER)
+        );
+        assert_eq!(
+            cert_json["cert_sha256"].as_str(),
+            ayab_val["cert_sha256"].as_str()
+        );
+
+        // Hand-knit draft reports honesty flags & files; Shima proprietary binary refuses fail-closed.
+        let hand_dir = root.join("hand-panel");
+        let hand_args = parse(
+            &[
+                "knit",
+                "draft",
+                "--machine",
+                "hand-knit",
+                "--age-class",
+                "infant",
+                "--created",
+                "2026-11-27T12:00",
+                "--out",
+                hand_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let (hand_val, hand_code, _) = cmd_knit(&hand_args).unwrap();
+        assert_eq!(hand_code, 0);
+        assert_eq!(hand_val["hardware_execution_authorized"], false);
+        assert_eq!(hand_val["physical_knitting_validated"], false);
+        assert_eq!(hand_val["fit_claimed"], false);
+        assert!(hand_dir.join("chart.svg").is_file());
+        assert!(hand_dir.join("chart.pdf").is_file());
+
+        let shima_prop = parse(
+            &[
+                "knit",
+                "draft",
+                "--machine",
+                "shima-12e",
+                "--age-class",
+                "adult",
+                "--allow-proprietary-binary",
+                "--out",
+                root.join("never-created-shima").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_knit(&shima_prop).unwrap_err().code,
+            RefusalCode::OpaqueProprietaryTarget
+        );
+        assert!(!root.join("never-created-shima").exists());
     }
 
     #[test]
