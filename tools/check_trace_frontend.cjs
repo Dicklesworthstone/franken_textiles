@@ -252,6 +252,10 @@ test('load errors and image read limits do not hang the page or publish files', 
 
 test('all five browser workers reject missing or mismatched wasm_interface_stamp on real web/pkg bundles and accept the matching stamp', async () => {
   const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-27.1';
+  const EXPECTED_REV = EXPECTED_STAMP.split('/')[1];
+  for (const w of ['worker.js', 'materials-worker.js', 'knit-worker.js']) {
+    assert.ok(read(w).includes(`?v=${EXPECTED_REV}`), `${w} must carry matching ?v=${EXPECTED_REV} WASM cache-buster`);
+  }
   for (const mode of ['missing', 'mismatch', 'previous', 'match']) {
     const stampExport = mode === 'missing'
       ? {}
@@ -364,11 +368,14 @@ test('all five browser workers reject missing or mismatched wasm_interface_stamp
         dye_optimize_json: () => '{"ok":true,"result":{}}',
         ...stampExport,
       };
-      const context = vm.createContext({ JSON, Error, self: {}, postMessage: m => sent.push(m) });
+      const context = vm.createContext({ JSON, Error, URL, self: {}, postMessage: m => sent.push(m) });
       const imports = new vm.SyntheticModule(Object.keys(values), function () {
         for (const [k, v] of Object.entries(values)) this.setExport(k, v);
       }, { context });
-      const mod = new vm.SourceTextModule(read('knit-worker.js'), { context });
+      const mod = new vm.SourceTextModule(read('knit-worker.js'), {
+        context,
+        initializeImportMeta: meta => { meta.url = 'https://unit.invalid/knit-worker.js'; },
+      });
       await mod.link(() => imports); await mod.evaluate();
       await new Promise(resolve => setImmediate(resolve));
       if (mode === 'match') {

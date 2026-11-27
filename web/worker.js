@@ -62,7 +62,7 @@ onmessage = async (ev) => {
     if (msg.type === "init") {
       postMessage({ type: "progress", text: "Loading FrankenTextiles…" });
       // Load bindings and module from the same numerical-engine revision.
-      const revision = "?v=2026-11-25.1";
+      const revision = "?v=2026-11-27.1";
       ftx = await import(msg.pkg + "ftx_wasm.js" + revision);
       await ftx.default({ module_or_path: msg.pkg + "ftx_wasm_bg.wasm" + revision });
       if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
