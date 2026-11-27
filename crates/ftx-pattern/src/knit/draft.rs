@@ -1,7 +1,7 @@
 //! Pathway 1 measured knitting drafters (`FTX-K05`):
 //! - Hard-capped stepped calibration swatch generator (`CalibrationSwatchOnly`),
 //! - Measured flat panel drafter (ribbed hem, side taper, armholes, separate shoulders and held neck),
-//! - Top-down shaped torso tube drafter; sleeve branches and tubular rib remain unsupported.
+//! - Top-down shaped torso tube drafter with half-gauge tubular collar and hem rib.
 //!
 //! All drafters report exact per-section mm quantization residuals honestly.
 
@@ -11,8 +11,8 @@ use ftx_core::{Refusal, RefusalCode};
 use serde::{Deserialize, Serialize};
 
 use super::ir::{
-    Bed, CamStitchSetting, CarrierId, GaugeSpec, KNIT_SCHEMA, KnitDoc, LoopKind, ParentRef,
-    StitchNode, YarnRun,
+    Bed, CableGroup, CamStitchSetting, CarrierId, CourseDir, GaugeSpec, KNIT_SCHEMA, KnitDoc,
+    KnitPass, LoopKind, ParentRef, StitchNode, YarnRun,
 };
 use super::profile::{CalibrationSwatchCaps, MachineProfile, WearerAgeClass};
 
@@ -71,9 +71,9 @@ pub struct RaglanPulloverSpec {
     pub yoke_depth_mm: f64,
     /// Torso length below underarm to hem, in mm.
     pub body_length_below_arm_mm: f64,
-    /// Collar rib course count; must be zero until tubular rib scheduling is supported.
+    /// Collar 1x1 rib course count. Ribbed tubes use interleaved half-gauge needles.
     pub collar_rib_courses: u32,
-    /// Bottom hem rib course count; must be zero until tubular rib scheduling is supported.
+    /// Bottom hem 1x1 rib course count, before the terminal bind-off pass.
     pub hem_rib_courses: u32,
     /// Dimensionless cam stitch setting.
     pub cam_setting: f64,
@@ -84,6 +84,27 @@ pub struct RaglanPulloverSpec {
     /// True if hood/neck drawstring is present.
     #[serde(default)]
     pub has_hood_or_neck_drawstring: bool,
+}
+
+/// A symmetric bottom-up pullover built from three independently fed tubes, joined
+/// on both beds before the yoke narrows to the neck. Measurements include ease.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BranchedPulloverSpec {
+    /// Neck, torso, yoke, rib, yarn, and body carrier settings.
+    pub torso: RaglanPulloverSpec,
+    /// Finished circumference of each wrist cuff, in mm.
+    pub sleeve_cuff_girth_mm: f64,
+    /// Finished circumference of each upper arm at the underarm, in mm.
+    pub sleeve_upper_arm_girth_mm: f64,
+    /// Sleeve length below the underarm, excluding cuff rib, in mm.
+    pub sleeve_length_mm: f64,
+    /// 1x1 rib courses at each wrist before sleeve shaping.
+    pub cuff_rib_courses: u32,
+    /// Separate yarn supply for the left sleeve, continued through the joined yoke.
+    pub left_sleeve_carrier: CarrierId,
+    /// Separate yarn supply for the right sleeve, removed after the underarm join.
+    pub right_sleeve_carrier: CarrierId,
 }
 
 /// Drafts a hard-capped stepped calibration swatch (`WearerAgeClass::CalibrationSwatchOnly`)
@@ -277,6 +298,7 @@ pub fn draft_calibration_swatch(
             relaxed_after_wash: false,
         },
         stitches,
+        passes: Vec::new(),
         short_row_turns: vec![],
         cable_groups: vec![],
         yarn_runs: vec![YarnRun {
@@ -767,6 +789,7 @@ pub fn draft_shaped_panel(
         wearer_age_class: spec.wearer_age_class,
         gauge: gauge.clone(),
         stitches,
+        passes: Vec::new(),
         short_row_turns: vec![],
         cable_groups: vec![],
         yarn_runs,
@@ -846,17 +869,11 @@ pub fn draft_seamless_raglan_tube(
         ));
     }
 
-    if spec.collar_rib_courses != 0 || spec.hem_rib_courses != 0 {
-        return Err(Refusal::new(
-            RefusalCode::MachineStateInfeasible,
-            "tubular collar and hem rib require a half-gauge schedule that is not yet supported",
-        )
-        .repair("set collar_rib_courses and hem_rib_courses to zero for a shaped stockinette torso tube"));
-    }
+    let half_gauge = spec.collar_rib_courses != 0 || spec.hem_rib_courses != 0;
 
     let wale_pitch = gauge.blocked_wale_pitch_mm();
     let course_height = gauge.blocked_course_height_mm();
-    let max_tube_st_f64 = 2.0 * f64::from(profile.needle_count);
+    let max_tube_st_f64 = f64::from(profile.needle_count) * if half_gauge { 1.0 } else { 2.0 };
     for (label, girth) in [
         ("neck_girth_mm", spec.neck_girth_mm),
         ("chest_girth_mm", spec.chest_girth_mm),
@@ -879,11 +896,12 @@ pub fn draft_seamless_raglan_tube(
     let neck_st = round_mult4(spec.neck_girth_mm);
     let chest_st = round_mult4(spec.chest_girth_mm);
     let max_per_bed = (chest_st / 2) as u32;
-    if max_per_bed > profile.needle_count {
+    let required_span = max_per_bed * if half_gauge { 2 } else { 1 };
+    if required_span > profile.needle_count {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
             format!(
-                "tubular chest requires {max_per_bed} needles per bed, exceeding {}",
+                "tubular chest requires a {required_span}-needle span (half-gauge: {half_gauge}), exceeding {}",
                 profile.needle_count
             ),
         ));
@@ -903,11 +921,16 @@ pub fn draft_seamless_raglan_tube(
     }
     let yoke_courses = yoke_f64.max(4.0) as u32;
     let body_courses = body_f64.max(4.0) as u32;
+    if spec.hem_rib_courses > body_courses {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "hem rib must fit inside the requested underarm-to-hem body length",
+        ));
+    }
     let total_courses = spec
         .collar_rib_courses
         .checked_add(yoke_courses)
         .and_then(|c| c.checked_add(body_courses))
-        .and_then(|c| c.checked_add(spec.hem_rib_courses))
         .ok_or_else(|| Refusal::new(RefusalCode::OutOfRange, "raglan course count overflow"))?;
     if total_courses > MAX_DRAFT_COURSES {
         return Err(Refusal::new(
@@ -918,6 +941,7 @@ pub fn draft_seamless_raglan_tube(
     let est_loop_mm = 2.6 * wale_pitch;
 
     let mut stitches = Vec::new();
+    let mut passes = Vec::new();
     let mut prev_front: BTreeMap<i32, u32> = BTreeMap::new();
     let mut prev_back: BTreeMap<i32, u32> = BTreeMap::new();
     let mut next_id = 0u32;
@@ -938,16 +962,36 @@ pub fn draft_seamless_raglan_tube(
         let mut cur_front = BTreeMap::new();
         let mut cur_back = BTreeMap::new();
 
+        let rib_course = c < total_courses
+            && ((spec.collar_rib_courses > 0 && c <= spec.collar_rib_courses)
+                || c >= total_courses - spec.hem_rib_courses);
         let mut bind_chain = None;
-        for (bed, prev_bed, cur_bed) in [
+        for (home_bed, prev_bed, cur_bed) in [
             (Bed::Front, &prev_front, &mut cur_front),
             (Bed::Back, &prev_back, &mut cur_back),
         ] {
             let mut wales: Vec<i32> = (left..=right).collect();
-            if bed == Bed::Back {
+            let direction = if home_bed == Bed::Front {
+                CourseDir::Plus
+            } else {
                 wales.reverse();
-            }
+                CourseDir::Minus
+            };
+            let mut pass_ids = Vec::new();
             for w in wales {
+                // The two logical tube sides occupy disjoint needle indices. Moving
+                // alternate loops to the opposite bed forms rib without exchanging
+                // the sides or changing their opposite yarn traversal directions.
+                let wale = if half_gauge {
+                    2 * w + i32::from(home_bed == Bed::Back)
+                } else {
+                    w
+                };
+                let bed = if half_gauge && rib_course && w.rem_euclid(2) != 0 {
+                    home_bed.opposite()
+                } else {
+                    home_bed
+                };
                 let mut parents = Vec::new();
                 if let Some(&pid) = prev_bed.get(&w) {
                     append_parent(&mut parents, pid, profile)?;
@@ -968,7 +1012,7 @@ pub fn draft_seamless_raglan_tube(
                 stitches.push(StitchNode {
                     id: next_id,
                     course: c,
-                    wale: w,
+                    wale,
                     bed,
                     kind,
                     parents,
@@ -980,8 +1024,15 @@ pub fn draft_seamless_raglan_tube(
                     },
                     yarn_length_mm: Some(est_loop_mm),
                 });
+                pass_ids.push(next_id);
                 cur_bed.insert(w, next_id);
                 next_id += 1;
+            }
+            if half_gauge {
+                passes.push(KnitPass {
+                    direction,
+                    stitch_ids: pass_ids,
+                });
             }
         }
         prev_front = cur_front;
@@ -994,6 +1045,24 @@ pub fn draft_seamless_raglan_tube(
         "pathway".to_string(),
         "top_down_shaped_torso_tube".to_string(),
     );
+    if half_gauge {
+        metadata.insert(
+            "tube_structure".to_string(),
+            "half_gauge_1x1_rib".to_string(),
+        );
+        metadata.insert(
+            "collar_rib_courses".to_string(),
+            spec.collar_rib_courses.to_string(),
+        );
+        metadata.insert(
+            "hem_rib_courses".to_string(),
+            spec.hem_rib_courses.to_string(),
+        );
+        metadata.insert(
+            "physical_needle_layout".to_string(),
+            "front side: even indices; back side: odd indices; rib alternates beds".to_string(),
+        );
+    }
     metadata.insert(
         "neck_girth_residual_mm".to_string(),
         format!(
@@ -1015,6 +1084,7 @@ pub fn draft_seamless_raglan_tube(
         wearer_age_class: spec.wearer_age_class,
         gauge: gauge.clone(),
         stitches,
+        passes,
         short_row_turns: vec![],
         cable_groups: vec![],
         yarn_runs: vec![YarnRun {
@@ -1031,6 +1101,840 @@ pub fn draft_seamless_raglan_tube(
     };
     doc.validate()?;
     Ok(doc)
+}
+
+struct HalfGaugeRounds<'a> {
+    torso: &'a RaglanPulloverSpec,
+    profile: &'a MachineProfile,
+    loop_length_mm: f64,
+    stitches: Vec<StitchNode>,
+    passes: Vec<KnitPass>,
+}
+
+impl HalfGaugeRounds<'_> {
+    fn push(
+        &mut self,
+        course: u32,
+        carrier: &CarrierId,
+        parents: &BTreeMap<(Bed, i32), Vec<u32>>,
+        rib: bool,
+        bind_off: bool,
+    ) -> Result<BTreeMap<(Bed, i32), u32>, Refusal> {
+        let mut current = BTreeMap::new();
+        let mut bind_chain = None;
+        for (home, direction) in [(Bed::Front, CourseDir::Plus), (Bed::Back, CourseDir::Minus)] {
+            let mut positions: Vec<_> = parents
+                .iter()
+                .filter(|((bed, _), _)| *bed == home)
+                .collect();
+            if direction == CourseDir::Minus {
+                positions.reverse();
+            }
+            let mut stitch_ids = Vec::new();
+            for (&(_, wale), old) in positions {
+                let id = u32::try_from(self.stitches.len()).map_err(|_| {
+                    Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        "branched pullover exceeds the stitch identity range",
+                    )
+                })?;
+                let mut parent_refs = Vec::new();
+                for &parent in old {
+                    append_parent(&mut parent_refs, parent, self.profile)?;
+                }
+                let bed = if rib && wale.rem_euclid(2) != 0 {
+                    home.opposite()
+                } else {
+                    home
+                };
+                let kind = if bind_off {
+                    if old.is_empty() {
+                        return Err(Refusal::new(
+                            RefusalCode::MachineStateInfeasible,
+                            "terminal tubular bind-off cannot create an unparented loop",
+                        ));
+                    }
+                    if let Some(parent) = bind_chain {
+                        append_parent(&mut parent_refs, parent, self.profile)?;
+                    }
+                    bind_chain = Some(id);
+                    LoopKind::BindOff
+                } else if old.is_empty() {
+                    LoopKind::CastOn
+                } else if old.len() > 1 {
+                    LoopKind::Decrease
+                } else if bed == Bed::Back {
+                    LoopKind::Purl
+                } else {
+                    LoopKind::Knit
+                };
+                self.stitches.push(StitchNode {
+                    id,
+                    course,
+                    wale: 2 * wale + i32::from(home == Bed::Back),
+                    bed,
+                    kind,
+                    parents: parent_refs,
+                    carrier_ids: vec![carrier.clone()],
+                    yarn_id: self.torso.yarn_id.clone(),
+                    cam_stitch_setting: CamStitchSetting {
+                        setting: self.torso.cam_setting,
+                        machine_family: self.profile.id.clone(),
+                    },
+                    yarn_length_mm: Some(self.loop_length_mm),
+                });
+                stitch_ids.push(id);
+                current.insert((home, wale), id);
+            }
+            self.passes.push(KnitPass {
+                direction,
+                stitch_ids,
+            });
+        }
+        Ok(current)
+    }
+}
+
+/// Drafts actual cuff, torso, and sleeve branches and joins their edge loops on both
+/// beds. Sleeve and torso lengths start at different courses so their underarms meet
+/// together. The left sleeve's continuous yarn forms the narrowed yoke and collar.
+///
+/// # Errors
+/// Refuses insufficient carriers, half-gauge bed width, extreme course counts, or
+/// a shaping step that would exceed the machine hook-stack capacity.
+pub fn draft_branched_raglan_pullover(
+    spec: &BranchedPulloverSpec,
+    gauge: &GaugeSpec,
+    profile: &MachineProfile,
+) -> Result<KnitDoc, Refusal> {
+    gauge.validate()?;
+    profile.validate()?;
+    let torso = &spec.torso;
+    if torso.name.trim().is_empty() || torso.yarn_id.trim().is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "branched pullover needs a name and yarn",
+        ));
+    }
+    if !profile.has_back_bed || profile.needle_count > i32::MAX as u32 {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            "branched pullover requires two addressable main needle beds",
+        ));
+    }
+    let carriers = [
+        &spec.left_sleeve_carrier,
+        &torso.carrier_id,
+        &spec.right_sleeve_carrier,
+    ];
+    for (index, carrier) in carriers.iter().enumerate() {
+        CarrierId::new(carrier.as_str())?;
+        if !profile.carrier_ids.contains(carrier) || carriers[..index].contains(carrier) {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                "branched pullover requires three distinct available yarn carriers",
+            ));
+        }
+    }
+    for (name, value) in [
+        ("neck_girth_mm", torso.neck_girth_mm),
+        ("chest_girth_mm", torso.chest_girth_mm),
+        ("yoke_depth_mm", torso.yoke_depth_mm),
+        ("body_length_below_arm_mm", torso.body_length_below_arm_mm),
+        ("sleeve_cuff_girth_mm", spec.sleeve_cuff_girth_mm),
+        ("sleeve_upper_arm_girth_mm", spec.sleeve_upper_arm_girth_mm),
+        ("sleeve_length_mm", spec.sleeve_length_mm),
+    ] {
+        Refusal::finite(name, value)?;
+        if value <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("{name} must be positive"),
+            ));
+        }
+    }
+    Refusal::finite("cam_setting", torso.cam_setting)?;
+    if torso.chest_girth_mm < torso.neck_girth_mm
+        || spec.sleeve_upper_arm_girth_mm < spec.sleeve_cuff_girth_mm
+        || torso.cam_setting < profile.cam_setting_range[0]
+        || torso.cam_setting > profile.cam_setting_range[1]
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "branched pullover needs neck <= chest, cuff <= upper arm, and a supported cam setting",
+        ));
+    }
+    let pitch = gauge.blocked_wale_pitch_mm();
+    let height = gauge.blocked_course_height_mm();
+    let stitch_count = |mm: f64| -> Result<i32, Refusal> {
+        let estimate = (mm / pitch).round();
+        if estimate < 8.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "each branch circumference must provide at least eight stitches at the selected gauge",
+            ));
+        }
+        if !estimate.is_finite() || estimate > f64::from(profile.needle_count) {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                "branch circumference exceeds the half-gauge bed capacity",
+            ));
+        }
+        let rounded = (estimate as u32).div_ceil(4) * 4;
+        if rounded > profile.needle_count || rounded > i32::MAX as u32 {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                "rounded branch circumference exceeds the half-gauge bed capacity",
+            ));
+        }
+        Ok(rounded as i32)
+    };
+    let course_count = |mm: f64| -> Result<u32, Refusal> {
+        let estimate = (mm / height).round();
+        if estimate < 4.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "each branched garment length must provide at least four courses at the selected gauge",
+            ));
+        }
+        if !estimate.is_finite() || estimate > f64::from(MAX_DRAFT_COURSES) {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "branched pullover dimension exceeds the course allocation cap",
+            ));
+        }
+        Ok(estimate as u32)
+    };
+    let neck_st = stitch_count(torso.neck_girth_mm)?;
+    let chest_st = stitch_count(torso.chest_girth_mm)?;
+    let cuff_st = stitch_count(spec.sleeve_cuff_girth_mm)?;
+    let arm_st = stitch_count(spec.sleeve_upper_arm_girth_mm)?;
+    let required_span = i64::from(chest_st) + 2 * i64::from(arm_st);
+    if required_span > i64::from(profile.needle_count) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            format!(
+                "three half-gauge branches need {required_span} needle positions, but '{}' has {}",
+                profile.id, profile.needle_count,
+            ),
+        ));
+    }
+    let body_courses = course_count(torso.body_length_below_arm_mm)?;
+    let sleeve_courses = course_count(spec.sleeve_length_mm)?;
+    let yoke_courses = course_count(torso.yoke_depth_mm)?;
+    let overflow = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "branched pullover exceeds the course allocation cap",
+        )
+    };
+    if torso.hem_rib_courses > body_courses {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "hem rib must fit inside the requested underarm-to-hem body length",
+        ));
+    }
+    let body_rounds = body_courses;
+    let sleeve_rounds = sleeve_courses
+        .checked_add(spec.cuff_rib_courses)
+        .ok_or_else(overflow)?;
+    let lower_rounds = body_rounds.max(sleeve_rounds);
+    let join_course = lower_rounds.checked_add(1).ok_or_else(overflow)?;
+    let end_course = join_course
+        .checked_add(yoke_courses)
+        .and_then(|value| value.checked_add(torso.collar_rib_courses))
+        .ok_or_else(overflow)?;
+    if end_course > MAX_DRAFT_COURSES {
+        return Err(overflow());
+    }
+    let arm_width = arm_st / 2;
+    let body_width = chest_st / 2;
+    let full_width = body_width + 2 * arm_width;
+    struct Branch<'a> {
+        carrier: &'a CarrierId,
+        left: i32,
+        width: i32,
+        initial_width: i32,
+        start: u32,
+        rib: u32,
+        growth: u32,
+    }
+    let branches = [
+        Branch {
+            carrier: &spec.left_sleeve_carrier,
+            left: 0,
+            width: arm_width,
+            initial_width: cuff_st / 2,
+            start: lower_rounds - sleeve_rounds,
+            rib: spec.cuff_rib_courses,
+            growth: sleeve_courses,
+        },
+        Branch {
+            carrier: &torso.carrier_id,
+            left: arm_width,
+            width: body_width,
+            initial_width: body_width,
+            start: lower_rounds - body_rounds,
+            rib: torso.hem_rib_courses,
+            growth: body_courses,
+        },
+        Branch {
+            carrier: &spec.right_sleeve_carrier,
+            left: arm_width + body_width,
+            width: arm_width,
+            initial_width: cuff_st / 2,
+            start: lower_rounds - sleeve_rounds,
+            rib: spec.cuff_rib_courses,
+            growth: sleeve_courses,
+        },
+    ];
+    let mut builder = HalfGaugeRounds {
+        torso,
+        profile,
+        loop_length_mm: 2.6 * pitch,
+        stitches: Vec::new(),
+        passes: Vec::new(),
+    };
+    let mut previous: [BTreeMap<(Bed, i32), u32>; 3] = std::array::from_fn(|_| BTreeMap::new());
+    for course in 0..=lower_rounds {
+        for (index, branch) in branches.iter().enumerate() {
+            if course < branch.start {
+                continue;
+            }
+            let local = course - branch.start;
+            let t = f64::from(local.saturating_sub(branch.rib)) / f64::from(branch.growth);
+            let width = branch.initial_width
+                + (f64::from(branch.width - branch.initial_width) * t).round() as i32;
+            let left = branch.left + (branch.width - width) / 2;
+            let mut parents = BTreeMap::new();
+            for bed in [Bed::Front, Bed::Back] {
+                for wale in left..left + width {
+                    parents.insert(
+                        (bed, wale),
+                        previous[index]
+                            .get(&(bed, wale))
+                            .copied()
+                            .into_iter()
+                            .collect(),
+                    );
+                }
+            }
+            previous[index] = builder.push(
+                course,
+                branch.carrier,
+                &parents,
+                branch.rib > 0 && local <= branch.rib,
+                false,
+            )?;
+        }
+    }
+    // Both torso edge loops stay at their own hooks. Each adjacent sleeve moves
+    // inward by one logical wale, making two real underarm decreases on each bed.
+    // Processing torso parents first defines the bottom-to-top decrease order.
+    let mut joined = BTreeMap::<(Bed, i32), Vec<u32>>::new();
+    for index in [1, 0, 2] {
+        for (&(bed, wale), &id) in &previous[index] {
+            let target = match index {
+                0 => wale + 1,
+                2 => wale - 1,
+                _ => wale,
+            };
+            joined.entry((bed, target)).or_default().push(id);
+        }
+    }
+    let mut current = builder.push(
+        join_course,
+        &spec.left_sleeve_carrier,
+        &joined,
+        false,
+        false,
+    )?;
+    let joined_width = full_width - 2;
+    let neck_width = neck_st / 2;
+    for step in 1..yoke_courses {
+        let reduction = (f64::from(joined_width - neck_width) * f64::from(step)
+            / f64::from(yoke_courses - 1))
+        .round() as i32;
+        let width = joined_width - reduction;
+        let left = 1 + reduction / 2;
+        let right = left + width - 1;
+        let mut parents = BTreeMap::new();
+        for bed in [Bed::Front, Bed::Back] {
+            for wale in left..=right {
+                let own = current
+                    .get(&(bed, wale))
+                    .copied()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                parents.insert((bed, wale), own);
+            }
+            for (&(old_bed, wale), &id) in &current {
+                if old_bed == bed && wale < left {
+                    parents.get_mut(&(bed, left)).expect("left target").push(id);
+                }
+            }
+            for (&(old_bed, wale), &id) in current.iter().rev() {
+                if old_bed == bed && wale > right {
+                    parents
+                        .get_mut(&(bed, right))
+                        .expect("right target")
+                        .push(id);
+                }
+            }
+        }
+        current = builder.push(
+            join_course + step,
+            &spec.left_sleeve_carrier,
+            &parents,
+            false,
+            false,
+        )?;
+    }
+    for collar in 0..torso.collar_rib_courses {
+        let parents = current
+            .iter()
+            .map(|(address, id)| (*address, vec![*id]))
+            .collect();
+        current = builder.push(
+            join_course + yoke_courses + collar,
+            &spec.left_sleeve_carrier,
+            &parents,
+            true,
+            false,
+        )?;
+    }
+    let terminal = current
+        .iter()
+        .map(|(address, id)| (*address, vec![*id]))
+        .collect();
+    builder.push(
+        end_course,
+        &spec.left_sleeve_carrier,
+        &terminal,
+        false,
+        true,
+    )?;
+    let mut yarn_runs = Vec::new();
+    for (index, branch) in branches.iter().enumerate() {
+        let yarn_m = builder
+            .stitches
+            .iter()
+            .filter(|node| node.carrier_ids[0] == *branch.carrier)
+            .filter_map(|node| node.yarn_length_mm)
+            .sum::<f64>()
+            / 1000.0;
+        yarn_runs.push(YarnRun {
+            run_id: index as u32,
+            carrier_id: branch.carrier.clone(),
+            yarn_id: torso.yarn_id.clone(),
+            start_course: branch.start,
+            end_course: if index == 0 { end_course } else { lower_rounds },
+            total_yarn_length_m: yarn_m,
+            cut_tail_mm: Some(15.0),
+        });
+    }
+    let mut metadata = BTreeMap::new();
+    for (key, value) in [
+        ("pathway", "bottom_up_three_tube_raglan".to_string()),
+        (
+            "boundary_rings",
+            "waist_hem,neck,left_wrist_cuff,right_wrist_cuff".to_string(),
+        ),
+        ("tube_structure", "interleaved_half_gauge".to_string()),
+        ("join_course", join_course.to_string()),
+        ("upper_yoke_carrier", spec.left_sleeve_carrier.0.clone()),
+        ("left_sleeve_carrier", spec.left_sleeve_carrier.0.clone()),
+        ("right_sleeve_carrier", spec.right_sleeve_carrier.0.clone()),
+        ("body_start_course", branches[1].start.to_string()),
+        ("sleeve_start_course", branches[0].start.to_string()),
+        ("source_stitch_count", builder.stitches.len().to_string()),
+        ("neck_stitch_count", neck_st.to_string()),
+        ("chest_stitch_count", chest_st.to_string()),
+        ("cuff_stitch_count", cuff_st.to_string()),
+        ("upper_arm_stitch_count", arm_st.to_string()),
+        ("body_course_count", body_courses.to_string()),
+        ("sleeve_plain_course_count", sleeve_courses.to_string()),
+        ("yoke_course_count", yoke_courses.to_string()),
+        ("hem_rib_courses", torso.hem_rib_courses.to_string()),
+        ("cuff_rib_courses", spec.cuff_rib_courses.to_string()),
+        ("collar_rib_courses", torso.collar_rib_courses.to_string()),
+        (
+            "body_total_length_mm",
+            format!("{:.2}", f64::from(body_rounds) * height),
+        ),
+        (
+            "sleeve_total_length_mm",
+            format!("{:.2}", f64::from(sleeve_rounds) * height),
+        ),
+    ] {
+        metadata.insert(key.to_string(), value);
+    }
+    for (key, actual, requested) in [
+        (
+            "neck_girth_residual_mm",
+            f64::from(neck_st) * pitch,
+            torso.neck_girth_mm,
+        ),
+        (
+            "chest_girth_residual_mm",
+            f64::from(chest_st) * pitch,
+            torso.chest_girth_mm,
+        ),
+        (
+            "sleeve_cuff_girth_residual_mm",
+            f64::from(cuff_st) * pitch,
+            spec.sleeve_cuff_girth_mm,
+        ),
+        (
+            "sleeve_upper_arm_girth_residual_mm",
+            f64::from(arm_st) * pitch,
+            spec.sleeve_upper_arm_girth_mm,
+        ),
+        (
+            "sleeve_length_residual_mm",
+            f64::from(sleeve_courses) * height,
+            spec.sleeve_length_mm,
+        ),
+        (
+            "body_length_residual_mm",
+            f64::from(body_courses) * height,
+            torso.body_length_below_arm_mm,
+        ),
+        (
+            "yoke_depth_residual_mm",
+            f64::from(yoke_courses) * height,
+            torso.yoke_depth_mm,
+        ),
+    ] {
+        metadata.insert(key.to_string(), format!("{:+.2}", actual - requested));
+    }
+    let doc = KnitDoc {
+        schema: KNIT_SCHEMA.to_string(),
+        name: torso.name.clone(),
+        wearer_age_class: torso.wearer_age_class,
+        gauge: gauge.clone(),
+        stitches: builder.stitches,
+        passes: builder.passes,
+        short_row_turns: Vec::new(),
+        cable_groups: Vec::new(),
+        yarn_runs,
+        has_hood_or_neck_drawstring: torso.has_hood_or_neck_drawstring,
+        metadata,
+    };
+    doc.validate()?;
+    Ok(doc)
+}
+
+/// Drafts an open-neck panel with tuck-anchored short-row wedges on both shoulders.
+/// Outer shoulder edges retain the requested panel height; inner stitches remain
+/// held for progressively shorter intervals, then all shoulder loops are rejoined
+/// before the two independent bind-off chains. Center neck loops still need finishing.
+///
+/// # Errors
+/// Refuses insufficient neck depth/shoulder width or shaping beyond the hook capacity.
+pub fn draft_short_row_neckline_panel(
+    spec: &ParametricPanelSpec,
+    gauge: &GaugeSpec,
+    profile: &MachineProfile,
+    shoulder_short_row_pairs: u32,
+) -> Result<KnitDoc, Refusal> {
+    let original = draft_shaped_panel(spec, gauge, profile)?;
+    if shoulder_short_row_pairs == 0 {
+        return Ok(original);
+    }
+    let invalid = || {
+        Refusal::new(
+            RefusalCode::OutOfRange,
+            "anchored neckline short rows require an open neck, sufficient shoulder width, and 2*pairs+1 forming courses",
+        )
+    };
+    let start: u32 = original
+        .metadata
+        .get("shoulder_start_course")
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(invalid)?;
+    let end: u32 = original.metadata["formed_course_count"]
+        .parse()
+        .map_err(|_| invalid())?;
+    let required = shoulder_short_row_pairs
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(invalid)?;
+    if end.saturating_sub(start) < required {
+        return Err(invalid());
+    }
+    let left_carrier = CarrierId::new(original.metadata["left_shoulder_carrier"].clone())?;
+    let right_carrier = CarrierId::new(original.metadata["right_shoulder_carrier"].clone())?;
+    let mut by_course: BTreeMap<u32, Vec<&StitchNode>> = BTreeMap::new();
+    for node in &original.stitches {
+        by_course.entry(node.course).or_default().push(node);
+    }
+    let left_inner = by_course[&start]
+        .iter()
+        .filter(|node| node.carrier_ids[0] == left_carrier)
+        .map(|node| node.wale)
+        .max()
+        .ok_or_else(invalid)?;
+    let right_inner = by_course[&start]
+        .iter()
+        .filter(|node| node.carrier_ids[0] == right_carrier)
+        .map(|node| node.wale)
+        .min()
+        .ok_or_else(invalid)?;
+    let mut live: BTreeMap<i32, Vec<u32>> = by_course[&(start - 1)]
+        .iter()
+        .filter(|node| node.wale <= left_inner || node.wale >= right_inner)
+        .map(|node| (node.wale, vec![node.id]))
+        .collect();
+    let mut result = original.clone();
+    result.stitches.retain(|node| node.course < start);
+    result.passes.clear();
+    let mut next_id = result
+        .stitches
+        .iter()
+        .map(|node| node.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    for (&course, nodes) in by_course.range(..start) {
+        let direction = if course.is_multiple_of(2) {
+            CourseDir::Plus
+        } else {
+            CourseDir::Minus
+        };
+        let mut sorted = nodes.clone();
+        sorted.sort_by_key(|node| node.wale);
+        if direction == CourseDir::Minus {
+            sorted.reverse();
+        }
+        result.passes.push(KnitPass {
+            direction,
+            stitch_ids: sorted.iter().map(|node| node.id).collect(),
+        });
+    }
+    let mut last_direction = result.passes.last().map(|pass| pass.direction);
+    for course in start..=end {
+        let row = course - start;
+        let partial = row < shoulder_short_row_pairs * 2;
+        let outgoing = row.is_multiple_of(2);
+        let mut sides = [
+            (
+                if outgoing {
+                    CourseDir::Plus
+                } else {
+                    CourseDir::Minus
+                },
+                &left_carrier,
+                true,
+            ),
+            (
+                if outgoing {
+                    CourseDir::Minus
+                } else {
+                    CourseDir::Plus
+                },
+                &right_carrier,
+                false,
+            ),
+        ];
+        sides.sort_by_key(|(direction, _, _)| last_direction == Some(*direction));
+        for (direction, carrier, is_left) in sides {
+            let mut templates: Vec<_> = by_course[&course]
+                .iter()
+                .copied()
+                .filter(|node| node.carrier_ids[0] == *carrier)
+                .collect();
+            templates.sort_by_key(|node| node.wale);
+            let min = templates.first().ok_or_else(invalid)?.wale;
+            let max = templates.last().ok_or_else(invalid)?.wale;
+            let outer = if is_left { min } else { max };
+            let mut removed = Vec::new();
+            let old_wales: Vec<_> = live
+                .keys()
+                .copied()
+                .filter(|wale| {
+                    let on_side = if is_left {
+                        *wale <= left_inner
+                    } else {
+                        *wale >= right_inner
+                    };
+                    on_side && (*wale < min || *wale > max)
+                })
+                .collect();
+            for wale in old_wales {
+                removed.extend(live.remove(&wale).expect("enumerated live hook"));
+            }
+            if !is_left {
+                removed.reverse();
+            }
+            let anchor = if partial {
+                let held_inner = (shoulder_short_row_pairs - 1 - row / 2) as i32;
+                if is_left {
+                    max - held_inner
+                } else {
+                    min + held_inner
+                }
+            } else {
+                outer
+            };
+            if partial && (anchor <= min || anchor >= max) {
+                // An endpoint anchor is allowed at the inner edge, but at least
+                // one ordinary stitch must remain toward the outer edge.
+                if (is_left && anchor <= min) || (!is_left && anchor >= max) {
+                    return Err(invalid());
+                }
+            }
+            if partial {
+                templates.retain(|node| {
+                    if is_left {
+                        node.wale < anchor || (outgoing && node.wale == anchor)
+                    } else {
+                        node.wale > anchor || (outgoing && node.wale == anchor)
+                    }
+                });
+            }
+            if templates.is_empty() {
+                return Err(invalid());
+            }
+            if direction == CourseDir::Minus {
+                templates.reverse();
+            }
+            let mut ids = Vec::new();
+            let mut bind_chain = None;
+            for template in templates {
+                let mut node = template.clone();
+                node.id = next_id;
+                node.parents.clear();
+                let old = live.remove(&node.wale).unwrap_or_default();
+                for &id in &old {
+                    append_parent(&mut node.parents, id, profile)?;
+                }
+                if node.wale == outer {
+                    for &id in &removed {
+                        append_parent(&mut node.parents, id, profile)?;
+                    }
+                }
+                let is_anchor = partial && outgoing && node.wale == anchor;
+                node.kind = if course == end {
+                    if let Some(id) = bind_chain {
+                        append_parent(&mut node.parents, id, profile)?;
+                    }
+                    bind_chain = Some(next_id);
+                    LoopKind::BindOff
+                } else if is_anchor {
+                    if old.is_empty() {
+                        return Err(invalid());
+                    }
+                    LoopKind::Tuck
+                } else if node.parents.is_empty() {
+                    LoopKind::CastOn
+                } else if node.parents.len() > 1 {
+                    LoopKind::Decrease
+                } else {
+                    LoopKind::Knit
+                };
+                node.bed = Bed::Front;
+                let stack = if is_anchor {
+                    let mut stack = old;
+                    stack.push(next_id);
+                    stack
+                } else {
+                    vec![next_id]
+                };
+                live.insert(node.wale, stack);
+                ids.push(next_id);
+                result.stitches.push(node);
+                next_id += 1;
+            }
+            if partial && outgoing {
+                result.short_row_turns.push(super::ir::ShortRowTurn {
+                    course,
+                    turn_wale: anchor,
+                    dir_after: direction.reversed(),
+                    anchored: true,
+                });
+            }
+            result.passes.push(KnitPass {
+                direction,
+                stitch_ids: ids,
+            });
+            last_direction = Some(direction);
+        }
+    }
+    for run in &mut result.yarn_runs {
+        run.total_yarn_length_m = result
+            .stitches
+            .iter()
+            .filter(|node| node.carrier_ids.contains(&run.carrier_id))
+            .filter_map(|node| node.yarn_length_mm)
+            .sum::<f64>()
+            / 1000.0;
+    }
+    result.metadata.insert(
+        "source_stitch_count".to_string(),
+        result.stitches.len().to_string(),
+    );
+    result.metadata.insert(
+        "shoulder_short_row_pairs".to_string(),
+        shoulder_short_row_pairs.to_string(),
+    );
+    result.metadata.insert(
+        "neckline_construction".to_string(),
+        "held_center_tuck_anchored_shoulders".to_string(),
+    );
+    result.metadata.insert("manual_finishing".to_string(),
+        "Each short-row turn tucks into a held shoulder loop and is knitted off before shoulder bind-off. Secure both terminal chains and finish the separately held center neckline loops manually.".to_string());
+    result.validate()?;
+    Ok(result)
+}
+
+/// Adds explicit front-bed cable crossings to ordinary single-parent stockinette
+/// rows. The stitch identities at each destination remain stable for later courses;
+/// their incoming parents are exchanged, preserving the complete garment graph.
+///
+/// # Errors
+/// Refuses overlapping/irregular blocks or a crossing through shaping, tucks, or rib.
+pub fn apply_cable_crossings(doc: &KnitDoc, groups: &[CableGroup]) -> Result<KnitDoc, Refusal> {
+    doc.validate()?;
+    let mut result = doc.clone();
+    for cable in groups {
+        cable.validate()?;
+        let positions: BTreeMap<_, _> = result
+            .stitches
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.course == cable.course && node.bed == Bed::Front)
+            .map(|(index, node)| (node.wale, index))
+            .collect();
+        for (&left, &right) in cable.left_wales.iter().zip(&cable.right_wales) {
+            let index = |wale: i32| -> Result<usize, Refusal> {
+                positions.get(&wale).copied().ok_or_else(|| Refusal::new(
+                    RefusalCode::MachineStateInfeasible,
+                    "cable drafting requires an existing front-bed stitch at every crossing wale",
+                ))
+            };
+            let left_index = index(left)?;
+            let right_index = index(right)?;
+            for position in [left_index, right_index] {
+                let node = &result.stitches[position];
+                if node.kind != LoopKind::Knit || node.parents.len() != 1 {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        "cable drafting requires ordinary single-parent front-bed stockinette stitches",
+                    ));
+                }
+            }
+            let left_parent = result.stitches[left_index].parents.clone();
+            let right_parent = result.stitches[right_index].parents.clone();
+            result.stitches[left_index].parents = right_parent;
+            result.stitches[right_index].parents = left_parent;
+            result.stitches[left_index].kind = LoopKind::Cable;
+            result.stitches[right_index].kind = LoopKind::Cable;
+        }
+        result.cable_groups.push(cable.clone());
+    }
+    result.validate()?;
+    Ok(result)
 }
 
 fn append_parent(
@@ -1517,11 +2421,22 @@ mod tests {
             carrier_id: CarrierId("1".to_string()),
             has_hood_or_neck_drawstring: false,
         };
-        let mut unsupported_rib = base_raglan.clone();
-        unsupported_rib.collar_rib_courses = 2;
-        let refusal = draft_seamless_raglan_tube(&unsupported_rib, &gauge, &prof).unwrap_err();
-        assert_eq!(refusal.code, RefusalCode::MachineStateInfeasible);
-        assert!(refusal.message.contains("rib"));
+        let mut ribbed = base_raglan.clone();
+        ribbed.collar_rib_courses = 2;
+        ribbed.hem_rib_courses = 3;
+        let rib_doc = draft_seamless_raglan_tube(&ribbed, &gauge, &prof).unwrap();
+        assert_eq!(rib_doc.metadata["tube_structure"], "half_gauge_1x1_rib");
+        assert_consumed_once(&rib_doc);
+        assert!(!rib_doc.passes.is_empty());
+        let mut too_narrow = prof.clone();
+        too_narrow.needle_count = 128;
+        assert!(draft_seamless_raglan_tube(&base_raglan, &gauge, &too_narrow).is_ok());
+        assert_eq!(
+            draft_seamless_raglan_tube(&ribbed, &gauge, &too_narrow)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
 
         let mut huge_girth = base_raglan.clone();
         huge_girth.chest_girth_mm = 1.0e15;

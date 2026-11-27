@@ -19,8 +19,9 @@ pub mod vm;
 pub use autoknit::{AutoKnitConfig, AutoKnitReport, draft_autoknit_from_shell};
 pub use compile::{CompiledKnitBundle, compile_knit_doc};
 pub use draft::{
-    ParametricPanelSpec, RaglanPulloverSpec, draft_calibration_swatch, draft_seamless_raglan_tube,
-    draft_shaped_panel,
+    BranchedPulloverSpec, ParametricPanelSpec, RaglanPulloverSpec, apply_cable_crossings,
+    draft_branched_raglan_pullover, draft_calibration_swatch, draft_seamless_raglan_tube,
+    draft_shaped_panel, draft_short_row_neckline_panel,
 };
 pub use garment::{
     AssemblySeam, GarmentEdge, GarmentEdgeKind, GarmentOpening, PulloverPiece, PulloverPieceRole,
@@ -31,8 +32,8 @@ pub use vm::{KnitSafetyContext, VBedVmReport, verify_knitout_program};
 
 pub use ir::{
     Bed, CableGroup, CamStitchSetting, CarrierId, CourseDir, GaugeSpec, KNIT_SCHEMA,
-    KNITOUT_SCHEMA, KnitDoc, KnitoutHeader, KnitoutOp, KnitoutProgram, LoopKind, Needle, ParentRef,
-    ShortRowTurn, StitchNode, YarnRun, format_quarter_pitches, parse_knitout,
+    KNITOUT_SCHEMA, KnitDoc, KnitPass, KnitoutHeader, KnitoutOp, KnitoutProgram, LoopKind, Needle,
+    ParentRef, ShortRowTurn, StitchNode, YarnRun, format_quarter_pitches, parse_knitout,
 };
 pub use profile::{CalibrationSwatchCaps, MachineBackendKind, MachineProfile, WearerAgeClass};
 pub use receipts::{

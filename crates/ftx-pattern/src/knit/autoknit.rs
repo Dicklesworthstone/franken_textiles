@@ -423,6 +423,7 @@ pub fn draft_autoknit_from_shell(
         gauge: gauge.clone(),
         stitches,
         short_row_turns: vec![],
+        passes: vec![],
         cable_groups: vec![],
         yarn_runs: vec![YarnRun {
             run_id: 0,

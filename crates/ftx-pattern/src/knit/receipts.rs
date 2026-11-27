@@ -550,6 +550,7 @@ mod tests {
                 },
             ],
             short_row_turns: vec![],
+            passes: vec![],
             cable_groups: vec![],
             yarn_runs: vec![],
             has_hood_or_neck_drawstring: false,

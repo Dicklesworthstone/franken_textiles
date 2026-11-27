@@ -499,16 +499,17 @@ acyclic DAG and a mechanical extraction boundary).
   `ftx_core::receipt::canonical_json_sha256`.
 - `knit::shaping` defines Seam 1 (`ShapingSurface`, `EaseProfile`, `EaseShellMesh` with open
   `boundary_rings`, `KnitShellRegion`) so `ftx-body` supplies uncapped shells without introducing
-  a reverse crate edge. Shared-edge plane clipping checks connected tube topology and offset
-  triangle orientation; it does not certify global self-collision freedom. Anatomical torso
-  inputs require real landmarks and pre-segmentation; sleeves and full-upper-body extraction refuse.
+  a reverse crate edge. The source-body adapter now supplies torso, sleeve and full-upper-body
+  shells using actual posed anatomical sections, exact clipping, explicit ease, named rings,
+  manifold checks and exact discrete triangle-intersection audits. Rig armhole segmentation
+  remains model anatomy, not a measured garment armhole or proof of continuous physical clearance.
 - `knit::receipts` defines Seam 4 pure receipts: `KnitSwatchQualification` (`#[serde(deny_unknown_fields)]`,
   `material_sha256`, `machine_sha256`, `yarn_lot_id`, `was_washed_and_blocked`, `evidence`, `source`,
   `conditioning`, `allow_estimates`), `DrapeUncertaintyReceipt` (`ftx-drape-uncertainty/1`), and
   `KnitMachineCert` (`ftx-machine-cert/1`) unconditionally sealing `hardware_execution_authorized: false`,
   `physical_knitting_validated: false`, and `four_claims.fit_claimed: false`.
 - `knit::profile` & `knit::vm` define built-in `MachineProfile` envelopes (Kniterate 7E, Brother KH-930/KH-270
-  AYAB, generic V-bed/slider 12E, hand-knit, Tier-B Shima/Stoll handoffs) and `verify_knitout_program`
+  AYAB, hand-knit, Tier-B Shima/Stoll 12E handoffs) and `verify_knitout_program`
   enforcing all 7 discrete crash & child/infant safety gates (slider ban on `Knit`/`Tuck`/`Split`,
   hook-stack/tuck caps, carrier hook-vs-gripper lifecycle & spacing, racking alignment & strain,
   `UniformRoller` short-row imbalance, blocked-pitch child float limit, EN 14682 hood/neck drawstring ban,
@@ -524,17 +525,29 @@ acyclic DAG and a mechanical extraction boundary).
   identities against live hooks, introduces the second carrier at first use, and preserves both
   the source-course holding bound and the VM's two directional passes per shoulder course.
   Held center loops require manual neckline finishing; excessive holding duration refuses.
+  Optional explicit `KnitPass` schedules require complete causal coverage, strict needle order
+  and consistent course/carriers/cam. Tucks retain old loop identities until knit-off; infant
+  interior returns are derived from live loops, so omitting turn metadata cannot bypass anchoring.
+  Earlier-course transfers are dependency ordered before formation. Declared front-bed cable
+  blocks use empty back hooks and preserve their crossed parents and over/under order.
+  Kniterate source controls explicitly suppress extra take-down for segmented logical passes
+  and manual final drops; the exporter independently checks actual pass exposure.
 - Qualified production requires an independently supplied material digest and exact agreement with
   the washed swatch's gauge, any supplied thickness and cam setting, the machine pitch/family, and retained
   material/yarn-lot metadata. `ftx knit draft|verify` accept `--material-sha256`; a qualification's
   own digest cannot select the active material implicitly.
 - Supported drafting includes flat panels with side/armhole decreases, straight tops or held-center
-  necklines with separately carried shoulders, and shaped torso tubes. Every removed outer edge
+  necklines with separately carried shoulders and tuck-anchored short rows, shaped torso tubes,
+  half-gauge 1x1 collar/hem rib, and symmetric three-branch sleeve/torso pullovers. Four actual
+  cross-branch decrease nodes join the underarms; three separate carriers and half-gauge bed
+  capacity are mandatory. Torso length includes hem rib; sleeve length explicitly excludes cuff
+  rib, with actual counts and quantization residuals retained. Every removed outer edge
   loop is consumed once; widening uses explicit edge cast-ons. Neckline dimensions and their
   quantization residuals describe the actual omitted center stitches and shortened center height.
-  Neckline short rows, cables, split/increase lowering, sleeve joins and tubular rib schedules
-  remain unsupported and refuse instead of becoming ordinary jersey stitches. Single-bed rib
-  requests refuse without changing the requested rib count.
+  Arbitrary cable beds/permutations, arbitrary mesh-to-branched-garment synthesis and unsupported
+  split/increase constructions refuse. Single-bed rib requests refuse without changing the
+  requested rib count. The independently added four-piece seamed pullover remains separate from
+  the three-branch machine schedule.
 - No-claim boundary: discrete VM verification and parametric/autoknit shaping establish software kinematics
   and declared constraint checks only — never physical knitability, yarn-lot equivalence, unattended machine
   safety, or real-body fit.
