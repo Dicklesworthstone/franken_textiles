@@ -518,13 +518,20 @@ acyclic DAG and a mechanical extraction boundary).
   traverse front ascending and back descending. Bounded transfer hooks and temporary parking
   preserve unrelated loops. Reused, missing, stranded or over-capacity parents refuse. A complete
   terminal bind-off chain ends with an operator tail-securing pause; calibration swatches retain
-  live loops for manual bind-off because their transfer prohibition remains in force.
+  live loops for manual bind-off because their transfer prohibition remains in force. Open flat
+  necklines may retain explicitly identified center loops while two separate carriers work
+  contiguous shoulders and independent terminal bind-off chains. The compiler checks the held
+  identities against live hooks, introduces the second carrier at first use, and preserves both
+  the source-course holding bound and the VM's two directional passes per shoulder course.
+  Held center loops require manual neckline finishing; excessive holding duration refuses.
 - Qualified production requires an independently supplied material digest and exact agreement with
   the washed swatch's gauge, any supplied thickness and cam setting, the machine pitch/family, and retained
   material/yarn-lot metadata. `ftx knit draft|verify` accept `--material-sha256`; a qualification's
   own digest cannot select the active material implicitly.
-- Supported drafting includes straight-top flat panels with side/armhole decreases and shaped
-  torso tubes. Every removed edge loop is consumed once; widening uses explicit edge cast-ons.
+- Supported drafting includes flat panels with side/armhole decreases, straight tops or held-center
+  necklines with separately carried shoulders, and shaped torso tubes. Every removed outer edge
+  loop is consumed once; widening uses explicit edge cast-ons. Neckline dimensions and their
+  quantization residuals describe the actual omitted center stitches and shortened center height.
   Neckline short rows, cables, split/increase lowering, sleeve joins and tubular rib schedules
   remain unsupported and refuse instead of becoming ordinary jersey stitches. Single-bed rib
   requests refuse without changing the requested rib count.

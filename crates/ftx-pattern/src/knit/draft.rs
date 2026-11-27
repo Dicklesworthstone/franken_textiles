@@ -1,6 +1,6 @@
 //! Pathway 1 measured knitting drafters (`FTX-K05`):
 //! - Hard-capped stepped calibration swatch generator (`CalibrationSwatchOnly`),
-//! - Measured flat panel drafter (ribbed hem, side taper, armhole decreases, chain bind-off),
+//! - Measured flat panel drafter (ribbed hem, side taper, armholes, separate shoulders and held neck),
 //! - Top-down shaped torso tube drafter; sleeve branches and tubular rib remain unsupported.
 //!
 //! All drafters report exact per-section mm quantization residuals honestly.
@@ -37,9 +37,9 @@ pub struct ParametricPanelSpec {
     pub armhole_depth_mm: f64,
     /// Armhole total width reduction across both sides combined, in mm (`>= 0`).
     pub armhole_inset_total_mm: f64,
-    /// Neck opening width at top, in mm; must be zero until short-row shaping is supported.
+    /// Width of the held center neckline, in mm (`0.0` for a closed straight top).
     pub neck_width_mm: f64,
-    /// Neck drop below shoulder line, in mm; must be zero until short-row shaping is supported.
+    /// Neck drop below the shoulder line, in mm (`0.0` for a closed straight top).
     pub neck_depth_mm: f64,
     /// Number of 1x1 rib courses at the bottom hem (`0` for plain stockinette).
     pub rib_hem_courses: u32,
@@ -47,7 +47,8 @@ pub struct ParametricPanelSpec {
     pub cam_setting: f64,
     /// Catalog yarn identifier.
     pub yarn_id: String,
-    /// Active yarn carrier identifier.
+    /// Primary yarn carrier. An open neckline uses a second available carrier for the other
+    /// shoulder, recorded in the drafted yarn runs and construction instructions.
     pub carrier_id: CarrierId,
     /// True if panel design includes a hood/neck drawstring (refused for child garments).
     #[serde(default)]
@@ -294,8 +295,10 @@ pub fn draft_calibration_swatch(
     Ok(doc)
 }
 
-/// Drafts a measured flat panel with hem rib, side taper, armhole decreases, and an explicit
-/// chain bind-off. Neck shaping refuses until its short-row topology can be compiled faithfully.
+/// Drafts a measured flat panel with hem rib, side taper, armhole decreases, and explicit
+/// chain bind-off. An open neckline holds its center loops while two separate yarn carriers
+/// form the shoulder sections and their independent bind-off chains. The held neck loops
+/// require manual finishing; no anchored short-row construction is claimed.
 ///
 /// # Errors
 /// [`RefusalCode::OutOfRange`], [`RefusalCode::NonFinite`], or [`RefusalCode::MaterialProcessHazard`].
@@ -452,13 +455,53 @@ pub fn draft_shaped_panel(
             ),
         ));
     }
-    if spec.neck_width_mm != 0.0 || spec.neck_depth_mm != 0.0 {
+    if (spec.neck_width_mm > 0.0) != (spec.neck_depth_mm > 0.0) {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
-            "panel neck shaping requires a short-row topology that is not yet supported",
-        )
-        .repair("set neck_width_mm and neck_depth_mm to zero for a straight-top panel"));
+            "an open panel neckline requires both positive neck_width_mm and neck_depth_mm",
+        ));
     }
+    let neck_courses = (spec.neck_depth_mm / course_height).round() as u32;
+    // The real terminal bind-off is a formed course. Stop the center neck_courses below
+    // it, so the two shoulders receive exactly the requested quantized additional height.
+    let neck_start = total_courses.saturating_sub(neck_courses) + 1;
+    if spec.neck_depth_mm > 0.0 && (neck_courses == 0 || neck_start <= spec.rib_hem_courses + 1) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "neck drop must span at least one course and leave body fabric above the hem rib",
+        ));
+    }
+    let neck_half = if neck_courses > 0 {
+        let half = ((spec.neck_width_mm * 0.5) / wale_pitch).round() as i32;
+        if half < 1 || half >= min_shoulder_half {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "neck opening must fit strictly inside the remaining shoulder span",
+            ));
+        }
+        half
+    } else {
+        0
+    };
+    let shoulder_carrier = if neck_courses > 0 {
+        Some(
+            profile
+                .carrier_ids
+                .iter()
+                .find(|carrier| **carrier != spec.carrier_id)
+                .cloned()
+                .ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        "separate shoulders require a second yarn carrier to avoid a float across the neckline",
+                    )
+                    .repair("use a profile with two carriers or draft a closed straight top")
+                })?,
+        )
+    } else {
+        None
+    };
+    let primary_on_left = neck_start.is_multiple_of(2);
     if spec.rib_hem_courses > 0 && !profile.has_back_bed {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
@@ -476,6 +519,7 @@ pub fn draft_shaped_panel(
 
     let est_loop_mm = 2.6 * wale_pitch;
     let mut stitches = Vec::new();
+    let mut held_neck_stitches = Vec::new();
     let mut prev_map: BTreeMap<i32, u32> = BTreeMap::new();
     let mut next_id = 0u32;
 
@@ -502,13 +546,44 @@ pub fn draft_shaped_panel(
         let right = half - 1;
         let mut cur_map = BTreeMap::new();
         let is_rib = c > 0 && c <= spec.rib_hem_courses;
-        let mut wales: Vec<i32> = (left..=right).collect();
-        if !c.is_multiple_of(2) {
-            wales.reverse();
+        let separate_shoulders = neck_courses > 0 && c >= neck_start;
+        if separate_shoulders && half <= neck_half {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "neck opening leaves no shoulder stitches at the requested shaping course",
+            ));
         }
-        let mut bind_chain = None;
+        if neck_courses > 0 && c == neck_start {
+            held_neck_stitches.extend(prev_map.range(-neck_half..neck_half).map(|(_, &id)| id));
+        }
+        let wales = if separate_shoulders {
+            // Both shoulders begin at their outer edge and then alternate independently.
+            let mut left_wales: Vec<i32> = (left..-neck_half).collect();
+            let mut right_wales: Vec<i32> = (neck_half..=right).collect();
+            if (c - neck_start).is_multiple_of(2) {
+                right_wales.reverse();
+            } else {
+                left_wales.reverse();
+            }
+            left_wales.extend(right_wales);
+            left_wales
+        } else {
+            let mut wales: Vec<i32> = (left..=right).collect();
+            if !c.is_multiple_of(2) {
+                wales.reverse();
+            }
+            wales
+        };
+        let mut bind_chains = BTreeMap::new();
 
         for w in wales {
+            let carrier = if separate_shoulders && ((w < 0) != primary_on_left) {
+                shoulder_carrier
+                    .as_ref()
+                    .expect("open neck has second carrier")
+            } else {
+                &spec.carrier_id
+            };
             let bed = if is_rib && (w.rem_euclid(2) == 1) {
                 Bed::Back
             } else {
@@ -533,10 +608,10 @@ pub fn draft_shaped_panel(
                 }
             }
             let kind = if c == total_courses {
-                if let Some(pid) = bind_chain {
+                if let Some(&pid) = bind_chains.get(carrier) {
                     append_parent(&mut parents, pid, profile)?;
                 }
-                bind_chain = Some(next_id);
+                bind_chains.insert(carrier.clone(), next_id);
                 LoopKind::BindOff
             } else if parents.is_empty() {
                 // Edge widening casts on a new loop; it must not consume a neighbor's loop
@@ -556,7 +631,7 @@ pub fn draft_shaped_panel(
                 bed,
                 kind,
                 parents,
-                carrier_ids: vec![spec.carrier_id.clone()],
+                carrier_ids: vec![carrier.clone()],
                 yarn_id: spec.yarn_id.clone(),
                 cam_stitch_setting: CamStitchSetting {
                     setting: spec.cam_setting,
@@ -570,7 +645,6 @@ pub fn draft_shaped_panel(
         prev_map = cur_map;
     }
 
-    let total_yarn_m = stitches.len() as f64 * est_loop_mm / 1000.0;
     let hem_residual_mm = f64::from(hem_wales) * wale_pitch - spec.hem_width_mm;
     let chest_residual_mm = f64::from(chest_wales) * wale_pitch - spec.chest_width_mm;
     let length_residual_mm = f64::from(total_courses) * course_height - spec.length_mm;
@@ -592,6 +666,100 @@ pub fn draft_shaped_panel(
         "length_residual_mm".to_string(),
         format!("{length_residual_mm:+.2}"),
     );
+    for (key, value) in [
+        ("hem_stitch_count", hem_wales.to_string()),
+        ("chest_stitch_count", chest_wales.to_string()),
+        ("formed_course_count", total_courses.to_string()),
+        ("source_stitch_count", stitches.len().to_string()),
+        (
+            "shoulder_stitch_count_at_top",
+            (2 * (min_shoulder_half - neck_half)).to_string(),
+        ),
+    ] {
+        metadata.insert(key.to_string(), value);
+    }
+    for (key, residual) in [
+        (
+            "armhole_inset_total_residual_mm",
+            f64::from(2 * armhole_inset_per_side) * wale_pitch - spec.armhole_inset_total_mm,
+        ),
+        (
+            "neck_width_residual_mm",
+            f64::from(2 * neck_half) * wale_pitch - spec.neck_width_mm,
+        ),
+        (
+            "neck_depth_residual_mm",
+            f64::from(neck_courses) * course_height - spec.neck_depth_mm,
+        ),
+    ] {
+        metadata.insert(key.to_string(), format!("{residual:+.2}"));
+    }
+    let primary_count = stitches
+        .iter()
+        .filter(|stitch| stitch.carrier_ids[0] == spec.carrier_id)
+        .count();
+    let mut yarn_runs = vec![YarnRun {
+        run_id: 0,
+        carrier_id: spec.carrier_id.clone(),
+        yarn_id: spec.yarn_id.clone(),
+        start_course: 0,
+        end_course: total_courses,
+        total_yarn_length_m: primary_count as f64 * est_loop_mm / 1000.0,
+        cut_tail_mm: Some(15.0),
+    }];
+    if let Some(second) = shoulder_carrier {
+        let (left_carrier, right_carrier) = if primary_on_left {
+            (&spec.carrier_id, &second)
+        } else {
+            (&second, &spec.carrier_id)
+        };
+        metadata.insert("shoulder_start_course".to_string(), neck_start.to_string());
+        metadata.insert("left_shoulder_carrier".to_string(), left_carrier.0.clone());
+        metadata.insert(
+            "right_shoulder_carrier".to_string(),
+            right_carrier.0.clone(),
+        );
+        metadata.insert(
+            format!("shoulder_initial_direction_{}", left_carrier.as_str()),
+            "plus".to_string(),
+        );
+        metadata.insert(
+            format!("shoulder_initial_direction_{}", right_carrier.as_str()),
+            "minus".to_string(),
+        );
+        let held_ids = held_neck_stitches
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        metadata.insert("held_neck_stitch_ids".to_string(), held_ids.clone());
+        metadata.insert(
+            "neckline_construction".to_string(),
+            "center_loops_held_separate_shoulder_carriers".to_string(),
+        );
+        metadata.insert(
+            "completion".to_string(),
+            "manual_neckline_finishing".to_string(),
+        );
+        metadata.insert(
+            "manual_finishing".to_string(),
+            format!(
+                "Neckline stitch IDs [{held_ids}] remain on hold after chart course {}. Work the left/right shoulders with carriers {}/{} using separate supplies of the stated yarn. The shoulders have independent bind-off chains; secure their final loops and finish the held neckline manually. No anchored short-row construction is claimed.",
+                neck_start,
+                left_carrier.as_str(),
+                right_carrier.as_str(),
+            ),
+        );
+        yarn_runs.push(YarnRun {
+            run_id: 1,
+            carrier_id: second,
+            yarn_id: spec.yarn_id.clone(),
+            start_course: neck_start,
+            end_course: total_courses,
+            total_yarn_length_m: (stitches.len() - primary_count) as f64 * est_loop_mm / 1000.0,
+            cut_tail_mm: Some(15.0),
+        });
+    }
 
     let doc = KnitDoc {
         schema: KNIT_SCHEMA.to_string(),
@@ -601,15 +769,7 @@ pub fn draft_shaped_panel(
         stitches,
         short_row_turns: vec![],
         cable_groups: vec![],
-        yarn_runs: vec![YarnRun {
-            run_id: 0,
-            carrier_id: spec.carrier_id.clone(),
-            yarn_id: spec.yarn_id.clone(),
-            start_course: 0,
-            end_course: total_courses,
-            total_yarn_length_m: total_yarn_m,
-            cut_tail_mm: Some(15.0),
-        }],
+        yarn_runs,
         has_hood_or_neck_drawstring: spec.has_hood_or_neck_drawstring,
         metadata,
     };
@@ -895,6 +1055,7 @@ fn append_parent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn assert_consumed_once(doc: &KnitDoc) {
         let mut uses: BTreeMap<u32, usize> = doc.stitches.iter().map(|st| (st.id, 0)).collect();
@@ -917,6 +1078,162 @@ mod tests {
             );
         }
         assert_eq!(doc.stitches.last().unwrap().kind, LoopKind::BindOff);
+    }
+
+    #[test]
+    fn open_neck_has_real_separate_shoulders_exact_parents_and_independent_bind_offs() {
+        let profile = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 24.0,
+            courses_per_100mm: 32.0,
+            needle_pitch_mm: profile.needle_pitch_mm,
+            yarn_tex: Some(180.0),
+            thickness_mm: Some(2.2),
+            relaxed_after_wash: true,
+        };
+        let spec = ParametricPanelSpec {
+            name: "toddler_front_with_neck".to_string(),
+            wearer_age_class: WearerAgeClass::Child3To14,
+            hem_width_mm: 280.0,
+            chest_width_mm: 300.0,
+            length_mm: 360.0,
+            armhole_depth_mm: 120.0,
+            armhole_inset_total_mm: 40.0,
+            neck_width_mm: 110.0,
+            neck_depth_mm: 40.0,
+            rib_hem_courses: 8,
+            cam_setting: 8.0,
+            yarn_id: "merino-180tex".to_string(),
+            carrier_id: CarrierId("1".to_string()),
+            has_hood_or_neck_drawstring: false,
+        };
+        let doc = draft_shaped_panel(&spec, &gauge, &profile).unwrap();
+        let neck_start: u32 = doc.metadata["shoulder_start_course"].parse().unwrap();
+        let formed: u32 = doc.metadata["formed_course_count"].parse().unwrap();
+        let held: BTreeSet<u32> = doc.metadata["held_neck_stitch_ids"]
+            .split(',')
+            .map(|id| id.parse().unwrap())
+            .collect();
+        assert_eq!(held.len(), 26);
+        assert_eq!(formed, 115);
+        assert_eq!(neck_start, 103);
+        assert!(doc.short_row_turns.is_empty());
+        assert_eq!(doc.wearer_age_class, spec.wearer_age_class);
+        assert_eq!(doc.yarn_runs.len(), 2);
+        assert_ne!(
+            doc.metadata["left_shoulder_carrier"],
+            doc.metadata["right_shoulder_carrier"]
+        );
+        let by_id: BTreeMap<_, _> = doc
+            .stitches
+            .iter()
+            .map(|stitch| (stitch.id, stitch))
+            .collect();
+        let mut uses = BTreeMap::<u32, usize>::new();
+        let mut terminal_chains = BTreeMap::<CarrierId, u32>::new();
+        for stitch in &doc.stitches {
+            for (position, parent) in stitch.parents.iter().enumerate() {
+                assert_eq!(usize::from(parent.stack_pos), position);
+                *uses.entry(parent.stitch_id).or_default() += 1;
+            }
+            if stitch.parents.is_empty() {
+                assert_eq!(stitch.kind, LoopKind::CastOn);
+            }
+            if held.contains(&stitch.id) {
+                assert_eq!(stitch.course, neck_start - 1);
+                assert!((-13..13).contains(&stitch.wale));
+            }
+            if stitch.course >= neck_start {
+                assert!(!(-13..13).contains(&stitch.wale));
+                let key = if stitch.wale < 0 {
+                    "left_shoulder_carrier"
+                } else {
+                    "right_shoulder_carrier"
+                };
+                assert_eq!(stitch.carrier_ids[0].as_str(), doc.metadata[key]);
+            } else {
+                assert_eq!(stitch.carrier_ids, vec![spec.carrier_id.clone()]);
+            }
+            if stitch.kind == LoopKind::BindOff {
+                assert_eq!(stitch.course, formed);
+                let previous = terminal_chains.insert(stitch.carrier_ids[0].clone(), stitch.id);
+                assert_eq!(stitch.parents.len(), if previous.is_some() { 2 } else { 1 });
+                assert_eq!(by_id[&stitch.parents[0].stitch_id].wale, stitch.wale);
+                assert_eq!(by_id[&stitch.parents[0].stitch_id].course, formed - 1);
+                if let Some(id) = previous {
+                    assert_eq!(stitch.parents[1].stitch_id, id);
+                }
+            }
+        }
+        assert_eq!(terminal_chains.len(), 2);
+        for stitch in &doc.stitches {
+            let remains =
+                held.contains(&stitch.id) || terminal_chains.values().any(|id| *id == stitch.id);
+            assert_eq!(
+                uses.get(&stitch.id).copied().unwrap_or(0),
+                usize::from(!remains),
+                "stitch {}",
+                stitch.id
+            );
+        }
+        assert!(
+            doc.stitches
+                .iter()
+                .any(|stitch| stitch.course > 0 && stitch.kind == LoopKind::CastOn)
+        );
+        assert!(
+            doc.stitches
+                .iter()
+                .any(|stitch| stitch.kind == LoopKind::Decrease)
+        );
+        let actual_drop = f64::from(formed - (neck_start - 1)) * gauge.blocked_course_height_mm();
+        let depth_residual: f64 = doc.metadata["neck_depth_residual_mm"].parse().unwrap();
+        let width_residual: f64 = doc.metadata["neck_width_residual_mm"].parse().unwrap();
+        assert!((actual_drop - spec.neck_depth_mm - depth_residual).abs() <= 0.0051);
+        assert!(
+            (held.len() as f64 * gauge.blocked_wale_pitch_mm()
+                - spec.neck_width_mm
+                - width_residual)
+                .abs()
+                <= 0.0051
+        );
+        assert_eq!(
+            doc.metadata["source_stitch_count"],
+            doc.stitches.len().to_string()
+        );
+        assert!(doc.metadata["manual_finishing"].contains("remain on hold"));
+        let yarn_total: f64 = doc
+            .yarn_runs
+            .iter()
+            .map(|run| run.total_yarn_length_m)
+            .sum();
+        let expected_yarn =
+            doc.stitches.len() as f64 * 2.6 * gauge.blocked_wale_pitch_mm() / 1000.0;
+        assert!((yarn_total - expected_yarn).abs() < 1.0e-9);
+
+        let mut one_carrier = profile.clone();
+        one_carrier.carrier_ids.truncate(1);
+        assert_eq!(
+            draft_shaped_panel(&spec, &gauge, &one_carrier)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+        let mut inconsistent = spec.clone();
+        inconsistent.neck_depth_mm = 0.0;
+        assert_eq!(
+            draft_shaped_panel(&inconsistent, &gauge, &profile)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        inconsistent.neck_depth_mm = 0.1;
+        assert_eq!(
+            draft_shaped_panel(&inconsistent, &gauge, &profile)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
     }
 
     #[test]
