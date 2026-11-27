@@ -8,6 +8,8 @@ pub mod autoknit;
 pub mod compile;
 pub mod draft;
 pub mod ir;
+pub mod lifted_procir;
+pub mod lifted_tangle;
 pub mod profile;
 pub mod receipts;
 pub mod shaping;
