@@ -12,9 +12,11 @@ const targetByRequest = new Map();
 const downloadUrlsByContainer = new WeakMap();
 
 const PANEL_MACHINE_DEFAULTS = {
-  "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1" },
-  "brother-kh930-ayab": { needle_pitch_mm: 4.5, carrier_id: "A" },
-  "hand-knit": { needle_pitch_mm: 4.0, carrier_id: "1" },
+  "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1", cam_setting: 7.0 },
+  "brother-kh930-ayab": { needle_pitch_mm: 4.5, carrier_id: "A", cam_setting: 7.0 },
+  "brother-kh270-ayab": { needle_pitch_mm: 9.0, carrier_id: "A", cam_setting: 6.0 },
+  "hand-knit": { needle_pitch_mm: 4.0, carrier_id: "1", cam_setting: 7.0 },
+  "shima-seiki-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
 };
 
 function showError(msg) {
@@ -36,8 +38,8 @@ function clearDownloads(container) {
   container.textContent = "";
 }
 
-function makeDownload(container, filename, text, mime = "text/plain") {
-  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+function makeDownload(container, filename, data, mime = "text/plain") {
+  const url = URL.createObjectURL(new Blob([data], { type: mime }));
   const urls = downloadUrlsByContainer.get(container) || [];
   urls.push(url);
   downloadUrlsByContainer.set(container, urls);
@@ -46,6 +48,13 @@ function makeDownload(container, filename, text, mime = "text/plain") {
   a.download = filename;
   a.textContent = `Download ${filename}`;
   container.append(a);
+}
+
+function decodeBase64Bytes(b64) {
+  const binary = atob(String(b64));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 function buildPresetPixels(preset, w, h) {
@@ -84,16 +93,41 @@ function drawGridCanvas(canvas, cols, rows, rgbList) {
   }
 }
 
+const BLOCKED_SVG_TAGS = new Set([
+  "parsererror",
+  "script",
+  "foreignobject",
+  "iframe",
+  "object",
+  "embed",
+  "animate",
+  "set",
+]);
+
 function renderSvg(container, svgText) {
   if (typeof DOMParser === "function") {
     const parsed = new DOMParser().parseFromString(String(svgText || ""), "image/svg+xml");
     const root = parsed.documentElement;
-    if (
-      !root ||
-      root.nodeName.toLowerCase() !== "svg" ||
-      parsed.querySelector("parsererror, script")
-    ) {
+    if (!root || String(root.localName || root.nodeName || "").toLowerCase() !== "svg") {
       throw new Error("Refused malformed or unsafe SVG chart payload.");
+    }
+    const nodes = [root, ...Array.from(parsed.querySelectorAll("*"))];
+    for (const el of nodes) {
+      const tag = String(el.localName || el.nodeName || "").toLowerCase();
+      if (BLOCKED_SVG_TAGS.has(tag)) {
+        throw new Error("Refused malformed or unsafe SVG chart payload.");
+      }
+      for (const attr of Array.from(el.attributes || [])) {
+        const name = String(attr.name || "").toLowerCase();
+        const val = String(attr.value || "").trim().toLowerCase();
+        if (
+          name.startsWith("on") ||
+          ((name === "href" || name === "xlink:href") &&
+            (val.startsWith("javascript:") || val.startsWith("data:")))
+        ) {
+          throw new Error("Refused malformed or unsafe SVG chart payload.");
+        }
+      }
     }
     container.replaceChildren(document.importNode(root, true));
     return;
@@ -122,9 +156,14 @@ function renderSwatch(res) {
   const dl = document.getElementById("swatchDownloads");
   const svgBox = document.getElementById("swatchSvgBox");
   const pre = document.getElementById("swatchPre");
+  // Validate SVG chart before exposing any download links or updating preview state.
+  renderSvg(svgBox, res.chart_svg);
   clearDownloads(dl);
   makeDownload(dl, "swatch.k", res.knitout_text, "text/plain");
   if (res.kc_text) makeDownload(dl, "swatch.kc", res.kc_text, "text/plain");
+  if (res.ayab_png_base64) {
+    makeDownload(dl, "swatch_ayab.png", decodeBase64Bytes(res.ayab_png_base64), "image/png");
+  }
   if (res.ayab_checklist) {
     makeDownload(dl, "ayab_session_checklist.json", JSON.stringify(res.ayab_checklist, null, 2), "application/json");
   }
@@ -132,7 +171,6 @@ function renderSwatch(res) {
   makeDownload(dl, "swatch_cert.json", JSON.stringify(res.cert, null, 2), "application/json");
   makeDownload(dl, "swatch_qualification_template.json", JSON.stringify(res.qualification_template, null, 2), "application/json");
 
-  renderSvg(svgBox, res.chart_svg);
   pre.textContent =
     `=== Certificate (hardware_execution_authorized=${res.cert.hardware_execution_authorized}) ===\n` +
     JSON.stringify(res.cert, null, 2) +
@@ -143,9 +181,16 @@ function renderSwatch(res) {
 
 function renderPanel(res) {
   const out = document.getElementById("panelOut");
-  document.getElementById("panelSummary").textContent =
-    `Drafted ${res.stitch_count} stitches (${res.short_row_turns} anchored short-row turns) · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed}`;
+  const dl = document.getElementById("panelDownloads");
   renderSvg(document.getElementById("panelSvgBox"), res.chart_svg);
+  if (dl) {
+    clearDownloads(dl);
+    makeDownload(dl, "panel_chart.svg", res.chart_svg, "image/svg+xml");
+    makeDownload(dl, "panel_instructions.txt", res.instructions_text, "text/plain");
+    makeDownload(dl, "panel_metadata.json", JSON.stringify(res.metadata, null, 2), "application/json");
+  }
+  document.getElementById("panelSummary").textContent =
+    `Drafted ${res.stitch_count} stitches (${res.short_row_turns} anchored short-row turns) · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed} · fit_claimed=${res.fit_claimed}`;
   document.getElementById("panelPre").textContent =
     JSON.stringify(res.metadata, null, 2) + "\n\n" + res.instructions_text;
   out.hidden = false;
@@ -319,6 +364,9 @@ runPanelBtn.addEventListener("click", () => {
     hem = parseFiniteInput("panelHem", "Hem Width (mm)");
     chest = parseFiniteInput("panelChest", "Chest Width (mm)");
     length = parseFiniteInput("panelLength", "Length (mm)");
+    if (hem <= 0 || chest <= 0 || length <= 0) {
+      throw new Error("Panel widths and length must be positive numbers.");
+    }
     rib = parseIntRange("panelRib", "Rib Hem Courses", 0, 200);
   } catch (err) {
     statusEl.textContent = "Invalid input.";
@@ -327,6 +375,10 @@ runPanelBtn.addEventListener("click", () => {
   }
   const machine = document.getElementById("panelMachine").value;
   const defaults = PANEL_MACHINE_DEFAULTS[machine] || PANEL_MACHINE_DEFAULTS["kniterate-7e"];
+  const armholeDepth = Math.min(95, Math.max(10, Math.round(length * 0.31)));
+  const armholeInset = Math.min(36, Math.max(0, Math.round(chest * 0.13)));
+  const neckWidth = Math.min(105, Math.max(20, Math.round(chest * 0.375)));
+  const neckDepth = Math.min(24, Math.max(6, Math.round(armholeDepth * 0.25)));
   const request = ++reqId;
   latestRequestByKind.panel = request;
   statusEl.textContent = "Drafting measured shaped panel…";
@@ -341,12 +393,12 @@ runPanelBtn.addEventListener("click", () => {
         hem_width_mm: hem,
         chest_width_mm: chest,
         length_mm: length,
-        armhole_depth_mm: 95,
-        armhole_inset_total_mm: 36,
-        neck_width_mm: 105,
-        neck_depth_mm: 24,
+        armhole_depth_mm: armholeDepth,
+        armhole_inset_total_mm: armholeInset,
+        neck_width_mm: neckWidth,
+        neck_depth_mm: neckDepth,
         rib_hem_courses: rib,
-        cam_setting: 7.0,
+        cam_setting: defaults.cam_setting,
         yarn_id: "merino-200tex",
         carrier_id: defaults.carrier_id,
         has_hood_or_neck_drawstring: false,
@@ -384,6 +436,15 @@ runDyeBtn.addEventListener("click", () => {
     return;
   }
   const preset = document.getElementById("dyePreset").value;
+  const isCircular = document.getElementById("dyeMode").value === "circular";
+  const selectedRegime = document.getElementById("dyeRegime")?.value || "auto";
+  const regime = selectedRegime === "auto"
+    ? (preset === "horizon"
+      ? "regime1_a_stripes"
+      : isCircular
+        ? "regime1_b_circular_pooling"
+        : "regime2_fiducial_synced")
+    : selectedRegime;
   const pixels = buildPresetPixels(preset, wales, courses);
   const request = ++reqId;
   latestRequestByKind.dye = request;
@@ -395,12 +456,12 @@ runDyeBtn.addEventListener("click", () => {
     payload: {
       machine: document.getElementById("dyeMachine").value,
       wearer_age_class: document.getElementById("dyeAgeClass").value,
-      regime: preset === "horizon" ? "regime1_a_stripes" : "regime1_b_circular_pooling",
+      regime,
       width: wales,
       height: courses,
       srgb_u8: pixels,
       grid: [courses, wales],
-      is_circular: document.getElementById("dyeMode").value === "circular",
+      is_circular: isCircular,
       drift_eps: driftEps,
       drift_sigma_eta: driftSigma,
       wick_mm: wickMm,
@@ -411,7 +472,7 @@ runDyeBtn.addEventListener("click", () => {
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("pagehide", () => {
-    for (const id of ["swatchDownloads", "dyeDownloads"]) {
+    for (const id of ["swatchDownloads", "panelDownloads", "dyeDownloads"]) {
       const el = document.getElementById(id);
       if (el) clearDownloads(el);
     }

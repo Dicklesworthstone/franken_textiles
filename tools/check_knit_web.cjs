@@ -54,8 +54,21 @@ for (const selectId of ["panelAgeClass", "dyeAgeClass"]) {
 assert(page.includes("relaxed_after_wash"), "knit-page.js must send GaugeSpec.relaxed_after_wash");
 assert(page.includes("needle_pitch_mm"), "knit-page.js must send GaugeSpec.needle_pitch_mm");
 assert(!page.includes("measured_after_wash_block"), "knit-page.js must not send unknown GaugeSpec field measured_after_wash_block");
-assert(page.includes("regime1_a_stripes") && page.includes("regime1_b_circular_pooling"), "knit-page.js must send valid DyeingRegime variants");
+assert(page.includes("regime1_a_stripes") && page.includes("regime1_b_circular_pooling") && page.includes("regime2_fiducial_synced"), "knit-page.js must send valid DyeingRegime variants");
 assert(!page.includes("regime2_b_planned_pooling"), "knit-page.js must not send invalid DyeingRegime regime2_b_planned_pooling");
+const validRegimes = new Set([
+  "auto",
+  "regime1_a_stripes",
+  "regime1_b_circular_pooling",
+  "regime2_fiducial_synced",
+  "regime3_inline_dancer",
+  "regime4_multi_carrier_jacquard",
+]);
+const regimeSelect = html.match(/<select id="dyeRegime">([\s\S]*?)<\/select>/);
+assert(regimeSelect, 'web/knit.html missing <select id="dyeRegime">');
+for (const m of regimeSelect[1].matchAll(/<option value="([^"]+)"/g)) {
+  assert(validRegimes.has(m[1]), `<select id="dyeRegime"> has invalid option "${m[1]}"`);
+}
 for (const field of ["expected_delta_e00_p95", "complexity_rank", "feasible", "rationale"]) {
   assert(page.includes(`row.${field}`), `knit-page.js must read DyeRegimeScore.${field}`);
 }
@@ -63,10 +76,11 @@ for (const stale of ["estimated_delta_e00_p50", "estimated_delta_e00_p95", "hard
   assert(!page.includes(stale), `knit-page.js references nonexistent Pareto field ${stale}`);
 }
 assert(!page.includes("tr.innerHTML"), "knit-page.js must build table rows with textContent, not innerHTML");
-assert(html.includes('id="panelLength" type="number" min="120"'), "panelLength min must exceed hardcoded armhole_depth_mm=95");
+assert(html.includes('id="panelLength" type="number" min="120"'), "panelLength min must stay >= 120 mm");
 
-// 5. Worker enforces WASM interface stamp & local-only execution (no fetch/XMLHttpRequest)
+// 5. Worker enforces WASM interface stamp, cache-busting revision, & local-only execution (no fetch/XMLHttpRequest)
 assert(worker.includes('EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.1"'), "worker missing updated stamp check");
+assert(worker.includes('ftx_wasm.js?v=2026-11-27.1') && worker.includes('ftx_wasm_bg.wasm?v=2026-11-27.1'), "worker missing matching ?v=2026-11-27.1 cache buster");
 assert(worker.includes("ftx.knit_swatch_json"), "worker missing knit_swatch_json call");
 assert(worker.includes("ftx.knit_panel_preview_json"), "worker missing knit_panel_preview_json call");
 assert(worker.includes("ftx.dye_optimize_json"), "worker missing dye_optimize_json call");
@@ -80,7 +94,7 @@ class MockEl {
   constructor(tag = "div") {
     this.tag = tag;
     this.value = "";
-    this.textContent = "";
+    this._textContent = "";
     this.hidden = false;
     this.disabled = false;
     this.children = [];
@@ -88,6 +102,8 @@ class MockEl {
     this.width = 160;
     this.height = 160;
   }
+  get textContent() { return this._textContent; }
+  set textContent(v) { this._textContent = String(v ?? ""); this.children = []; }
   addEventListener(name, fn) { this.handlers[name] = fn; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = [...nodes]; }
@@ -112,6 +128,7 @@ elMap.dyeMachine.value = "piezo-cmyk";
 elMap.dyeAgeClass.value = "calibration_swatch_only";
 elMap.dyePreset.value = "horizon";
 elMap.dyeMode.value = "circular";
+elMap.dyeRegime.value = "auto";
 elMap.dyeCourses.value = "6";
 elMap.dyeWales.value = "6";
 elMap.dyeEps.value = "0.002";
@@ -126,8 +143,36 @@ let workerInstance = null;
 const windowHandlers = {};
 
 const ctx = vm.createContext({
-  JSON, Number, String, Boolean, Error, Map, WeakMap, Math, Array, Object,
+  JSON, Number, String, Boolean, Error, Map, WeakMap, Set, Math, Array, Object, Uint8Array,
+  atob: (s) => Buffer.from(s, "base64").toString("binary"),
   Blob,
+  DOMParser: class {
+    parseFromString(src) {
+      const s = String(src || "");
+      const makeNode = (tag, attrs = []) => ({
+        nodeName: tag,
+        localName: tag,
+        attributes: attrs,
+      });
+      const tags = [];
+      const tagRe = /<([a-zA-Z_][\w:-]*)([^>]*)>/g;
+      let m;
+      while ((m = tagRe.exec(s)) !== null) {
+        const attrs = [];
+        const attrRe = /([a-zA-Z_][\w:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+        let am;
+        while ((am = attrRe.exec(m[2])) !== null) {
+          attrs.push({ name: am[1], value: am[2] ?? am[3] ?? "" });
+        }
+        tags.push(makeNode(m[1], attrs));
+      }
+      const root = tags[0] || null;
+      return {
+        documentElement: root,
+        querySelectorAll: () => tags.slice(1),
+      };
+    }
+  },
   URL: {
     createObjectURL: () => { const u = `blob:knit-${++nextUrl}`; activeUrls.add(u); return u; },
     revokeObjectURL: (u) => { activeUrls.delete(u); },
@@ -140,6 +185,7 @@ const ctx = vm.createContext({
     getElementById: (id) => elMap[id] || null,
     querySelector: (sel) => (sel === "#dyeParetoTable tbody" ? paretoTbody : null),
     createElement: (tag) => new MockEl(tag),
+    importNode: (node) => node,
   },
   window: {
     addEventListener: (name, fn) => { windowHandlers[name] = fn; },
@@ -203,7 +249,127 @@ workerInstance.onmessage({
 assert.equal(elMap.error.hidden, true, "stale refusal must be ignored");
 assert.equal(elMap.knitStatus.textContent, "Completed dye.");
 
-// pagehide revokes Blob URLs cleanly.
+// SVG sanitizer accepts safe SVG charts and refuses event handlers, foreignObject, and javascript: hrefs.
+elMap.runPanel.handlers.click();
+const panelReqSafe = posted[posted.length - 1];
+workerInstance.onmessage({
+  data: {
+    type: "result",
+    kind: "panel",
+    request: panelReqSafe.request,
+    result: {
+      chart_svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
+      instructions_text: "# ok",
+      stitch_count: 10,
+      short_row_turns: 0,
+      doc_sha256: "0123456789abcdef0123456789abcdef",
+      svg_checks_passed: true,
+      fit_claimed: false,
+      metadata: {},
+    },
+  },
+});
+assert.equal(elMap.error.hidden, true, "safe SVG must render without error");
+assert.equal(elMap.panelSvgBox.children.length, 1);
+
+for (const unsafeSvg of [
+  '<svg onload="alert(1)"><rect/></svg>',
+  '<svg><foreignObject><div/></foreignObject></svg>',
+  '<svg><a href="javascript:alert(1)"></a></svg>',
+  '<svg><use xlink:href="data:image/svg+xml,boom"/></svg>',
+]) {
+  elMap.runPanel.handlers.click();
+  const reqBad = posted[posted.length - 1];
+  workerInstance.onmessage({
+    data: {
+      type: "result",
+      kind: "panel",
+      request: reqBad.request,
+      result: {
+        chart_svg: unsafeSvg,
+        instructions_text: "# bad",
+        stitch_count: 10,
+        short_row_turns: 0,
+        doc_sha256: "0123456789abcdef0123456789abcdef",
+        svg_checks_passed: true,
+        fit_claimed: false,
+        metadata: {},
+      },
+    },
+  });
+  assert.equal(elMap.error.hidden, false, `unsafe SVG must refuse: ${unsafeSvg}`);
+  assert.match(elMap.error.textContent, /Refused malformed or unsafe SVG/);
+}
+
+// Flatbed checker in auto regime must pick regime2_fiducial_synced rather than circular pooling.
+elMap.dyePreset.value = "checker";
+elMap.dyeMode.value = "flatbed";
+elMap.dyeRegime.value = "auto";
+elMap.runDye.handlers.click();
+const flatbedReq = posted.at(-1);
+assert.equal(flatbedReq.payload.is_circular, false);
+assert.equal(flatbedReq.payload.regime, "regime2_fiducial_synced");
+
+// Brother AYAB swatch offers swatch_ayab.png download alongside checklist.
+elMap.swatchCams.value = "4.0,6.0";
+elMap.swatchMachine.value = "brother-kh930-ayab";
+elMap.runSwatch.handlers.click();
+const swatchReq = posted.at(-1);
+workerInstance.onmessage({
+  data: {
+    type: "result",
+    kind: "swatch",
+    request: swatchReq.request,
+    result: {
+      knitout_text: ";!knitout-2\n",
+      ayab_png_base64: Buffer.from("\x89PNG\r\n\x1a\n", "binary").toString("base64"),
+      ayab_checklist: { schema: "ftx-ayab-checklist/1" },
+      chart_svg: "<svg></svg>",
+      cert: { hardware_execution_authorized: false },
+      qualification_template: {},
+    },
+  },
+});
+assert(
+  elMap.swatchDownloads.children.some((a) => a.download === "swatch_ayab.png"),
+  "Brother AYAB swatch must render swatch_ayab.png download link"
+);
+
+// Small newborn panel scales shaping proportionally instead of overflowing chest/length; default preserves 95/36/105/24.
+elMap.runPanel.handlers.click();
+const defaultPanel = posted.at(-1).payload.panel;
+assert.equal(defaultPanel.armhole_depth_mm, 95);
+assert.equal(defaultPanel.armhole_inset_total_mm, 36);
+assert.equal(defaultPanel.neck_width_mm, 105);
+assert.equal(defaultPanel.neck_depth_mm, 24);
+elMap.panelHem.value = "120";
+elMap.panelChest.value = "120";
+elMap.panelLength.value = "150";
+elMap.runPanel.handlers.click();
+const smallPanelReq = posted.at(-1);
+assert(smallPanelReq.payload.panel.neck_width_mm < 120, "small panel neck_width_mm must scale below chest width");
+assert(smallPanelReq.payload.panel.armhole_depth_mm < 60, "small panel armhole_depth_mm must scale below panel length");
+workerInstance.onmessage({
+  data: {
+    type: "result",
+    kind: "panel",
+    request: smallPanelReq.request,
+    result: {
+      stitch_count: 120,
+      short_row_turns: 2,
+      doc_sha256: "abcdef0123456789",
+      svg_checks_passed: true,
+      fit_claimed: false,
+      chart_svg: "<svg></svg>",
+      instructions_text: "Row 1: knit",
+      metadata: { pathway: "measured_fully_fashioned_panel" },
+    },
+  },
+});
+assert.equal(elMap.panelDownloads.children.length, 3, "panel preview must create 3 download links");
+
+// pagehide revokes ALL Blob URLs cleanly across swatch, panel, and dye containers.
+assert(activeUrls.size >= 9);
 windowHandlers.pagehide();
 assert.equal(activeUrls.size, 0, "pagehide must revoke download URLs");
 
