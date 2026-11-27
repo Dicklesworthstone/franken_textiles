@@ -24,6 +24,7 @@ mod fabric;
 mod fold;
 mod import;
 mod inspect_pixel;
+mod knit;
 mod materials;
 mod measure;
 mod outfit;
@@ -202,6 +203,12 @@ const USAGE: &str = "usage:
   ftx annotate DRAFT --names NAMES.json --out PATTERN [--json]
   ftx scale-fit PATTERN --target REF=LEN [--target REF=LEN ...] --out PATTERN [--json]
   ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250] [--label-tol 0.03] [--json]
+  ftx knit swatch --out DIR [--profile ID] [--yarn-id ID] [--needles N] [--courses-per-zone N] [--cam-settings C1,C2,...] [--json]
+  ftx knit draft --out DIR [--kind panel|raglan] [--profile ID] [--age-class infant|toddler|child|adult] [--target knitout|kniterate|ayab|hand-knit|all] [--json]
+  ftx knit verify --knitout FILE [--profile ID] [--age-class ...] [--json]
+  ftx knit poincloux [--out DIR] [--json]
+  ftx dye optimize --out DIR [--target-image PNG] [--profile piezo|dip] [--regime-mode flatbed|circular] [--age-class ...] [--max-iters N] [--json]
+  ftx dye verify --program FILE [--profile piezo|dip] [--age-class ...] [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
@@ -247,6 +254,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 || name == "start-self-repulsion"
                 || measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
+                || knit::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
                 || trace::BOOLEAN_OPTIONS.contains(&name)
                 || (name == "seams" && command == Some("outfit"))
@@ -2134,6 +2142,8 @@ fn main() -> ExitCode {
         Some("measure") => emit("measure", args.json, measure::run(&args)),
         Some("materials") => emit("materials", args.json, materials::run(&args)),
         Some("export") => emit("export", args.json, export::cmd_export(&args)),
+        Some("knit") => emit("knit", args.json, knit::cmd_knit(&args)),
+        Some("dye") => emit("dye", args.json, knit::cmd_dye(&args)),
         Some("trace") => emit("trace", args.json, trace::cmd_trace(&args)),
         Some("annotate") => emit("annotate", args.json, trace::cmd_annotate(&args)),
         Some("scale-fit") => emit("scale-fit", args.json, trace::cmd_scale_fit(&args)),
