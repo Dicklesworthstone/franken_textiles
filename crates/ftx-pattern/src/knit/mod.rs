@@ -7,6 +7,7 @@
 pub mod autoknit;
 pub mod compile;
 pub mod draft;
+pub mod garment;
 pub mod ir;
 pub mod lifted_procir;
 pub mod lifted_tangle;
@@ -20,6 +21,11 @@ pub use compile::{CompiledKnitBundle, compile_knit_doc};
 pub use draft::{
     ParametricPanelSpec, RaglanPulloverSpec, draft_calibration_swatch, draft_seamless_raglan_tube,
     draft_shaped_panel,
+};
+pub use garment::{
+    AssemblySeam, GarmentEdge, GarmentEdgeKind, GarmentOpening, PulloverPiece, PulloverPieceRole,
+    SEAMED_PULLOVER_SCHEMA, SeamJoinGroup, SeamedPulloverDraft, SeamedPulloverSpec,
+    draft_seamed_pullover,
 };
 pub use vm::{KnitSafetyContext, VBedVmReport, verify_knitout_program};
 
