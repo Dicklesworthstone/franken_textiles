@@ -1,11 +1,17 @@
 //! Uncapped, conforming plane-clipped shells for 3D-to-knit drafting (`FTX-K12`).
 //!
 //! The generic tube path preserves shared edge intersections and the actual clipping planes.
-//! A torso request requires its real landmarks and an already segmented torso tube. Full-body
-//! sleeve/armhole extraction is not implemented and refuses instead of returning a horizontal
-//! slice of unrelated anatomy. A bounded exact intersection audit checks both the clipped and
-//! offset surfaces; local topology checks require an outward-wound annulus. These are geometric
+//! The anatomical adapter uses source rig segmentation and independently posed section planes;
+//! the older `AnnyKnitShell` adapter accepts already segmented tubes. A bounded exact intersection
+//! audit checks both the clipped and offset surfaces. These are geometric
 //! checks on the requested discrete shell, not physical cloth clearance or garment-fit evidence.
+
+mod anatomical;
+
+pub use anatomical::{
+    AnatomicalCut, AnatomicalSection, AnatomicalShellSpec, AnnyAnatomicalShell,
+    build_anatomical_ease_shell,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,9 +57,9 @@ impl ShapingSurface for AnnyKnitShell<'_> {
             | KnitShellRegion::RightSleeve => {
                 return Err(Refusal::new(
                     RefusalCode::InvalidDocument,
-                    "anatomical sleeve and full-upper-body knit shells require region segmentation and named wrist/armhole rings; a global height slab cannot supply them",
+                    "this segmented-skin adapter lacks the source rig and independently posed joints needed for anatomical sleeve and full-upper-body extraction",
                 )
-                .repair("Supply an explicitly segmented tube to the tube shell builder."));
+                .repair("Use AnnyAnatomicalShell with the source AnnyModel and PosedBody, or supply an explicit AnatomicalShellSpec."));
             }
             KnitShellRegion::Tube => {
                 if self.skin.vertices.is_empty() {
