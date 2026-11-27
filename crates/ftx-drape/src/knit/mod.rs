@@ -11,8 +11,8 @@ pub mod poincloux;
 
 pub use constitutive::{
     AsymmetricKnitBending, CoupledKnitMembrane, KnitBendingEval, KnitHonestyFlag,
-    KnitHysteresisBank, KnitHysteresisState, KnitMembraneEval, KnitShellAssessment,
-    assess_knit_shell_state, cayley_hamilton_inv_sqrt_2x2,
+    KnitHysteresisBank, KnitHysteresisEval, KnitHysteresisState, KnitMembraneEval,
+    KnitShellAssessment, assess_knit_shell_state, cayley_hamilton_inv_sqrt_2x2,
 };
 pub use poincloux::{
     KnitPriorCalibrationResult, LocalAuditPatchInput, LocalAuditPatchResult, PoinclouxParams,

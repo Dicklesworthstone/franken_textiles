@@ -6,6 +6,7 @@
 use super::{BendingPatch, bad, quadratic};
 use crate::ad::Jet;
 use crate::elements::Local;
+use crate::knit::{AsymmetricKnitBending, cayley_hamilton_inv_sqrt_2x2};
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_plasticity::Response;
 
@@ -57,7 +58,7 @@ pub(super) fn tangent_weights(
 }
 
 impl BendingPatch {
-    fn normal_frame(&self, x: &[Vec3]) -> Option<Vec3> {
+    fn tangent_and_normal(&self, x: &[Vec3]) -> Option<([Vec3; 2], Vec3)> {
         if self.v.iter().any(|&v| v >= x.len() || !x[v].is_finite()) {
             return None;
         }
@@ -76,7 +77,186 @@ impl BendingPatch {
         {
             return None;
         }
-        Some(cross / area2.sqrt())
+        Some((t, cross / area2.sqrt()))
+    }
+
+    fn normal_frame(&self, x: &[Vec3]) -> Option<Vec3> {
+        self.tangent_and_normal(x).map(|(_, n)| n)
+    }
+
+    /// Objective physical curvature `[kappa_11, kappa_22, 2*kappa_12]` in inverse deformed metres,
+    /// obtained by pulling back the covariant second fundamental form `b` through the closed-form
+    /// singularity-free Cayley–Hamilton metric inverse square root `C^{-1/2}` (`FTX-K09`).
+    ///
+    /// Unlike [`Self::normal_curvature`], this removes pure membrane stretch pollution so a
+    /// pre-stretched cylinder retains its exact physical bending curvature (`KAT-SHELL-1`).
+    ///
+    /// # Errors
+    /// Vector-Hessian patch, singular tangent frame, or non-SPD metric tensor `C`.
+    pub fn physical_curvature(&self, x: &[Vec3]) -> Result<[f64; 3], Refusal> {
+        if !self.tensor.uses_normal() {
+            return Err(bad(
+                "physical curvature pullback requires the explicit normal-projected model",
+            ));
+        }
+        let (t, n) = self.tangent_and_normal(x).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::OutOfRange,
+                "normal-projected bending has a singular/non-finite reconstructed surface frame",
+            )
+            .repair("refine or repair the panel deformation; no substitute normal is used")
+        })?;
+        let c00 = t[0].dot(t[0]);
+        let c01 = t[0].dot(t[1]);
+        let c11 = t[1].dot(t[1]);
+        let [m00, m01, m11] = cayley_hamilton_inv_sqrt_2x2(c00, c01, c11)?;
+        let raw = self.curvature(x);
+        // `self.weights[2]` already includes the engineering twist factor 2, so `b_uv = 0.5 * n·(2 x_uv)`.
+        let buu = n.dot(raw[0]);
+        let bvv = n.dot(raw[1]);
+        let buv = 0.5 * n.dot(raw[2]);
+        let mb00 = m00 * buu + m01 * buv;
+        let mb01 = m00 * buv + m01 * bvv;
+        let mb10 = m01 * buu + m11 * buv;
+        let mb11 = m01 * buv + m11 * bvv;
+        let k11 = mb00 * m00 + mb01 * m01;
+        let k22 = mb10 * m01 + mb11 * m11;
+        let k12_tensor = mb00 * m01 + mb01 * m11;
+        let out = [k11, k22, 2.0 * k12_tensor];
+        if out.iter().any(|v| !v.is_finite()) {
+            return Err(bad("physical curvature pullback overflows"));
+        }
+        Ok(out)
+    }
+
+    /// Reference-area asymmetric knit bending energy (J) evaluated on objective physical curvature
+    /// `kappa_phys = C^{-1/2} b C^{-1/2}` (`FTX-K09`).
+    ///
+    /// # Errors
+    /// Invalid normal/metric domain or non-finite energy.
+    pub fn knit_bending_energy(
+        &self,
+        x: &[Vec3],
+        law: &AsymmetricKnitBending,
+    ) -> Result<f64, Refusal> {
+        let kp = self.physical_curvature(x)?;
+        let energy = self.area * law.evaluate_from_kappa(kp).energy_density;
+        if !energy.is_finite() {
+            return Err(bad("asymmetric knit bending energy overflows"));
+        }
+        Ok(energy)
+    }
+
+    /// Exact 18-DOF gradient and symmetric Hessian of [`Self::knit_bending_energy`] using
+    /// singularity-free Cayley–Hamilton `C^{-1/2}` pullback inside `Jet<18>` (`FTX-K09`).
+    ///
+    /// # Errors
+    /// Invalid normal/metric domain or non-finite composed derivatives.
+    pub fn knit_bending_local(
+        &self,
+        x: &[Vec3],
+        law: &AsymmetricKnitBending,
+    ) -> Result<Local<18, 324>, Refusal> {
+        let k = self.physical_curvature_jets(x)?;
+        let eval = law.evaluate_from_kappa(k.map(|c| c.v));
+        let grad = std::array::from_fn(|i| {
+            self.area * (0..3).map(|a| eval.moment[a] * k[a].g[i]).sum::<f64>()
+        });
+        let mut hess = [0.0; 324];
+        for i in 0..18 {
+            for j in 0..=i {
+                let mut h = 0.0;
+                for a in 0..3 {
+                    h += eval.moment[a] * k[a].h[i][j];
+                    for b in 0..3 {
+                        h += eval.tangent[a][b] * k[a].g[i] * k[b].g[j];
+                    }
+                }
+                let val = self.area * h;
+                hess[i * 18 + j] = val;
+                hess[j * 18 + i] = val;
+            }
+        }
+        let energy = self.area * eval.energy_density;
+        if !energy.is_finite() || grad.iter().chain(&hess).any(|v| !v.is_finite()) {
+            return Err(bad("composed asymmetric knit bending derivatives overflow"));
+        }
+        Ok(Local {
+            energy,
+            grad,
+            hess,
+            psd: false,
+        })
+    }
+
+    fn physical_curvature_jets(&self, x: &[Vec3]) -> Result<[Jet<18>; 3], Refusal> {
+        if !self.tensor.uses_normal() {
+            return Err(bad(
+                "physical curvature pullback requires the explicit normal-projected model",
+            ));
+        }
+        self.check_domain(x)?;
+        type J = Jet<18>;
+        let z = J::constant(0.0);
+        let p: [[J; 3]; 6] = std::array::from_fn(|i| {
+            std::array::from_fn(|k| {
+                if i == 0 {
+                    z
+                } else {
+                    J::var(x[self.v[i]][k] - x[self.v[0]][k], 3 * i + k) - J::var(0.0, k)
+                }
+            })
+        });
+        let dot = |a: [J; 3], b: [J; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let t: [[J; 3]; 2] = std::array::from_fn(|a| {
+            std::array::from_fn(|k| (1..6).fold(z, |sum, i| sum + p[i][k] * self.tangents[a][i]))
+        });
+        let c00 = dot(t[0], t[0]);
+        let c01 = dot(t[0], t[1]);
+        let c11 = dot(t[1], t[1]);
+        let tr = c00 + c11;
+        let det = c00 * c11 - c01 * c01;
+        if !tr.v.is_finite() || !det.v.is_finite() || tr.v <= 0.0 || det.v <= 1e-18 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "non-SPD metric tensor in knit bending patch (tr={}, det={})",
+                    tr.v, det.v
+                ),
+            ));
+        }
+        // Singularity-free Cayley–Hamilton C^{-1/2} in Jet<18> (no eigendecomposition atan2(0,0)!).
+        let s = det.sqrt();
+        let q = (tr + s * 2.0).sqrt();
+        let inv_sq = J::constant(1.0) / (s * q);
+        let m00 = (c11 + s) * inv_sq;
+        let m01 = (-c01) * inv_sq;
+        let m11 = (c00 + s) * inv_sq;
+
+        let cross = [
+            t[0][1] * t[1][2] - t[0][2] * t[1][1],
+            t[0][2] * t[1][0] - t[0][0] * t[1][2],
+            t[0][0] * t[1][1] - t[0][1] * t[1][0],
+        ];
+        let length = dot(cross, cross).sqrt();
+        let normal = cross.map(|v| v / length);
+        let b_voigt: [J; 3] = std::array::from_fn(|a| {
+            let derivative = std::array::from_fn(|k| {
+                (1..6).fold(z, |sum, i| sum + p[i][k] * self.weights[a][i])
+            });
+            dot(normal, derivative)
+        });
+        let buu = b_voigt[0];
+        let bvv = b_voigt[1];
+        let buv = b_voigt[2] * 0.5;
+        let mb00 = m00 * buu + m01 * buv;
+        let mb01 = m00 * buv + m01 * bvv;
+        let mb10 = m01 * buu + m11 * buv;
+        let mb11 = m01 * buv + m11 * bvv;
+        let k11 = mb00 * m00 + mb01 * m01;
+        let k22 = mb10 * m01 + mb11 * m11;
+        let k12_tensor = mb00 * m01 + mb01 * m11;
+        Ok([k11, k22, k12_tensor * 2.0])
     }
 
     /// Check the deformed quadratic tangent frame. A numerical fold or collapse cannot silently

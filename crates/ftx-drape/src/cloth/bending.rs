@@ -6,6 +6,7 @@ use ftx_pattern::material_bending::BendingTensor;
 use super::ClothModel;
 use crate::bending::{BendingPatch, build};
 use crate::elements::MembraneElement;
+use crate::knit::AsymmetricKnitBending;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PanelField {
@@ -13,6 +14,7 @@ pub(super) struct PanelField {
     pub replaced_hinges: Vec<bool>,
     pub triangles: Vec<usize>,
     pub heterogeneous: bool,
+    pub knit_laws: Option<Vec<Option<AsymmetricKnitBending>>>,
 }
 
 impl ClothModel {
@@ -45,6 +47,13 @@ impl ClothModel {
                 self.hinge_bending.as_ref().map_or(self.bending, |b| b[h])
                     != reference.hinge_rigidity(h)
             })
+        {
+            return Err(bad());
+        }
+        if self
+            .panel_bending
+            .as_ref()
+            .is_some_and(|p| p.knit_laws.is_some())
         {
             return Err(bad());
         }
@@ -135,8 +144,63 @@ impl ClothModel {
                 .filter_map(|(i, m)| m.is_some().then_some(i))
                 .collect(),
             heterogeneous: laws.windows(2).any(|pair| pair[0] != pair[1]),
+            knit_laws: None,
         });
         Ok(())
+    }
+
+    /// Bind twice-integrated `C^3` strictly convex asymmetric knit bending laws (with exact
+    /// Cayley–Hamilton `C^{-1/2}` objective physical curvature pullback) on unwelded source
+    /// panels, replacing interior scalar hinges while keeping seam hinges intact (`FTX-K09`).
+    ///
+    /// # Errors
+    /// Invalid bending parameters, mismatched rest geometry/welds, unresolved quadratic patches,
+    /// or an attempted second binding. A refusal leaves the model unchanged.
+    pub fn set_knit_panel_bending(
+        &mut self,
+        source_rest: &[Vec2],
+        source_triangles: &[[usize; 3]],
+        weld: &[usize],
+        laws: &[Option<AsymmetricKnitBending>],
+    ) -> Result<(), Refusal> {
+        if laws.len() != self.membranes.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "one asymmetric knit bending slot per membrane triangle is required",
+            ));
+        }
+        let mut tensors = Vec::with_capacity(laws.len());
+        let mut patch_laws = Vec::new();
+        for law in laws {
+            if let Some(k) = law {
+                k.validate()?;
+                let d11 = 0.5 * (k.d_plus[0] + k.d_minus[0]);
+                let d22 = 0.5 * (k.d_plus[1] + k.d_minus[1]);
+                let tensor = BendingTensor::new(d11, d22, k.d12, k.d66)?.normal_projected();
+                tensors.push(Some(tensor));
+                patch_laws.push(Some(*k));
+            } else {
+                tensors.push(None);
+            }
+        }
+        self.set_panel_bending(source_rest, source_triangles, weld, &tensors)?;
+        if !patch_laws.is_empty()
+            && let Some(field) = &mut self.panel_bending
+        {
+            field.heterogeneous |= laws.windows(2).any(|pair| pair[0] != pair[1]);
+            field.knit_laws = Some(patch_laws);
+        }
+        Ok(())
+    }
+
+    /// Asymmetric knit bending law bound to panel patch `patch_index`, if any.
+    #[must_use]
+    pub fn panel_knit_bending(&self, patch_index: usize) -> Option<&AsymmetricKnitBending> {
+        self.panel_bending
+            .as_ref()
+            .and_then(|p| p.knit_laws.as_ref())
+            .and_then(|laws| laws.get(patch_index))
+            .and_then(Option::as_ref)
     }
 
     /// Immutable curvature patches in source-triangle order (unselected scalar panels omitted).
@@ -155,14 +219,18 @@ impl ClothModel {
             .map_or(&[], |p| p.triangles.as_slice())
     }
 
-    /// Refuse singular reconstructed tangent frames before evaluating curvature or derivatives.
-    /// A line-search trial may fail this gate without changing the accepted state.
+    /// Refuse singular reconstructed tangent frames (or non-SPD knit bending metrics) before
+    /// evaluating curvature or derivatives. A line-search trial may fail this gate without
+    /// changing the accepted state.
     ///
     /// # Errors
-    /// Missing/non-finite positions or a degenerate normal-projected patch frame.
+    /// Missing/non-finite positions, a degenerate normal-projected patch frame, or non-SPD metric.
     pub fn check_panel_bending_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
-        for patch in self.panel_bending_patches() {
+        for (i, patch) in self.panel_bending_patches().iter().enumerate() {
             patch.check_domain(x)?;
+            if self.panel_knit_bending(i).is_some() {
+                patch.physical_curvature(x)?;
+            }
         }
         Ok(())
     }

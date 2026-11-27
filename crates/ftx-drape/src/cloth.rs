@@ -33,6 +33,7 @@ type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, us
 mod materials;
 pub use materials::SheetMaterial;
 mod bending;
+mod knit_hysteresis;
 mod membrane_plasticity;
 mod plasticity;
 mod relaxation;
@@ -69,6 +70,9 @@ pub struct ClothModel {
     // Nonlinear laws are immutable source-bound constitutive responses; None entries use the
     // corresponding linear/reference-tangent material above.
     element_responses: Option<Vec<Option<CompiledMembrane>>>,
+    // Coupled orthotropic knit membrane laws with jamming barrier (`FTX-K09`); mutually exclusive
+    // with `element_responses` on any given triangle.
+    coupled_knit_membranes: Option<Vec<Option<crate::knit::CoupledKnitMembrane>>>,
     // Scalar calibration bounds survive source resolution and grain-frame scene assembly.
     element_domains: Option<Vec<Option<StrainDomain>>>,
     hinge_bending: Option<Vec<f64>>,
@@ -228,6 +232,7 @@ impl ClothModel {
             elastics: Vec::new(),
             element_materials: None,
             element_responses: None,
+            coupled_knit_membranes: None,
             element_domains: None,
             hinge_bending: None,
             hinge_support,
@@ -377,6 +382,16 @@ impl ClothModel {
                 "one nonlinear response slot per membrane triangle is required",
             ));
         }
+        for (i, r) in responses.iter().enumerate() {
+            if r.is_some() && self.coupled_knit_membrane(i).is_some() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!(
+                        "membrane triangle {i} cannot bind both CompiledMembrane and CoupledKnitMembrane"
+                    ),
+                ));
+            }
+        }
         self.element_responses = responses
             .iter()
             .any(Option::is_some)
@@ -391,6 +406,121 @@ impl ClothModel {
             .as_ref()
             .and_then(|r| r.get(e))
             .and_then(Option::as_ref)
+    }
+
+    /// Bind optional coupled orthotropic knit membrane laws (with smooth yarn-jamming barrier) to
+    /// membrane triangles (`FTX-K09`). An all-`None` slice preserves the legacy/tabulated path
+    /// identically. Mutually exclusive with [`Self::set_membrane_responses`] on any triangle.
+    ///
+    /// # Errors
+    /// Length mismatch, invalid constitutive parameters, or overlap with a tabulated response.
+    pub fn set_coupled_knit_membranes(
+        &mut self,
+        laws: &[Option<crate::knit::CoupledKnitMembrane>],
+    ) -> Result<(), Refusal> {
+        if laws.len() != self.membranes.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "one coupled knit membrane slot per membrane triangle is required",
+            ));
+        }
+        for (i, law) in laws.iter().enumerate() {
+            if let Some(m) = law {
+                m.validate()?;
+                if self.membrane_response(i).is_some() {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!(
+                            "membrane triangle {i} cannot bind both CoupledKnitMembrane and CompiledMembrane"
+                        ),
+                    ));
+                }
+            }
+        }
+        self.coupled_knit_membranes = laws.iter().any(Option::is_some).then(|| laws.to_vec());
+        Ok(())
+    }
+
+    /// Coupled orthotropic knit membrane law of triangle `e`, when bound (`FTX-K09`).
+    #[must_use]
+    pub fn coupled_knit_membrane(&self, e: usize) -> Option<&crate::knit::CoupledKnitMembrane> {
+        self.coupled_knit_membranes
+            .as_ref()
+            .and_then(|r| r.get(e))
+            .and_then(Option::as_ref)
+    }
+
+    /// Elastic membrane energy of triangle `i` dispatching linear, tabulated nonlinear, or coupled knit.
+    pub(crate) fn membrane_elastic_energy(&self, i: usize, x: &[Vec3]) -> f64 {
+        let e = &self.membranes[i];
+        if let Some(knit) = self.coupled_knit_membrane(i) {
+            let eff = crate::elements::effective_strain(
+                e.strain(x),
+                &self.material(i),
+                self.compression_model,
+            );
+            return knit
+                .evaluate(eff)
+                .map_or(f64::NAN, |ev| e.area * ev.energy_density);
+        }
+        self.membrane_response(i).map_or_else(
+            || self.membrane_energy(i, x),
+            |law| e.response_energy_with_model(x, law, &self.material(i), self.compression_model),
+        )
+    }
+
+    /// Exact unprojected local energy/gradient/Hessian of triangle `i` (linear, tabulated, or coupled knit).
+    pub(crate) fn membrane_elastic_local(&self, i: usize, x: &[Vec3]) -> Local<9, 81> {
+        let e = &self.membranes[i];
+        if let Some(knit) = self.coupled_knit_membrane(i) {
+            let mut l = e.local_with_response_model(
+                x,
+                &self.material(i),
+                self.compression_model,
+                |strain| {
+                    knit.evaluate(strain)
+                        .ok()
+                        .map(|ev| ftx_pattern::material_response::Response {
+                            energy: ev.energy_density,
+                            stress: ev.stress,
+                            tangent: ev.tangent,
+                        })
+                },
+            );
+            // Delegate PSD fallback strictly to `project_psd_translation_free` so `assemble_static_exact`
+            // keeps the exact unprojected tangent for IFT adjoints.
+            l.psd = false;
+            return l;
+        }
+        self.membrane_response(i).map_or_else(
+            || self.membrane_local(i, x),
+            |law| e.response_local_with_model(x, law, &self.material(i), self.compression_model),
+        )
+    }
+
+    /// Panel patch bending energy dispatching either asymmetric knit pullback or standard patch energy.
+    pub(crate) fn panel_patch_energy(&self, patch_index: usize, x: &[Vec3]) -> f64 {
+        let patch = &self.panel_bending_patches()[patch_index];
+        self.panel_knit_bending(patch_index).map_or_else(
+            || patch.energy(x),
+            |law| patch.knit_bending_energy(x, law).unwrap_or(f64::INFINITY),
+        )
+    }
+
+    /// Panel patch local energy/gradient/Hessian dispatching asymmetric knit pullback or standard patch.
+    pub(crate) fn panel_patch_local(&self, patch_index: usize, x: &[Vec3]) -> Local<18, 324> {
+        let patch = &self.panel_bending_patches()[patch_index];
+        self.panel_knit_bending(patch_index).map_or_else(
+            || patch.local(x),
+            |law| {
+                patch.knit_bending_local(x, law).unwrap_or(Local {
+                    energy: f64::INFINITY,
+                    grad: [f64::NAN; 18],
+                    hess: [f64::NAN; 324],
+                    psd: false,
+                })
+            },
+        )
     }
 
     /// Bind the optional physical domain of each fitted scalar membrane.
@@ -458,6 +588,25 @@ impl ClothModel {
                     ));
                 }
             }
+            if let Some(knit) = self.coupled_knit_membrane(i) {
+                let strain = e.strain(x);
+                knit.evaluate(strain).map_err(|mut refusal| {
+                    refusal.message = format!("membrane element {i}: {}", refusal.message);
+                    refusal
+                })?;
+                let eff = crate::elements::effective_strain(
+                    strain,
+                    &self.material(i),
+                    self.compression_model,
+                );
+                knit.evaluate(eff).map_err(|mut refusal| {
+                    refusal.message = format!(
+                        "membrane element {i} (effective strain): {}",
+                        refusal.message
+                    );
+                    refusal
+                })?;
+            }
         }
         Ok(())
     }
@@ -482,27 +631,19 @@ impl ClothModel {
         // Per-element energies are independent (parallel with the `parallel` feature); the sums run
         // in element order, the same bits either way.
         let m: f64 = membranes.unwrap_or_else(|| {
-            par::map(self.membranes.len(), |i| {
-                self.membrane_response(i).map_or_else(
-                    || self.membrane_energy(i, x),
-                    |law| {
-                        self.membranes[i].response_energy_with_model(
-                            x,
-                            law,
-                            &self.material(i),
-                            self.compression_model,
-                        )
-                    },
-                )
-            })
-            .into_iter()
-            .sum()
+            par::map(self.membranes.len(), |i| self.membrane_elastic_energy(i, x))
+                .into_iter()
+                .sum()
         });
         let mut b: f64 = par::map(self.hinges.len(), |i| self.hinge_energy(i, x))
             .into_iter()
             .sum();
         if let Some(field) = &self.panel_bending {
-            b += panels.unwrap_or_else(|| field.patches.iter().map(|p| p.energy(x)).sum::<f64>());
+            b += panels.unwrap_or_else(|| {
+                (0..field.patches.len())
+                    .map(|i| self.panel_patch_energy(i, x))
+                    .sum::<f64>()
+            });
         }
         let t: f64 = self.elastics.iter().map(|e| e.energy(x)).sum();
         m + b + t
@@ -521,6 +662,7 @@ impl ClothModel {
             && self.elastics == original.elastics
             && self.element_materials == original.element_materials
             && self.element_responses == original.element_responses
+            && self.coupled_knit_membranes == original.coupled_knit_membranes
             && self.element_domains == original.element_domains
             && self.hinge_bending == original.hinge_bending
             && self.hinge_support == original.hinge_support
@@ -778,6 +920,8 @@ pub struct Solver {
     plasticity: Option<plasticity::Field>,
     // Permanent raw Green strain; replaces selected membrane energies and derivatives.
     membrane_plasticity: Option<membrane_plasticity::Field>,
+    // Additive parallel Prandtl–Ishlinskii knit yarn-slip hysteresis (`FTX-K09`).
+    knit_hysteresis: Option<knit_hysteresis::Field>,
     pub(crate) liquid_mass: Option<crate::liquid_mass::Binding>,
 }
 
@@ -1061,6 +1205,7 @@ impl Solver {
             relaxation: None,
             plasticity: None,
             membrane_plasticity: None,
+            knit_hysteresis: None,
             liquid_mass: None,
         }
     }
@@ -1315,23 +1460,20 @@ impl Solver {
                 .membrane_plasticity
                 .as_ref()
                 .and_then(|field| field.local(i, &self.x, false))
-                .unwrap_or_else(|| {
-                    self.model.membrane_response(i).map_or_else(
-                        || self.model.membrane_local(i, &self.x),
-                        |law| {
-                            e.response_local_with_model(
-                                &self.x,
-                                law,
-                                &self.model.material(i),
-                                self.model.compression_model,
-                            )
-                        },
-                    )
-                });
+                .unwrap_or_else(|| self.model.membrane_elastic_local(i, &self.x));
             if let Some(extra) = self
                 .relaxation
                 .as_ref()
                 .and_then(|field| field.local(i, &self.x, None))
+            {
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+            }
+            if let Some(extra) = self
+                .knit_hysteresis
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x))
             {
                 for (a, b) in l.grad.iter_mut().zip(extra.grad) {
                     *a += b;
@@ -1348,7 +1490,7 @@ impl Solver {
                 .plasticity
                 .as_ref()
                 .and_then(|field| field.local(i, &self.x, false))
-                .unwrap_or_else(|| p.local(&self.x));
+                .unwrap_or_else(|| self.model.panel_patch_local(i, &self.x));
             add_local(&mut r, &p.v, &l.grad);
         }
         for e in &self.model.elastics {
@@ -1446,7 +1588,8 @@ impl Solver {
         if self.integrator != TimeIntegrator::ImplicitEuler
             && (self.relaxation.is_some()
                 || self.plasticity.is_some()
-                || self.membrane_plasticity.is_some())
+                || self.membrane_plasticity.is_some()
+                || self.knit_hysteresis.is_some())
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -1537,11 +1680,14 @@ impl Solver {
             && self.relaxation.is_none()
             && self.plasticity.is_none()
             && self.membrane_plasticity.is_none()
+            && self.knit_hysteresis.is_none()
             && !self.contact.as_ref().is_some_and(|c| c.has_friction())
     }
 
     pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
-        self.is_memoryless_elastic_for_adjoint() && self.model.element_responses.is_none()
+        self.is_memoryless_elastic_for_adjoint()
+            && self.model.element_responses.is_none()
+            && self.model.coupled_knit_membranes.is_none()
     }
 
     /// Test-only helper matching the legacy static / implicit-Euler potential signature.
@@ -1590,6 +1736,9 @@ impl Solver {
                     .elastic_energy_with_fields(&x_eval, panels, membranes);
                 if let Some(field) = &self.relaxation {
                     e += field.energy(&x_eval, Some(h))?;
+                }
+                if let Some(field) = &self.knit_hysteresis {
+                    e += field.energy(&x_eval)?;
                 }
                 e /= params.elastic_weight();
                 // Contact barrier and lagged friction enforce end-of-step non-penetration at x_{n+1}
@@ -1673,6 +1822,9 @@ impl Solver {
         let mut e = self.model.elastic_energy_with_fields(x, panels, membranes);
         if let Some(field) = &self.relaxation {
             e += field.energy(x, inertia.map(|(_, h)| h))?;
+        }
+        if let Some(field) = &self.knit_hysteresis {
+            e += field.energy(x)?;
         }
         match inertia {
             Some((xt, h)) => {
@@ -1841,23 +1993,25 @@ impl Solver {
                 .membrane_plasticity
                 .as_ref()
                 .and_then(|field| field.local(i, x_el, dynamic))
-                .unwrap_or_else(|| {
-                    self.model.membrane_response(i).map_or_else(
-                        || self.model.membrane_local(i, x_el),
-                        |law| {
-                            e.response_local_with_model(
-                                x_el,
-                                law,
-                                &self.model.material(i),
-                                self.model.compression_model,
-                            )
-                        },
-                    )
-                });
+                .unwrap_or_else(|| self.model.membrane_elastic_local(i, x_el));
             if let Some(extra) = self
                 .relaxation
                 .as_ref()
                 .and_then(|field| field.local(i, x_el, ctx.time_step()))
+            {
+                l.energy += extra.energy;
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+                for (a, b) in l.hess.iter_mut().zip(extra.hess) {
+                    *a += b;
+                }
+                l.psd &= extra.psd;
+            }
+            if let Some(extra) = self
+                .knit_hysteresis
+                .as_ref()
+                .and_then(|field| field.local(i, x_el))
             {
                 l.energy += extra.energy;
                 for (a, b) in l.grad.iter_mut().zip(extra.grad) {
@@ -1959,7 +2113,7 @@ impl Solver {
                 .plasticity
                 .as_ref()
                 .and_then(|field| field.local(i, x_el, dynamic))
-                .unwrap_or_else(|| p.local(x_el));
+                .unwrap_or_else(|| self.model.panel_patch_local(i, x_el));
             scatter(
                 &p.v,
                 plan.map(|s| s.element(n_membranes + n_hinges + i)),
@@ -3018,6 +3172,25 @@ impl Solver {
             )
             .repair("Use CompressionModel::AxisAligned with membrane plasticity, or remove the plastic law to use Principal compression softening."));
         }
+        if self.damping.rayleigh_bending_s > 0.0
+            && self
+                .model
+                .panel_bending
+                .as_ref()
+                .is_some_and(|p| p.knit_laws.is_some())
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "Rayleigh bending damping does not implement asymmetric knit bending panels",
+            )
+            .repair("Set rayleigh_bending_s = 0.0 when using AsymmetricKnitBending panels."));
+        }
+        if self.liquid_mass.is_some() && self.knit_hysteresis.is_some() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "liquid-mass binding is not admitted alongside knit hysteresis history",
+            ));
+        }
         Ok(())
     }
 
@@ -3034,6 +3207,7 @@ impl Solver {
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
+            || self.knit_hysteresis.is_some()
         {
             if self.integrator != TimeIntegrator::ImplicitEuler {
                 return Err(Refusal::new(
@@ -3083,6 +3257,7 @@ impl Solver {
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
+            || self.knit_hysteresis.is_some()
         {
             return self.relaxing_step(h, body_start, Some(guess));
         }
@@ -3146,6 +3321,7 @@ impl Solver {
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
+            || self.knit_hysteresis.is_some()
         {
             if self.integrator != TimeIntegrator::ImplicitEuler {
                 return Err(Refusal::new(
@@ -3188,6 +3364,7 @@ impl Solver {
             || self.integrator != TimeIntegrator::ImplicitEuler
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
+            || self.knit_hysteresis.is_some()
             || self.model.bending_model == BendingModel::DiscreteShells
             || self.damping.rayleigh_bending_s > 0.0
         {
@@ -3290,6 +3467,9 @@ impl Solver {
         }
         if let Some(field) = &self.relaxation {
             field.energy(x_el, ctx.time_step()).map_err(&remap)?;
+        }
+        if let Some(field) = &self.knit_hysteresis {
+            field.energy(x_el).map_err(&remap)?;
         }
         match ctx {
             StepContext::ImplicitEuler {
@@ -3793,6 +3973,7 @@ impl Solver {
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
+            || self.knit_hysteresis.is_some()
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -3815,6 +3996,7 @@ impl Solver {
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
+            || self.knit_hysteresis.is_some()
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -3937,29 +4119,29 @@ impl Solver {
         if let Some(field) = &self.plasticity {
             field.check(&self.model, x)?;
         }
+        if let Some(field) = &self.knit_hysteresis {
+            field.check(&self.model, x)?;
+        }
         let mut f = vec![Vec3::ZERO; x.len()];
         for (i, e) in self.model.membranes.iter().enumerate() {
             let mut l = self
                 .membrane_plasticity
                 .as_ref()
                 .and_then(|field| field.local(i, x, incremental))
-                .unwrap_or_else(|| {
-                    self.model.membrane_response(i).map_or_else(
-                        || self.model.membrane_local(i, x),
-                        |law| {
-                            e.response_local_with_model(
-                                x,
-                                law,
-                                &self.model.material(i),
-                                self.model.compression_model,
-                            )
-                        },
-                    )
-                });
+                .unwrap_or_else(|| self.model.membrane_elastic_local(i, x));
             if let Some(extra) = self
                 .relaxation
                 .as_ref()
                 .and_then(|field| field.local(i, x, step_dt))
+            {
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+            }
+            if let Some(extra) = self
+                .knit_hysteresis
+                .as_ref()
+                .and_then(|field| field.local(i, x))
             {
                 for (a, b) in l.grad.iter_mut().zip(extra.grad) {
                     *a += b;
@@ -3980,7 +4162,7 @@ impl Solver {
                 .plasticity
                 .as_ref()
                 .and_then(|field| field.local(i, x, incremental))
-                .unwrap_or_else(|| p.local(x));
+                .unwrap_or_else(|| self.model.panel_patch_local(i, x));
             for (a, &vi) in p.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }

@@ -17,6 +17,7 @@ struct Bound {
     element: MembraneElement,
     material: Membrane,
     compression_model: CompressionModel,
+    coupled_knit: Option<crate::knit::CoupledKnitMembrane>,
     equilibrium: Option<CompiledMembrane>,
     domain: Option<StrainDomain>,
     law: CompiledRelaxation,
@@ -86,6 +87,7 @@ impl Field {
                 if model.membranes[i] != b.element
                     || model.material(i) != b.material
                     || model.compression_model != b.compression_model
+                    || model.coupled_knit_membrane(i) != b.coupled_knit.as_ref()
                     || model.membrane_response(i) != b.equilibrium.as_ref()
                     || model.membrane_domain(i) != b.domain
                 {
@@ -226,6 +228,7 @@ impl Solver {
                     element,
                     material,
                     compression_model,
+                    coupled_knit: self.model.coupled_knit_membrane(i).copied(),
                     memory,
                     dissipated_j: 0.,
                     law: law.clone(),
@@ -280,6 +283,9 @@ impl Solver {
         if let Some(field) = &self.membrane_plasticity {
             field.check(&self.model, source)?;
         }
+        if let Some(field) = &self.knit_hysteresis {
+            field.check(&self.model, source)?;
+        }
         let mut trial = self.clone();
         // Check and freeze accepted material history before seeding Newton. The inner step keeps
         // inertia and friction anchored at x_n; only its converged endpoint advances the memories.
@@ -303,6 +309,9 @@ impl Solver {
             field.advance(&trial.x)?;
         }
         if let Some(field) = &mut trial.membrane_plasticity {
+            field.advance(&trial.x)?;
+        }
+        if let Some(field) = &mut trial.knit_hysteresis {
             field.advance(&trial.x)?;
         }
         *self = trial;

@@ -60,6 +60,7 @@ impl Field {
         {
             if b.patch != model.panel_bending_patches()[i]
                 || b.element != model.membranes[b.triangle]
+                || model.panel_knit_bending(i).is_some()
                 || !b.dissipated_j.is_finite()
                 || b.dissipated_j < 0.
             {
@@ -86,7 +87,7 @@ impl Field {
                     p.reference_area()
                         * b.memory.response(p.bending_strain(x)?, incremental)?.energy
                 }
-                None => p.energy(x),
+                None => model.panel_patch_energy(i, x),
             };
         }
         if !energy.is_finite() {
@@ -177,10 +178,16 @@ impl Solver {
         let entries = triangles
             .iter()
             .zip(self.model.panel_bending_patches())
-            .map(|(&triangle, patch)| {
+            .enumerate()
+            .map(|(patch_idx, (&triangle, patch))| {
                 let Some(law) = &laws[triangle] else {
                     return Ok(None);
                 };
+                if self.model.panel_knit_bending(patch_idx).is_some() {
+                    return Err(bad(
+                        "plastic bending is not admitted on patches bound to AsymmetricKnitBending",
+                    ));
+                }
                 if law.tensor() != patch.tensor() {
                     return Err(bad(
                         "plastic bending tensor/target differs from the source-panel law",

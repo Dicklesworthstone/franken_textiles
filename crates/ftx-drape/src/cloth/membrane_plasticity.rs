@@ -78,6 +78,7 @@ impl Field {
                 if model.membranes[i] != b.element
                     || model.material(i) != b.material
                     || model.membrane_response(i).is_some()
+                    || model.coupled_knit_membrane(i).is_some()
                     || model.membrane_domain(i) != b.domain
                     || !b.dissipated_j.is_finite()
                     || b.dissipated_j < 0.
@@ -106,17 +107,7 @@ impl Field {
         for (i, element) in model.membranes.iter().enumerate() {
             energy += match &self.entries[i] {
                 Some(b) => element.area * b.memory.response(b.strain(x)?, incremental)?.energy,
-                None => model.membrane_response(i).map_or_else(
-                    || model.membrane_energy(i, x),
-                    |law| {
-                        element.response_energy_with_model(
-                            x,
-                            law,
-                            &model.material(i),
-                            model.compression_model,
-                        )
-                    },
-                ),
+                None => model.membrane_elastic_energy(i, x),
             };
         }
         if !energy.is_finite() {
@@ -271,7 +262,10 @@ impl Solver {
             if material.compression != [1., 1.] {
                 return Err(bad("plastic membrane uses physical Green strain; selected triangles require compression=1 and no gather-softening zone"));
             }
-            if material.q != law.tensor() || self.model.membrane_response(i).is_some() {
+            if material.q != law.tensor()
+                || self.model.membrane_response(i).is_some()
+                || self.model.coupled_knit_membrane(i).is_some()
+            {
                 return Err(bad("plastic membrane requires its exact linear elastic tensor without a nonlinear equilibrium law"));
             }
             if self.relaxation.as_ref().is_some_and(|field|
@@ -311,28 +305,17 @@ impl Solver {
             field.check(&self.model, &self.x)?;
             field.energy(&self.model, &self.x, false)?
         } else {
-            self.model
-                .membranes
-                .iter()
-                .enumerate()
-                .map(|(i, e)| {
-                    self.model.membrane_response(i).map_or_else(
-                        || self.model.membrane_energy(i, &self.x),
-                        |law| {
-                            e.response_energy_with_model(
-                                &self.x,
-                                law,
-                                &self.model.material(i),
-                                self.model.compression_model,
-                            )
-                        },
-                    )
-                })
+            (0..self.model.membranes.len())
+                .map(|i| self.model.membrane_elastic_energy(i, &self.x))
                 .sum()
         };
         if let Some(field) = &self.relaxation {
             field.check(&self.model, &self.x)?;
             energy += field.energy(&self.x, None)?;
+        }
+        if let Some(field) = &self.knit_hysteresis {
+            field.check(&self.model, &self.x)?;
+            energy += field.energy(&self.x)?;
         }
         if !energy.is_finite() {
             return Err(bad("stored membrane energy overflows"));
