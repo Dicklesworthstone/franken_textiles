@@ -543,10 +543,17 @@ dependency:
   `DyePrimarySpec`, oven temperature/length/scorch cap, line speed/accel bounds, and optical fiducial sensor
   capability).
 - `dye::qualification` defines `YarnDyeingQualification` (`#[serde(deny_unknown_fields)]`, `material_sha256`,
-  `dye_machine_sha256`, `yarn_lot_id`, `dye_lot_id`, `OpticalMeasurementBasis`, capillary `wick_dispersion_mm`,
-  `shrinkage_axial_pct`, `wet_tenacity_retention_ratio`, `yarn_breaking_force_n`, optional `yarn_tg_c`,
-  `washing_off_validated`, `ISO 105-C06`, `ISO 105-X12`, `saliva_fastness_validated`, `evidence`, `source`,
-  `allow_estimates`), refusing estimated optical/coupon records without opt-in and enforcing child/infant
-  wash-off and fastness thresholds fail-closed.
+  `dye_machine_sha256`, `yarn_lot_id`, `dye_lot_id`, `OpticalMeasurementBasis` including `CalibratedChartScanner`,
+  `UnqualifiedUncalibrated`, and `EstimateOnly`, capillary `wick_dispersion_mm`, bounded `shrinkage_axial_pct`,
+  `wet_tenacity_retention_ratio`, `yarn_breaking_force_n`, optional `yarn_tg_c`, `washing_off_validated`,
+  `ISO 105-C06`, `ISO 105-X12`, `saliva_fastness_validated`, `evidence`, `source`, `allow_estimates`), refusing
+  estimated optical/coupon records without opt-in and enforcing child/infant wash-off and fastness thresholds
+  fail-closed.
+- `dye::receipt` defines standalone Seam-4 `DyePlanUncertaintyReceipt` (`ftx-dye-uncertainty/1`,
+  `#[serde(deny_unknown_fields)]`, sealed via `canonical_json_sha256`, carrying `DyeDriftLedger`,
+  `DyeFeatureFloorSummary`, `DressedAppearanceSummary`, and `DyeFourClaimsStatus`), forcing
+  `color_fidelity_claimed: false` whenever uncalibrated/unqualified/estimated and unconditionally sealing
+  `visual_realization_swatch_verified: false`, `hardware_execution_authorized: false`,
+  `physical_dyeing_validated: false`, and `fit_claimed: false`.
 - No-claim boundary: IR validation and qualification checks do not substitute for physical Exp-4 bleed/wash
   coupons, spectrophotometer calibration, or unattended dye-rig execution.

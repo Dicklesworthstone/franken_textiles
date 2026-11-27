@@ -23,5 +23,9 @@ rayon = { workspace = true, optional = true }
 # users get no thread pool unless they ask. Results are bit-identical with and without it.
 parallel = ["dep:rayon"]
 
+[[bench]]
+name = "exp1_knit_rve_bolero"
+harness = false
+
 [lints]
 workspace = true

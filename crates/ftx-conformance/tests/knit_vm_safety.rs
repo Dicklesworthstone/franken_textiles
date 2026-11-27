@@ -131,11 +131,18 @@ fn lifted_procir_golden_digests_match_pinned_frankensim() {
 
 #[test]
 fn lifted_tangle_hopf_linking_and_crossing_flip_detection() {
-    let hopf = build_canonical_hopf_link::<FtxDetMath>();
+    let mut hopf = build_canonical_hopf_link::<FtxDetMath>();
     let cert = certify_topology_det(&hopf).expect("hopf link topology certificate");
     assert!(cert.isotopy_valid);
-    assert_eq!(cert.pairwise_linking, vec![(1, 2, 1)]);
+    assert_eq!(cert.pairwise_linking, vec![(1, 2, -1)]);
     assert!(cert.max_linking_residual < 1e-12);
+
+    // Reversing curve 2 orientation flips Gauss linking number from -1 to +1.
+    hopf.curves[1].nodes.reverse();
+    let rev_cert = certify_topology_det(&hopf).expect("reversed hopf link topology certificate");
+    assert!(rev_cert.isotopy_valid);
+    assert_eq!(rev_cert.pairwise_linking, vec![(1, 2, 1)]);
+    assert!(rev_cert.max_linking_residual < 1e-12);
 
     // Flipping the prescribed crossing sign must fail isotopy verification.
     let mut flipped = build_canonical_planar_tangle::<FtxDetMath>();

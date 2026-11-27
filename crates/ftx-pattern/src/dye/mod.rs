@@ -6,6 +6,7 @@
 pub mod ir;
 pub mod machine;
 pub mod qualification;
+pub mod receipt;
 
 pub use ir::{
     DYE_PROGRAM_SCHEMA, DyeSegment, DyeingRegime, IntakeEvent, IntakeEventKind,
@@ -15,3 +16,7 @@ pub use machine::{
     CapstanPinSpec, DancerAccumulatorSpec, DyeApplicatorKind, DyeMachineProfile, DyePrimarySpec,
 };
 pub use qualification::{OpticalMeasurementBasis, YarnDyeingQualification};
+pub use receipt::{
+    DYE_UNCERTAINTY_SCHEMA, DressedAppearanceSummary, DyeDriftLedger, DyeFeatureFloorSummary,
+    DyeFourClaimsStatus, DyePlanUncertaintyInput, DyePlanUncertaintyReceipt,
+};

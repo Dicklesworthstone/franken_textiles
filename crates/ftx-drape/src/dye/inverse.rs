@@ -3,13 +3,16 @@
 //! Bertsekas Two-Metric Projected L-BFGS, coherent open-loop horizons, and 5-Regime Pareto ranking
 //! (`FTX-K14`, `FTX-K15`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, TargetRaster, det};
 use ftx_pattern::dye::{
-    DYE_PROGRAM_SCHEMA, DyeMachineProfile, DyeSegment, DyeingRegime, YarnDyeProgram,
+    DYE_PROGRAM_SCHEMA, DressedAppearanceSummary, DyeDriftLedger, DyeFeatureFloorSummary,
+    DyeMachineProfile, DyePlanUncertaintyInput, DyePlanUncertaintyReceipt, DyeSegment,
+    DyeingRegime, OpticalMeasurementBasis, YarnDyeProgram, YarnDyeingQualification,
 };
 use ftx_pattern::knit::WearerAgeClass;
+use ftx_pattern::materials::Evidence;
 use serde::{Deserialize, Serialize};
 
 use super::optics::{
@@ -165,11 +168,57 @@ pub struct DyeInverseConfig {
     pub drift: DriftParameters,
 }
 
+/// Context supplying calibration provenance and dressed stretch bounds when sealing
+/// [`DyePlanUncertaintyReceipt`] alongside inverse yarn-dyeing optimization (`FTX-K13`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DyeUncertaintyContext {
+    /// Optical measurement basis behind the Kubelka–Munk colorimetry curve.
+    pub optical_measurement_basis: OpticalMeasurementBasis,
+    /// Optional canonical SHA-256 of the bound [`YarnDyeingQualification`].
+    pub qualification_sha256: Option<String>,
+    /// Evidence basis of the dye optics and transport parameters.
+    pub evidence: Evidence,
+    /// Upper bound on dressed stitch aspect-ratio stretch distortion (`> 0`, default `1.0`).
+    pub aspect_ratio_stretch_bound: f64,
+    /// Axial shrinkage fraction threshold above which differential shrinkage stretch perturbation is flagged (`> 0`, default `0.03`).
+    pub differential_shrinkage_threshold_frac: f64,
+}
+
+impl Default for DyeUncertaintyContext {
+    fn default() -> Self {
+        Self {
+            optical_measurement_basis: OpticalMeasurementBasis::UnqualifiedUncalibrated,
+            qualification_sha256: None,
+            evidence: Evidence::Estimate,
+            aspect_ratio_stretch_bound: 1.0,
+            differential_shrinkage_threshold_frac: 0.03,
+        }
+    }
+}
+
+impl DyeUncertaintyContext {
+    /// Derives [`DyeUncertaintyContext`] from a [`YarnDyeingQualification`] record.
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] or [`RefusalCode::NonFinite`] if canonical hashing fails.
+    pub fn from_qualification(qual: &YarnDyeingQualification) -> Result<Self, Refusal> {
+        Ok(Self {
+            optical_measurement_basis: qual.optical_measurement_basis,
+            qualification_sha256: Some(qual.canonical_sha256()?),
+            evidence: qual.evidence,
+            aspect_ratio_stretch_bound: 1.0,
+            differential_shrinkage_threshold_frac: 0.03,
+        })
+    }
+}
+
 /// Complete output of the inverse continuous yarn dyeing optimizer.
 #[derive(Clone, Debug)]
 pub struct DyeInverseResult {
     /// Optimized, validated `ftx-dye-program/1` ready for physical hazard verification & emission.
     pub program: YarnDyeProgram,
+    /// Sealed Seam-4 uncertainty and Four-Claims receipt for downstream `ftx-export` verification.
+    pub uncertainty_receipt: DyePlanUncertaintyReceipt,
     /// Median predicted perceptual CIEDE2000 error across all foreground stitches & drift scenarios.
     pub delta_e00_p50: f64,
     /// 95th-percentile worst-case drift CIEDE2000 error.
@@ -382,7 +431,8 @@ fn solve_smooth_cvar(losses: &[f64], alpha: f64, tau: f64) -> (f64, Vec<f64>) {
 
 /// Runs CVaR-robust inverse yarn dyeing optimization (`FTX-K15`) via pure-Rust Bertsekas Two-Metric
 /// Projected L-BFGS over `(u, eta) in [0, u_max]^M x R`, factoring Stage 1 capillary transport
-/// outside the `K`-scenario Sobol drift loop!
+/// outside the `K`-scenario Sobol drift loop and sealing a [`DyePlanUncertaintyReceipt`] under
+/// uncalibrated/estimate default provenance.
 ///
 /// # Errors
 /// [`RefusalCode::InvalidDocument`] or [`RefusalCode::OutOfRange`] on malformed inputs.
@@ -394,8 +444,49 @@ pub fn optimize_yarn_dye_program(
     transport_cfg: &CapillaryTransportConfig,
     cfg: &DyeInverseConfig,
 ) -> Result<DyeInverseResult, Refusal> {
+    optimize_yarn_dye_program_with_context(
+        target,
+        stitch_map,
+        machine,
+        optics,
+        transport_cfg,
+        cfg,
+        &DyeUncertaintyContext::default(),
+    )
+}
+
+/// Runs CVaR-robust inverse yarn dyeing optimization (`FTX-K15`) with explicit calibration and
+/// dressed-stretch context, sealing a standalone Seam-4 [`DyePlanUncertaintyReceipt`] (`FTX-K13`).
+///
+/// # Errors
+/// [`RefusalCode::InvalidDocument`], [`RefusalCode::NonFinite`], or [`RefusalCode::OutOfRange`] on malformed inputs.
+pub fn optimize_yarn_dye_program_with_context(
+    target: &TargetRaster,
+    stitch_map: &KnitStitchMap,
+    machine: &DyeMachineProfile,
+    optics: &DyeOpticsModel,
+    transport_cfg: &CapillaryTransportConfig,
+    cfg: &DyeInverseConfig,
+    uncertainty_ctx: &DyeUncertaintyContext,
+) -> Result<DyeInverseResult, Refusal> {
     machine.validate()?;
     transport_cfg.validate()?;
+    Refusal::finite(
+        "uncertainty_ctx.aspect_ratio_stretch_bound",
+        uncertainty_ctx.aspect_ratio_stretch_bound,
+    )?;
+    Refusal::finite(
+        "uncertainty_ctx.differential_shrinkage_threshold_frac",
+        uncertainty_ctx.differential_shrinkage_threshold_frac,
+    )?;
+    if uncertainty_ctx.aspect_ratio_stretch_bound <= 0.0
+        || uncertainty_ctx.differential_shrinkage_threshold_frac <= 0.0
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "uncertainty context aspect_ratio_stretch_bound and differential_shrinkage_threshold_frac must be positive",
+        ));
+    }
     let n_p = optics.primaries.len();
     if n_p == 0 || machine.primaries.len() != n_p || transport_cfg.rf_retardations.len() != n_p {
         return Err(Refusal::new(
@@ -795,6 +886,11 @@ pub fn optimize_yarn_dye_program(
             de_list[idx]
         }
     };
+    let delta_e00_mean = if de_list.is_empty() {
+        0.0
+    } else {
+        de_list.iter().sum::<f64>() / (de_list.len() as f64)
+    };
     let delta_e00_p50 = pct(0.50);
     let delta_e00_p95 = pct(0.95);
 
@@ -881,6 +977,7 @@ pub fn optimize_yarn_dye_program(
     );
     metadata.insert("sobol_scenarios".to_string(), n_scen.to_string());
 
+    let machine_sha256 = machine.canonical_sha256()?;
     let program = YarnDyeProgram {
         schema: DYE_PROGRAM_SCHEMA.to_string(),
         name: cfg.name.clone(),
@@ -888,8 +985,8 @@ pub fn optimize_yarn_dye_program(
         yarn_id: cfg.yarn_id.clone(),
         wearer_age_class: cfg.wearer_age_class,
         regime: cfg.regime,
-        machine_sha256: machine.canonical_sha256()?,
-        qualification_sha256: None,
+        machine_sha256: machine_sha256.clone(),
+        qualification_sha256: uncertainty_ctx.qualification_sha256.clone(),
         startup_leader_m: leader,
         shutdown_trailer_m: ramp_dist + 0.1,
         segments,
@@ -901,14 +998,103 @@ pub fn optimize_yarn_dye_program(
         not_for_garment_wear: cfg.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly,
         metadata,
     };
+    let program_sha256 = program.canonical_sha256()?;
+    let coherent_horizons = coherent_open_loop_horizons(cfg.drift);
+    let topology_multiplier = if stitch_map.is_circular { 1.0 } else { 2.0 };
+    let n_st_f = stitch_map.stitches.len() as f64;
+    let max_stitch_phase_shift = topology_multiplier
+        * (n_st_f * cfg.drift.systematic_eps.abs()
+            + 2.0 * n_st_f.sqrt() * cfg.drift.stochastic_sigma_eta);
+    let active_horizon = if stitch_map.is_circular {
+        coherent_horizons.0
+    } else {
+        coherent_horizons.1
+    };
+    let coherent_course_horizon = active_horizon / (stitch_map.stitches_per_course.max(1) as usize);
+    let sigma_wick_mm = transport_cfg.sigma_wick_m * 1000.0;
+    let mean_loop_mm = mean_loop_m * 1000.0;
+    let sigma_wick_stitches = if mean_loop_mm > 1e-9 {
+        sigma_wick_mm / mean_loop_mm
+    } else {
+        0.0
+    };
+    let rf_min = transport_cfg
+        .rf_retardations
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let rf_max = transport_cfg
+        .rf_retardations
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let delta_rf = if rf_min.is_finite() && rf_max.is_finite() {
+        (rf_max - rf_min).max(0.0)
+    } else {
+        0.0
+    };
+    let chromatographic_halo_mm = sigma_wick_mm * delta_rf;
+    let min_reproducible_feature_mm = 2.0 * sigma_wick_mm + chromatographic_halo_mm;
+    let differential_shrinkage_stretch_perturbation_flagged =
+        transport_cfg.shrinkage_axial_frac > uncertainty_ctx.differential_shrinkage_threshold_frac;
+    let pore_zones: BTreeSet<String> = stitch_map
+        .stitches
+        .iter()
+        .filter(|st| st.pore_open_fraction > 0.20)
+        .map(|st| format!("course_{:04}_pore_gt_0.20", st.course))
+        .collect();
+    let mut gating_flags = Vec::new();
+    if stitch_map.stitches.len() > active_horizon
+        && matches!(
+            cfg.regime,
+            DyeingRegime::Regime1AStripes | DyeingRegime::Regime1BCircularPooling
+        )
+    {
+        gating_flags.push("exceeds_open_loop_horizon".to_string());
+    }
+    let uncertainty_receipt = DyePlanUncertaintyReceipt::seal(DyePlanUncertaintyInput {
+        program_sha256,
+        machine_sha256,
+        qualification_sha256: uncertainty_ctx.qualification_sha256.clone(),
+        regime: cfg.regime,
+        optical_measurement_basis: uncertainty_ctx.optical_measurement_basis,
+        drift_ledger: DyeDriftLedger {
+            topology_multiplier,
+            drift_epsilon: cfg.drift.systematic_eps,
+            drift_sigma_eta: cfg.drift.stochastic_sigma_eta,
+            max_stitch_phase_shift,
+            coherent_course_horizon,
+            coherent_horizon_circular_stitches: coherent_horizons.0,
+            coherent_horizon_flatbed_stitches: coherent_horizons.1,
+        },
+        feature_floor: DyeFeatureFloorSummary {
+            sigma_wick_mm,
+            sigma_wick_stitches,
+            min_reproducible_feature_mm,
+            chromatographic_halo_mm,
+            unreproducible_energy_fraction,
+        },
+        dressed_appearance: DressedAppearanceSummary {
+            delta_e00_mean,
+            delta_e00_p50,
+            delta_e00_p95,
+            gamut_floor_delta_e00,
+            aspect_ratio_stretch_bound: uncertainty_ctx.aspect_ratio_stretch_bound,
+            differential_shrinkage_stretch_perturbation_flagged,
+            pore_grin_through_alert_zones: pore_zones.into_iter().collect(),
+        },
+        evidence: uncertainty_ctx.evidence,
+        gating_flags,
+    })?;
 
     Ok(DyeInverseResult {
         program,
+        uncertainty_receipt,
         delta_e00_p50,
         delta_e00_p95,
         gamut_floor_delta_e00,
         unreproducible_energy_fraction,
-        coherent_horizons: coherent_open_loop_horizons(cfg.drift),
+        coherent_horizons,
         predicted_stitch_srgb,
         final_objective: f_val,
         iterations: iters_done,
@@ -1090,6 +1276,78 @@ mod tests {
         );
         assert!(res.coherent_horizons.0 > res.coherent_horizons.1);
         res.program.validate().unwrap();
+        res.uncertainty_receipt.verify_integrity().unwrap();
+        assert!(!res.uncertainty_receipt.four_claims.color_fidelity_claimed);
+        assert_eq!(
+            res.uncertainty_receipt.drift_ledger.topology_multiplier,
+            1.0
+        );
+        assert!(
+            !res.uncertainty_receipt
+                .dressed_appearance
+                .differential_shrinkage_stretch_perturbation_flagged
+        );
+
+        // Flatbed topology + high pore grin-through + high shrinkage + calibrated scanner context
+        let flatbed_map = KnitStitchMap::regular_grid(1, 4, 4, 0.010, false, 0.25);
+        let mut high_shrink_tr = tr_cfg.clone();
+        high_shrink_tr.ds_m = flatbed_map.total_yarn_length_m / 16.0;
+        high_shrink_tr.shrinkage_axial_frac = 0.05;
+        let cal_ctx = DyeUncertaintyContext {
+            optical_measurement_basis: OpticalMeasurementBasis::CalibratedChartScanner,
+            qualification_sha256: Some("qual-sha-flatbed".to_string()),
+            evidence: Evidence::Measured,
+            aspect_ratio_stretch_bound: 1.25,
+            differential_shrinkage_threshold_frac: 0.03,
+        };
+        let res_flat = optimize_yarn_dye_program_with_context(
+            &target,
+            &flatbed_map,
+            &machine,
+            &optics,
+            &high_shrink_tr,
+            &cfg,
+            &cal_ctx,
+        )
+        .unwrap();
+        res_flat.uncertainty_receipt.verify_integrity().unwrap();
+        assert_eq!(
+            res_flat
+                .uncertainty_receipt
+                .drift_ledger
+                .topology_multiplier,
+            2.0
+        );
+        assert!(
+            res_flat
+                .uncertainty_receipt
+                .four_claims
+                .color_fidelity_claimed
+        );
+        assert!(
+            !res_flat
+                .uncertainty_receipt
+                .four_claims
+                .visual_realization_swatch_verified
+        );
+        assert!(
+            res_flat
+                .uncertainty_receipt
+                .dressed_appearance
+                .differential_shrinkage_stretch_perturbation_flagged
+        );
+        assert_eq!(
+            res_flat
+                .uncertainty_receipt
+                .dressed_appearance
+                .pore_grin_through_alert_zones,
+            vec![
+                "course_0000_pore_gt_0.20".to_string(),
+                "course_0001_pore_gt_0.20".to_string(),
+                "course_0002_pore_gt_0.20".to_string(),
+                "course_0003_pore_gt_0.20".to_string(),
+            ]
+        );
 
         let pareto = rank_five_regime_pareto(&target, &stitch_map, &machine, cfg.drift, 4);
         assert_eq!(pareto.len(), 5);

@@ -16,8 +16,8 @@ use std::fmt::Write as _;
 use ftx_core::receipt::{canonical_json_sha256, sha256_hex};
 use ftx_core::{Refusal, RefusalCode, det};
 use ftx_pattern::dye::{
-    DYE_PROGRAM_SCHEMA, DyeMachineProfile, DyeSegment, DyeingRegime, OpticalMeasurementBasis,
-    YarnDyeProgram, YarnDyeingQualification,
+    DYE_PROGRAM_SCHEMA, DyeMachineProfile, DyePlanUncertaintyReceipt, DyeSegment, DyeingRegime,
+    OpticalMeasurementBasis, YarnDyeProgram, YarnDyeingQualification,
 };
 use ftx_pattern::knit::{CalibrationSwatchCaps, FourClaimsVerdict, WearerAgeClass};
 use ftx_pattern::materials::{Evidence, Source};
@@ -52,6 +52,7 @@ struct DyeCertSealView<'a> {
     program_sha256: &'a str,
     machine_sha256: &'a str,
     qualification_sha256: &'a Option<String>,
+    uncertainty_receipt_sha256: &'a Option<String>,
     wearer_age_class: WearerAgeClass,
     hardware_execution_authorized: bool,
     physical_dyeing_validated: bool,
@@ -72,6 +73,9 @@ pub struct DyeMachineCert {
     /// Optional SHA-256 of [`YarnDyeingQualification`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qualification_sha256: Option<String>,
+    /// Optional SHA-256 of sealed Seam-4 [`DyePlanUncertaintyReceipt`] (`FTX-K13`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertainty_receipt_sha256: Option<String>,
     /// Required wearer age class.
     pub wearer_age_class: WearerAgeClass,
     /// ALWAYS `false`: software verification never authorizes unattended dye-rig execution.
@@ -113,6 +117,7 @@ impl DyeMachineCert {
             program_sha256: &self.program_sha256,
             machine_sha256: &self.machine_sha256,
             qualification_sha256: &self.qualification_sha256,
+            uncertainty_receipt_sha256: &self.uncertainty_receipt_sha256,
             wearer_age_class: self.wearer_age_class,
             hardware_execution_authorized: self.hardware_execution_authorized,
             physical_dyeing_validated: self.physical_dyeing_validated,
@@ -169,6 +174,29 @@ pub fn verify_and_export_dye_program(
     machine: &DyeMachineProfile,
     qualification: Option<&YarnDyeingQualification>,
     expected_material_sha256: Option<&str>,
+) -> Result<DyeExportBundle, Refusal> {
+    verify_and_export_dye_program_with_receipt(
+        program,
+        machine,
+        qualification,
+        expected_material_sha256,
+        None,
+    )
+}
+
+/// Verifies every physical hazard invariant of a [`YarnDyeProgram`] against [`DyeMachineProfile`],
+/// [`YarnDyeingQualification`], and an optional sealed Seam-4 [`DyePlanUncertaintyReceipt`] (`FTX-K13`),
+/// then emits deterministic `.csv`, `.gcode`, and `ftx-dye-cert/1` stamped with `uncertainty_receipt_sha256`.
+///
+/// # Errors
+/// Fails closed with [`RefusalCode::MaterialProcessHazard`], [`RefusalCode::UnqualifiedProcess`],
+/// or [`RefusalCode::VerificationMismatch`] on any hazard, missing qualification, or tampered receipt.
+pub fn verify_and_export_dye_program_with_receipt(
+    program: &YarnDyeProgram,
+    machine: &DyeMachineProfile,
+    qualification: Option<&YarnDyeingQualification>,
+    expected_material_sha256: Option<&str>,
+    uncertainty_receipt: Option<&DyePlanUncertaintyReceipt>,
 ) -> Result<DyeExportBundle, Refusal> {
     program.validate()?;
     machine.validate()?;
@@ -562,10 +590,60 @@ pub fn verify_and_export_dye_program(
     verify_dye_export_readback(&csv, &gcode, program, machine)?;
 
     let program_sha256 = program.canonical_sha256()?;
+    let mut hazard_report = hazard_report;
+    let uncertainty_receipt_sha256 = if let Some(receipt) = uncertainty_receipt {
+        receipt.verify_integrity()?;
+        if receipt.program_sha256 != program_sha256 {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "dye plan uncertainty receipt program_sha256 does not match YarnDyeProgram",
+            ));
+        }
+        if receipt.machine_sha256 != machine_sha256 {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "dye plan uncertainty receipt machine_sha256 does not match DyeMachineProfile",
+            ));
+        }
+        if receipt.regime != program.regime {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "dye plan uncertainty receipt regime does not match YarnDyeProgram",
+            ));
+        }
+        if let Some(rq) = &receipt.qualification_sha256
+            && qual_sha.as_deref() != Some(rq.as_str())
+        {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "dye plan uncertainty receipt qualification_sha256 does not match supplied YarnDyeingQualification",
+            ));
+        }
+        if qual_sha.is_some()
+            && receipt.qualification_sha256.is_none()
+            && receipt.four_claims.color_fidelity_claimed
+        {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "unqualified dye plan uncertainty receipt cannot claim color fidelity",
+            ));
+        }
+        hazard_report
+            .checks_passed
+            .push("7_uncertainty_receipt_verified".to_string());
+        Some(receipt.payload_sha256.clone())
+    } else {
+        None
+    };
+
     let gcode_sha256 = sha256_hex(gcode.as_bytes());
     let four_claims = FourClaimsVerdict {
         parity_basis: "ftx_dye_program_v1_verified".to_string(),
-        physics_basis: "capstan_dwell_accumulator_and_km_transport".to_string(),
+        physics_basis: if uncertainty_receipt_sha256.is_some() {
+            "capstan_dwell_accumulator_km_transport_and_uncertainty_receipt".to_string()
+        } else {
+            "capstan_dwell_accumulator_and_km_transport".to_string()
+        },
         fit_claimed: false,
         performance_basis: "unbenchmarked".to_string(),
     };
@@ -574,6 +652,7 @@ pub fn verify_and_export_dye_program(
         program_sha256: &program_sha256,
         machine_sha256: &machine_sha256,
         qualification_sha256: &qual_sha,
+        uncertainty_receipt_sha256: &uncertainty_receipt_sha256,
         wearer_age_class: program.wearer_age_class,
         hardware_execution_authorized: false,
         physical_dyeing_validated: false,
@@ -586,6 +665,7 @@ pub fn verify_and_export_dye_program(
         program_sha256,
         machine_sha256,
         qualification_sha256: qual_sha,
+        uncertainty_receipt_sha256,
         wearer_age_class: program.wearer_age_class,
         hardware_execution_authorized: false,
         physical_dyeing_validated: false,
@@ -796,7 +876,12 @@ pub fn verify_dye_export_readback(
                     format!("dye G-code line {line_no}: malformed G1 move '{code}'"),
                 ));
             };
-            if !e_mm.is_finite() || !feed.is_finite() || feed <= 0.0 || e_mm + 1e-6 < prev_e_mm {
+            if !e_mm.is_finite()
+                || !feed.is_finite()
+                || feed <= 0.0
+                || e_mm < 0.0
+                || e_mm + 1e-6 < prev_e_mm
+            {
                 return Err(Refusal::new(
                     RefusalCode::VerificationMismatch,
                     format!(
@@ -1204,5 +1289,193 @@ mod tests {
         assert!(!kit.qualification_template.washing_off_validated);
         assert_eq!(kit.qualification_template.evidence, Evidence::Estimate);
         kit.export.cert.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn dye_export_verifies_uncertainty_receipt_linkage_and_rejects_tamper_or_mismatch() {
+        use ftx_pattern::dye::{
+            DressedAppearanceSummary, DyeDriftLedger, DyeFeatureFloorSummary,
+            DyePlanUncertaintyInput,
+        };
+
+        let machine = DyeMachineProfile::benchtop_piezo_cmyk();
+        let mhash = machine.canonical_sha256().unwrap();
+        let qual = YarnDyeingQualification {
+            id: "exp4-receipt-link".to_string(),
+            material_sha256: "mat-cotton".to_string(),
+            dye_machine_sha256: mhash.clone(),
+            yarn_lot_id: "lot-1".to_string(),
+            dye_lot_id: "dye-1".to_string(),
+            wick_dispersion_mm: 1.2,
+            shrinkage_axial_pct: 2.0,
+            wet_tenacity_retention_ratio: 0.95,
+            yarn_breaking_force_n: 9.0,
+            yarn_tg_c: None,
+            optical_measurement_basis: OpticalMeasurementBasis::CalibratedChartScanner,
+            washing_off_validated: true,
+            iso_105_c06_grade: Some(4.5),
+            iso_105_x12_wet_rub_grade: Some(4.5),
+            saliva_fastness_validated: true,
+            evidence: Evidence::Measured,
+            source: Source {
+                reference: "local:exp4".to_string(),
+                accessed_on: "2026-11-27".to_string(),
+                note: "cotton coupon".to_string(),
+            },
+            method: "steam fix + soap wash".to_string(),
+            conditioning: BTreeMap::new(),
+            allow_estimates: false,
+        };
+        let qhash = qual.canonical_sha256().unwrap();
+        let prog = YarnDyeProgram {
+            schema: DYE_PROGRAM_SCHEMA.to_string(),
+            name: "receipt-linked-stripe".to_string(),
+            run_id: 0,
+            yarn_id: "cotton-120tex".to_string(),
+            wearer_age_class: WearerAgeClass::Adult,
+            regime: DyeingRegime::Regime1AStripes,
+            machine_sha256: mhash.clone(),
+            qualification_sha256: Some(qhash.clone()),
+            startup_leader_m: 1.4,
+            shutdown_trailer_m: 0.3,
+            segments: vec![DyeSegment {
+                s_start_m: 0.0,
+                s_end_m: 1.0,
+                target_speed_m_s: 0.08,
+                doses: vec![0.4, 0.1, 0.0, 0.0],
+                fiducial_mark: false,
+            }],
+            regime3_intake_timeline: None,
+            expected_delta_e00_p50: Some(1.4),
+            expected_delta_e00_p95: Some(2.6),
+            gamut_floor_delta_e00: Some(0.6),
+            unreproducible_energy_fraction: Some(0.05),
+            not_for_garment_wear: false,
+            metadata: BTreeMap::new(),
+        };
+        let phash = prog.canonical_sha256().unwrap();
+        let make_receipt =
+            |p_sha: String, m_sha: String, reg: DyeingRegime, q_sha: Option<String>| {
+                DyePlanUncertaintyReceipt::seal(DyePlanUncertaintyInput {
+                    program_sha256: p_sha,
+                    machine_sha256: m_sha,
+                    qualification_sha256: q_sha,
+                    regime: reg,
+                    optical_measurement_basis: OpticalMeasurementBasis::CalibratedChartScanner,
+                    drift_ledger: DyeDriftLedger {
+                        topology_multiplier: 1.0,
+                        drift_epsilon: 0.002,
+                        drift_sigma_eta: 0.015,
+                        max_stitch_phase_shift: 0.5,
+                        coherent_course_horizon: 10,
+                        coherent_horizon_circular_stitches: 180,
+                        coherent_horizon_flatbed_stitches: 60,
+                    },
+                    feature_floor: DyeFeatureFloorSummary {
+                        sigma_wick_mm: 1.2,
+                        sigma_wick_stitches: 0.18,
+                        min_reproducible_feature_mm: 2.7,
+                        chromatographic_halo_mm: 0.3,
+                        unreproducible_energy_fraction: 0.05,
+                    },
+                    dressed_appearance: DressedAppearanceSummary {
+                        delta_e00_mean: 1.5,
+                        delta_e00_p50: 1.4,
+                        delta_e00_p95: 2.6,
+                        gamut_floor_delta_e00: 0.6,
+                        aspect_ratio_stretch_bound: 1.05,
+                        differential_shrinkage_stretch_perturbation_flagged: false,
+                        pore_grin_through_alert_zones: Vec::new(),
+                    },
+                    evidence: Evidence::Measured,
+                    gating_flags: Vec::new(),
+                })
+                .unwrap()
+            };
+
+        let receipt = make_receipt(
+            phash.clone(),
+            mhash.clone(),
+            DyeingRegime::Regime1AStripes,
+            Some(qhash.clone()),
+        );
+        let bundle = verify_and_export_dye_program_with_receipt(
+            &prog,
+            &machine,
+            Some(&qual),
+            Some("mat-cotton"),
+            Some(&receipt),
+        )
+        .unwrap();
+        assert_eq!(
+            bundle.cert.uncertainty_receipt_sha256.as_deref(),
+            Some(receipt.payload_sha256.as_str())
+        );
+        assert!(
+            bundle
+                .cert
+                .hazard_report
+                .checks_passed
+                .iter()
+                .any(|c| c == "7_uncertainty_receipt_verified")
+        );
+        bundle.cert.verify_integrity().unwrap();
+
+        // Tampered receipt refuses
+        let mut tampered = receipt.clone();
+        tampered.dressed_appearance.delta_e00_p95 = 0.01;
+        assert_eq!(
+            verify_and_export_dye_program_with_receipt(
+                &prog,
+                &machine,
+                Some(&qual),
+                Some("mat-cotton"),
+                Some(&tampered),
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Mismatched program_sha256, machine_sha256, regime, or qualification_sha256 all refuse
+        for bad_receipt in [
+            make_receipt(
+                "0".repeat(64),
+                mhash.clone(),
+                DyeingRegime::Regime1AStripes,
+                Some(qhash.clone()),
+            ),
+            make_receipt(
+                phash.clone(),
+                "0".repeat(64),
+                DyeingRegime::Regime1AStripes,
+                Some(qhash.clone()),
+            ),
+            make_receipt(
+                phash.clone(),
+                mhash.clone(),
+                DyeingRegime::Regime1BCircularPooling,
+                Some(qhash),
+            ),
+            make_receipt(
+                phash,
+                mhash,
+                DyeingRegime::Regime1AStripes,
+                Some("0".repeat(64)),
+            ),
+        ] {
+            assert_eq!(
+                verify_and_export_dye_program_with_receipt(
+                    &prog,
+                    &machine,
+                    Some(&qual),
+                    Some("mat-cotton"),
+                    Some(&bad_receipt),
+                )
+                .unwrap_err()
+                .code,
+                RefusalCode::VerificationMismatch
+            );
+        }
     }
 }

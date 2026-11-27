@@ -363,11 +363,18 @@ impl DyeMachineProfile {
                 "dye machine physical dimensions and limits must be positive",
             ));
         }
+        let mut seen_primaries = std::collections::BTreeSet::new();
         for p in &self.primaries {
             if p.id.trim().is_empty() {
                 return Err(Refusal::new(
                     RefusalCode::InvalidDocument,
                     "dye primary requires a non-empty id",
+                ));
+            }
+            if !seen_primaries.insert(p.id.as_str()) {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("dye machine profile contains duplicate primary '{}'", p.id),
                 ));
             }
             Refusal::finite("max_dose_per_m", p.max_dose_per_m)?;
@@ -405,6 +412,12 @@ impl DyeMachineProfile {
             }
         }
         for pin in &self.guide_capstan_pins {
+            if pin.label.trim().is_empty() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "capstan pin requires a non-empty label",
+                ));
+            }
             Refusal::finite("wrap_angle_rad", pin.wrap_angle_rad)?;
             Refusal::finite("mu_friction", pin.mu_friction)?;
             if pin.wrap_angle_rad < 0.0 || pin.mu_friction < 0.0 {

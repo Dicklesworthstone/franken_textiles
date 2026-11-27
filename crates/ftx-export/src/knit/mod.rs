@@ -9,6 +9,7 @@ pub mod ayab;
 pub mod hand_knit;
 pub mod kniterate;
 pub mod knitout;
+pub mod vendor_handoff;
 
 pub use ayab::{
     AyabExportBundle, AyabMode, AyabSessionChecklist, export_brother_ayab, verify_ayab_1bit_png,
@@ -18,7 +19,11 @@ pub use hand_knit::{
 };
 pub use kniterate::{KniterateExportBundle, export_kniterate_kc, verify_kniterate_kc_roundtrip};
 pub use knitout::{
-    KnitoutExportBundle, SwatchKitBundle, TierBVendorHandoff, VENDOR_HANDOFF_SCHEMA,
-    VendorHandoffManifest, export_calibration_swatch_kit, export_knitout_v2,
-    export_tier_b_vendor_handoff, refuse_proprietary_binary_target, verify_knitout_v2_readback,
+    KnitoutExportBundle, SwatchKitBundle, export_calibration_swatch_kit, export_knitout_v2,
+    verify_knitout_v2_readback,
+};
+pub use vendor_handoff::{
+    TierBProprietaryTarget, TierBVendorHandoff, VENDOR_HANDOFF_SCHEMA, VendorHandoffManifest,
+    export_tier_b_vendor_handoff, is_proprietary_handoff, refuse_proprietary_binary_target,
+    verify_tier_b_handoff_bundle,
 };

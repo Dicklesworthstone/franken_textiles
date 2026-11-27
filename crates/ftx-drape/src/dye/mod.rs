@@ -10,9 +10,9 @@ pub mod optics;
 pub mod transport;
 
 pub use inverse::{
-    DriftParameters, DyeInverseConfig, DyeInverseResult, DyeRegimeScore, KnitStitchMap,
-    StitchArcMapping, coherent_open_loop_horizons, optimize_yarn_dye_program,
-    rank_five_regime_pareto,
+    DriftParameters, DyeInverseConfig, DyeInverseResult, DyeRegimeScore, DyeUncertaintyContext,
+    KnitStitchMap, StitchArcMapping, coherent_open_loop_horizons, optimize_yarn_dye_program,
+    optimize_yarn_dye_program_with_context, rank_five_regime_pareto,
 };
 pub use optics::{
     CieLab, CieXyz, DyeOpticsModel, PrimarySpectralCard, ciede2000_exact, ciede2000_sq_smooth,

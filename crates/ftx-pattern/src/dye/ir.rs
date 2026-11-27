@@ -173,10 +173,13 @@ impl YarnDyeProgram {
                 ),
             ));
         }
-        if self.name.trim().is_empty() || self.yarn_id.trim().is_empty() {
+        if self.name.trim().is_empty()
+            || self.yarn_id.trim().is_empty()
+            || self.machine_sha256.trim().is_empty()
+        {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
-                "dye program requires non-empty name and yarn_id",
+                "dye program requires non-empty name, yarn_id, and machine_sha256",
             ));
         }
         if self.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
@@ -310,6 +313,31 @@ impl YarnDyeProgram {
                         RefusalCode::OutOfRange,
                         format!("intake event {idx} has invalid duration or negative speed"),
                     ));
+                }
+                match ev.kind {
+                    IntakeEventKind::KnitPass if ev.yarn_intake_speed_m_s <= 0.0 => {
+                        return Err(Refusal::new(
+                            RefusalCode::OutOfRange,
+                            format!(
+                                "knit_pass intake event {idx} requires yarn_intake_speed_m_s > 0"
+                            ),
+                        ));
+                    }
+                    IntakeEventKind::ReversalDwell
+                    | IntakeEventKind::TransferPause
+                    | IntakeEventKind::RackPause
+                    | IntakeEventKind::OperatorPause
+                        if ev.yarn_intake_speed_m_s > 0.0 =>
+                    {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            format!(
+                                "pause/dwell intake event {idx} ({:?}) must have zero yarn_intake_speed_m_s (got {})",
+                                ev.kind, ev.yarn_intake_speed_m_s
+                            ),
+                        ));
+                    }
+                    _ => {}
                 }
             }
         }

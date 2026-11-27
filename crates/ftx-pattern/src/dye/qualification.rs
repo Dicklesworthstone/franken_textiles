@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use crate::knit::WearerAgeClass;
 use crate::materials::{Evidence, Source};
 
+pub use super::receipt::{
+    DYE_UNCERTAINTY_SCHEMA, DressedAppearanceSummary, DyeDriftLedger, DyeFeatureFloorSummary,
+    DyeFourClaimsStatus, DyePlanUncertaintyInput, DyePlanUncertaintyReceipt,
+};
+
 /// Optical measurement basis used to calibrate dye colorimetry curves (prevents uncalibrated sRGB claims).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,10 +22,22 @@ pub enum OpticalMeasurementBasis {
     SpectrophotometerD65_10Deg,
     /// Spectrophotometer under CIE D65 / 2° observer.
     SpectrophotometerD65_2Deg,
+    /// Calibrated flat-bed or color-chart scanner measurement (IT8 / ColorChecker target).
+    CalibratedChartScanner,
     /// ColorChecker-calibrated sRGB camera measurement (lower accuracy than spectrophotometer).
     CalibratedCameraSrgb,
-    /// Unmeasured numerical estimate (requires explicit `allow_estimates = true`).
+    /// Unmeasured numerical estimate (requires explicit `allow_estimates = true`; never claims color fidelity).
     EstimateOnly,
+    /// Unqualified / uncalibrated optical curve (forces `color_fidelity_claimed = false` unconditionally).
+    UnqualifiedUncalibrated,
+}
+
+impl OpticalMeasurementBasis {
+    /// Returns true if this optical basis lacks physical calibration (forces `color_fidelity_claimed = false`).
+    #[must_use]
+    pub const fn is_uncalibrated_or_estimate(self) -> bool {
+        matches!(self, Self::EstimateOnly | Self::UnqualifiedUncalibrated)
+    }
 }
 
 /// Qualified physical dye-yarn-machine coupon observation (`Exp-4`).
@@ -87,6 +104,17 @@ impl YarnDyeingQualification {
         expected_material_sha256: &str,
         expected_machine_sha256: &str,
     ) -> Result<(), Refusal> {
+        if self.id.trim().is_empty()
+            || self.yarn_lot_id.trim().is_empty()
+            || self.dye_lot_id.trim().is_empty()
+            || self.method.trim().is_empty()
+            || self.source.reference.trim().is_empty()
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "dyeing qualification requires non-empty id, yarn_lot_id, dye_lot_id, method, and source.reference",
+            ));
+        }
         if self.material_sha256 != expected_material_sha256 {
             return Err(Refusal::new(
                 RefusalCode::VerificationMismatch,
@@ -100,12 +128,12 @@ impl YarnDyeingQualification {
             ));
         }
         if (self.evidence == Evidence::Estimate
-            || self.optical_measurement_basis == OpticalMeasurementBasis::EstimateOnly)
+            || self.optical_measurement_basis.is_uncalibrated_or_estimate())
             && !self.allow_estimates
         {
             return Err(Refusal::new(
                 RefusalCode::UnqualifiedProcess,
-                "dyeing qualification is estimated without explicit allow_estimates = true",
+                "dyeing qualification is estimated or uncalibrated without explicit allow_estimates = true",
             ));
         }
         for (k, v) in [
@@ -120,13 +148,14 @@ impl YarnDyeingQualification {
             Refusal::finite(k, v)?;
         }
         if self.wick_dispersion_mm < 0.0
+            || !(-25.0..=50.0).contains(&self.shrinkage_axial_pct)
             || self.wet_tenacity_retention_ratio <= 0.0
             || self.wet_tenacity_retention_ratio > 1.5
             || self.yarn_breaking_force_n <= 0.0
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                "invalid wick dispersion, wet tenacity retention, or breaking force",
+                "invalid wick dispersion, axial shrinkage (-25..=50%), wet tenacity retention, or breaking force",
             ));
         }
         if let Some(tg) = self.yarn_tg_c {
@@ -403,5 +432,209 @@ mod tests {
         prog.expected_delta_e00_p50 = Some(1.0);
         prog.unreproducible_energy_fraction = Some(1.5);
         assert_eq!(prog.validate().unwrap_err().code, RefusalCode::OutOfRange);
+    }
+
+    #[test]
+    fn ftx_k13_schema_gates_receipt_tamper_uncalibrated_and_bounds() {
+        let prof = DyeMachineProfile::benchtop_piezo_cmyk();
+        let mhash = prof.canonical_sha256().unwrap();
+
+        // Missing required wearer_age_class and unknown fields both refuse deserialization.
+        let prog = YarnDyeProgram {
+            schema: DYE_PROGRAM_SCHEMA.to_string(),
+            name: "stripe-roundtrip".to_string(),
+            run_id: 0,
+            yarn_id: "cotton-120tex".to_string(),
+            wearer_age_class: WearerAgeClass::CalibrationSwatchOnly,
+            regime: DyeingRegime::Regime1AStripes,
+            machine_sha256: mhash.clone(),
+            qualification_sha256: None,
+            startup_leader_m: 1.5,
+            shutdown_trailer_m: 0.5,
+            segments: vec![DyeSegment {
+                s_start_m: 0.0,
+                s_end_m: 2.0,
+                target_speed_m_s: 0.08,
+                doses: vec![-0.0, 0.25, 0.0, 0.0],
+                fiducial_mark: false,
+            }],
+            regime3_intake_timeline: None,
+            expected_delta_e00_p50: Some(1.2),
+            expected_delta_e00_p95: Some(2.4),
+            gamut_floor_delta_e00: Some(0.5),
+            unreproducible_energy_fraction: Some(0.08),
+            not_for_garment_wear: true,
+            metadata: BTreeMap::new(),
+        };
+        prog.validate().unwrap();
+        let mut prog_pos_zero = prog.clone();
+        prog_pos_zero.segments[0].doses[0] = 0.0;
+        assert_eq!(
+            prog.canonical_sha256().unwrap(),
+            prog_pos_zero.canonical_sha256().unwrap()
+        );
+
+        let mut val = serde_json::to_value(&prog).unwrap();
+        let roundtrip: YarnDyeProgram = serde_json::from_value(val.clone()).unwrap();
+        assert_eq!(roundtrip, prog);
+
+        let mut missing_age = val.clone();
+        missing_age
+            .as_object_mut()
+            .unwrap()
+            .remove("wearer_age_class");
+        assert!(serde_json::from_value::<YarnDyeProgram>(missing_age).is_err());
+
+        val.as_object_mut()
+            .unwrap()
+            .insert("unknown_extra_field".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<YarnDyeProgram>(val).is_err());
+
+        // Pause intake event with nonzero speed refuses; duplicate primary refuses.
+        let mut bad_tl = prog.clone();
+        bad_tl.regime = DyeingRegime::Regime3InlineDancer;
+        bad_tl.regime3_intake_timeline = Some(Regime3IntakeTimeline {
+            events: vec![IntakeEvent {
+                duration_s: 1.0,
+                yarn_intake_speed_m_s: 0.05,
+                kind: IntakeEventKind::TransferPause,
+            }],
+            dt_verify_s: 0.05,
+        });
+        assert_eq!(
+            bad_tl.validate().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        let mut dup_primary = prof.clone();
+        dup_primary.primaries.push(dup_primary.primaries[0].clone());
+        assert_eq!(
+            dup_primary.validate().unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        // UnqualifiedUncalibrated qualification refuses without opt-in and extreme shrinkage refuses.
+        let mut q = YarnDyeingQualification {
+            id: "dq-uncal".to_string(),
+            material_sha256: "mat".to_string(),
+            dye_machine_sha256: mhash.clone(),
+            yarn_lot_id: "lot-1".to_string(),
+            dye_lot_id: "dye-1".to_string(),
+            wick_dispersion_mm: 1.2,
+            shrinkage_axial_pct: 2.0,
+            wet_tenacity_retention_ratio: 0.9,
+            yarn_breaking_force_n: 8.0,
+            yarn_tg_c: None,
+            optical_measurement_basis: OpticalMeasurementBasis::UnqualifiedUncalibrated,
+            washing_off_validated: true,
+            iso_105_c06_grade: Some(4.5),
+            iso_105_x12_wet_rub_grade: Some(4.5),
+            saliva_fastness_validated: true,
+            evidence: Evidence::Measured,
+            source: Source {
+                reference: "local:exp4".to_string(),
+                accessed_on: "2026-11-27".to_string(),
+                note: "uncalibrated".to_string(),
+            },
+            method: "uncalibrated preview".to_string(),
+            conditioning: BTreeMap::new(),
+            allow_estimates: false,
+        };
+        assert_eq!(
+            q.validate_for_wearer(WearerAgeClass::Adult, "mat", &mhash)
+                .unwrap_err()
+                .code,
+            RefusalCode::UnqualifiedProcess
+        );
+        q.allow_estimates = true;
+        q.shrinkage_axial_pct = 150.0;
+        assert_eq!(
+            q.validate_for_wearer(WearerAgeClass::Adult, "mat", &mhash)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        // DyePlanUncertaintyReceipt forces color_fidelity_claimed=false on UnqualifiedUncalibrated
+        // and rejects any tamper or forged fidelity/validation flags.
+        let phash = prog.canonical_sha256().unwrap();
+        let make_input = |basis: OpticalMeasurementBasis| DyePlanUncertaintyInput {
+            program_sha256: phash.clone(),
+            machine_sha256: mhash.clone(),
+            qualification_sha256: Some("qual-sha".to_string()),
+            regime: DyeingRegime::Regime1AStripes,
+            optical_measurement_basis: basis,
+            drift_ledger: DyeDriftLedger {
+                topology_multiplier: 1.0,
+                drift_epsilon: 0.002,
+                drift_sigma_eta: 0.015,
+                max_stitch_phase_shift: 0.8,
+                coherent_course_horizon: 10,
+                coherent_horizon_circular_stitches: 120,
+                coherent_horizon_flatbed_stitches: 60,
+            },
+            feature_floor: DyeFeatureFloorSummary {
+                sigma_wick_mm: 1.5,
+                sigma_wick_stitches: 0.22,
+                min_reproducible_feature_mm: 3.3,
+                chromatographic_halo_mm: 0.3,
+                unreproducible_energy_fraction: 0.08,
+            },
+            dressed_appearance: DressedAppearanceSummary {
+                delta_e00_mean: 1.3,
+                delta_e00_p50: 1.2,
+                delta_e00_p95: 2.4,
+                gamut_floor_delta_e00: 0.5,
+                aspect_ratio_stretch_bound: 1.1,
+                differential_shrinkage_stretch_perturbation_flagged: false,
+                pore_grin_through_alert_zones: Vec::new(),
+            },
+            evidence: Evidence::Measured,
+            gating_flags: vec!["uncalibrated_optics".to_string()],
+        };
+        let uncal_receipt = DyePlanUncertaintyReceipt::seal(make_input(
+            OpticalMeasurementBasis::UnqualifiedUncalibrated,
+        ))
+        .unwrap();
+        assert!(!uncal_receipt.four_claims.color_fidelity_claimed);
+        assert!(!uncal_receipt.four_claims.physical_dyeing_validated);
+        assert!(!uncal_receipt.four_claims.visual_realization_swatch_verified);
+        assert!(!uncal_receipt.four_claims.hardware_execution_authorized);
+        assert!(!uncal_receipt.four_claims.fit_claimed);
+        uncal_receipt.verify_integrity().unwrap();
+
+        let receipt_json = serde_json::to_string(&uncal_receipt).unwrap();
+        let receipt_rt: DyePlanUncertaintyReceipt = serde_json::from_str(&receipt_json).unwrap();
+        assert_eq!(receipt_rt, uncal_receipt);
+
+        let mut tampered_metric = uncal_receipt.clone();
+        tampered_metric.dressed_appearance.delta_e00_p95 = 0.1;
+        assert_eq!(
+            tampered_metric.verify_integrity().unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+
+        let mut forged_fidelity = uncal_receipt.clone();
+        forged_fidelity.four_claims.color_fidelity_claimed = true;
+        assert_eq!(
+            forged_fidelity.verify_integrity().unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+
+        let mut forged_validated = uncal_receipt;
+        forged_validated.four_claims.physical_dyeing_validated = true;
+        assert_eq!(
+            forged_validated.verify_integrity().unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Calibrated spectrophotometer + Measured + bound qualification allows color_fidelity_claimed=true,
+        // while still keeping physical_dyeing_validated=false.
+        let mut cal_input = make_input(OpticalMeasurementBasis::SpectrophotometerD65_10Deg);
+        cal_input.gating_flags.clear();
+        let cal_receipt = DyePlanUncertaintyReceipt::seal(cal_input).unwrap();
+        assert!(cal_receipt.four_claims.color_fidelity_claimed);
+        assert!(!cal_receipt.four_claims.physical_dyeing_validated);
+        cal_receipt.verify_integrity().unwrap();
     }
 }
