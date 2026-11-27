@@ -718,11 +718,7 @@ mod tests {
         let mut pixels = Vec::with_capacity(36);
         for _y in 0..6 {
             for x in 0..6 {
-                pixels.push(if x < 3 {
-                    [25, 95, 195]
-                } else {
-                    [225, 175, 40]
-                });
+                pixels.push(if x < 3 { [25, 95, 195] } else { [225, 175, 40] });
             }
         }
         let req = json!({
