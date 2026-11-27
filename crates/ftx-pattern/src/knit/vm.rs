@@ -54,7 +54,6 @@ struct CarrierState {
     active: bool,
     hook_holding: bool,
     last_needle: Option<i32>,
-    last_dir: Option<CourseDir>,
     last_knit_needle: Option<i32>,
 }
 
@@ -250,7 +249,6 @@ pub fn verify_knitout_program(
                 active: false,
                 hook_holding: false,
                 last_needle: None,
-                last_dir: None,
                 last_knit_needle: None,
             },
         );
@@ -528,9 +526,7 @@ pub fn verify_knitout_program(
                             format!("op #{step}: carrier '{}' knitted before `in`/`inhook`", c.0),
                         ));
                     }
-                    if let Some(prev_k) = st.last_knit_needle
-                        && st.last_dir == Some(*dir)
-                    {
+                    if let Some(prev_k) = st.last_knit_needle {
                         let span = (i64::from(needle.index) - i64::from(prev_k))
                             .unsigned_abs()
                             .saturating_sub(1);
@@ -539,7 +535,6 @@ pub fn verify_knitout_program(
                     }
                     st.last_needle = Some(needle.index);
                     st.last_knit_needle = Some(needle.index);
-                    st.last_dir = Some(*dir);
                 }
                 let h = hooks.entry((needle.bed, needle.index)).or_default();
                 if h.loops > 0 && h.last_active_course > 0 {
@@ -581,9 +576,7 @@ pub fn verify_knitout_program(
                             format!("op #{step}: carrier '{}' tucked before `in`/`inhook`", c.0),
                         ));
                     }
-                    if let Some(prev_k) = st.last_knit_needle
-                        && st.last_dir == Some(*dir)
-                    {
+                    if let Some(prev_k) = st.last_knit_needle {
                         let span = (i64::from(needle.index) - i64::from(prev_k))
                             .unsigned_abs()
                             .saturating_sub(1);
@@ -592,40 +585,41 @@ pub fn verify_knitout_program(
                     }
                     st.last_needle = Some(needle.index);
                     st.last_knit_needle = Some(needle.index);
-                    st.last_dir = Some(*dir);
                 }
                 let h = hooks.entry((needle.bed, needle.index)).or_default();
                 if h.loops > 0 && h.last_active_course > 0 {
                     max_roller_imbalance = max_roller_imbalance
                         .max(estimated_courses.saturating_sub(h.last_active_course + 1));
                 }
-                h.loops = h.loops.saturating_add(1);
-                h.tuck_depth = h.tuck_depth.saturating_add(1);
-                h.last_active_course = estimated_courses;
-                max_loops_on_hook = max_loops_on_hook.max(h.loops);
-                max_tuck_depth = max_tuck_depth.max(h.tuck_depth);
-                if h.loops > profile.max_loops_per_hook {
+                let loops = u16::from(h.loops) + 1;
+                let tuck_depth = u16::from(h.tuck_depth) + 1;
+                if loops > u16::from(profile.max_loops_per_hook) {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
                         format!(
-                            "op #{step}: needle {} loop stack {} exceeds max_loops_per_hook {}",
+                            "op #{step}: needle {} loop stack {loops} exceeds max_loops_per_hook {}",
                             needle.knitout_token(),
-                            h.loops,
                             profile.max_loops_per_hook
                         ),
                     ));
                 }
-                if h.tuck_depth > profile.max_tuck_stack {
+                if tuck_depth > u16::from(profile.max_tuck_stack) {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
                         format!(
-                            "op #{step}: needle {} tuck depth {} exceeds max_tuck_stack {}",
+                            "op #{step}: needle {} tuck depth {tuck_depth} exceeds max_tuck_stack {}",
                             needle.knitout_token(),
-                            h.tuck_depth,
                             profile.max_tuck_stack
                         ),
                     ));
                 }
+                if h.loops == 0 {
+                    h.last_active_course = estimated_courses;
+                }
+                h.loops = loops as u8;
+                h.tuck_depth = tuck_depth as u8;
+                max_loops_on_hook = max_loops_on_hook.max(h.loops);
+                max_tuck_depth = max_tuck_depth.max(h.tuck_depth);
             }
             KnitoutOp::Split {
                 dir,
@@ -669,9 +663,7 @@ pub fn verify_knitout_program(
                             format!("op #{step}: inactive carrier '{}' in `split`", c.0),
                         ));
                     }
-                    if let Some(prev_k) = st.last_knit_needle
-                        && st.last_dir == Some(*dir)
-                    {
+                    if let Some(prev_k) = st.last_knit_needle {
                         let span = (i64::from(from.index) - i64::from(prev_k))
                             .unsigned_abs()
                             .saturating_sub(1);
@@ -680,31 +672,20 @@ pub fn verify_knitout_program(
                     }
                     st.last_needle = Some(from.index);
                     st.last_knit_needle = Some(from.index);
-                    st.last_dir = Some(*dir);
                 }
-                let (src_loops, src_last_course) = hooks
+                let source = hooks
                     .get(&(from.bed, from.index))
-                    .map_or((0, 0), |h| (h.loops, h.last_active_course));
-                if src_loops > 0 && src_last_course > 0 {
+                    .cloned()
+                    .unwrap_or_default();
+                if source.loops > 0 && source.last_active_course > 0 {
                     max_roller_imbalance = max_roller_imbalance
-                        .max(estimated_courses.saturating_sub(src_last_course + 1));
+                        .max(estimated_courses.saturating_sub(source.last_active_course + 1));
                 }
-                if src_loops > 0 {
+                if source.loops > 0 {
                     let dst = hooks.entry((to.bed, to.index)).or_default();
-                    dst.loops = dst.loops.saturating_add(src_loops);
-                    dst.last_active_course = dst.last_active_course.max(src_last_course);
+                    merge_transferred_hooks(dst, &source, *to, profile, step)?;
                     max_loops_on_hook = max_loops_on_hook.max(dst.loops);
-                    if dst.loops > profile.max_loops_per_hook {
-                        return Err(Refusal::new(
-                            RefusalCode::MachineStateInfeasible,
-                            format!(
-                                "op #{step}: `split` destination {} stack {} exceeds max_loops_per_hook {}",
-                                to.knitout_token(),
-                                dst.loops,
-                                profile.max_loops_per_hook
-                            ),
-                        ));
-                    }
+                    max_tuck_depth = max_tuck_depth.max(dst.tuck_depth);
                 }
                 let src = hooks.entry((from.bed, from.index)).or_default();
                 src.loops = 1;
@@ -724,37 +705,25 @@ pub fn verify_knitout_program(
                 check_bed_and_bounds(*from, true, step)?;
                 check_bed_and_bounds(*to, true, step)?;
                 validate_bed_transfer_alignment(*from, *to, rack_quarter_pitches, step)?;
-                let (src_loops, src_last_course) = hooks
+                let source = hooks
                     .get(&(from.bed, from.index))
-                    .map_or((0, 0), |h| (h.loops, h.last_active_course));
-                if let Some(src) = hooks.get_mut(&(from.bed, from.index)) {
-                    src.loops = 0;
-                    src.tuck_depth = 0;
-                    src.last_active_course = 0;
-                }
-                if src_loops > 0 {
+                    .cloned()
+                    .unwrap_or_default();
+                if source.loops > 0 {
                     let dst = hooks.entry((to.bed, to.index)).or_default();
-                    dst.loops = dst.loops.saturating_add(src_loops);
-                    dst.last_active_course = dst.last_active_course.max(src_last_course);
+                    merge_transferred_hooks(dst, &source, *to, profile, step)?;
                     max_loops_on_hook = max_loops_on_hook.max(dst.loops);
-                    if dst.loops > profile.max_loops_per_hook {
-                        return Err(Refusal::new(
-                            RefusalCode::MachineStateInfeasible,
-                            format!(
-                                "op #{step}: `xfer` destination {} stack {} exceeds max_loops_per_hook {}",
-                                to.knitout_token(),
-                                dst.loops,
-                                profile.max_loops_per_hook
-                            ),
-                        ));
-                    }
+                    max_tuck_depth = max_tuck_depth.max(dst.tuck_depth);
+                }
+                if let Some(src) = hooks.get_mut(&(from.bed, from.index)) {
+                    *src = HookState::default();
                 }
                 total_transfers += 1;
             }
             KnitoutOp::Miss {
-                dir,
                 needle,
                 carriers: cs,
+                ..
             } => {
                 check_bed_and_bounds(*needle, false, step)?;
                 if cs.is_empty() {
@@ -777,7 +746,6 @@ pub fn verify_knitout_program(
                         ));
                     }
                     st.last_needle = Some(needle.index);
-                    st.last_dir = Some(*dir);
                 }
             }
             KnitoutOp::Amiss { needle } => {
@@ -904,6 +872,49 @@ pub fn verify_knitout_program(
     })
 }
 
+// Moving held loops does not knit them off. Preserve the oldest held course and all
+// pending tucks even when a stack visits an empty hook or joins a newer stack.
+fn merge_transferred_hooks(
+    destination: &mut HookState,
+    source: &HookState,
+    needle: Needle,
+    profile: &MachineProfile,
+    step: usize,
+) -> Result<(), Refusal> {
+    let loops = u16::from(destination.loops) + u16::from(source.loops);
+    let tuck_depth = u16::from(destination.tuck_depth) + u16::from(source.tuck_depth);
+    if loops > u16::from(profile.max_loops_per_hook) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            format!(
+                "op #{step}: transfer destination {} stack {loops} exceeds max_loops_per_hook {}",
+                needle.knitout_token(),
+                profile.max_loops_per_hook
+            ),
+        )
+        .repair("knit off held loops before stacking more loops on this needle"));
+    }
+    if tuck_depth > u16::from(profile.max_tuck_stack) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            format!(
+                "op #{step}: transfer destination {} tuck depth {tuck_depth} exceeds max_tuck_stack {}",
+                needle.knitout_token(),
+                profile.max_tuck_stack
+            ),
+        )
+        .repair("knit off the held tucks before merging these stacks"));
+    }
+    destination.last_active_course = if destination.loops == 0 {
+        source.last_active_course
+    } else {
+        destination.last_active_course.min(source.last_active_course)
+    };
+    destination.loops = loops as u8;
+    destination.tuck_depth = tuck_depth as u8;
+    Ok(())
+}
+
 fn validate_bed_transfer_alignment(
     from: Needle,
     to: Needle,
@@ -971,6 +982,206 @@ mod tests {
             },
             ops,
         }
+    }
+
+    fn test_context(profile: &MachineProfile, age: WearerAgeClass) -> KnitSafetyContext<'_> {
+        KnitSafetyContext {
+            wearer_age_class: age,
+            blocked_wale_pitch_mm: profile.needle_pitch_mm,
+            source_doc: None,
+            speed_fraction: None,
+            takedown_fraction: None,
+        }
+    }
+
+    fn yarn_in() -> KnitoutOp {
+        KnitoutOp::In {
+            carriers: vec![CarrierId("1".to_string())],
+        }
+    }
+
+    fn yarn_out() -> KnitoutOp {
+        KnitoutOp::Out {
+            carriers: vec![CarrierId("1".to_string())],
+        }
+    }
+
+    fn knit_at(dir: CourseDir, bed: Bed, index: i32) -> KnitoutOp {
+        KnitoutOp::Knit {
+            dir,
+            needle: Needle::new(bed, index),
+            carriers: vec![CarrierId("1".to_string())],
+        }
+    }
+
+    fn tuck_at(dir: CourseDir, bed: Bed, index: i32) -> KnitoutOp {
+        KnitoutOp::Tuck {
+            dir,
+            needle: Needle::new(bed, index),
+            carriers: vec![CarrierId("1".to_string())],
+        }
+    }
+
+    #[test]
+    fn vm_measures_floats_across_reversals_and_misses() {
+        let profile = MachineProfile::kniterate_7e();
+        let ctx = test_context(&profile, WearerAgeClass::Child3To14);
+        for with_miss in [false, true] {
+            let mut ops = vec![yarn_in(), knit_at(CourseDir::Plus, Bed::Front, 0)];
+            if with_miss {
+                ops.push(KnitoutOp::Miss {
+                    dir: CourseDir::Minus,
+                    needle: Needle::new(Bed::Front, 8),
+                    carriers: vec![CarrierId("1".to_string())],
+                });
+            }
+            ops.push(knit_at(CourseDir::Minus, Bed::Front, 8));
+            ops.push(yarn_out());
+            let err = verify_knitout_program(&minimal_program(&profile, ops), &profile, &ctx)
+                .unwrap_err();
+            assert_eq!(err.code, RefusalCode::MaterialProcessHazard);
+            assert!(err.message.contains("interior float"));
+        }
+
+        let no_span = minimal_program(
+            &profile,
+            vec![
+                yarn_in(),
+                knit_at(CourseDir::Plus, Bed::Front, 0),
+                knit_at(CourseDir::Minus, Bed::Back, 0),
+                yarn_out(),
+            ],
+        );
+        assert_eq!(
+            verify_knitout_program(&no_span, &profile, &ctx)
+                .unwrap()
+                .max_float_mm,
+            0.0
+        );
+    }
+
+    #[test]
+    fn vm_preserves_tuck_depth_through_transfer_and_split() {
+        let mut profile = MachineProfile::kniterate_7e();
+        profile.max_loops_per_hook = 4;
+        profile.max_tuck_stack = 1;
+        let ctx = test_context(&profile, WearerAgeClass::Adult);
+        for transfer in [
+            KnitoutOp::Xfer {
+                from: Needle::new(Bed::Front, 10),
+                to: Needle::new(Bed::Back, 10),
+            },
+            KnitoutOp::Split {
+                dir: CourseDir::Plus,
+                from: Needle::new(Bed::Front, 10),
+                to: Needle::new(Bed::Back, 10),
+                carriers: vec![CarrierId("1".to_string())],
+            },
+        ] {
+            let ops = vec![
+                yarn_in(),
+                tuck_at(CourseDir::Plus, Bed::Front, 10),
+                transfer,
+                tuck_at(CourseDir::Minus, Bed::Back, 10),
+                yarn_out(),
+            ];
+            let err = verify_knitout_program(&minimal_program(&profile, ops), &profile, &ctx)
+                .unwrap_err();
+            assert_eq!(err.code, RefusalCode::MachineStateInfeasible);
+            assert!(err.message.contains("tuck depth"));
+        }
+    }
+
+    #[test]
+    fn vm_does_not_refresh_held_loops_when_merging_into_a_newer_stack() {
+        let mut profile = MachineProfile::kniterate_7e();
+        profile.max_roller_imbalance_courses = 1;
+        let ctx = test_context(&profile, WearerAgeClass::Adult);
+        let ops = vec![
+            yarn_in(),
+            knit_at(CourseDir::Plus, Bed::Front, 10),
+            knit_at(CourseDir::Minus, Bed::Front, 11),
+            knit_at(CourseDir::Plus, Bed::Front, 11),
+            KnitoutOp::Xfer {
+                from: Needle::new(Bed::Front, 10),
+                to: Needle::new(Bed::Back, 10),
+            },
+            KnitoutOp::Rack { quarter_pitches: 4 },
+            KnitoutOp::Xfer {
+                from: Needle::new(Bed::Back, 10),
+                to: Needle::new(Bed::Front, 11),
+            },
+            yarn_out(),
+        ];
+        let err = verify_knitout_program(&minimal_program(&profile, ops), &profile, &ctx)
+            .unwrap_err();
+        assert_eq!(err.code, RefusalCode::MaterialProcessHazard);
+        assert!(err.message.contains("roller imbalance"));
+    }
+
+    #[test]
+    fn vm_transfers_preserve_valid_stacks_and_refuse_count_overflow() {
+        let profile = MachineProfile::kniterate_7e();
+        let ctx = test_context(&profile, WearerAgeClass::Adult);
+        let ops = vec![
+            yarn_in(),
+            tuck_at(CourseDir::Plus, Bed::Front, 10),
+            KnitoutOp::Xfer {
+                from: Needle::new(Bed::Front, 10),
+                to: Needle::new(Bed::Back, 10),
+            },
+            tuck_at(CourseDir::Minus, Bed::Back, 10),
+            knit_at(CourseDir::Plus, Bed::Back, 10),
+            yarn_out(),
+        ];
+        let report =
+            verify_knitout_program(&minimal_program(&profile, ops), &profile, &ctx).unwrap();
+        assert_eq!(report.max_loops_on_hook, 2);
+        assert_eq!(report.max_tuck_depth, 2);
+        assert_eq!(report.total_transfers, 1);
+
+        let mut wide_profile = profile;
+        wide_profile.max_loops_per_hook = u8::MAX;
+        wide_profile.max_tuck_stack = u8::MAX;
+        let source = HookState {
+            loops: 1,
+            tuck_depth: 0,
+            last_active_course: 1,
+        };
+        let mut full_hook = HookState {
+            loops: u8::MAX,
+            tuck_depth: 0,
+            last_active_course: 2,
+        };
+        assert_eq!(
+            merge_transferred_hooks(
+                &mut full_hook,
+                &source,
+                Needle::new(Bed::Back, 10),
+                &wide_profile,
+                0,
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::MachineStateInfeasible
+        );
+        assert_eq!(full_hook.loops, u8::MAX);
+        assert_eq!(full_hook.last_active_course, 2);
+
+        let mut too_many_tucks = vec![yarn_in()];
+        too_many_tucks.extend((0..256).map(|_| tuck_at(CourseDir::Plus, Bed::Front, 10)));
+        too_many_tucks.push(yarn_out());
+        let ctx = test_context(&wide_profile, WearerAgeClass::Adult);
+        assert_eq!(
+            verify_knitout_program(
+                &minimal_program(&wide_profile, too_many_tucks),
+                &wide_profile,
+                &ctx,
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::MachineStateInfeasible
+        );
     }
 
     #[test]
