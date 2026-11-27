@@ -1,19 +1,15 @@
 //! Bounded file boundary for the shared recipe selector; never writes or executes a machine file.
 use ftx_core::{Refusal, RefusalCode};
 use serde_json::Value;
-use std::{fs::File, io::Read};
 
 fn read(path: &str, remaining: &mut u64) -> Result<String, Refusal> {
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|f| f.take(*remaining + 1).read_to_end(&mut bytes))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    if bytes.len() as u64 > *remaining {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "combined sewing selection input exceeds 64 MiB",
-        ));
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        path,
+        *remaining,
+        "sewing selection input",
+        RefusalCode::BudgetExceeded,
+        "combined sewing selection input exceeds 64 MiB",
+    )?;
     *remaining -= bytes.len() as u64;
     String::from_utf8(bytes).map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
 }

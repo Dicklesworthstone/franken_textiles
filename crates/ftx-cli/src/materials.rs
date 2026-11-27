@@ -46,10 +46,6 @@ fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
 
-fn io(path: &str, error: std::io::Error) -> Refusal {
-    Refusal::new(RefusalCode::Io, format!("{path}: {error}"))
-}
-
 fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMaterial, Refusal> {
     if !raw.is_object() || !raw["fabric"].is_object() {
         return Err(invalid(
@@ -930,10 +926,38 @@ mod tests {
         assert_eq!(dot_err.code, RefusalCode::Io);
         assert!(!stray_parent.exists());
 
-        // Calibration reader refuses non-regular inputs (directories/FIFOs) with InvalidDocument.
-        let dir_read_err = calibration::read::<Value>(root.to_str().unwrap()).unwrap_err();
+        // Calibration reader and all unified material workbench adapters refuse non-regular
+        // inputs (directories and Unix FIFOs) and oversized inputs without hanging.
+        let dir_str = root.to_str().unwrap();
+        let dir_read_err = calibration::read::<Value>(dir_str).unwrap_err();
         assert_eq!(dir_read_err.code, RefusalCode::InvalidDocument);
         assert!(dir_read_err.message.contains("regular file"));
+
+        let small = root.join("small.json");
+        std::fs::write(&small, b"0123456789abcdef0").unwrap();
+        let over_err = calibration::read_bounded_bytes(
+            &small,
+            16,
+            "material input",
+            RefusalCode::BudgetExceeded,
+            "exceeds 16 bytes",
+        )
+        .unwrap_err();
+        assert_eq!(over_err.code, RefusalCode::BudgetExceeded);
+
+        for err in [
+            cutting::plan(dir_str, dir_str).unwrap_err(),
+            stock::plan(dir_str, dir_str).unwrap_err(),
+            screen::run(dir_str).unwrap_err(),
+            sewing_selection::run(dir_str, dir_str).unwrap_err(),
+            strip::experiment(dir_str).unwrap_err(),
+            nonlinear::run(dir_str, false).unwrap_err(),
+            membrane_plasticity::run(dir_str, false).unwrap_err(),
+            relaxation::run(dir_str, false).unwrap_err(),
+        ] {
+            assert_eq!(err.code, RefusalCode::InvalidDocument, "{err}");
+            assert!(err.message.contains("regular file"), "{err}");
+        }
 
         #[cfg(unix)]
         {
@@ -944,6 +968,25 @@ mod tests {
             let err = write_new_file(dangling.to_str().unwrap(), b"data").unwrap_err();
             assert_eq!(err.code, RefusalCode::Io);
             assert!(!outside_target.exists());
+
+            let fifo = root.join("material.fifo");
+            let created = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(created, "mkfifo should create test FIFO");
+            let fifo_str = fifo.to_str().unwrap();
+            let fifo_err = calibration::read::<Value>(fifo_str).unwrap_err();
+            assert_eq!(fifo_err.code, RefusalCode::InvalidDocument);
+            assert!(fifo_err.message.contains("regular file"));
+            assert_eq!(
+                stock::plan(fifo_str, fifo_str).unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+            assert_eq!(
+                strip::experiment(fifo_str).unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
         }
     }
 }

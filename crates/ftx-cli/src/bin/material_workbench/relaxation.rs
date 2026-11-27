@@ -1,6 +1,4 @@
 //! Acquisition-to-selection adapter. Observation permission never implies permission to simulate.
-use std::{fs::File, io::Read};
-
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::material_relaxation::calibration::comparison::{self, ComparisonInput};
@@ -10,16 +8,13 @@ use serde_json::{Value, json};
 
 pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     const MAX: u64 = 64 * 1024 * 1024;
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(MAX + 1).read_to_end(&mut bytes))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    if bytes.len() as u64 > MAX {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "relaxation history input exceeds 64 MiB",
-        ));
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        path,
+        MAX,
+        "relaxation history input",
+        RefusalCode::BudgetExceeded,
+        "relaxation history input exceeds 64 MiB",
+    )?;
     let document: Value = serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))?;
     let comparison = if document["schema"] == comparison::SCHEMA {
@@ -48,14 +43,7 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
         ..Selection::default()
     })?;
     // This checks complete mechanics as well as the fitted law under the SAME consuming policy.
-    let readiness = (|| {
-        material.mechanics()?;
-        material.membrane_relaxation()?;
-        material.membrane_plasticity()?;
-        material.bending_response()?;
-        material.bending_plasticity()?;
-        Ok::<(), Refusal>(())
-    })();
+    let readiness = super::calibration::simulation_readiness(&material);
     let selection = material.frozen_selection();
     let selection_json = serde_json::to_string(&selection)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;

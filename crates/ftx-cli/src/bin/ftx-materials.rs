@@ -173,10 +173,6 @@ fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
 
-fn io(path: &str, error: std::io::Error) -> Refusal {
-    Refusal::new(RefusalCode::Io, format!("{path}: {error}"))
-}
-
 fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMaterial, Refusal> {
     if !raw.is_object() || !raw["fabric"].is_object() {
         return Err(invalid(

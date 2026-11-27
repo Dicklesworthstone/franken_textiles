@@ -1,6 +1,4 @@
 //! Bounded file boundary for the shared nonlinear swatch identification engine.
-use std::{fs::File, io::Read};
-
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::{
     material_calibration::nonlinear::{Input, calibrate},
@@ -11,16 +9,13 @@ use serde_json::{Value, json};
 
 pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     const MAX: u64 = 64 * 1024 * 1024;
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(MAX + 1).read_to_end(&mut bytes))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    if bytes.len() as u64 > MAX {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "nonlinear swatch input exceeds 64 MiB",
-        ));
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        path,
+        MAX,
+        "nonlinear swatch input",
+        RefusalCode::BudgetExceeded,
+        "nonlinear swatch input exceeds 64 MiB",
+    )?;
     let input: Input = serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))?;
     let report = calibrate(&input)?;
@@ -30,14 +25,7 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
         allow_estimates,
         ..Selection::default()
     })?;
-    let mechanics = (|| {
-        snapshot.mechanics()?;
-        snapshot.membrane_relaxation()?;
-        snapshot.membrane_plasticity()?;
-        snapshot.bending_response()?;
-        snapshot.bending_plasticity()?;
-        Ok::<(), Refusal>(())
-    })();
+    let mechanics = super::calibration::simulation_readiness(&snapshot);
     let selection = snapshot.frozen_selection();
     let selection_json = serde_json::to_string(&selection)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;

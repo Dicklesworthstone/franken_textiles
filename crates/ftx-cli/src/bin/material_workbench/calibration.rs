@@ -10,32 +10,56 @@ use ftx_pattern::textile_import::catalog;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-pub(super) fn read<T: DeserializeOwned>(path: &str) -> Result<T, Refusal> {
-    const MAX: u64 = 64 * 1024 * 1024;
-    let io = |error| Refusal::new(RefusalCode::Io, format!("{path}: {error}"));
-    let budget = || Refusal::new(RefusalCode::BudgetExceeded, "material input exceeds 64 MiB");
+pub(super) fn read_bounded_bytes(
+    path: impl AsRef<Path>,
+    max_bytes: u64,
+    label: &str,
+    budget_code: RefusalCode,
+    budget_message: &str,
+) -> Result<Vec<u8>, Refusal> {
+    let path = path.as_ref();
+    let io = |error| Refusal::new(RefusalCode::Io, format!("{}: {error}", path.display()));
+    let not_regular = || {
+        Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{}: {label} must be a regular file", path.display()),
+        )
+    };
+    let budget = || Refusal::new(budget_code, budget_message);
     let meta = std::fs::metadata(path).map_err(io)?;
     if !meta.is_file() {
-        return Err(Refusal::new(
-            RefusalCode::InvalidDocument,
-            format!("{path}: material input must be a regular file"),
-        ));
+        return Err(not_regular());
     }
-    if meta.len() > MAX {
+    if meta.len() > max_bytes {
         return Err(budget());
     }
     let file = File::open(path).map_err(io)?;
-    if !file.metadata().map_err(io)?.is_file() {
-        return Err(Refusal::new(
-            RefusalCode::InvalidDocument,
-            format!("{path}: material input must be a regular file"),
-        ));
+    let fd_meta = file.metadata().map_err(io)?;
+    if !fd_meta.is_file() {
+        return Err(not_regular());
     }
-    let mut bytes = Vec::new();
-    file.take(MAX + 1).read_to_end(&mut bytes).map_err(io)?;
-    if bytes.len() as u64 > MAX {
+    if fd_meta.len() > max_bytes {
         return Err(budget());
     }
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(budget());
+    }
+    Ok(bytes)
+}
+
+pub(super) fn read<T: DeserializeOwned>(path: &str) -> Result<T, Refusal> {
+    const MAX: u64 = 64 * 1024 * 1024;
+    let bytes = read_bounded_bytes(
+        path,
+        MAX,
+        "material input",
+        RefusalCode::BudgetExceeded,
+        "material input exceeds 64 MiB",
+    )?;
     serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))
 }

@@ -7,19 +7,15 @@ use ftx_export::cutting::{
 use ftx_pattern::Pattern;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::{fs::File, io::Read};
 
 fn read<T: DeserializeOwned>(path: &str, left: &mut u64) -> Result<T, Refusal> {
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|f| f.take(*left + 1).read_to_end(&mut bytes))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    if bytes.len() as u64 > *left {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "combined finite-stock inputs exceed 64 MiB",
-        ));
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        path,
+        *left,
+        "finite-stock input",
+        RefusalCode::BudgetExceeded,
+        "combined finite-stock inputs exceed 64 MiB",
+    )?;
     *left -= bytes.len() as u64;
     serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))

@@ -1,12 +1,8 @@
 //! Timed prescribed poses: conservative instantaneous remap, then heat on the arrival geometry.
 //! Playback frames are not timestamps. A material change never resets or borrows an old heat state.
-use std::{
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use ftx_core::{Refusal, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_drape::thermal::{
     Boundary,
     microclimate::MicroclimateExterior,
@@ -20,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    invalid, io, read,
+    invalid, read,
     thermal_coverage::{self, Film},
 };
 
@@ -95,12 +91,14 @@ impl Inputs {
             return Err(invalid("motion input path is empty"));
         }
         let path = self.base.join(name);
-        let mut bytes = Vec::new();
-        File::open(&path)
-            .map_err(|e| io(name, e))?
-            .take((MAX_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|e| io(name, e))?;
+        let remaining = MAX_INPUT_BYTES.saturating_sub(self.bytes).min(MAX_BYTES) as u64;
+        let bytes = super::calibration::read_bounded_bytes(
+            &path,
+            remaining,
+            "motion input",
+            RefusalCode::InvalidDocument,
+            "motion inputs exceed 64 MiB per file or 256 MiB total read budget",
+        )?;
         self.bytes = self
             .bytes
             .checked_add(bytes.len())

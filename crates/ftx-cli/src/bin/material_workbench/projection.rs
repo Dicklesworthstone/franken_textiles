@@ -1,7 +1,7 @@
 //! Saved sewn-drape -> geometry-derived coverage; physical layer names and interfaces stay explicit.
-use std::{collections::BTreeMap, fs::File, io::Read};
+use std::collections::BTreeMap;
 
-use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_drape::{
     render::{ColouredMesh, read_obj},
     thermal::surface::{
@@ -14,7 +14,7 @@ use ftx_drape::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{invalid, io, read};
+use super::{invalid, read};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -142,15 +142,13 @@ pub(super) fn run(report: &str, body: &str, settings: &str) -> Result<Value, Ref
     let report: Value = read(report)?;
     let input: Input = read(settings)?;
     let (source, cloth) = Surface::from_drape_report(&report)?;
-    let mut bytes = Vec::new();
-    File::open(body)
-        .map_err(|e| io(body, e))?
-        .take(64 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| io(body, e))?;
-    if bytes.len() > 64 * 1024 * 1024 {
-        return Err(invalid("body OBJ exceeds 64 MiB"));
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        body,
+        64 * 1024 * 1024,
+        "body OBJ",
+        RefusalCode::InvalidDocument,
+        "body OBJ exceeds 64 MiB",
+    )?;
     let text = std::str::from_utf8(&bytes).map_err(|e| invalid(format!("body OBJ UTF-8: {e}")))?;
     let mesh = body_mesh(text)?;
     let result = project(

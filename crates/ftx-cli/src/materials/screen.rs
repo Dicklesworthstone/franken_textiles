@@ -1,22 +1,17 @@
 //! File boundary shared by both native material commands; evaluators themselves perform no I/O.
-use std::{fs::File, io::Read};
-
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::{Pattern, material_screen::Request, textile_import};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 fn read<T: DeserializeOwned>(path: &str, remaining: &mut u64) -> Result<T, Refusal> {
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(*remaining + 1).read_to_end(&mut bytes))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    if bytes.len() as u64 > *remaining {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "combined material study/screening input exceeds 64 MiB",
-        ));
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        path,
+        *remaining,
+        "material study/screening input",
+        RefusalCode::BudgetExceeded,
+        "combined material study/screening input exceeds 64 MiB",
+    )?;
     *remaining -= bytes.len() as u64;
     serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))

@@ -1,6 +1,4 @@
 //! Bounded file boundary for the shared strip experiment, inverse identification and acquisition APIs.
-use std::{fs::File, io::Read};
-
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::{cylinder, strip};
 use ftx_pattern::textile_import::catalog;
@@ -12,16 +10,13 @@ fn invalid(error: impl std::fmt::Display) -> Refusal {
 
 fn read(path: &str) -> Result<String, Refusal> {
     const MAX: u64 = 64 * 1024 * 1024;
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(MAX + 1).read_to_end(&mut bytes))
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    if bytes.len() as u64 > MAX {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "strip input exceeds 64 MiB",
-        ));
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        path,
+        MAX,
+        "strip input",
+        RefusalCode::BudgetExceeded,
+        "strip input exceeds 64 MiB",
+    )?;
     String::from_utf8(bytes).map_err(|e| invalid(format!("{path}: {e}")))
 }
 
@@ -57,14 +52,7 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
         .as_ref()
         .ok_or_else(|| invalid("accepted strip fit lacks its frozen selection"))?;
     let snapshot = catalog()?.resolve(selection)?;
-    let readiness = (|| {
-        snapshot.mechanics()?;
-        snapshot.membrane_relaxation()?;
-        snapshot.membrane_plasticity()?;
-        snapshot.bending_response()?;
-        snapshot.bending_plasticity()?;
-        Ok::<(), Refusal>(())
-    })();
+    let readiness = super::calibration::simulation_readiness(&snapshot);
     Ok(
         json!({"calibration":report,"selection":selection,"selection_json":report.selection_json,
         "simulation_ready":readiness.is_ok(),"mechanics_refusal":readiness.err(),
@@ -89,14 +77,7 @@ pub(super) fn calibrate_cylinder(path: &str, allow_estimates: bool) -> Result<Va
         .as_ref()
         .ok_or_else(|| invalid("accepted cylinder fit lacks its frozen selection"))?;
     let snapshot = catalog()?.resolve(selection)?;
-    let readiness = (|| {
-        snapshot.mechanics()?;
-        snapshot.membrane_relaxation()?;
-        snapshot.membrane_plasticity()?;
-        snapshot.bending_response()?;
-        snapshot.bending_plasticity()?;
-        Ok::<(), Refusal>(())
-    })();
+    let readiness = super::calibration::simulation_readiness(&snapshot);
     Ok(
         json!({"calibration":report,"selection":selection,"selection_json":report.selection_json,
         "simulation_ready":readiness.is_ok(),"mechanics_refusal":readiness.err(),
