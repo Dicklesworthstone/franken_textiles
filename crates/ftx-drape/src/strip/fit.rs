@@ -2586,7 +2586,7 @@ mod tests {
             method:
                 "Sperl et al. (2022) SJ1 original loading-force rows; planar elastic strip test"
                     .into(),
-            conditions,
+            conditions: conditions.clone(),
             fitted_on: "2026-11-27".into(),
             experiments,
             parameter_bounds: vec![[0.5, 2.0], [0.5, 2.0], [0.5, 2.0], [-4.0, 4.0]],
