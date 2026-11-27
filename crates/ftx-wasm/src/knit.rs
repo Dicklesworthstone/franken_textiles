@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 const MAX_INPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const SWATCH_MATERIAL_PLACEHOLDER: &str = "browser-unqualified-yarn-placeholder";
 
 /// Request payload for [`knit_swatch_json`].
 #[derive(Clone, Debug, Deserialize)]
@@ -169,12 +170,24 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
     let kit = export_calibration_swatch_kit(
         &profile,
         &req.yarn_id,
-        "browser-unqualified-yarn-placeholder",
+        SWATCH_MATERIAL_PLACEHOLDER,
         req.needles,
         req.courses_per_zone,
         &req.cam_settings,
     )?;
-    let compiled = compile_knit_doc(&kit.doc, &profile, None, None, None)?;
+    let compiled = compile_knit_doc(
+        &kit.doc,
+        &profile,
+        None,
+        Some(SWATCH_MATERIAL_PLACEHOLDER),
+        None,
+    )?;
+    if compiled.cert.cert_sha256 != kit.knitout.cert.cert_sha256 {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "calibration swatch kit certificate digest disagreed with compiled bundle",
+        ));
+    }
     let hand = export_hand_knit_document(&kit.doc, &req.created)?;
     let svg_checks = check_hand_knit_svg(&hand.svg_text, "swatch.svg");
     let kc_text = if profile.backend_kind == MachineBackendKind::KniterateKc {
@@ -182,8 +195,8 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
     } else {
         None
     };
-    let ayab_checklist = if profile.backend_kind == MachineBackendKind::BrotherAyab {
-        Some(export_brother_ayab(&kit.doc, &profile, &compiled.cert)?.checklist)
+    let ayab = if profile.backend_kind == MachineBackendKind::BrotherAyab {
+        Some(export_brother_ayab(&kit.doc, &profile, &compiled.cert)?)
     } else {
         None
     };
@@ -193,7 +206,9 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
         "knitout_text": kit.knitout.knitout_text,
         "knitout_sha256": kit.knitout.knitout_sha256,
         "kc_text": kc_text,
-        "ayab_checklist": ayab_checklist,
+        "ayab_checklist": ayab.as_ref().map(|b| &b.checklist),
+        "ayab_png_base64": ayab.as_ref().map(|b| encode_base64(&b.png_bytes)),
+        "ayab_png_sha256": ayab.as_ref().map(|b| &b.png_sha256),
         "chart_svg": hand.svg_text,
         "instructions_text": hand.instructions_text,
         "svg_checks_passed": svg_checks.iter().all(|c| c.ok),
@@ -367,6 +382,20 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
             (None, None)
         };
 
+    // Re-index yarn-path stitch predictions into canonical `(course, wale)` row-major grid order
+    // so flatbed boustrophedon odd courses render at their true physical wale positions.
+    let grid_courses = courses as usize;
+    let grid_wales = wales as usize;
+    let mut predicted_grid = vec![[220_u8, 220, 220]; grid_courses * grid_wales];
+    for (st, &rgb) in stitch_map.stitches.iter().zip(&opt.predicted_stitch_srgb) {
+        if let Ok(wale) = usize::try_from(st.wale) {
+            let row = st.course as usize;
+            if row < grid_courses && wale < grid_wales {
+                predicted_grid[row * grid_wales + wale] = rgb;
+            }
+        }
+    }
+
     let payload = json!({
         "delta_e00_p50": opt.delta_e00_p50,
         "delta_e00_p95": opt.delta_e00_p95,
@@ -376,7 +405,7 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
         "coherent_horizon_flatbed_stitches": opt.coherent_horizons.1,
         "iterations": opt.iterations,
         "grid": [courses, wales],
-        "predicted_stitch_srgb": opt.predicted_stitch_srgb,
+        "predicted_stitch_srgb": predicted_grid,
         "pareto_regimes": pareto,
         "program": opt.program,
         "schedule_csv": verified_export.as_ref().map(|b| &b.schedule_csv),
@@ -393,6 +422,34 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
 #[must_use]
 pub fn default_carrier() -> CarrierId {
     CarrierId("1".to_string())
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let mut chunks = bytes.chunks_exact(3);
+    for chunk in &mut chunks {
+        let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
+        out.push(TABLE[(n & 0x3f) as usize] as char);
+    }
+    let rem = chunks.remainder();
+    if rem.len() == 1 {
+        let n = u32::from(rem[0]) << 16;
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem.len() == 2 {
+        let n = (u32::from(rem[0]) << 16) | (u32::from(rem[1]) << 8);
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
+        out.push('=');
+    }
+    out
 }
 
 fn encode_bounded_json(payload: &Value) -> Result<String, Refusal> {
@@ -595,5 +652,106 @@ mod tests {
             dye_optimize_json(&bad_wick).unwrap_err().code,
             RefusalCode::OutOfRange
         );
+    }
+
+    #[test]
+    fn brother_ayab_swatch_emits_png_base64_and_consistent_cert_material_sha() {
+        fn decode_base64(input: &str) -> Vec<u8> {
+            let val = |b: u8| -> Option<u8> {
+                match b {
+                    b'A'..=b'Z' => Some(b - b'A'),
+                    b'a'..=b'z' => Some(b - b'a' + 26),
+                    b'0'..=b'9' => Some(b - b'0' + 52),
+                    b'+' => Some(62),
+                    b'/' => Some(63),
+                    _ => None,
+                }
+            };
+            let bytes = input.as_bytes();
+            assert_eq!(bytes.len() % 4, 0);
+            let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+            for chunk in bytes.chunks_exact(4) {
+                let a = val(chunk[0]).unwrap();
+                let b = val(chunk[1]).unwrap();
+                out.push((a << 2) | (b >> 4));
+                if chunk[2] != b'=' {
+                    let c = val(chunk[2]).unwrap();
+                    out.push((b << 4) | (c >> 2));
+                    if chunk[3] != b'=' {
+                        let d = val(chunk[3]).unwrap();
+                        out.push((c << 6) | d);
+                    }
+                }
+            }
+            out
+        }
+
+        let req = json!({
+            "machine": "brother-kh930-ayab",
+            "yarn_id": "merino-200tex",
+            "needles": 20,
+            "courses_per_zone": 8,
+            "cam_settings": [4.0, 6.0]
+        })
+        .to_string();
+        let out: Value = serde_json::from_str(&knit_swatch_json(&req).unwrap()).unwrap();
+        assert_eq!(
+            out["cert"]["material_sha256"].as_str(),
+            Some(SWATCH_MATERIAL_PLACEHOLDER)
+        );
+        let b64 = out["ayab_png_base64"].as_str().unwrap();
+        let png = decode_base64(b64);
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let sha = ftx_core::receipt::sha256_hex(&png);
+        assert_eq!(out["ayab_png_sha256"].as_str(), Some(sha.as_str()));
+        assert_eq!(
+            out["ayab_checklist"]["png_sha256"].as_str(),
+            Some(sha.as_str())
+        );
+    }
+
+    #[test]
+    fn flatbed_dye_optimize_orders_predicted_srgb_in_canonical_course_wale_grid() {
+        // Left half crisp blue, right half crisp gold across all rows.
+        // In flatbed boustrophedon knitting, odd courses traverse right-to-left along the yarn,
+        // so returning raw yarn-path order would mirror odd rows horizontally!
+        let mut pixels = Vec::with_capacity(36);
+        for _y in 0..6 {
+            for x in 0..6 {
+                pixels.push(if x < 3 {
+                    [25, 95, 195]
+                } else {
+                    [225, 175, 40]
+                });
+            }
+        }
+        let req = json!({
+            "machine": "piezo-cmyk",
+            "wearer_age_class": "calibration_swatch_only",
+            "regime": "regime2_fiducial_synced",
+            "width": 6,
+            "height": 6,
+            "srgb_u8": pixels,
+            "grid": [4, 6],
+            "is_circular": false,
+            "drift_eps": 0.0,
+            "drift_sigma_eta": 0.0,
+            "wick_mm": 0.2,
+            "max_iters": 16
+        })
+        .to_string();
+        let out: Value = serde_json::from_str(&dye_optimize_json(&req).unwrap()).unwrap();
+        let grid = out["predicted_stitch_srgb"].as_array().unwrap();
+        assert_eq!(grid.len(), 24);
+        for c in 0..4 {
+            let left = grid[c * 6].as_array().unwrap();
+            let right = grid[c * 6 + 5].as_array().unwrap();
+            let left_b_minus_r = left[2].as_i64().unwrap() - left[0].as_i64().unwrap();
+            let right_b_minus_r = right[2].as_i64().unwrap() - right[0].as_i64().unwrap();
+            assert!(
+                left_b_minus_r > right_b_minus_r,
+                "course {c} should be bluer on the left than the right (left={left:?}, right={right:?})"
+            );
+        }
     }
 }
