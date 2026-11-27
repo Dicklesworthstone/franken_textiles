@@ -3,15 +3,18 @@
 //! conforming target, native and wasm alike. No platform libm.
 //!
 //! Provenance: lifted from frankensim `crates/fs-math/src/det.rs` at commit
-//! `f58c1acb88c7525ac5a2c3bac9531bf9a182b97b` (same author, MIT + OpenAI/Anthropic rider). The bodies
-//! of [`exp`], [`expm1`], [`ln`], [`sin`], [`cos`], [`sin_cos`], [`tanh`], [`sqrt`], [`hypot`],
-//! [`atan`], [`atan2`], [`asin`], [`acos`] and [`powi`] are unchanged, so their bits match frankensim's
-//! cross-ISA golden hash (test `frankensim_core_golden_hash`). Changes on lifting:
-//! - No Payne–Hanek path: for |x| > [`TRIG_DOMAIN`] (2²⁰ rad) the trig functions return NaN instead of
-//!   reducing with 1280-bit arithmetic. Pattern and body angles are a few radians; a NaN there is a
-//!   bug upstream, and every caller refuses non-finite values.
-//! - Omitted: `erf`, `erfc`, `pow`, double-double and quad-double support (unused here). [`tan`] was
-//!   added later from the same commit (its body over this file's reduction), for the fez's arc controls.
+//! `f58c1acb88c7525ac5a2c3bac9531bf9a182b97b` (same author, MIT + OpenAI/Anthropic rider), with
+//! [`tan`], [`erf`], [`erfc`], [`pow`] (backed by [`crate::dd`] and [`crate::eft`]), and `FS-K01`
+//! [`cbrt`] (`crates/fs-math/src/det.rs:819-865`, `/dp/frankensim` workspace snapshot `fs-math`
+//! `0.1.0`, no `.git` directory) lifted bit-identically. Their bits match frankensim's cross-ISA
+//! golden hashes (`frankensim_core_golden_hash`, `frankensim_extensions_golden_hash`, and
+//! `frankensim_cbrt_golden_hash`). Changes on lifting:
+//! - No Payne–Hanek path (`payne`): for |x| > [`TRIG_DOMAIN`] (2²⁰ rad) the trig functions return
+//!   NaN instead of reducing with 1280-bit arithmetic. Pattern and body angles are a few radians; a
+//!   NaN there is a bug upstream, and every caller refuses non-finite values.
+//! - Omitted: quad-double support (`fs-dd`), complex helpers (`c64`), and fs-math's `erf_both_paths`
+//!   / extra ULP-budget constants (`SIN_LARGE_ULP_BUDGET`, `TAN_ULP_BUDGET`, `ERF_ULP_BUDGET`,
+//!   `ERFC_ULP_BUDGET`, `pow_ulp_budget`).
 //! - Added: [`cube`], a correctly rounded x³ (closest to numpy's `x ** 3`, see its docs), and
 //!   [`ulp_distance`] for tests.
 //!
@@ -1017,6 +1020,10 @@ mod tests {
             let v = f64::from_bits((exp_bits << 52) | (mant_bits & 0x000f_ffff_ffff_ffff));
             feed(cbrt(if i.is_multiple_of(2) { v } else { -v }));
         }
-        assert_eq!(acc, 0xf72c_2f93_3906_343a);
+        const CBRT_GOLDEN_HASH: u64 = 0xf72c_2f93_3906_343a;
+        assert_eq!(
+            acc, CBRT_GOLDEN_HASH,
+            "cbrt bits changed: {acc:#018x} vs {CBRT_GOLDEN_HASH:#018x}"
+        );
     }
 }
