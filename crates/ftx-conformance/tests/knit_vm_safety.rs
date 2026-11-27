@@ -84,6 +84,7 @@ fn base_knit_doc(age: WearerAgeClass, yarn_tex: Option<f64>) -> KnitDoc {
             yarn_length_mm: Some(10.0),
         }],
         short_row_turns: Vec::new(),
+        passes: Vec::new(),
         cable_groups: Vec::new(),
         yarn_runs: vec![YarnRun {
             run_id: 1,

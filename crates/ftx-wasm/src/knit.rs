@@ -20,7 +20,7 @@ use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime};
 use ftx_pattern::knit::{
     CarrierId, DrapeUncertaintyReceipt, GaugeSpec, KnitDoc, KnitSwatchQualification,
     MachineBackendKind, MachineProfile, ParametricPanelSpec, SeamedPulloverSpec, WearerAgeClass,
-    compile_knit_doc, draft_seamed_pullover, draft_shaped_panel,
+    compile_knit_doc, draft_seamed_pullover, draft_short_row_neckline_panel,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -63,6 +63,9 @@ pub struct KnitPanelPreviewRequest {
     pub panel: ParametricPanelSpec,
     /// Gauge specification.
     pub gauge: GaugeSpec,
+    /// Optional tuck-and-return shoulder wedges inside the requested neck depth.
+    #[serde(default)]
+    pub shoulder_short_row_pairs: u32,
     /// Deterministic creation date (`YYYY-MM-DDTHH:MM`).
     #[serde(default = "default_created")]
     pub created: String,
@@ -247,9 +250,9 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
     let hand = export_hand_knit_document(&kit.doc, &req.created)?;
     let svg_checks = check_hand_knit_svg(&hand.svg_text, "swatch.svg");
     let mut backend_export_refusal = None;
-    let kc_text = if profile.backend_kind == MachineBackendKind::KniterateKc {
+    let kc = if profile.backend_kind == MachineBackendKind::KniterateKc {
         match export_kniterate_kc(&compiled, &profile) {
-            Ok(bundle) => Some(bundle.kc_text),
+            Ok(bundle) => Some(bundle),
             Err(refusal) if refusal.code == RefusalCode::UnqualifiedProcess => {
                 backend_export_refusal = Some(refusal);
                 None
@@ -282,7 +285,9 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
         "pattern_sha256": kit.doc.canonical_sha256()?,
         "knitout_text": kit.knitout.knitout_text,
         "knitout_sha256": kit.knitout.knitout_sha256,
-        "kc_text": kc_text,
+        "kc_text": kc.as_ref().map(|bundle| &bundle.kc_text),
+        "kc_sha256": kc.as_ref().map(|bundle| &bundle.kc_sha256),
+        "kcode_verification": kc.as_ref().map(|bundle| &bundle.verification),
         "backend_export_refusal": backend_export_refusal,
         "machine_executable": false,
         "ayab_checklist": ayab.as_ref().map(|b| &b.checklist),
@@ -313,7 +318,12 @@ pub fn knit_panel_preview_json(request_json: &str) -> Result<String, Refusal> {
     let req: KnitPanelPreviewRequest = serde_json::from_str(request_json)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     let profile = resolve_knit_machine(&req.machine)?;
-    let doc = draft_shaped_panel(&req.panel, &req.gauge, &profile)?;
+    let doc = draft_short_row_neckline_panel(
+        &req.panel,
+        &req.gauge,
+        &profile,
+        req.shoulder_short_row_pairs,
+    )?;
     let hand = export_hand_knit_document(&doc, &req.created)?;
     let svg_checks = check_hand_knit_svg(&hand.svg_text, "panel.svg");
     let payload = json!({
@@ -400,6 +410,7 @@ pub fn knit_export_json(request_json: &str) -> Result<String, Refusal> {
         "vm_report": bundle.compiled.vm_report,
         "cert": bundle.compiled.cert,
         "backend_export_refusal": bundle.backend_export_refusal,
+        "kcode_verification": bundle.kcode_verification,
         "machine_executable": false,
         "hardware_execution_authorized": false,
         "physical_knitting_validated": false,
@@ -959,8 +970,13 @@ mod tests {
         }
         assert_eq!(observed, native.files);
         assert_eq!(out["cert"]["drape_receipt_sha256"], receipt.payload_sha256);
-        assert_eq!(out["backend_export_refusal"]["code"], "unqualified_process");
-        assert!(!observed.contains_key("program.kc"));
+        assert!(out["backend_export_refusal"].is_null());
+        assert!(observed.contains_key("program.kc"));
+        assert_eq!(
+            out["kcode_verification"]["kc_sha256"],
+            sha256_hex(&observed["program.kc"])
+        );
+        assert!(observed.contains_key("kcode_verification.json"));
         assert_eq!(out["machine_executable"], false);
         assert_eq!(out["fit_claimed"], false);
 
@@ -991,7 +1007,16 @@ mod tests {
         let sw_out: Value = serde_json::from_str(&knit_swatch_json(&swatch_req).unwrap()).unwrap();
         assert_eq!(sw_out["svg_checks_passed"], true);
         assert_eq!(sw_out["cert"]["hardware_execution_authorized"], false);
-        assert!(sw_out["kc_text"].is_null());
+        assert!(
+            sw_out["kc_text"]
+                .as_str()
+                .unwrap()
+                .starts_with("HOME\nRACK:0\n")
+        );
+        assert_eq!(
+            sw_out["kcode_verification"]["program_sha256"],
+            sw_out["knitout_sha256"]
+        );
         assert!(
             sw_out["knitout_text"]
                 .as_str()
@@ -999,10 +1024,7 @@ mod tests {
                 .starts_with(";!knitout-2")
         );
         assert_eq!(sw_out["machine_executable"], false);
-        assert_eq!(
-            sw_out["backend_export_refusal"]["code"],
-            serde_json::to_value(RefusalCode::UnqualifiedProcess).unwrap()
-        );
+        assert!(sw_out["backend_export_refusal"].is_null());
 
         let mut pixels = Vec::with_capacity(16);
         for y in 0..4 {
@@ -1073,19 +1095,25 @@ mod tests {
         assert_eq!(panel_out["svg_checks_passed"], true);
         assert_eq!(panel_out["fit_claimed"], false);
         assert_eq!(panel_out["hardware_execution_authorized"], false);
-        let mut open_neck: Value = serde_json::from_str(&panel_req).unwrap();
-        open_neck["panel"]["neck_width_mm"] = json!(105.0);
-        open_neck["panel"]["neck_depth_mm"] = json!(24.0);
-        let neck_out: Value =
-            serde_json::from_str(&knit_panel_preview_json(&open_neck.to_string()).unwrap())
+        let mut shaped_neck: Value = serde_json::from_str(&panel_req).unwrap();
+        shaped_neck["panel"]["neck_width_mm"] = json!(105.0);
+        shaped_neck["panel"]["neck_depth_mm"] = json!(24.0);
+        shaped_neck["shoulder_short_row_pairs"] = json!(2);
+        let neckline: Value =
+            serde_json::from_str(&knit_panel_preview_json(&shaped_neck.to_string()).unwrap())
                 .unwrap();
-        assert_eq!(neck_out["svg_checks_passed"], true);
-        assert_eq!(neck_out["short_row_turns"], 0);
-        assert_eq!(
-            neck_out["metadata"]["neckline_construction"],
-            "center_loops_held_separate_shoulder_carriers"
+        assert_eq!(neckline["svg_checks_passed"], true);
+        let doc: KnitDoc =
+            serde_json::from_str(neckline["pattern_json"].as_str().unwrap()).unwrap();
+        assert!(doc.metadata.contains_key("held_neck_stitch_ids"));
+        assert_eq!(doc.short_row_turns.len(), 4);
+        assert!(doc.short_row_turns.iter().all(|turn| turn.anchored));
+        assert!(
+            doc.stitches
+                .iter()
+                .any(|stitch| stitch.carrier_ids != doc.stitches[0].carrier_ids)
         );
-        let mut impossible_neck = open_neck;
+        let mut impossible_neck = shaped_neck;
         impossible_neck["panel"]["neck_width_mm"] = json!(260.0);
         assert_eq!(
             knit_panel_preview_json(&impossible_neck.to_string())
@@ -1237,8 +1265,12 @@ mod tests {
             serde_json::from_str(&knit_swatch_json(&request.to_string()).unwrap()).unwrap();
         assert_eq!(result["qualification_template"]["material_sha256"], digest);
         assert_eq!(result["cert"]["hardware_execution_authorized"], false);
-        assert!(result["kc_text"].is_null());
-        assert!(result["backend_export_refusal"].is_object());
+        assert!(result["kc_text"].is_string());
+        assert_eq!(
+            result["kcode_verification"]["hardware_execution_authorized"],
+            false
+        );
+        assert!(result["backend_export_refusal"].is_null());
         request["material_sha256"] = json!(" ");
         assert_eq!(
             knit_swatch_json(&request.to_string()).unwrap_err().code,

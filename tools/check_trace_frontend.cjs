@@ -251,7 +251,7 @@ test('load errors and image read limits do not hang the page or publish files', 
 });
 
 test('all five browser workers reject missing or mismatched wasm_interface_stamp on real web/pkg bundles and accept the matching stamp', async () => {
-  const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-27.2';
+  const EXPECTED_STAMP = 'ftx-wasm-interface/2026-11-27.3';
   const EXPECTED_REV = EXPECTED_STAMP.split('/')[1];
   for (const w of ['worker.js', 'materials-worker.js', 'knit-worker.js']) {
     assert.ok(read(w).includes(`?v=${EXPECTED_REV}`), `${w} must carry matching ?v=${EXPECTED_REV} WASM cache-buster`);

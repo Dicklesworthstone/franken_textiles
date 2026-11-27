@@ -1,11 +1,11 @@
 // Local-only worker for Knitting & Programmed Continuous Yarn Dyeing (FTX-K18).
 // No pattern, image, or yarn data ever leaves the browser.
-import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.2";
+import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.3";
 
-const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.2";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.3";
 let loadFailure = null;
 
-const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-27.2", import.meta.url) }).then(() => {
+const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-27.3", import.meta.url) }).then(() => {
   if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
       (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== EXPECTED_WASM_STAMP)) {
     throw new Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");

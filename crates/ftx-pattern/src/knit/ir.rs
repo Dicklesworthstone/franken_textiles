@@ -204,7 +204,8 @@ pub struct StitchNode {
     pub bed: Bed,
     /// Loop formation type.
     pub kind: LoopKind,
-    /// Ordered parent loops consumed by this stitch (bottom-to-top hook stack).
+    /// Ordered existing loops on the hook (bottom-to-top). Knit/decrease/bind-off
+    /// consume them; a tuck retains them and appends its own loop identity.
     #[serde(default)]
     pub parents: Vec<ParentRef>,
     /// Active yarn carrier set knitting this stitch (supports plating/multiple carriers).
@@ -244,6 +245,39 @@ pub struct CableGroup {
     pub right_wales: Vec<i32>,
     /// True if `left_wales` cross in front of `right_wales`.
     pub left_in_front: bool,
+}
+
+impl CableGroup {
+    /// Validates two equally spaced adjacent blocks with a one-to-one crossing.
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] for empty, overlapping, unordered, or unequal blocks.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        let invalid = || {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                "cable crossing requires equal nonempty adjacent blocks in increasing wale order",
+            )
+        };
+        if self.left_wales.is_empty() || self.left_wales.len() != self.right_wales.len() {
+            return Err(invalid());
+        }
+        let wales: Vec<_> = self
+            .left_wales
+            .iter()
+            .chain(&self.right_wales)
+            .copied()
+            .collect();
+        let step = i64::from(wales[1]) - i64::from(wales[0]);
+        if step <= 0
+            || wales
+                .windows(2)
+                .any(|pair| i64::from(pair[1]) - i64::from(pair[0]) != step)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }
 
 /// Contiguous yarn run fed by one carrier (supports multi-piece & intarsia dyeing).
@@ -340,6 +374,18 @@ impl GaugeSpec {
     }
 }
 
+/// One ordered yarn-forming pass through a course. Logical tube sides may use
+/// either physical bed (for example half-gauge tubular rib), so direction belongs
+/// to the pass rather than being inferred from the bed of each stitch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnitPass {
+    /// Carriage direction for every listed stitch.
+    pub direction: CourseDir,
+    /// Stitch identities in execution order; all belong to one course and carrier set.
+    pub stitch_ids: Vec<u32>,
+}
+
 /// Complete `ftx-knit/1` knitting pattern document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -354,6 +400,10 @@ pub struct KnitDoc {
     pub gauge: GaugeSpec,
     /// Topological stitch nodes.
     pub stitches: Vec<StitchNode>,
+    /// Optional complete execution order. An empty list retains the conventional
+    /// flat/tube/held-shoulder schedule; a supplied list must cover every stitch once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passes: Vec<KnitPass>,
     /// Explicit short-row turnaround records.
     #[serde(default)]
     pub short_row_turns: Vec<ShortRowTurn>,
@@ -474,6 +524,98 @@ impl KnitDoc {
                             "stitch {} has duplicate parent stack_pos {}",
                             node.id, p.stack_pos
                         ),
+                    ));
+                }
+            }
+        }
+        if !self.passes.is_empty() {
+            let nodes: BTreeMap<_, _> = self.stitches.iter().map(|node| (node.id, node)).collect();
+            let mut scheduled = BTreeSet::new();
+            let mut previous_course = None;
+            let mut previous_end = None;
+            let mut previous_pass_node: Option<&StitchNode> = None;
+            for pass in &self.passes {
+                let first = pass
+                    .stitch_ids
+                    .first()
+                    .and_then(|id| nodes.get(id))
+                    .ok_or_else(|| {
+                        Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "knit pass must name existing stitches",
+                        )
+                    })?;
+                if previous_course.is_some_and(|course| first.course < course) {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        "knit passes must follow nondecreasing source courses",
+                    ));
+                }
+                if let Some((direction, wale)) = previous_end
+                    && direction == pass.direction
+                    && (previous_course != Some(first.course)
+                        || previous_pass_node.is_some_and(|previous| {
+                            previous.carrier_ids != first.carrier_ids
+                                || previous.cam_stitch_setting != first.cam_stitch_setting
+                        })
+                        || match direction {
+                            CourseDir::Plus => first.wale <= wale,
+                            CourseDir::Minus => first.wale >= wale,
+                        })
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        "a new pass must reverse direction or continue monotonically in the same course",
+                    ));
+                }
+                previous_course = Some(first.course);
+                let mut previous_wale = None;
+                for id in &pass.stitch_ids {
+                    let node = nodes.get(id).ok_or_else(|| {
+                        Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            format!("knit pass references missing stitch {id}"),
+                        )
+                    })?;
+                    if !scheduled.insert(*id)
+                        || node.course != first.course
+                        || node.carrier_ids != first.carrier_ids
+                        || node.cam_stitch_setting != first.cam_stitch_setting
+                    {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "each stitch must appear once in a pass with one course, carrier set, and cam setting",
+                        ));
+                    }
+                    if previous_wale.is_some_and(|wale| match pass.direction {
+                        CourseDir::Plus => node.wale <= wale,
+                        CourseDir::Minus => node.wale >= wale,
+                    }) {
+                        return Err(Refusal::new(
+                            RefusalCode::InvalidDocument,
+                            "knit pass needle order contradicts its direction",
+                        ));
+                    }
+                    previous_wale = Some(node.wale);
+                }
+                previous_end = Some((pass.direction, previous_wale.expect("nonempty pass")));
+                previous_pass_node = Some(*first);
+            }
+            if scheduled.len() != self.stitches.len() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "explicit knit passes must schedule every stitch",
+                ));
+            }
+        }
+        let mut cable_addresses = BTreeSet::new();
+        for cable in &self.cable_groups {
+            cable.validate()?;
+            for &wale in cable.left_wales.iter().chain(&cable.right_wales) {
+                if !cable_addresses.insert((cable.course, wale)) {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        "cable groups cannot overlap in the same course",
                     ));
                 }
             }

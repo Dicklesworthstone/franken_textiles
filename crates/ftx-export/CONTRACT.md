@@ -1359,14 +1359,24 @@ checks standalone equality, complete admission, cross-case ties/tradeoffs, inter
 protocol isolation, binding failures and bounded work. Numerical cases do not establish garment fit.
 
 **Knitting machine-format boundary.** Verified Knitout v2 (`.k`), certificates and human charts
-remain available. Kniterate `.kc` requires the actual pass-oriented KCode format; the former
-`HEADER`/`GRIPPER_IN`/`KNIT` instruction text was not that format. Direct `.kc` export and purported
-read-back verification return `unqualified_process` until a real backend and independent fixtures
-are implemented. Profile, program and certificate mismatches retain their distinct failures.
-Native and WASM callers preserve the valid `.k`/charts, expose `backend_export_refusal`, and mark
-the result `machine_executable: false`; the browser also rejects stale engines offering fake `.kc`.
-External conversion through `textiles-lab/knitout-backend-kniterate` remains a separate operator
-workflow. Neither format conversion nor software VM checks authorize hardware execution.
+remain available. Kniterate `.kc` uses actual `HOME`/`RACK`, front/rear needle rasters, hexadecimal
+cam rows, carrier/carriage markers and directional physical passes. A separate parser checks
+frozen MIT-licensed upstream fixtures, transfer alignment and receiving-cam direction, travel
+continuity, calibrated dials and executable pauses. It compares decoded needle actions directly
+with the source Knitout and pass controls with its scheduled intent. The original upstream split
+fixture contains a stale direction opcode and is retained unchanged as a rejection witness.
+`kcode_verification.json` binds the exact KCode bytes to their certified Knitout and upstream
+revision. FTX uses already-certified zero-based needle positions and exact whole cam dials 0..15.
+The receipt also contains independently replayed take-down exposure on actual machine passes.
+Tucks, transfers and splits preserve old held-loop ages, and positive empty-pass advances count.
+The existing holding bound uses 100 nominal upstream roller units per reference course, with
+new-loop ages beginning after their own formation pass. These units are not measured tension
+or distance; `physical_takedown_calibrated` stays false. Over-budget conversions refuse.
+Fractional dials, plated carrier sets and unsupported controls retain `backend_export_refusal`
+alongside useful review artifacts. Profile/program/certificate mismatches remain hard errors.
+Native and WASM run this same Rust backend; browser downloads require matching read-back metadata.
+No software conversion, archive or VM check authorizes hardware execution or supplies physical
+take-down, waste-yarn, washed-gauge or wearer-fit qualification.
 
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
 outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` for a projector page over
@@ -1396,8 +1406,9 @@ certificate, SVG, PDF and instruction files before clients expose output. Suppli
 are retained. Supplied drape receipts must verify their seal, match the document and independently
 selected material, and have no unresolved gating flags; the certificate binds their payload digest.
 
-Kniterate conversion refusal is retained as `backend_export_refusal.json` alongside review artifacts;
-it never becomes a `.kc` file. AYAB refuses multiple operations mapped to one course/wale pixel rather
+Representable Kniterate programs include `program.kc` and `kcode_verification.json`; a specific
+unsupported conversion is retained as `backend_export_refusal.json` alongside review artifacts.
+AYAB refuses multiple operations mapped to one course/wale pixel rather
 than losing a bed. Proprietary targets retain their vendor handoff manifests. CLI output directories
 must be new; portable ZIP files contain the same artifact bytes. Browser inputs carry original JSON
 text through the JavaScript boundary to preserve numeric and sealed-receipt integrity. Software

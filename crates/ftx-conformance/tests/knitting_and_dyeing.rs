@@ -2,7 +2,7 @@
 //! and programmed continuous length-wise yarn dyeing (`FTX-K01`..`FTX-K19`).
 //!
 //! Explicitly separates the Four Claims:
-//! - Format contracts (Knitout v2, Brother AYAB 1-bit PNG, vector CYC SVG/PDF) and KCode refusal,
+//! - Format contracts (Knitout v2, Kniterate pass-oriented KCode, Brother AYAB PNG, CYC SVG/PDF),
 //! - Physics KATs (Poincloux et al. 2018 Rung-3 elastica, exact Kubelka-Munk / Sharma 2005 CIEDE2000,
 //!   conserved-mass capillary transport + VJP, Sobol-CVaR Bertsekas L-BFGS),
 //! - Honesty & safety invariants (child/infant EN 14682 / float / eyelet / tail / fastness gates,
@@ -168,7 +168,7 @@ fn knitting_end_to_end_swatch_panel_tube_and_format_boundaries() {
     assert_eq!(err_unqual.code, RefusalCode::UnqualifiedProcess);
 
     // A matching synthetic swatch qualifies the supported panel and verified Knitout.
-    // Actual pass-oriented Kniterate KCode still requires its separate backend.
+    // The native pass backend retains source identity and independent KCode read-back.
     let compiled = compile_knit_doc(
         &panel_doc,
         &kniterate,
@@ -178,10 +178,10 @@ fn knitting_end_to_end_swatch_panel_tube_and_format_boundaries() {
     )
     .unwrap();
     let ko = export_knitout_v2(&compiled).unwrap();
-    assert_eq!(
-        export_kniterate_kc(&compiled, &kniterate).unwrap_err().code,
-        RefusalCode::UnqualifiedProcess
-    );
+    let kc = export_kniterate_kc(&compiled, &kniterate).unwrap();
+    assert_eq!(kc.verification.program_sha256, compiled.cert.program_sha256);
+    assert!(kc.kc_text.starts_with("HOME\nRACK:0\n"));
+    assert!(!kc.verification.hardware_execution_authorized);
     assert!(!ko.cert.hardware_execution_authorized);
 
     let hand = export_hand_knit_document(&panel_doc, "2026-11-27T08:00").unwrap();

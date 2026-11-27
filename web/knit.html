@@ -100,7 +100,7 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
 
 <section id="panelSection">
   <h2>2. Measured Shaped Panel Preview</h2>
-  <p>Draft a flat panel with side shaping, armhole decreases, and optional double-bed rib. Leave both neckline dimensions at zero for a straight top, or enter a measured opening width and drop. An open neckline holds the center loops and works the shoulders with separate carriers; the held neckline requires manual finishing. Single-bed rib and anchored neckline short rows are not supported. This chart preview does not qualify a production garment; EN 14682 child drawstring restrictions remain part of the separate machine-program checks.</p>
+  <p>Draft a flat panel with side shaping, armhole decreases, and optional double-bed rib. Leave both neckline dimensions at zero for a straight top, or enter a measured opening width and drop. An open neckline holds the center loops and works the shoulders with separate carriers. Optional shoulder short rows use tuck-and-return anchors and rejoin every shoulder loop before bind-off; the held center still requires manual finishing. Single-bed rib remains unsupported. This chart preview does not qualify a production garment; EN 14682 child drawstring restrictions remain part of the separate machine-program checks.</p>
   <div class="row">
     <label>Machine
       <select id="panelMachine">
@@ -136,6 +136,9 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
     </label>
     <label>Neck Drop (mm; 0 for straight top)
       <input id="panelNeckDepth" type="number" min="0" step="any" value="0">
+    </label>
+    <label>Short-Row Pairs per Shoulder
+      <input id="panelShoulderPairs" type="number" min="0" max="30" step="1" value="0">
     </label>
     <button id="runPanel" class="primary" type="button" disabled>Draft &amp; Chart Panel</button>
   </div>

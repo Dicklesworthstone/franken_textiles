@@ -4,7 +4,7 @@
 //! - `ftx knit verify` — 7-check V-bed VM & child-safety verifier for any `ftx-knit/1` document
 //! - `ftx knit export` — recompile and export a saved document with its current qualification
 //! - `ftx knit pullover` — four-piece garment with checked manual seam assembly
-//! - `ftx knit poincloux` — Rung-3 Poincloux et al. (2018) planar elastica analytical KAT curve
+//! - `ftx knit poincloux` — published sliding-swatch comparison or explicitly unvalidated legacy surrogate
 //! - `ftx dye optimize` — 4-stage radiometric KM + Sobol-CVaR Bertsekas L-BFGS + 5-regime Pareto
 //! - `ftx dye verify` — physical dye-rig Capstan/dwell/Tg/accumulator/fastness verifier + `.csv`/`.gcode`/cert
 
@@ -28,9 +28,11 @@ use ftx_pattern::dye::{
     YarnDyeingQualification,
 };
 use ftx_pattern::knit::{
-    DrapeUncertaintyReceipt, GaugeSpec, KnitDoc, KnitSwatchQualification, MachineBackendKind,
-    MachineProfile, ParametricPanelSpec, RaglanPulloverSpec, SeamedPulloverSpec, WearerAgeClass,
-    compile_knit_doc, draft_seamed_pullover, draft_seamless_raglan_tube, draft_shaped_panel,
+    BranchedPulloverSpec, CableGroup, DrapeUncertaintyReceipt, GaugeSpec, KnitDoc,
+    KnitSwatchQualification, MachineBackendKind, MachineProfile, ParametricPanelSpec,
+    RaglanPulloverSpec, SeamedPulloverSpec, WearerAgeClass, apply_cable_crossings,
+    compile_knit_doc, draft_branched_raglan_pullover, draft_seamed_pullover,
+    draft_seamless_raglan_tube, draft_short_row_neckline_panel,
 };
 use ftx_trace::raster::load_target_raster_with_limit;
 use serde_json::{Value, json};
@@ -158,7 +160,7 @@ fn no_extra_positional(args: &Args, expected: usize, usage: &str) -> Result<(), 
     Ok(())
 }
 
-/// Dispatches `ftx knit <swatch|draft|pullover|verify|export|poincloux> ...`.
+/// Dispatches `ftx knit <swatch|draft|pullover|verify|export|shell|poincloux> ...`.
 pub(super) fn cmd_knit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     match args.positional.get(1).map(String::as_str) {
         Some("swatch") => cmd_knit_swatch(args),
@@ -166,9 +168,10 @@ pub(super) fn cmd_knit(args: &Args) -> Result<(Value, i32, String), Refusal> {
         Some("pullover") => cmd_knit_pullover(args),
         Some("verify") => cmd_knit_verify(args),
         Some("export") => cmd_knit_export(args),
+        Some("shell") => crate::knit_shell::cmd_knit_shell(args),
         Some("poincloux") => cmd_knit_poincloux(args),
         _ => Err(bad_input(
-            "expected `ftx knit swatch|draft|pullover|verify|export|poincloux`",
+            "expected `ftx knit swatch|draft|pullover|verify|export|shell|poincloux`",
         )),
     }
 }
@@ -224,12 +227,16 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
             parsed
         }
-        None => vec![
-            profile.cam_setting_range[0]
-                + 0.35 * (profile.cam_setting_range[1] - profile.cam_setting_range[0]),
-            profile.cam_setting_range[0]
-                + 0.55 * (profile.cam_setting_range[1] - profile.cam_setting_range[0]),
-        ],
+        // Choose representable defaults; explicit --cams values above remain unchanged.
+        None if profile.backend_kind == MachineBackendKind::KniterateKc => vec![5.0, 8.0],
+        None => [0.35, 0.55]
+            .into_iter()
+            .map(|fraction| {
+                let setting = profile.cam_setting_range[0]
+                    + fraction * (profile.cam_setting_range[1] - profile.cam_setting_range[0]);
+                (setting * 10.0).round() / 10.0
+            })
+            .collect(),
     };
     let created = match args.options.get("created") {
         Some(c) => c.clone(),
@@ -324,9 +331,13 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
         hand.instructions_text.as_bytes(),
     )?;
 
-    if let Some(kc) = kc {
+    if let Some(kc) = &kc {
         write_file(&out_dir, "swatch.kc", kc.kc_text.as_bytes())?;
+        let verification = serde_json::to_vec_pretty(&kc.verification)
+            .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+        write_file(&out_dir, "kcode_verification.json", &verification)?;
         files.push("swatch.kc".to_string());
+        files.push("kcode_verification.json".to_string());
     } else if let Some(ayab) = ayab {
         write_file(&out_dir, "swatch_ayab.png", &ayab.png_bytes)?;
         write_file(
@@ -356,6 +367,7 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "out_dir": out_dir.display().to_string(),
         "files": files,
         "knitout_sha256": kit.knitout.knitout_sha256,
+        "kcode_verification": kc.as_ref().map(|bundle| &bundle.verification),
         "cert_sha256": kit.knitout.cert.cert_sha256,
         "backend_export_refusal": backend_export_refusal,
         "machine_executable": false,
@@ -395,9 +407,15 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "armhole-inset-mm",
             "neck-mm",
             "neck-depth-mm",
+            "shoulder-short-row-pairs",
             "rib-courses",
             "yoke-mm",
             "collar-rib",
+            "sleeve-cuff-mm",
+            "upper-arm-mm",
+            "sleeve-length-mm",
+            "cuff-rib",
+            "cables",
             "qual",
             "material-sha256",
             "drape-receipt",
@@ -408,7 +426,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     no_extra_positional(
         args,
         2,
-        "ftx knit draft --age-class infant|child|adult --out NEW_DIR [--style panel|tube] [--machine ID] [--qual SWATCH.json --material-sha256 SOURCE_DIGEST]",
+        "ftx knit draft --age-class infant|child|adult --out NEW_DIR [--style panel|tube|pullover] [--machine ID] [--qual SWATCH.json --material-sha256 SOURCE_DIGEST]",
     )?;
     let style = args
         .options
@@ -482,9 +500,29 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ),
     )?;
     let has_drawstring = args.options.contains_key("has-drawstring");
+    let shoulder_short_row_pairs = opt_u32(args, "shoulder-short-row-pairs", 0)?;
+    if shoulder_short_row_pairs != 0 && style != "panel" {
+        return Err(bad_input(
+            "--shoulder-short-row-pairs requires --style panel",
+        ));
+    }
 
+    if style != "pullover"
+        && [
+            "sleeve-cuff-mm",
+            "upper-arm-mm",
+            "sleeve-length-mm",
+            "cuff-rib",
+        ]
+        .iter()
+        .any(|key| args.options.contains_key(*key))
+    {
+        return Err(bad_input(
+            "sleeve dimensions and --cuff-rib require --style pullover",
+        ));
+    }
     let mut doc = match style {
-        "panel" => draft_shaped_panel(
+        "panel" => draft_short_row_neckline_panel(
             &ParametricPanelSpec {
                 name: args
                     .options
@@ -511,14 +549,18 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             },
             &gauge,
             &profile,
+            shoulder_short_row_pairs,
         )?,
-        "tube" | "raglan" => draft_seamless_raglan_tube(
-            &RaglanPulloverSpec {
-                name: args
-                    .options
-                    .get("name")
-                    .cloned()
-                    .unwrap_or_else(|| "shaped_torso_tube".to_string()),
+        "tube" | "raglan" | "pullover" => {
+            let torso = RaglanPulloverSpec {
+                name: args.options.get("name").cloned().unwrap_or_else(|| {
+                    if style == "pullover" {
+                        "branched_raglan_pullover"
+                    } else {
+                        "shaped_torso_tube"
+                    }
+                    .to_string()
+                }),
                 wearer_age_class,
                 neck_girth_mm: opt_f64(args, "neck-mm", 280.0)?,
                 chest_girth_mm: opt_f64(args, "chest-mm", 560.0)?,
@@ -530,16 +572,47 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 yarn_id,
                 carrier_id: profile.carrier_ids[0].clone(),
                 has_hood_or_neck_drawstring: has_drawstring,
-            },
-            &gauge,
-            &profile,
-        )?,
+            };
+            if style == "pullover" {
+                let missing_carriers =
+                    || bad_input("a branched pullover requires three available yarn carriers");
+                draft_branched_raglan_pullover(
+                    &BranchedPulloverSpec {
+                        torso,
+                        sleeve_cuff_girth_mm: opt_f64(args, "sleeve-cuff-mm", 150.0)?,
+                        sleeve_upper_arm_girth_mm: opt_f64(args, "upper-arm-mm", 220.0)?,
+                        sleeve_length_mm: opt_f64(args, "sleeve-length-mm", 200.0)?,
+                        cuff_rib_courses: opt_u32(args, "cuff-rib", 0)?,
+                        left_sleeve_carrier: profile
+                            .carrier_ids
+                            .get(1)
+                            .ok_or_else(missing_carriers)?
+                            .clone(),
+                        right_sleeve_carrier: profile
+                            .carrier_ids
+                            .get(2)
+                            .ok_or_else(missing_carriers)?
+                            .clone(),
+                    },
+                    &gauge,
+                    &profile,
+                )?
+            } else {
+                draft_seamless_raglan_tube(&torso, &gauge, &profile)?
+            }
+        }
         _ => {
             return Err(bad_input(format!(
-                "unknown --style '{style}' (expected panel or tube; raglan is a legacy tube alias)"
+                "unknown --style '{style}' (expected panel, tube or pullover; raglan is a legacy tube alias)"
             )));
         }
     };
+
+    if let Some(groups) =
+        read_optional_knit_json::<Vec<CableGroup>>(args, "cables", "cable groups")?
+    {
+        doc = apply_cable_crossings(&doc, &groups)?;
+    }
 
     let receipt: Option<DrapeUncertaintyReceipt> =
         read_optional_knit_json(args, "drape-receipt", "knit drape receipt")?;
@@ -586,6 +659,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "wearer_age_class": doc.wearer_age_class,
         "stitches": doc.stitches.len(),
         "transfers": bundle.compiled.vm_report.total_transfers,
+        "kcode_verification": bundle.kcode_verification,
         "max_float_mm": bundle.compiled.vm_report.max_float_mm,
         "files": bundle.files.keys().collect::<Vec<_>>(),
         "metadata": doc.metadata,
@@ -754,6 +828,7 @@ fn cmd_knit_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "pattern_sha256": doc.canonical_sha256()?,
         "stitches": doc.stitches.len(),
         "vm_report": bundle.compiled.vm_report,
+        "kcode_verification": bundle.kcode_verification,
         "cert": bundle.compiled.cert,
         "backend_export_refusal": bundle.backend_export_refusal,
         "machine_executable": false,
@@ -836,8 +911,77 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_knit_poincloux(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "knit poincloux", &["mu"])?;
-    no_extra_positional(args, 2, "ftx knit poincloux [--mu MU] [--json]")?;
+    known_options(
+        args,
+        "knit poincloux",
+        &[
+            "mu",
+            "dataset",
+            "fit-min-strain",
+            "fit-max-strain",
+            "check-max-strain",
+            "rmse-limit-n",
+            "max-error-limit-n",
+        ],
+    )?;
+    no_extra_positional(
+        args,
+        2,
+        "ftx knit poincloux [--mu MU] [--dataset published-sliding] [--json]",
+    )?;
+    if let Some(dataset) = args.options.get("dataset") {
+        if dataset != "published-sliding" {
+            return Err(bad_input("--dataset must be published-sliding"));
+        }
+        if args.options.contains_key("mu") {
+            return Err(bad_input(
+                "--mu belongs to the legacy surrogate; the published equation fits separate effective branch moduli",
+            ));
+        }
+        use ftx_drape::knit::poincloux_measured::{ComparisonSettings, compare_measured_sliding};
+        use ftx_pattern::material_catalog::poincloux::{BoundaryCondition, published_force_data};
+        let data = published_force_data(BoundaryCondition::Sliding)?;
+        let settings = ComparisonSettings {
+            fit_strain_range: [
+                opt_f64(args, "fit-min-strain", 0.02)?,
+                opt_f64(args, "fit-max-strain", 0.15)?,
+            ],
+            check_max_strain: opt_f64(args, "check-max-strain", 1.0)?,
+            max_rmse_n: opt_f64(args, "rmse-limit-n", 0.1)?,
+            max_abs_error_n: opt_f64(args, "max-error-limit-n", 0.25)?,
+        };
+        let report = compare_measured_sliding(&data, settings)?;
+        let code = if report.held_out_agreement { 0 } else { 2 };
+        let text = format!(
+            "Published sliding-swatch comparison: {} original measurements; FIT cycles 1-3, CHECK cycles 4-5; held-out criteria {}. Local production and wearer fit remain unqualified.",
+            report.source_rows,
+            if report.held_out_agreement {
+                "passed"
+            } else {
+                "failed (inspect branch refusals and force residuals)"
+            },
+        );
+        return Ok((
+            serde_json::to_value(report)
+                .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
+            code,
+            text,
+        ));
+    }
+    if [
+        "fit-min-strain",
+        "fit-max-strain",
+        "check-max-strain",
+        "rmse-limit-n",
+        "max-error-limit-n",
+    ]
+    .iter()
+    .any(|key| args.options.contains_key(*key))
+    {
+        return Err(bad_input(
+            "measurement comparison options require --dataset published-sliding",
+        ));
+    }
     let mut params = PoinclouxParams::reference_monofilament();
     params.mu_friction = opt_f64(args, "mu", params.mu_friction)?;
     Refusal::finite("mu", params.mu_friction)?;
@@ -863,12 +1007,15 @@ fn cmd_knit_poincloux(args: &Args) -> Result<(Value, i32, String), Refusal> {
         })
         .collect();
     let result = json!({
-        "oracle": "poincloux_2018_planar_elastica",
+        "model": "legacy_knit_elastica_surrogate",
+        "independently_validated": false,
+        "published_equation_6": false,
         "mu_friction": params.mu_friction,
         "points": rows,
+        "comparison_command": "ftx knit poincloux --dataset published-sliding --json",
     });
     let text = format!(
-        "Poincloux (2018) Rung-3 KAT (mu={:.2}): {} points, peak loading tension {:.2} N/m at strain 0.30",
+        "Legacy knit surrogate (mu={:.2}): {} points, peak loading tension {:.2} N/m at strain 0.30. Use --dataset published-sliding for the published equation and measured force comparison.",
         params.mu_friction,
         curve.len(),
         curve.last().map_or(0.0, |p| p.tension_loading_n_m)
@@ -1310,6 +1457,73 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn swatch_defaults_export_without_rounding_explicit_cams() {
+        let root = fresh_dir("default-cams");
+        for (machine, expected) in [("kniterate-7e", [5.0, 8.0]), ("stoll-12e", [34.7, 54.5])] {
+            let out = root.join(machine);
+            let args = parse(
+                &[
+                    "knit",
+                    "swatch",
+                    "--machine",
+                    machine,
+                    "--needles",
+                    "20",
+                    "--courses-per-zone",
+                    "8",
+                    "--created",
+                    "2026-11-27T12:00",
+                    "--out",
+                    out.to_str().unwrap(),
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+            let (result, code, _) = cmd_knit(&args).unwrap();
+            assert_eq!(code, 0);
+            let doc: KnitDoc =
+                serde_json::from_slice(&std::fs::read(out.join("swatch.knit.json")).unwrap())
+                    .unwrap();
+            assert!(
+                doc.stitches
+                    .iter()
+                    .all(|stitch| expected.contains(&stitch.cam_stitch_setting.setting))
+            );
+            for cam in expected {
+                assert!(
+                    doc.stitches
+                        .iter()
+                        .any(|stitch| stitch.cam_stitch_setting.setting == cam)
+                );
+            }
+            if machine == "kniterate-7e" {
+                assert!(out.join("swatch.kc").is_file());
+                assert!(result["backend_export_refusal"].is_null());
+                assert!(result["kcode_verification"].is_object());
+            }
+        }
+
+        let rejected_out = root.join("explicit-quarter-cam");
+        let args = parse(
+            &[
+                "knit",
+                "swatch",
+                "--cams",
+                "5.25,8.25",
+                "--created",
+                "2026-11-27T12:00",
+                "--out",
+                rejected_out.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let refusal = cmd_knit(&args).unwrap_err();
+        assert!(refusal.message.contains("integer tenths"));
+        assert!(!rejected_out.exists());
     }
 
     #[test]
@@ -1781,6 +1995,41 @@ mod tests {
     }
 
     #[test]
+    fn published_force_comparison_reaches_cli_and_keeps_failed_physical_checks() {
+        let args =
+            parse(&["knit", "poincloux", "--dataset", "published-sliding"].map(String::from))
+                .unwrap();
+        let (result, code, text) = cmd_knit(&args).unwrap();
+        assert_eq!(code, 2);
+        assert_eq!(result["source_rows"], 18_141);
+        assert_eq!(result["fit_cycles"], json!([1, 2, 3]));
+        assert_eq!(result["check_cycles"], json!([4, 5]));
+        assert_eq!(result["held_out_agreement"], false);
+        assert!(result["branches"][1]["fit_refusal"].is_object());
+        assert_eq!(result["local_production_qualified"], false);
+        assert_eq!(result["wearer_fit_claimed"], false);
+        assert!(text.contains("criteria failed"));
+        let mixed = parse(
+            &[
+                "knit",
+                "poincloux",
+                "--dataset",
+                "published-sliding",
+                "--mu",
+                "0.2",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert!(cmd_knit(&mixed).is_err());
+        let legacy = parse(&["knit", "poincloux"].map(String::from)).unwrap();
+        let (result, code, _) = cmd_knit(&legacy).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(result["independently_validated"], false);
+        assert_eq!(result["published_equation_6"], false);
+    }
+
+    #[test]
     fn production_draft_uses_qualified_gauge_and_requires_independent_material_identity() {
         let root = fresh_dir("qualified-panel");
         let profile = MachineProfile::kniterate_7e();
@@ -1860,8 +2109,13 @@ mod tests {
         let (result, code, _) = cmd_knit(&args).unwrap();
         assert_eq!(code, 0);
         assert_eq!(result["machine_executable"], false);
-        assert!(result["backend_export_refusal"].is_object());
-        assert!(!out_dir.join("program.kc").exists());
+        assert!(result["backend_export_refusal"].is_null());
+        assert!(out_dir.join("program.kc").exists());
+        assert!(out_dir.join("kcode_verification.json").exists());
+        assert_eq!(
+            result["kcode_verification"]["hardware_execution_authorized"],
+            false
+        );
         let pattern_path = out_dir.join("pattern.knit.json");
         let doc: KnitDoc = serde_json::from_slice(&std::fs::read(&pattern_path).unwrap()).unwrap();
         assert_eq!(doc.gauge.wales_per_100mm, 20.0);
@@ -1875,6 +2129,107 @@ mod tests {
                 .iter()
                 .all(|st| st.cam_stitch_setting.setting == 6.0)
         );
+
+        let cables_path = root.join("cables.json");
+        std::fs::write(
+            &cables_path,
+            serde_json::to_vec(&json!([{
+                "course": 4, "left_wales": [-2, -1], "right_wales": [0, 1], "left_in_front": true
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        let constructions: &[(&str, &[(&str, &str)])] = &[
+            (
+                "neckline",
+                &[
+                    ("neck-mm", "40"),
+                    ("neck-depth-mm", "16"),
+                    ("shoulder-short-row-pairs", "1"),
+                ],
+            ),
+            (
+                "ribbed-tube",
+                &[
+                    ("style", "tube"),
+                    ("chest-mm", "120"),
+                    ("neck-mm", "80"),
+                    ("yoke-mm", "48"),
+                    ("length-mm", "48"),
+                    ("rib-courses", "2"),
+                    ("collar-rib", "2"),
+                ],
+            ),
+            (
+                "branched",
+                &[
+                    ("style", "pullover"),
+                    ("chest-mm", "120"),
+                    ("neck-mm", "80"),
+                    ("yoke-mm", "48"),
+                    ("length-mm", "48"),
+                    ("sleeve-cuff-mm", "40"),
+                    ("upper-arm-mm", "60"),
+                    ("sleeve-length-mm", "48"),
+                    ("cuff-rib", "2"),
+                    ("rib-courses", "2"),
+                    ("collar-rib", "2"),
+                ],
+            ),
+            ("cabled", &[("cables", cables_path.to_str().unwrap())]),
+        ];
+        for (label, options) in constructions {
+            let mut request = Args {
+                positional: args.positional.clone(),
+                options: args.options.clone(),
+                values: args.values.clone(),
+                json: args.json,
+            };
+            let destination = root.join(label);
+            request
+                .options
+                .insert("out".into(), destination.to_str().unwrap().into());
+            for (key, value) in *options {
+                request.options.insert((*key).into(), (*value).into());
+            }
+            let (output, exit, _) =
+                cmd_knit(&request).unwrap_or_else(|error| panic!("{label}: {error:?}"));
+            assert_eq!(exit, 0, "{label}");
+            assert!(
+                output["backend_export_refusal"].is_null(),
+                "{label}: {}",
+                output["backend_export_refusal"]
+            );
+            let saved: KnitDoc = serde_json::from_slice(
+                &std::fs::read(destination.join("pattern.knit.json")).unwrap(),
+            )
+            .unwrap();
+            let compiled = compile_knit_doc(
+                &saved,
+                &profile,
+                Some(&serde_json::from_value(qualification.clone()).unwrap()),
+                Some(&material_sha256),
+                None,
+            )
+            .unwrap();
+            let kc = std::fs::read_to_string(destination.join("program.kc")).unwrap();
+            ftx_export::knit::verify_kniterate_kc_roundtrip(&kc, &compiled, &profile).unwrap();
+            let budget = &output["kcode_verification"]["takedown"];
+            assert_eq!(budget["physical_takedown_calibrated"], false);
+            assert!(
+                budget["max_held_advance_units"].as_u64().unwrap()
+                    <= budget["limit_units"].as_u64().unwrap()
+            );
+            match *label {
+                "neckline" => assert_eq!(saved.short_row_turns.len(), 2),
+                "branched" => assert_eq!(
+                    saved.metadata["boundary_rings"],
+                    "waist_hem,neck,left_wrist_cuff,right_wrist_cuff"
+                ),
+                "cabled" => assert_eq!(saved.cable_groups.len(), 1),
+                _ => assert_eq!(saved.metadata["tube_structure"], "half_gauge_1x1_rib"),
+            }
+        }
 
         let verify = parse(
             &[

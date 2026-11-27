@@ -79,8 +79,8 @@ assert(!page.includes("tr.innerHTML"), "knit-page.js must build table rows with 
 assert(html.includes('id="panelLength" type="number" min="120"'), "panelLength min must stay >= 120 mm");
 
 // 5. Worker enforces WASM interface stamp, cache-busting revision, & local-only execution (no fetch/XMLHttpRequest)
-assert(worker.includes('EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.2"'), "worker missing updated stamp check");
-assert(worker.includes('ftx_wasm.js?v=2026-11-27.2') && worker.includes('ftx_wasm_bg.wasm?v=2026-11-27.2'), "worker missing matching ?v=2026-11-27.2 cache buster");
+assert(worker.includes('EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.3"'), "worker missing updated stamp check");
+assert(worker.includes('ftx_wasm.js?v=2026-11-27.3') && worker.includes('ftx_wasm_bg.wasm?v=2026-11-27.3'), "worker missing matching ?v=2026-11-27.3 cache buster");
 assert(worker.includes("ftx.knit_swatch_json"), "worker missing knit_swatch_json call");
 assert(worker.includes("ftx.knit_panel_preview_json"), "worker missing knit_panel_preview_json call");
 assert(worker.includes("ftx.knit_export_json"), "worker missing knit_export_json call");
@@ -128,6 +128,7 @@ elMap.panelLength.value = "310";
 elMap.panelRib.value = "6";
 elMap.panelNeckWidth.value = "0";
 elMap.panelNeckDepth.value = "0";
+elMap.panelShoulderPairs.value = "0";
 elMap.exportMachine.value = "kniterate-7e";
 elMap.dyeMachine.value = "piezo-cmyk";
 elMap.dyeAgeClass.value = "calibration_swatch_only";
@@ -377,6 +378,37 @@ const swatchPatternLink = elMap.swatchDownloads.children.find((a) => a.download 
 assert(swatchPatternLink, "swatch must supply its reusable pattern JSON");
 assert.equal(await blobByUrl.get(swatchPatternLink.href).text(), '{ "gauge": 0.1234567890123456789 }\r\n', "saved swatch JSON must remain byte-for-byte identical");
 
+// A real KCode result needs an exact source-bound verification and stays hardware-unqualified.
+const kcodeResult = {
+  knitout_text: ";!knitout-2\n",
+  knitout_sha256: "b".repeat(64),
+  pattern_json: '{"name":"KCode swatch"}\n',
+  kc_text: "HOME\nRACK:0\n// fixture response\n",
+  kc_sha256: "c".repeat(64),
+  kcode_verification: {
+    schema: "ftx-kniterate-readback/1",
+    program_sha256: "b".repeat(64),
+    kc_sha256: "c".repeat(64),
+    hardware_execution_authorized: false,
+    takedown: { kc_sha256: "c".repeat(64), machine_sha256: "e".repeat(64), physical_takedown_calibrated: false },
+  },
+  machine_executable: false,
+  backend_export_refusal: null,
+  chart_svg: "<svg></svg>",
+  cert: { hardware_execution_authorized: false, machine_sha256: "e".repeat(64) },
+  qualification_template: {},
+};
+elMap.runSwatch.handlers.click();
+workerInstance.onmessage({ data: { type: "result", kind: "swatch", request: posted.at(-1).request, result: kcodeResult } });
+assert(elMap.swatchDownloads.children.some((a) => a.download === "swatch.kc"));
+assert(elMap.swatchDownloads.children.some((a) => a.download === "kcode_verification.json"));
+assert.match(elMap.swatchPre.textContent, /KCode pass and needle read-back verified/);
+elMap.runSwatch.handlers.click();
+workerInstance.onmessage({ data: { type: "result", kind: "swatch", request: posted.at(-1).request,
+  result: { ...kcodeResult, kcode_verification: { ...kcodeResult.kcode_verification, kc_sha256: "d".repeat(64) } } } });
+assert.equal(elMap.swatchDownloads.children.length, 0);
+assert.match(elMap.error.textContent, /source-bound read-back/);
+
 // An old bundle's invented .kc result must withdraw all prior swatch downloads.
 elMap.runSwatch.handlers.click();
 workerInstance.onmessage({
@@ -450,14 +482,17 @@ assert.equal(defaultPanel.armhole_depth_mm, 95);
 assert.equal(defaultPanel.armhole_inset_total_mm, 36);
 assert.equal(defaultPanel.neck_width_mm, 0);
 assert.equal(defaultPanel.neck_depth_mm, 0);
+assert.equal(posted.at(-1).payload.shoulder_short_row_pairs, 0);
 
 // Measured neckline requests retain the user's exact values and explain the actual construction.
 elMap.panelNeckWidth.value = "93.25";
 elMap.panelNeckDepth.value = "26.5";
+elMap.panelShoulderPairs.value = "2";
 elMap.runPanel.handlers.click();
 const neckPanelRequest = posted.at(-1);
 assert.equal(neckPanelRequest.payload.panel.neck_width_mm, 93.25);
 assert.equal(neckPanelRequest.payload.panel.neck_depth_mm, 26.5);
+assert.equal(neckPanelRequest.payload.shoulder_short_row_pairs, 2);
 workerInstance.onmessage({ data: {
   type: "result", kind: "panel", request: neckPanelRequest.request,
   result: {
@@ -466,12 +501,12 @@ workerInstance.onmessage({ data: {
     doc_sha256: "0123456789abcdef", svg_checks_passed: true, fit_claimed: false,
     chart_svg: "<svg></svg>", instructions_text: "Finish held center loops manually.",
     metadata: {
-      neckline_construction: "center_loops_held_separate_shoulder_carriers",
+      neckline_construction: "held_center_tuck_anchored_shoulders",
       manual_finishing: "Finish held center loops manually.",
     },
   },
 } });
-assert.match(elMap.panelSummary.textContent, /held center neckline loops and separate shoulder carriers; manual finishing required/);
+assert.match(elMap.panelSummary.textContent, /tuck-anchored shoulder short rows and held center neckline loops; manual finishing required/);
 assert.match(elMap.panelPre.textContent, /Finish held center loops manually/);
 
 for (const [width, depth, reason] of [
@@ -505,6 +540,7 @@ assert.match(elMap.error.textContent, /remaining shoulder span/);
 assert.equal(elMap.panelDownloads.children.length, 0);
 elMap.panelNeckWidth.value = "0";
 elMap.panelNeckDepth.value = "0";
+elMap.panelShoulderPairs.value = "0";
 
 // Single-bed rib requests remain visible and refuse, rather than silently turning into jersey.
 const beforeUnsupportedRib = posted.length;
@@ -738,11 +774,11 @@ assert.equal(activeUrls.size, 0, "failed engine's late result must remain unavai
 
 // Execute the worker dispatcher too: only the outer envelope is serialized, preserving raw files.
 const workerSource = worker
-  .replace('import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.2";', "")
+  .replace('import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.3";', "")
   .replace("import.meta.url", '"https://local.invalid/knit-worker.js"');
 let forwardedRequest;
 const workerApi = {
-  wasm_interface_stamp: () => "ftx-wasm-interface/2026-11-27.2",
+  wasm_interface_stamp: () => "ftx-wasm-interface/2026-11-27.3",
   knit_swatch_json: () => '{"ok":true,"result":{}}',
   knit_panel_preview_json: () => '{"ok":true,"result":{}}',
   dye_optimize_json: () => '{"ok":true,"result":{}}',
