@@ -1361,4 +1361,71 @@ mod decode_budget_tests {
             RefusalCode::InvalidDocument
         );
     }
+
+    #[test]
+    fn target_raster_preserves_straight_rgba_alpha_for_transparent_webp() {
+        // Minimal 1x1 lossless VP8L bitstream with alpha_is_used = 1, RGB = (40, 180, 90), A = 128.
+        let mut acc = 0u64;
+        let mut bits = 0u32;
+        let mut vp8l = Vec::new();
+        let mut put = |val: u32, n: u32| {
+            acc |= u64::from(val & ((1u32 << n) - 1)) << bits;
+            bits += n;
+            while bits >= 8 {
+                vp8l.push(acc as u8);
+                acc >>= 8;
+                bits -= 8;
+            }
+        };
+        put(0x2f, 8); // VP8L signature
+        put(0, 14); // width - 1 = 0 (1 px)
+        put(0, 14); // height - 1 = 0 (1 px)
+        put(1, 1); // alpha_is_used = 1
+        put(0, 3); // version = 0
+        put(0, 1); // no transforms
+        put(0, 1); // no color cache
+        put(0, 1); // no meta huffman
+        for sym in [180u32, 40, 90, 128, 0] {
+            // Simple 1-symbol Huffman codes for G, R, B, A, distance
+            put(1, 1);
+            put(0, 1);
+            if sym < 2 {
+                put(0, 1);
+                put(sym, 1);
+            } else {
+                put(1, 1);
+                put(sym, 8);
+            }
+        }
+        if bits > 0 {
+            vp8l.push(acc as u8);
+        }
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WEBP");
+        body.extend_from_slice(b"VP8L");
+        body.extend_from_slice(&(vp8l.len() as u32).to_le_bytes());
+        body.extend_from_slice(&vp8l);
+        if !body.len().is_multiple_of(2) {
+            body.push(0);
+        }
+        let mut webp = Vec::new();
+        webp.extend_from_slice(b"RIFF");
+        webp.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        webp.extend_from_slice(&body);
+
+        let raster = load_target_raster_with_limit(&webp, 16).unwrap();
+        assert_eq!((raster.width, raster.height), (1, 1));
+        assert_eq!(raster.srgb_u8[0], [40, 180, 90]);
+        assert!((raster.alpha_weight[0] - 128.0 / 255.0).abs() < 1e-6);
+
+        // Pixel budget enforcement on WebP fails closed with BudgetExceeded.
+        assert_eq!(
+            load_target_raster_with_limit(&webp, 0).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+
+        // Legacy decode() still composites over white (Pillow parity preserved).
+        let legacy = super::super::webp::decode(&webp, 16).unwrap();
+        assert_ne!(&legacy.data[0..3], &[90, 180, 40]);
+    }
 }

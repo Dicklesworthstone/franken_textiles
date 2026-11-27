@@ -87,6 +87,9 @@ pub fn decode_rgba(bytes: &[u8], max_pixels: usize) -> Result<super::StraightRgb
     let rgba = if (fw, fh) == (w, h) {
         decoded
     } else {
+        if xo.checked_add(fw).is_none_or(|x| x > w) || yo.checked_add(fh).is_none_or(|y| y > h) {
+            return Err("WebP: animation frame exceeds canvas bounds".into());
+        }
         let mut canvas = vec![0u8; w * h * 4];
         for (y, row) in decoded.chunks_exact(fw * 4).enumerate() {
             let at = ((yo + y) * w + xo) * 4;
@@ -133,6 +136,9 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
     let rgba = if (fw, fh) == (w, h) {
         decoded
     } else {
+        if xo.checked_add(fw).is_none_or(|x| x > w) || yo.checked_add(fh).is_none_or(|y| y > h) {
+            return Err("WebP: animation frame exceeds canvas bounds".into());
+        }
         let mut canvas = vec![0u8; w * h * 4];
         for (y, row) in decoded.chunks_exact(fw * 4).enumerate() {
             let at = ((yo + y) * w + xo) * 4;
