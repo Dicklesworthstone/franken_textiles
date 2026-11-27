@@ -1,7 +1,7 @@
 //! Pathway 1 measured knitting drafters (`FTX-K05`):
 //! - Hard-capped stepped calibration swatch generator (`CalibrationSwatchOnly`),
-//! - Measured fully-fashioned flat panel drafter (ribbed hem, waist/armhole decreases, short-row neck),
-//! - Seamless top-down raglan pullover tube drafter.
+//! - Measured flat panel drafter (ribbed hem, side taper, armhole decreases, chain bind-off),
+//! - Top-down shaped torso tube drafter; sleeve branches and tubular rib remain unsupported.
 //!
 //! All drafters report exact per-section mm quantization residuals honestly.
 
@@ -11,8 +11,8 @@ use ftx_core::{Refusal, RefusalCode};
 use serde::{Deserialize, Serialize};
 
 use super::ir::{
-    Bed, CamStitchSetting, CarrierId, CourseDir, GaugeSpec, KNIT_SCHEMA, KnitDoc, LoopKind,
-    ParentRef, ShortRowTurn, StitchNode, YarnRun,
+    Bed, CamStitchSetting, CarrierId, GaugeSpec, KNIT_SCHEMA, KnitDoc, LoopKind, ParentRef,
+    StitchNode, YarnRun,
 };
 use super::profile::{CalibrationSwatchCaps, MachineProfile, WearerAgeClass};
 
@@ -37,9 +37,9 @@ pub struct ParametricPanelSpec {
     pub armhole_depth_mm: f64,
     /// Armhole total width reduction across both sides combined, in mm (`>= 0`).
     pub armhole_inset_total_mm: f64,
-    /// Neck opening width at top, in mm (`0.0` for closed straight top).
+    /// Neck opening width at top, in mm; must be zero until short-row shaping is supported.
     pub neck_width_mm: f64,
-    /// Neck drop below shoulder line, in mm (`0.0` for straight top).
+    /// Neck drop below shoulder line, in mm; must be zero until short-row shaping is supported.
     pub neck_depth_mm: f64,
     /// Number of 1x1 rib courses at the bottom hem (`0` for plain stockinette).
     pub rib_hem_courses: u32,
@@ -54,7 +54,7 @@ pub struct ParametricPanelSpec {
     pub has_hood_or_neck_drawstring: bool,
 }
 
-/// Parameters for a top-down seamless raglan pullover tube.
+/// Parameters for a top-down shaped torso tube. Sleeve branches are not drafted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RaglanPulloverSpec {
@@ -70,9 +70,9 @@ pub struct RaglanPulloverSpec {
     pub yoke_depth_mm: f64,
     /// Torso length below underarm to hem, in mm.
     pub body_length_below_arm_mm: f64,
-    /// Collar rib course count.
+    /// Collar rib course count; must be zero until tubular rib scheduling is supported.
     pub collar_rib_courses: u32,
-    /// Bottom hem rib course count.
+    /// Bottom hem rib course count; must be zero until tubular rib scheduling is supported.
     pub hem_rib_courses: u32,
     /// Dimensionless cam stitch setting.
     pub cam_setting: f64,
@@ -218,7 +218,8 @@ pub fn draft_calibration_swatch(
         }
     }
 
-    // Final bind-off course
+    // Keep the final course on the needles for an explicit manual bind-off. An automatic
+    // chain bind-off needs transfers, which unqualified calibration swatches forbid.
     for w in 0..needles {
         let pid = prev_row[w as usize];
         stitches.push(StitchNode {
@@ -226,7 +227,7 @@ pub fn draft_calibration_swatch(
             course: course_idx,
             wale: w as i32,
             bed: Bed::Front,
-            kind: LoopKind::BindOff,
+            kind: LoopKind::Knit,
             parents: vec![ParentRef {
                 stitch_id: pid,
                 stack_pos: 0,
@@ -244,6 +245,7 @@ pub fn draft_calibration_swatch(
 
     let mut metadata = BTreeMap::new();
     metadata.insert("calibration_swatch_only".to_string(), "true".to_string());
+    metadata.insert("completion".to_string(), "manual_bind_off".to_string());
     metadata.insert(
         "max_speed_fraction".to_string(),
         format!("{:.2}", CalibrationSwatchCaps::MAX_SPEED_FRACTION),
@@ -292,8 +294,8 @@ pub fn draft_calibration_swatch(
     Ok(doc)
 }
 
-/// Drafts a measured fully-fashioned flat panel (hem rib, side taper, armhole decreases, and
-/// anchored short-row neckline) with exact mm stitch/course quantization residuals.
+/// Drafts a measured flat panel with hem rib, side taper, armhole decreases, and an explicit
+/// chain bind-off. Neck shaping refuses until its short-row topology can be compiled faithfully.
 ///
 /// # Errors
 /// [`RefusalCode::OutOfRange`], [`RefusalCode::NonFinite`], or [`RefusalCode::MaterialProcessHazard`].
@@ -426,9 +428,11 @@ pub fn draft_shaped_panel(
         ));
     }
     let armhole_courses = (spec.armhole_depth_mm / course_height).round() as u32;
-    let armhole_start = total_courses
+    // Finish width shaping before the terminal chain, so every bind-off starts with its own loop.
+    let last_body_course = total_courses - 1;
+    let armhole_start = last_body_course
         .saturating_sub(armhole_courses)
-        .max(spec.rib_hem_courses + 2);
+        .max(spec.rib_hem_courses + 1);
     if spec.armhole_inset_total_mm >= spec.chest_width_mm {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
@@ -448,31 +452,35 @@ pub fn draft_shaped_panel(
             ),
         ));
     }
-    let neck_courses = (spec.neck_depth_mm / course_height).round() as u32;
-    let neck_start = total_courses.saturating_sub(neck_courses);
-    let neck_half = if neck_courses > 0 {
-        let nh = ((spec.neck_width_mm * 0.5) / wale_pitch).round() as i32;
-        if spec.neck_width_mm <= 0.0 || nh < 1 || nh >= min_shoulder_half {
-            return Err(Refusal::new(
-                RefusalCode::OutOfRange,
-                format!(
-                    "neck_width_mm ({:.1} mm, half-width {nh} st) must fit strictly inside remaining shoulder half-width ({min_shoulder_half} st)",
-                    spec.neck_width_mm
-                ),
-            ));
-        }
-        nh
-    } else {
-        0
-    };
+    if spec.neck_width_mm != 0.0 || spec.neck_depth_mm != 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "panel neck shaping requires a short-row topology that is not yet supported",
+        )
+        .repair("set neck_width_mm and neck_depth_mm to zero for a straight-top panel"));
+    }
+    if spec.rib_hem_courses > 0 && !profile.has_back_bed {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            "a ribbed panel requires independently controlled front and back beds",
+        )
+        .repair("use a double-bed machine or request zero rib_hem_courses"));
+    }
+    if armhole_inset_per_side > 0 && (armhole_courses == 0 || armhole_start >= last_body_course) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "panel has no knitted courses available for the requested armhole decrease",
+        )
+        .repair("increase the panel or armhole depth, or reduce the rib course count"));
+    }
 
     let est_loop_mm = 2.6 * wale_pitch;
     let mut stitches = Vec::new();
-    let mut short_row_turns = Vec::new();
     let mut prev_map: BTreeMap<i32, u32> = BTreeMap::new();
     let mut next_id = 0u32;
 
     let half_wales_at = |c: u32| -> i32 {
+        let c = c.min(last_body_course);
         if c <= spec.rib_hem_courses {
             hem_wales / 2
         } else if c < armhole_start {
@@ -481,7 +489,7 @@ pub fn draft_shaped_panel(
             let w = f64::from(hem_wales) + t * f64::from(chest_wales - hem_wales);
             (w * 0.5).round().max(2.0) as i32
         } else {
-            let span = (total_courses - armhole_start).max(1) as f64;
+            let span = (last_body_course - armhole_start).max(1) as f64;
             let t = (f64::from(c - armhole_start) / span).min(1.0);
             let dec = (t * f64::from(armhole_inset_per_side)).round() as i32;
             chest_wales / 2 - dec
@@ -493,63 +501,47 @@ pub fn draft_shaped_panel(
         let left = -half;
         let right = half - 1;
         let mut cur_map = BTreeMap::new();
-        let is_rib = c > 0 && c <= spec.rib_hem_courses && profile.has_back_bed;
-
-        // If inside neck shaping region, emit anchored short-row turnaround on shoulders
-        if neck_courses > 0 && c >= neck_start && c < total_courses {
-            short_row_turns.push(ShortRowTurn {
-                course: c,
-                turn_wale: neck_half,
-                dir_after: if c.is_multiple_of(2) {
-                    CourseDir::Minus
-                } else {
-                    CourseDir::Plus
-                },
-                anchored: true,
-            });
+        let is_rib = c > 0 && c <= spec.rib_hem_courses;
+        let mut wales: Vec<i32> = (left..=right).collect();
+        if !c.is_multiple_of(2) {
+            wales.reverse();
         }
+        let mut bind_chain = None;
 
-        for w in left..=right {
+        for w in wales {
             let bed = if is_rib && (w.rem_euclid(2) == 1) {
                 Bed::Back
             } else {
                 Bed::Front
             };
             let mut parents = Vec::new();
-            if c > 0 {
-                if let Some(&pid) = prev_map.get(&w) {
-                    parents.push(ParentRef {
-                        stitch_id: pid,
-                        stack_pos: 0,
-                    });
-                } else if let Some(&pid) = prev_map.get(&(w + 1)).or_else(|| prev_map.get(&(w - 1)))
-                {
-                    parents.push(ParentRef {
-                        stitch_id: pid,
-                        stack_pos: 0,
-                    });
+            if let Some(&pid) = prev_map.get(&w) {
+                append_parent(&mut parents, pid, profile)?;
+            }
+            // Every disappearing edge loop belongs to the retained edge's decrease. Never
+            // lose a loop when a coarse course removes more than one needle on either side.
+            if w == left {
+                for (_, &pid) in prev_map.range(..left) {
+                    append_parent(&mut parents, pid, profile)?;
                 }
-                // Merge outer edge stitch cleanly on symmetrical decrease courses
-                if w == left
-                    && let Some(&outer) = prev_map.get(&(w - 1))
-                {
-                    parents.push(ParentRef {
-                        stitch_id: outer,
-                        stack_pos: 1,
-                    });
-                } else if w == right
-                    && let Some(&outer) = prev_map.get(&(w + 1))
-                {
-                    parents.push(ParentRef {
-                        stitch_id: outer,
-                        stack_pos: 1,
-                    });
+            } else if w == right {
+                for (&old_wale, &pid) in prev_map.iter().rev() {
+                    if old_wale <= right {
+                        break;
+                    }
+                    append_parent(&mut parents, pid, profile)?;
                 }
             }
-            let kind = if c == 0 {
-                LoopKind::CastOn
-            } else if c == total_courses {
+            let kind = if c == total_courses {
+                if let Some(pid) = bind_chain {
+                    append_parent(&mut parents, pid, profile)?;
+                }
+                bind_chain = Some(next_id);
                 LoopKind::BindOff
+            } else if parents.is_empty() {
+                // Edge widening casts on a new loop; it must not consume a neighbor's loop
+                // already used by that neighbor in this course.
+                LoopKind::CastOn
             } else if parents.len() >= 2 {
                 LoopKind::Decrease
             } else if bed == Bed::Back {
@@ -607,7 +599,7 @@ pub fn draft_shaped_panel(
         wearer_age_class: spec.wearer_age_class,
         gauge: gauge.clone(),
         stitches,
-        short_row_turns,
+        short_row_turns: vec![],
         cable_groups: vec![],
         yarn_runs: vec![YarnRun {
             run_id: 0,
@@ -625,7 +617,8 @@ pub fn draft_shaped_panel(
     Ok(doc)
 }
 
-/// Drafts a top-down seamless raglan pullover body tube (front + back bed circular knitting).
+/// Drafts a top-down shaped body tube with distinct front/back loops and chain bind-off.
+/// This tube does not include sleeve openings or a branched raglan garment.
 ///
 /// # Errors
 /// [`RefusalCode::OutOfRange`] or [`RefusalCode::MachineStateInfeasible`].
@@ -691,6 +684,14 @@ pub fn draft_seamless_raglan_tube(
                 spec.cam_setting, profile.cam_setting_range
             ),
         ));
+    }
+
+    if spec.collar_rib_courses != 0 || spec.hem_rib_courses != 0 {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            "tubular collar and hem rib require a half-gauge schedule that is not yet supported",
+        )
+        .repair("set collar_rib_courses and hem_rib_courses to zero for a shaped stockinette torso tube"));
     }
 
     let wale_pitch = gauge.blocked_wale_pitch_mm();
@@ -777,32 +778,28 @@ pub fn draft_seamless_raglan_tube(
         let mut cur_front = BTreeMap::new();
         let mut cur_back = BTreeMap::new();
 
+        let mut bind_chain = None;
         for (bed, prev_bed, cur_bed) in [
             (Bed::Front, &prev_front, &mut cur_front),
             (Bed::Back, &prev_back, &mut cur_back),
         ] {
-            for w in left..=right {
+            let mut wales: Vec<i32> = (left..=right).collect();
+            if bed == Bed::Back {
+                wales.reverse();
+            }
+            for w in wales {
                 let mut parents = Vec::new();
-                if c > 0
-                    && let Some(&pid) = prev_bed
-                        .get(&w)
-                        .or_else(|| prev_bed.get(&(w - 1)))
-                        .or_else(|| prev_bed.get(&(w + 1)))
-                {
-                    parents.push(ParentRef {
-                        stitch_id: pid,
-                        stack_pos: 0,
-                    });
+                if let Some(&pid) = prev_bed.get(&w) {
+                    append_parent(&mut parents, pid, profile)?;
                 }
-                let kind = if c == 0 {
-                    LoopKind::CastOn
-                } else if c == total_courses {
+                let kind = if c == total_courses {
+                    if let Some(pid) = bind_chain {
+                        append_parent(&mut parents, pid, profile)?;
+                    }
+                    bind_chain = Some(next_id);
                     LoopKind::BindOff
-                } else if c > spec.collar_rib_courses
-                    && c <= spec.collar_rib_courses + yoke_courses
-                    && !prev_bed.contains_key(&w)
-                {
-                    LoopKind::Increase
+                } else if parents.is_empty() {
+                    LoopKind::CastOn
                 } else if bed == Bed::Back {
                     LoopKind::Purl
                 } else {
@@ -835,7 +832,7 @@ pub fn draft_seamless_raglan_tube(
     let mut metadata = BTreeMap::new();
     metadata.insert(
         "pathway".to_string(),
-        "top_down_seamless_raglan".to_string(),
+        "top_down_shaped_torso_tube".to_string(),
     );
     metadata.insert(
         "neck_girth_residual_mm".to_string(),
@@ -876,9 +873,97 @@ pub fn draft_seamless_raglan_tube(
     Ok(doc)
 }
 
+fn append_parent(
+    parents: &mut Vec<ParentRef>,
+    stitch_id: u32,
+    profile: &MachineProfile,
+) -> Result<(), Refusal> {
+    if parents.len() >= usize::from(profile.max_loops_per_hook) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            "drafted decrease or bind-off exceeds the machine hook-stack capacity",
+        )
+        .repair("spread the width change over more courses or reduce the armhole inset"));
+    }
+    parents.push(ParentRef {
+        stitch_id,
+        stack_pos: parents.len() as u8,
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_consumed_once(doc: &KnitDoc) {
+        let mut uses: BTreeMap<u32, usize> = doc.stitches.iter().map(|st| (st.id, 0)).collect();
+        for st in &doc.stitches {
+            for (index, parent) in st.parents.iter().enumerate() {
+                assert_eq!(usize::from(parent.stack_pos), index);
+                *uses.get_mut(&parent.stitch_id).unwrap() += 1;
+            }
+            if st.kind == LoopKind::CastOn {
+                assert!(st.parents.is_empty());
+            }
+        }
+        let final_id = doc.stitches.last().unwrap().id;
+        for st in &doc.stitches {
+            assert_eq!(
+                uses[&st.id],
+                usize::from(st.id != final_id),
+                "loop {}",
+                st.id
+            );
+        }
+        assert_eq!(doc.stitches.last().unwrap().kind, LoopKind::BindOff);
+    }
+
+    #[test]
+    fn coarse_taper_retains_every_removed_edge_loop_and_declared_dimensions() {
+        let prof = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 20.0,
+            courses_per_100mm: 10.0,
+            needle_pitch_mm: prof.needle_pitch_mm,
+            yarn_tex: Some(180.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        let spec = ParametricPanelSpec {
+            name: "coarse_taper".to_string(),
+            wearer_age_class: WearerAgeClass::Adult,
+            hem_width_mm: 200.0,
+            chest_width_mm: 100.0,
+            length_mm: 80.0,
+            armhole_depth_mm: 0.0,
+            armhole_inset_total_mm: 0.0,
+            neck_width_mm: 0.0,
+            neck_depth_mm: 0.0,
+            rib_hem_courses: 0,
+            cam_setting: 8.0,
+            yarn_id: "synthetic-yarn".to_string(),
+            carrier_id: CarrierId("1".to_string()),
+            has_hood_or_neck_drawstring: false,
+        };
+        let doc = draft_shaped_panel(&spec, &gauge, &prof).unwrap();
+        assert_consumed_once(&doc);
+        assert_eq!(doc.stitches.iter().filter(|st| st.course == 0).count(), 40);
+        assert_eq!(doc.stitches.iter().filter(|st| st.course == 8).count(), 20);
+        assert!(
+            doc.stitches
+                .iter()
+                .any(|st| st.kind == LoopKind::Decrease && st.parents.len() >= 3)
+        );
+        let mut tight_hook = prof;
+        tight_hook.max_loops_per_hook = 2;
+        assert_eq!(
+            draft_shaped_panel(&spec, &gauge, &tight_hook)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+    }
 
     #[test]
     fn calibration_swatch_enforces_hard_caps() {
@@ -887,6 +972,8 @@ mod tests {
             draft_calibration_swatch(&prof, "wool-200tex", 40, 20, &[6.0, 8.0, 10.0]).unwrap();
         assert_eq!(doc.wearer_age_class, WearerAgeClass::CalibrationSwatchOnly);
         assert_eq!(doc.stitches.len(), 40 * (60 + 2));
+        assert!(doc.stitches.iter().all(|st| st.kind != LoopKind::BindOff));
+        assert_eq!(doc.metadata["completion"], "manual_bind_off");
 
         // Exceeding 80 needles is refused fail-closed
         let err = draft_calibration_swatch(&prof, "wool-200tex", 90, 20, &[8.0]).unwrap_err();
@@ -913,8 +1000,8 @@ mod tests {
                 length_mm: 360.0,
                 armhole_depth_mm: 120.0,
                 armhole_inset_total_mm: 40.0,
-                neck_width_mm: 110.0,
-                neck_depth_mm: 40.0,
+                neck_width_mm: 0.0,
+                neck_depth_mm: 0.0,
                 rib_hem_courses: 8,
                 cam_setting: 8.0,
                 yarn_id: "merino-180tex".to_string(),
@@ -926,18 +1013,19 @@ mod tests {
         )
         .unwrap();
         assert!(panel.metadata.contains_key("chest_width_residual_mm"));
-        assert!(!panel.short_row_turns.is_empty());
+        assert!(panel.short_row_turns.is_empty());
+        assert_consumed_once(&panel);
 
         let raglan = draft_seamless_raglan_tube(
             &RaglanPulloverSpec {
-                name: "toddler_raglan".to_string(),
+                name: "toddler_torso_tube".to_string(),
                 wearer_age_class: WearerAgeClass::Child3To14,
                 neck_girth_mm: 280.0,
                 chest_girth_mm: 580.0,
                 yoke_depth_mm: 130.0,
                 body_length_below_arm_mm: 200.0,
-                collar_rib_courses: 6,
-                hem_rib_courses: 8,
+                collar_rib_courses: 0,
+                hem_rib_courses: 0,
                 cam_setting: 8.0,
                 yarn_id: "merino-180tex".to_string(),
                 carrier_id: CarrierId("1".to_string()),
@@ -948,6 +1036,18 @@ mod tests {
         )
         .unwrap();
         assert!(raglan.metadata.contains_key("chest_girth_residual_mm"));
+        assert_consumed_once(&raglan);
+        let last_course = raglan.stitches.last().unwrap().course;
+        let terminal: Vec<_> = raglan
+            .stitches
+            .iter()
+            .filter(|st| st.course == last_course)
+            .collect();
+        assert_eq!(terminal.first().unwrap().bed, Bed::Front);
+        assert_eq!(terminal.last().unwrap().bed, Bed::Back);
+        for pair in terminal.windows(2) {
+            assert_eq!(pair[1].parents.last().unwrap().stitch_id, pair[0].id);
+        }
 
         // Non-finite raglan inputs and out-of-range panel inputs fail closed instead of clamping.
         let nan_raglan = draft_seamless_raglan_tube(
@@ -1028,8 +1128,8 @@ mod tests {
             length_mm: 360.0,
             armhole_depth_mm: 120.0,
             armhole_inset_total_mm: 40.0,
-            neck_width_mm: 110.0,
-            neck_depth_mm: 40.0,
+            neck_width_mm: 0.0,
+            neck_depth_mm: 0.0,
             rib_hem_courses: 8,
             cam_setting: 8.0,
             yarn_id: "merino-180tex".to_string(),
@@ -1047,7 +1147,7 @@ mod tests {
             RefusalCode::OutOfRange
         );
 
-        // Neck opening wider than remaining shoulder span must refuse OutOfRange (no silent clamp).
+        // A requested neckline must not silently become a rectangular straight top.
         let mut bad_neck = base_panel.clone();
         bad_neck.neck_width_mm = 280.0;
         assert_eq!(
@@ -1087,19 +1187,25 @@ mod tests {
 
         // Extreme raglan girth & height refuse cleanly without overflow or OOM.
         let base_raglan = RaglanPulloverSpec {
-            name: "raglan".to_string(),
+            name: "torso_tube".to_string(),
             wearer_age_class: WearerAgeClass::Adult,
             neck_girth_mm: 280.0,
             chest_girth_mm: 580.0,
             yoke_depth_mm: 130.0,
             body_length_below_arm_mm: 200.0,
-            collar_rib_courses: 6,
-            hem_rib_courses: 8,
+            collar_rib_courses: 0,
+            hem_rib_courses: 0,
             cam_setting: 8.0,
             yarn_id: "merino-180tex".to_string(),
             carrier_id: CarrierId("1".to_string()),
             has_hood_or_neck_drawstring: false,
         };
+        let mut unsupported_rib = base_raglan.clone();
+        unsupported_rib.collar_rib_courses = 2;
+        let refusal = draft_seamless_raglan_tube(&unsupported_rib, &gauge, &prof).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::MachineStateInfeasible);
+        assert!(refusal.message.contains("rib"));
+
         let mut huge_girth = base_raglan.clone();
         huge_girth.chest_girth_mm = 1.0e15;
         assert_eq!(

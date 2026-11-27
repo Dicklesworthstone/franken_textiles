@@ -34,6 +34,9 @@ pub struct KnitSwatchRequest {
     pub machine: String,
     /// Yarn identifier label.
     pub yarn_id: String,
+    /// Optional independent source material digest retained in the blank qualification template.
+    #[serde(default)]
+    pub material_sha256: Option<String>,
     /// Active needle width (`4..=80`).
     pub needles: u32,
     /// Courses per stepped cam zone.
@@ -167,21 +170,25 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
     let req: KnitSwatchRequest = serde_json::from_str(request_json)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     let profile = resolve_knit_machine(&req.machine)?;
+    let material_sha256 = match req.material_sha256.as_deref() {
+        Some(value) if value.trim().is_empty() => {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "material_sha256 must identify the selected source material",
+            ));
+        }
+        Some(value) => value,
+        None => SWATCH_MATERIAL_PLACEHOLDER,
+    };
     let kit = export_calibration_swatch_kit(
         &profile,
         &req.yarn_id,
-        SWATCH_MATERIAL_PLACEHOLDER,
+        material_sha256,
         req.needles,
         req.courses_per_zone,
         &req.cam_settings,
     )?;
-    let compiled = compile_knit_doc(
-        &kit.doc,
-        &profile,
-        None,
-        Some(SWATCH_MATERIAL_PLACEHOLDER),
-        None,
-    )?;
+    let compiled = compile_knit_doc(&kit.doc, &profile, None, Some(material_sha256), None)?;
     if compiled.cert.cert_sha256 != kit.knitout.cert.cert_sha256 {
         return Err(Refusal::new(
             RefusalCode::VerificationMismatch,
@@ -190,8 +197,16 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
     }
     let hand = export_hand_knit_document(&kit.doc, &req.created)?;
     let svg_checks = check_hand_knit_svg(&hand.svg_text, "swatch.svg");
+    let mut backend_export_refusal = None;
     let kc_text = if profile.backend_kind == MachineBackendKind::KniterateKc {
-        Some(export_kniterate_kc(&compiled, &profile)?.kc_text)
+        match export_kniterate_kc(&compiled, &profile) {
+            Ok(bundle) => Some(bundle.kc_text),
+            Err(refusal) if refusal.code == RefusalCode::UnqualifiedProcess => {
+                backend_export_refusal = Some(refusal);
+                None
+            }
+            Err(refusal) => return Err(refusal),
+        }
     } else {
         None
     };
@@ -206,6 +221,8 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
         "knitout_text": kit.knitout.knitout_text,
         "knitout_sha256": kit.knitout.knitout_sha256,
         "kc_text": kc_text,
+        "backend_export_refusal": backend_export_refusal,
+        "machine_executable": false,
         "ayab_checklist": ayab.as_ref().map(|b| &b.checklist),
         "ayab_png_base64": ayab.as_ref().map(|b| encode_base64(&b.png_bytes)),
         "ayab_png_sha256": ayab.as_ref().map(|b| &b.png_sha256),
@@ -535,7 +552,18 @@ mod tests {
         let sw_out: Value = serde_json::from_str(&knit_swatch_json(&swatch_req).unwrap()).unwrap();
         assert_eq!(sw_out["svg_checks_passed"], true);
         assert_eq!(sw_out["cert"]["hardware_execution_authorized"], false);
-        assert!(sw_out["kc_text"].as_str().unwrap().contains("GRIPPER_IN 1"));
+        assert!(sw_out["kc_text"].is_null());
+        assert!(
+            sw_out["knitout_text"]
+                .as_str()
+                .unwrap()
+                .starts_with(";!knitout-2")
+        );
+        assert_eq!(sw_out["machine_executable"], false);
+        assert_eq!(
+            sw_out["backend_export_refusal"]["code"],
+            serde_json::to_value(RefusalCode::UnqualifiedProcess).unwrap()
+        );
 
         let mut pixels = Vec::with_capacity(16);
         for y in 0..4 {
@@ -584,9 +612,9 @@ mod tests {
                 "length_mm": 310.0,
                 "armhole_depth_mm": 95.0,
                 "armhole_inset_total_mm": 36.0,
-                "neck_width_mm": 105.0,
-                "neck_depth_mm": 24.0,
-                "rib_hem_courses": 6,
+                "neck_width_mm": 0.0,
+                "neck_depth_mm": 0.0,
+                "rib_hem_courses": 0,
                 "cam_setting": 7.0,
                 "yarn_id": "merino-200tex",
                 "carrier_id": "A",
@@ -606,6 +634,15 @@ mod tests {
         assert_eq!(panel_out["svg_checks_passed"], true);
         assert_eq!(panel_out["fit_claimed"], false);
         assert_eq!(panel_out["hardware_execution_authorized"], false);
+        let mut unsupported_neck: Value = serde_json::from_str(&panel_req).unwrap();
+        unsupported_neck["panel"]["neck_width_mm"] = json!(105.0);
+        unsupported_neck["panel"]["neck_depth_mm"] = json!(24.0);
+        assert_eq!(
+            knit_panel_preview_json(&unsupported_neck.to_string())
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
 
         let first_pareto = &dye_out["pareto_regimes"][0];
         assert!(first_pareto["expected_delta_e00_p95"].as_f64().is_some());
@@ -708,6 +745,30 @@ mod tests {
         assert_eq!(
             out["ayab_checklist"]["png_sha256"].as_str(),
             Some(sha.as_str())
+        );
+    }
+
+    #[test]
+    fn swatch_template_preserves_an_independently_supplied_material_identity() {
+        let digest = "a".repeat(64);
+        let mut request = json!({
+            "machine": "kniterate-7e",
+            "yarn_id": "synthetic-yarn-lot",
+            "material_sha256": digest,
+            "needles": 8,
+            "courses_per_zone": 2,
+            "cam_settings": [6.0]
+        });
+        let result: Value =
+            serde_json::from_str(&knit_swatch_json(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(result["qualification_template"]["material_sha256"], digest);
+        assert_eq!(result["cert"]["hardware_execution_authorized"], false);
+        assert!(result["kc_text"].is_null());
+        assert!(result["backend_export_refusal"].is_object());
+        request["material_sha256"] = json!(" ");
+        assert_eq!(
+            knit_swatch_json(&request.to_string()).unwrap_err().code,
+            RefusalCode::InvalidDocument
         );
     }
 

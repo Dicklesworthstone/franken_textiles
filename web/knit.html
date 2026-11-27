@@ -60,7 +60,7 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
   <div class="row">
     <label>Machine Profile
       <select id="swatchMachine">
-        <option value="kniterate-7e">Kniterate 7E (.kc + Knitout v2)</option>
+        <option value="kniterate-7e">Kniterate 7E (Knitout v2 for external conversion)</option>
         <option value="brother-kh930-ayab">Brother KH-930 / AYAB (1-bit PNG + checklist)</option>
         <option value="brother-kh270-ayab">Brother KH-270 / AYAB</option>
         <option value="hand-knit">Hand Knit (CYC Vector SVG + written guide)</option>
@@ -69,6 +69,9 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
     </label>
     <label>Yarn ID
       <input id="swatchYarn" type="text" value="merino-200tex">
+    </label>
+    <label>Source Material SHA-256 (optional)
+      <input id="swatchMaterialSha256" type="text" placeholder="Digest of the selected material record">
     </label>
     <label>Needles (4–80)
       <input id="swatchNeedles" type="number" min="4" max="80" value="32">
@@ -95,8 +98,8 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
 </section>
 
 <section id="panelSection">
-  <h2>2. Measured Fully-Fashioned Panel Preview</h2>
-  <p>Draft a flat shaped panel with ribbed hem, symmetrical decreases, and anchored short-row neck shaping. Child/infant classes enforce EN 14682 drawstring bans and float/eyelet/tail caps.</p>
+  <h2>2. Measured Shaped Panel Preview</h2>
+  <p>Draft a straight-top flat panel with side shaping, armhole decreases, and optional double-bed rib. Neckline short rows and single-bed rib are not supported. This chart preview does not qualify a production garment; EN 14682 child drawstring restrictions remain part of the separate machine-program checks.</p>
   <div class="row">
     <label>Machine
       <select id="panelMachine">

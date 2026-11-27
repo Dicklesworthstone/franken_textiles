@@ -498,8 +498,10 @@ acyclic DAG and a mechanical extraction boundary).
   `to_knitout_text` and bijective read-back parser `parse_knitout`, sealed via
   `ftx_core::receipt::canonical_json_sha256`.
 - `knit::shaping` defines Seam 1 (`ShapingSurface`, `EaseProfile`, `EaseShellMesh` with open
-  `boundary_rings` and `non_self_intersecting`, `KnitShellRegion`) so `ftx-body` supplies uncapped
-  Anny shells without introducing a reverse crate edge.
+  `boundary_rings`, `KnitShellRegion`) so `ftx-body` supplies uncapped shells without introducing
+  a reverse crate edge. Shared-edge plane clipping checks connected tube topology and offset
+  triangle orientation; it does not certify global self-collision freedom. Anatomical torso
+  inputs require real landmarks and pre-segmentation; sleeves and full-upper-body extraction refuse.
 - `knit::receipts` defines Seam 4 pure receipts: `KnitSwatchQualification` (`#[serde(deny_unknown_fields)]`,
   `material_sha256`, `machine_sha256`, `yarn_lot_id`, `was_washed_and_blocked`, `evidence`, `source`,
   `conditioning`, `allow_estimates`), `DrapeUncertaintyReceipt` (`ftx-drape-uncertainty/1`), and
@@ -511,6 +513,21 @@ acyclic DAG and a mechanical extraction boundary).
   hook-stack/tuck caps, carrier hook-vs-gripper lifecycle & spacing, racking alignment & strain,
   `UniformRoller` short-row imbalance, blocked-pitch child float limit, EN 14682 hood/neck drawstring ban,
   infant unanchored short-row eyelet refusal, and `CalibrationSwatchCaps` hard limits).
+- `knit::compile` consumes exact parent loop identities on independent front/back hooks, including
+  stack order through cross-bed transfers. Flat courses alternate direction; full tube courses
+  traverse front ascending and back descending. Bounded transfer hooks and temporary parking
+  preserve unrelated loops. Reused, missing, stranded or over-capacity parents refuse. A complete
+  terminal bind-off chain ends with an operator tail-securing pause; calibration swatches retain
+  live loops for manual bind-off because their transfer prohibition remains in force.
+- Qualified production requires an independently supplied material digest and exact agreement with
+  the washed swatch's gauge, any supplied thickness and cam setting, the machine pitch/family, and retained
+  material/yarn-lot metadata. `ftx knit draft|verify` accept `--material-sha256`; a qualification's
+  own digest cannot select the active material implicitly.
+- Supported drafting includes straight-top flat panels with side/armhole decreases and shaped
+  torso tubes. Every removed edge loop is consumed once; widening uses explicit edge cast-ons.
+  Neckline short rows, cables, split/increase lowering, sleeve joins and tubular rib schedules
+  remain unsupported and refuse instead of becoming ordinary jersey stitches. Single-bed rib
+  requests refuse without changing the requested rib count.
 - No-claim boundary: discrete VM verification and parametric/autoknit shaping establish software kinematics
   and declared constraint checks only — never physical knitability, yarn-lot equivalence, unattended machine
   safety, or real-body fit.

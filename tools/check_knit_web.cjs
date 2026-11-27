@@ -310,6 +310,50 @@ const flatbedReq = posted.at(-1);
 assert.equal(flatbedReq.payload.is_circular, false);
 assert.equal(flatbedReq.payload.regime, "regime2_fiducial_synced");
 
+// Kniterate retains useful Knitout and source identity without offering an unqualified .kc file.
+elMap.swatchCams.value = "5.0,7.0";
+elMap.swatchMaterialSha256.value = "a".repeat(64);
+elMap.runSwatch.handlers.click();
+const kniterateReq = posted.at(-1);
+assert.equal(kniterateReq.payload.material_sha256, "a".repeat(64));
+workerInstance.onmessage({
+  data: {
+    type: "result",
+    kind: "swatch",
+    request: kniterateReq.request,
+    result: {
+      knitout_text: ";!knitout-2\n",
+      kc_text: null,
+      machine_executable: false,
+      backend_export_refusal: {
+        code: "unqualified_process",
+        message: "Kniterate conversion requires an independent backend",
+        repairs: ["Convert the verified Knitout file with the official backend."],
+      },
+      chart_svg: "<svg></svg>",
+      cert: { hardware_execution_authorized: false },
+      qualification_template: { material_sha256: "a".repeat(64) },
+    },
+  },
+});
+assert(elMap.swatchDownloads.children.some((a) => a.download === "swatch.k"));
+assert(!elMap.swatchDownloads.children.some((a) => a.download === "swatch.kc"));
+assert(elMap.swatchDownloads.children.some((a) => a.download === "backend_export_refusal.json"));
+assert.match(elMap.swatchPre.textContent, /Machine conversion required/);
+
+// An old bundle's invented .kc result must withdraw all prior swatch downloads.
+elMap.runSwatch.handlers.click();
+workerInstance.onmessage({
+  data: {
+    type: "result",
+    kind: "swatch",
+    request: posted.at(-1).request,
+    result: { knitout_text: ";!knitout-2\n", kc_text: "GRIPPER_IN 1", chart_svg: "<svg></svg>" },
+  },
+});
+assert.equal(elMap.swatchDownloads.children.length, 0);
+assert.match(elMap.error.textContent, /Rebuild and reload/);
+
 // Brother AYAB swatch offers swatch_ayab.png download alongside checklist.
 elMap.swatchCams.value = "4.0,6.0";
 elMap.swatchMachine.value = "brother-kh930-ayab";
@@ -322,6 +366,7 @@ workerInstance.onmessage({
     request: swatchReq.request,
     result: {
       knitout_text: ";!knitout-2\n",
+      machine_executable: false,
       ayab_png_base64: Buffer.from("\x89PNG\r\n\x1a\n", "binary").toString("base64"),
       ayab_checklist: { schema: "ftx-ayab-checklist/1" },
       chart_svg: "<svg></svg>",
@@ -335,19 +380,32 @@ assert(
   "Brother AYAB swatch must render swatch_ayab.png download link"
 );
 
-// Small newborn panel scales shaping proportionally instead of overflowing chest/length; default preserves 95/36/105/24.
+// A supported straight-top panel preserves actual dimensions and does not invent a neckline.
 elMap.runPanel.handlers.click();
 const defaultPanel = posted.at(-1).payload.panel;
 assert.equal(defaultPanel.armhole_depth_mm, 95);
 assert.equal(defaultPanel.armhole_inset_total_mm, 36);
-assert.equal(defaultPanel.neck_width_mm, 105);
-assert.equal(defaultPanel.neck_depth_mm, 24);
+assert.equal(defaultPanel.neck_width_mm, 0);
+assert.equal(defaultPanel.neck_depth_mm, 0);
+
+// Single-bed rib requests remain visible and refuse, rather than silently turning into jersey.
+const beforeUnsupportedRib = posted.length;
+elMap.panelMachine.value = "brother-kh930-ayab";
+elMap.runPanel.handlers.click();
+assert.equal(posted.length, beforeUnsupportedRib);
+assert.equal(elMap.panelRib.value, "6");
+assert.match(elMap.error.textContent, /Set Rib Hem Courses to zero/);
+elMap.panelRib.value = "0";
+elMap.runPanel.handlers.click();
+assert.equal(posted.at(-1).payload.panel.rib_hem_courses, 0);
+elMap.panelMachine.value = "kniterate-7e";
+elMap.panelRib.value = "6";
 elMap.panelHem.value = "120";
 elMap.panelChest.value = "120";
 elMap.panelLength.value = "150";
 elMap.runPanel.handlers.click();
 const smallPanelReq = posted.at(-1);
-assert(smallPanelReq.payload.panel.neck_width_mm < 120, "small panel neck_width_mm must scale below chest width");
+assert.equal(smallPanelReq.payload.panel.neck_width_mm, 0, "small panel must retain the supported straight top");
 assert(smallPanelReq.payload.panel.armhole_depth_mm < 60, "small panel armhole_depth_mm must scale below panel length");
 workerInstance.onmessage({
   data: {
@@ -356,7 +414,7 @@ workerInstance.onmessage({
     request: smallPanelReq.request,
     result: {
       stitch_count: 120,
-      short_row_turns: 2,
+      short_row_turns: 0,
       doc_sha256: "abcdef0123456789",
       svg_checks_passed: true,
       fit_claimed: false,

@@ -486,23 +486,24 @@ mod tests {
     };
 
     #[test]
-    fn ayab_readback_emits_short_row_steps_and_refuses_corrupt_png_or_unanchored_infant_turn() {
+    fn ayab_readback_refuses_corruption_and_unsupported_short_rows() {
         let kh930 = MachineProfile::brother_kh930_ayab();
-        let mut doc = draft_calibration_swatch(&kh930, "wool-150tex", 16, 6, &[5.0]).unwrap();
-        doc.short_row_turns.push(ShortRowTurn {
+        let doc = draft_calibration_swatch(&kh930, "wool-150tex", 16, 6, &[5.0]).unwrap();
+        let compiled = compile_knit_doc(&doc, &kh930, None, None, None).unwrap();
+        let bundle = export_brother_ayab(&doc, &kh930, &compiled.cert).unwrap();
+
+        let mut short_rows = doc;
+        short_rows.short_row_turns.push(ShortRowTurn {
             course: 3,
             turn_wale: 8,
             dir_after: CourseDir::Minus,
             anchored: true,
         });
-        let compiled = compile_knit_doc(&doc, &kh930, None, None, None).unwrap();
-        let bundle = export_brother_ayab(&doc, &kh930, &compiled.cert).unwrap();
-        assert!(
-            bundle
-                .checklist
-                .operator_steps
-                .iter()
-                .any(|s| s.action == "short_row_turn" && s.row_number == 4)
+        assert_eq!(
+            compile_knit_doc(&short_rows, &kh930, None, None, None)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
         );
         verify_ayab_1bit_png(
             &bundle.png_bytes,
@@ -526,7 +527,7 @@ mod tests {
         );
 
         // Infant garment with unanchored short-row turn refuses fail-closed.
-        let mut infant_doc = doc;
+        let mut infant_doc = short_rows;
         infant_doc.wearer_age_class = WearerAgeClass::InfantUnder3;
         infant_doc.short_row_turns[0].anchored = false;
         let mut infant_cert = compiled.cert.clone();

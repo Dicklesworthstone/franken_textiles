@@ -908,7 +908,9 @@ fn merge_transferred_hooks(
     destination.last_active_course = if destination.loops == 0 {
         source.last_active_course
     } else {
-        destination.last_active_course.min(source.last_active_course)
+        destination
+            .last_active_course
+            .min(source.last_active_course)
     };
     destination.loops = loops as u8;
     destination.tuck_depth = tuck_depth as u8;
@@ -1113,8 +1115,8 @@ mod tests {
             },
             yarn_out(),
         ];
-        let err = verify_knitout_program(&minimal_program(&profile, ops), &profile, &ctx)
-            .unwrap_err();
+        let err =
+            verify_knitout_program(&minimal_program(&profile, ops), &profile, &ctx).unwrap_err();
         assert_eq!(err.code, RefusalCode::MaterialProcessHazard);
         assert!(err.message.contains("roller imbalance"));
     }

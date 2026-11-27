@@ -1,6 +1,6 @@
 //! `ftx knit` and `ftx dye` subcommands (`FTX-K17`):
-//! - `ftx knit swatch` — hard-capped `CalibrationSwatchOnly` kit (`.k`, `.kc`/AYAB, CYC SVG/PDF, cert, template)
-//! - `ftx knit draft` — measured fully-fashioned panel or top-down seamless raglan with child-safety gates
+//! - `ftx knit swatch` — hard-capped `CalibrationSwatchOnly` kit (`.k`, AYAB, CYC SVG/PDF, cert, template)
+//! - `ftx knit draft` — measured flat panel or shaped torso tube with child-safety gates
 //! - `ftx knit verify` — 7-check V-bed VM & child-safety verifier for any `ftx-knit/1` document
 //! - `ftx knit poincloux` — Rung-3 Poincloux et al. (2018) planar elastica analytical KAT curve
 //! - `ftx dye optimize` — 4-stage radiometric KM + Sobol-CVaR Bertsekas L-BFGS + 5-regime Pareto
@@ -124,6 +124,27 @@ fn read_utf8(path: &std::path::Path, label: &str) -> Result<String, Refusal> {
     String::from_utf8(bytes).map_err(|e| bad_input(format!("{}: {e}", path.display())))
 }
 
+fn read_knit_qualification(args: &Args) -> Result<Option<KnitSwatchQualification>, Refusal> {
+    args.options
+        .get("qual")
+        .map(|path| {
+            let txt = read_utf8(&PathBuf::from(path), "knit swatch qualification")?;
+            serde_json::from_str(&txt)
+                .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+        })
+        .transpose()
+}
+
+fn expected_knit_material(args: &Args) -> Result<Option<&str>, Refusal> {
+    match args.options.get("material-sha256") {
+        Some(value) if value.trim().is_empty() => Err(bad_input(
+            "--material-sha256 must identify the selected source material",
+        )),
+        Some(value) => Ok(Some(value.as_str())),
+        None => Ok(None),
+    }
+}
+
 fn no_extra_positional(args: &Args, expected: usize, usage: &str) -> Result<(), Refusal> {
     if args.positional.len() != expected {
         return Err(bad_input(format!("usage: {usage}")));
@@ -154,6 +175,7 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "needles",
             "courses-per-zone",
             "cams",
+            "material-sha256",
             "created",
             "out",
         ],
@@ -211,21 +233,16 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .ok_or_else(|| bad_input("`ftx knit swatch` requires --out NEW_DIR"))?,
     );
 
+    let material_sha256 = expected_knit_material(args)?.unwrap_or(SWATCH_MATERIAL_PLACEHOLDER);
     let kit = export_calibration_swatch_kit(
         &profile,
         yarn_id,
-        SWATCH_MATERIAL_PLACEHOLDER,
+        material_sha256,
         needles,
         courses_per_zone,
         &cams,
     )?;
-    let compiled = compile_knit_doc(
-        &kit.doc,
-        &profile,
-        None,
-        Some(SWATCH_MATERIAL_PLACEHOLDER),
-        None,
-    )?;
+    let compiled = compile_knit_doc(&kit.doc, &profile, None, Some(material_sha256), None)?;
     if compiled.cert.cert_sha256 != kit.knitout.cert.cert_sha256 {
         return Err(Refusal::new(
             RefusalCode::VerificationMismatch,
@@ -244,8 +261,16 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
     // Prepare all backend outputs and serialized JSON before reserving --out so failures leave no partial directory.
     let doc_json = serde_json::to_string_pretty(&kit.doc)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let mut backend_export_refusal = None;
     let kc = if profile.backend_kind == MachineBackendKind::KniterateKc {
-        Some(export_kniterate_kc(&compiled, &profile)?)
+        match export_kniterate_kc(&compiled, &profile) {
+            Ok(bundle) => Some(bundle),
+            Err(refusal) if refusal.code == RefusalCode::UnqualifiedProcess => {
+                backend_export_refusal = Some(refusal);
+                None
+            }
+            Err(refusal) => return Err(refusal),
+        }
     } else {
         None
     };
@@ -312,6 +337,11 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
         files.push("vendor_handoff_manifest.json".to_string());
     }
 
+    let conversion_notice = backend_export_refusal
+        .as_ref()
+        .map_or_else(String::new, |refusal| {
+            format!("\nMachine conversion required: {}", refusal.message)
+        });
     let result = json!({
         "machine": profile.id,
         "wearer_age_class": "calibration_swatch_only",
@@ -319,11 +349,13 @@ fn cmd_knit_swatch(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "files": files,
         "knitout_sha256": kit.knitout.knitout_sha256,
         "cert_sha256": kit.knitout.cert.cert_sha256,
+        "backend_export_refusal": backend_export_refusal,
+        "machine_executable": false,
         "hardware_execution_authorized": false,
         "physical_knitting_validated": false,
     });
     let text = format!(
-        "Generated CalibrationSwatchOnly kit for {} in {} ({} files; hardware_execution_authorized=false)",
+        "Generated CalibrationSwatchOnly kit for {} in {} ({} files; hardware_execution_authorized=false){conversion_notice}",
         profile.id,
         out_dir.display(),
         files.len()
@@ -359,6 +391,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "yoke-mm",
             "collar-rib",
             "qual",
+            "material-sha256",
             "created",
             "out",
         ],
@@ -366,7 +399,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     no_extra_positional(
         args,
         2,
-        "ftx knit draft --age-class infant|child|adult --out NEW_DIR [--style panel|raglan] [--machine ID] [--qual SWATCH.json]",
+        "ftx knit draft --age-class infant|child|adult --out NEW_DIR [--style panel|tube] [--machine ID] [--qual SWATCH.json --material-sha256 SOURCE_DIGEST]",
     )?;
     let style = args
         .options
@@ -386,8 +419,18 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         bad_input("`ftx knit draft` requires explicit --age-class infant|child|adult")
     })?;
     let wearer_age_class = parse_age_class(age_str)?;
-    let wales_per_100mm = opt_f64(args, "wales", 24.0)?;
-    let courses_per_100mm = opt_f64(args, "courses", 32.0)?;
+    let qual = read_knit_qualification(args)?;
+    let expected_material_sha256 = expected_knit_material(args)?;
+    let wales_per_100mm = opt_f64(
+        args,
+        "wales",
+        qual.as_ref().map_or(24.0, |q| q.wales_per_100mm),
+    )?;
+    let courses_per_100mm = opt_f64(
+        args,
+        "courses",
+        qual.as_ref().map_or(32.0, |q| q.courses_per_100mm),
+    )?;
     let yarn_tex = args
         .options
         .get("yarn-tex")
@@ -410,22 +453,28 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         courses_per_100mm,
         needle_pitch_mm: profile.needle_pitch_mm,
         yarn_tex,
-        thickness_mm: Some(opt_f64(args, "thickness-mm", 2.0)?),
-        relaxed_after_wash: true,
+        thickness_mm: Some(opt_f64(
+            args,
+            "thickness-mm",
+            qual.as_ref().map_or(2.0, |q| q.thickness_mm),
+        )?),
+        relaxed_after_wash: qual.as_ref().is_some_and(|q| q.was_washed_and_blocked),
     };
-    let yarn_id = args
-        .options
-        .get("yarn")
-        .cloned()
-        .unwrap_or_else(|| "merino-180tex".to_string());
+    let yarn_id = args.options.get("yarn").cloned().unwrap_or_else(|| {
+        qual.as_ref()
+            .map_or_else(|| "unspecified-yarn".to_string(), |q| q.yarn_lot_id.clone())
+    });
     let cam = opt_f64(
         args,
         "cam",
-        0.5 * (profile.cam_setting_range[0] + profile.cam_setting_range[1]),
+        qual.as_ref().map_or(
+            0.5 * (profile.cam_setting_range[0] + profile.cam_setting_range[1]),
+            |q| q.cam_stitch_setting,
+        ),
     )?;
     let has_drawstring = args.options.contains_key("has-drawstring");
 
-    let doc = match style {
+    let mut doc = match style {
         "panel" => draft_shaped_panel(
             &ParametricPanelSpec {
                 name: args
@@ -439,9 +488,13 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 length_mm: opt_f64(args, "length-mm", 320.0)?,
                 armhole_depth_mm: opt_f64(args, "armhole-mm", 110.0)?,
                 armhole_inset_total_mm: opt_f64(args, "armhole-inset-mm", 35.0)?,
-                neck_width_mm: opt_f64(args, "neck-mm", 100.0)?,
-                neck_depth_mm: opt_f64(args, "neck-depth-mm", 35.0)?,
-                rib_hem_courses: opt_u32(args, "rib-courses", 8)?,
+                neck_width_mm: opt_f64(args, "neck-mm", 0.0)?,
+                neck_depth_mm: opt_f64(args, "neck-depth-mm", 0.0)?,
+                rib_hem_courses: opt_u32(
+                    args,
+                    "rib-courses",
+                    if profile.has_back_bed { 8 } else { 0 },
+                )?,
                 cam_setting: cam,
                 yarn_id,
                 carrier_id: profile.carrier_ids[0].clone(),
@@ -450,20 +503,20 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             &gauge,
             &profile,
         )?,
-        "raglan" => draft_seamless_raglan_tube(
+        "tube" | "raglan" => draft_seamless_raglan_tube(
             &RaglanPulloverSpec {
                 name: args
                     .options
                     .get("name")
                     .cloned()
-                    .unwrap_or_else(|| "raglan_pullover".to_string()),
+                    .unwrap_or_else(|| "shaped_torso_tube".to_string()),
                 wearer_age_class,
                 neck_girth_mm: opt_f64(args, "neck-mm", 280.0)?,
                 chest_girth_mm: opt_f64(args, "chest-mm", 560.0)?,
                 yoke_depth_mm: opt_f64(args, "yoke-mm", 120.0)?,
                 body_length_below_arm_mm: opt_f64(args, "length-mm", 200.0)?,
-                collar_rib_courses: opt_u32(args, "collar-rib", 6)?,
-                hem_rib_courses: opt_u32(args, "rib-courses", 8)?,
+                collar_rib_courses: opt_u32(args, "collar-rib", 0)?,
+                hem_rib_courses: opt_u32(args, "rib-courses", 0)?,
                 cam_setting: cam,
                 yarn_id,
                 carrier_id: profile.carrier_ids[0].clone(),
@@ -474,23 +527,26 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         )?,
         _ => {
             return Err(bad_input(format!(
-                "unknown --style '{style}' (expected panel or raglan)"
+                "unknown --style '{style}' (expected panel or tube; raglan is a legacy tube alias)"
             )));
         }
     };
 
-    let qual: Option<KnitSwatchQualification> = match args.options.get("qual") {
-        Some(path) => {
-            let p = PathBuf::from(path);
-            let txt = read_utf8(&p, "knit swatch qualification")?;
-            Some(
-                serde_json::from_str(&txt)
-                    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
-            )
-        }
-        None => None,
-    };
-    let compiled = compile_knit_doc(&doc, &profile, qual.as_ref(), None, None)?;
+    if let Some(material_sha256) = expected_material_sha256 {
+        doc.metadata
+            .insert("material_sha256".to_string(), material_sha256.to_string());
+    }
+    if let Some(q) = &qual {
+        doc.metadata
+            .insert("yarn_lot_id".to_string(), q.yarn_lot_id.clone());
+    }
+    let compiled = compile_knit_doc(
+        &doc,
+        &profile,
+        qual.as_ref(),
+        expected_material_sha256,
+        None,
+    )?;
     let knitout = export_knitout_v2(&compiled)?;
     let created = match args.options.get("created") {
         Some(c) => c.clone(),
@@ -513,8 +569,16 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     );
     let doc_json = serde_json::to_string_pretty(&doc)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let mut backend_export_refusal = None;
     let kc = if profile.backend_kind == MachineBackendKind::KniterateKc {
-        Some(export_kniterate_kc(&compiled, &profile)?)
+        match export_kniterate_kc(&compiled, &profile) {
+            Ok(bundle) => Some(bundle),
+            Err(refusal) if refusal.code == RefusalCode::UnqualifiedProcess => {
+                backend_export_refusal = Some(refusal);
+                None
+            }
+            Err(refusal) => return Err(refusal),
+        }
     } else {
         None
     };
@@ -576,6 +640,11 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         files.push("vendor_handoff_manifest.json".to_string());
     }
 
+    let conversion_notice = backend_export_refusal
+        .as_ref()
+        .map_or_else(String::new, |refusal| {
+            format!("\nMachine conversion required: {}", refusal.message)
+        });
     let result = json!({
         "style": style,
         "machine": profile.id,
@@ -585,6 +654,8 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "max_float_mm": compiled.vm_report.max_float_mm,
         "files": files,
         "metadata": doc.metadata,
+        "backend_export_refusal": backend_export_refusal,
+        "machine_executable": false,
         "cert": compiled.cert,
         "out_dir": out_dir.display().to_string(),
         "hardware_execution_authorized": false,
@@ -592,7 +663,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "fit_claimed": false,
     });
     let text = format!(
-        "Drafted & verified {style} knit ({} stitches, {} transfers) for {} -> {}",
+        "Drafted & verified {style} knit ({} stitches, {} transfers) for {} -> {}{conversion_notice}",
         doc.stitches.len(),
         compiled.vm_report.total_transfers,
         profile.id,
@@ -602,11 +673,11 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "knit verify", &["machine", "qual"])?;
+    known_options(args, "knit verify", &["machine", "qual", "material-sha256"])?;
     no_extra_positional(
         args,
         3,
-        "ftx knit verify PATTERN.knit.json [--machine ID] [--qual SWATCH.json] [--json]",
+        "ftx knit verify PATTERN.knit.json [--machine ID] [--qual SWATCH.json --material-sha256 SOURCE_DIGEST] [--json]",
     )?;
     let doc_path = PathBuf::from(&args.positional[2]);
     let txt = read_utf8(&doc_path, "knit pattern document")?;
@@ -618,18 +689,14 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .map(String::as_str)
         .unwrap_or("kniterate-7e");
     let profile = parse_machine(machine_id)?;
-    let qual: Option<KnitSwatchQualification> = match args.options.get("qual") {
-        Some(path) => {
-            let p = PathBuf::from(path);
-            let qtxt = read_utf8(&p, "knit swatch qualification")?;
-            Some(
-                serde_json::from_str(&qtxt)
-                    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
-            )
-        }
-        None => None,
-    };
-    let compiled = compile_knit_doc(&doc, &profile, qual.as_ref(), None, None)?;
+    let qual = read_knit_qualification(args)?;
+    let compiled = compile_knit_doc(
+        &doc,
+        &profile,
+        qual.as_ref(),
+        expected_knit_material(args)?,
+        None,
+    )?;
     let _ = export_knitout_v2(&compiled)?;
     let result = json!({
         "verified": true,
@@ -1101,7 +1168,13 @@ mod tests {
         assert_eq!(code, 0);
         assert_eq!(swatch_val["hardware_execution_authorized"], false);
         assert!(swatch_dir.join("swatch.knit.json").is_file());
-        assert!(swatch_dir.join("swatch.kc").is_file());
+        assert!(swatch_dir.join("swatch.k").is_file());
+        assert!(!swatch_dir.join("swatch.kc").exists());
+        assert_eq!(swatch_val["machine_executable"], false);
+        assert_eq!(
+            swatch_val["backend_export_refusal"]["code"],
+            serde_json::to_value(RefusalCode::UnqualifiedProcess).unwrap()
+        );
 
         // Reusing --out must refuse without overwriting.
         assert!(cmd_knit(&swatch_args).is_err());
@@ -1417,6 +1490,128 @@ mod tests {
             RefusalCode::OpaqueProprietaryTarget
         );
         assert!(!root.join("never-created-shima").exists());
+    }
+
+    #[test]
+    fn production_draft_uses_qualified_gauge_and_requires_independent_material_identity() {
+        let root = fresh_dir("qualified-panel");
+        let profile = MachineProfile::kniterate_7e();
+        let material_sha256 = "a".repeat(64);
+        let qualification = json!({
+            "id": "synthetic-washed-swatch",
+            "material_sha256": material_sha256,
+            "machine_sha256": profile.canonical_sha256().unwrap(),
+            "yarn_lot_id": "synthetic-lot",
+            "was_washed_and_blocked": true,
+            "wales_per_100mm": 20.0,
+            "courses_per_100mm": 25.0,
+            "thickness_mm": 1.6,
+            "cam_stitch_setting": 6.0,
+            "evidence": ftx_pattern::materials::Evidence::Measured,
+            "source": {
+                "reference": "synthetic:test",
+                "accessed_on": "2026-11-27",
+                "note": "synthetic compiler regression, not measured fabric"
+            },
+            "method": "synthetic exact gauge",
+            "conditioning": {}
+        });
+        let qual_path = root.join("qualification.json");
+        std::fs::write(&qual_path, serde_json::to_vec(&qualification).unwrap()).unwrap();
+        let out_dir = root.join("panel");
+        let mut args = parse(
+            &[
+                "knit",
+                "draft",
+                "--age-class",
+                "adult",
+                "--machine",
+                "kniterate-7e",
+                "--qual",
+                qual_path.to_str().unwrap(),
+                "--material-sha256",
+                &material_sha256,
+                "--width-mm",
+                "100",
+                "--chest-mm",
+                "100",
+                "--length-mm",
+                "100",
+                "--armhole-mm",
+                "0",
+                "--armhole-inset-mm",
+                "0",
+                "--rib-courses",
+                "0",
+                "--created",
+                "2026-11-27T12:00",
+                "--out",
+                out_dir.to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+
+        let selected_source = args.options.remove("material-sha256").unwrap();
+        assert_eq!(
+            cmd_knit(&args).unwrap_err().code,
+            RefusalCode::UnqualifiedProcess
+        );
+        assert!(!out_dir.exists());
+        args.options
+            .insert("material-sha256".to_string(), selected_source);
+
+        args.options.insert("wales".to_string(), "22".to_string());
+        assert_eq!(
+            cmd_knit(&args).unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+        assert!(!out_dir.exists());
+        args.options.remove("wales");
+
+        let (result, code, _) = cmd_knit(&args).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(result["machine_executable"], false);
+        assert!(result["backend_export_refusal"].is_object());
+        assert!(!out_dir.join("program.kc").exists());
+        let pattern_path = out_dir.join("pattern.knit.json");
+        let doc: KnitDoc = serde_json::from_slice(&std::fs::read(&pattern_path).unwrap()).unwrap();
+        assert_eq!(doc.gauge.wales_per_100mm, 20.0);
+        assert_eq!(doc.gauge.courses_per_100mm, 25.0);
+        assert_eq!(doc.gauge.thickness_mm, Some(1.6));
+        assert!(doc.gauge.relaxed_after_wash);
+        assert_eq!(doc.metadata["material_sha256"], material_sha256);
+        assert_eq!(doc.metadata["yarn_lot_id"], "synthetic-lot");
+        assert!(
+            doc.stitches
+                .iter()
+                .all(|st| st.cam_stitch_setting.setting == 6.0)
+        );
+
+        let verify = parse(
+            &[
+                "knit",
+                "verify",
+                pattern_path.to_str().unwrap(),
+                "--machine",
+                "kniterate-7e",
+                "--qual",
+                qual_path.to_str().unwrap(),
+                "--material-sha256",
+                &material_sha256,
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(cmd_knit(&verify).unwrap().1, 0);
+        let mut wrong_source = verify;
+        wrong_source
+            .options
+            .insert("material-sha256".to_string(), "b".repeat(64));
+        assert_eq!(
+            cmd_knit(&wrong_source).unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
     }
 
     #[test]

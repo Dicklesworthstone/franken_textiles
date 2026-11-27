@@ -831,7 +831,7 @@ mod tests {
 
     #[test]
     fn full_tier_a_and_tier_b_knitting_export_suite_passes() {
-        // 1. Kniterate 7E swatch kit + .kc dialect
+        // 1. Kniterate 7E verified swatch handoff; executable KCode stays unavailable.
         let kniterate = MachineProfile::kniterate_7e();
         let kit = export_calibration_swatch_kit(
             &kniterate,
@@ -847,13 +847,11 @@ mod tests {
 
         let compiled =
             compile_knit_doc(&kit.doc, &kniterate, None, Some("mat-sha-test"), None).unwrap();
-        let kc = export_kniterate_kc(&compiled, &kniterate).unwrap();
-        assert!(
-            kc.kc_text
-                .contains("HEADER MACHINE=KNITERATE_7E NEEDLES=252")
+        assert!(kit.knitout.knitout_text.starts_with(";!knitout-2"));
+        assert_eq!(
+            export_kniterate_kc(&compiled, &kniterate).unwrap_err().code,
+            RefusalCode::UnqualifiedProcess
         );
-        assert!(kc.kc_text.contains("GRIPPER_IN 1"));
-        assert!(!kc.kc_text.contains("inhook"));
 
         // 2. Brother KH-930 AYAB 1-bit PNG + synchronized checklist
         let kh930 = MachineProfile::brother_kh930_ayab();
@@ -926,7 +924,7 @@ mod tests {
             RefusalCode::BudgetExceeded
         );
 
-        // Kniterate refuses tampered program digest, out-of-range dial, and swatch overspeed
+        // Kniterate validates the program digest and machine before its backend refusal.
         let compiled = compile_knit_doc(&doc, &kniterate, None, None, None).unwrap();
         let mut tampered = compiled.clone();
         tampered

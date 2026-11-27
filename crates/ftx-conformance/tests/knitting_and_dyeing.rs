@@ -2,7 +2,7 @@
 //! and programmed continuous length-wise yarn dyeing (`FTX-K01`..`FTX-K19`).
 //!
 //! Explicitly separates the Four Claims:
-//! - Parity/format contracts (Knitout v2, Kniterate `.kc`, Brother AYAB 1-bit PNG, vector CYC SVG/PDF),
+//! - Format contracts (Knitout v2, Brother AYAB 1-bit PNG, vector CYC SVG/PDF) and KCode refusal,
 //! - Physics KATs (Poincloux et al. 2018 Rung-3 elastica, exact Kubelka-Munk / Sharma 2005 CIEDE2000,
 //!   conserved-mass capillary transport + VJP, Sobol-CVaR Bertsekas L-BFGS),
 //! - Honesty & safety invariants (child/infant EN 14682 / float / eyelet / tail / fastness gates,
@@ -119,7 +119,7 @@ fn target_raster_preserves_straight_alpha_png() {
 }
 
 #[test]
-fn knitting_end_to_end_swatch_panel_raglan_and_tier_a_b_exports() {
+fn knitting_end_to_end_swatch_panel_tube_and_format_boundaries() {
     let kniterate = MachineProfile::kniterate_7e();
     let ayab = MachineProfile::brother_kh930_ayab();
     let gauge = default_gauge();
@@ -153,8 +153,8 @@ fn knitting_end_to_end_swatch_panel_raglan_and_tier_a_b_exports() {
         length_mm: 290.0,
         armhole_depth_mm: 90.0,
         armhole_inset_total_mm: 36.0,
-        neck_width_mm: 100.0,
-        neck_depth_mm: 22.0,
+        neck_width_mm: 0.0,
+        neck_depth_mm: 0.0,
         rib_hem_courses: 6,
         cam_setting: 7.0,
         yarn_id: "merino-200tex".to_string(),
@@ -165,12 +165,22 @@ fn knitting_end_to_end_swatch_panel_raglan_and_tier_a_b_exports() {
     let err_unqual = compile_knit_doc(&panel_doc, &kniterate, None, None, None).unwrap_err();
     assert_eq!(err_unqual.code, RefusalCode::UnqualifiedProcess);
 
-    // With Exp-3 qualification, compiles cleanly + emits Kniterate .kc + hand-knit vector SVG/PDF!
-    let compiled = compile_knit_doc(&panel_doc, &kniterate, Some(&qual), None, None).unwrap();
+    // A matching synthetic swatch qualifies the supported panel and verified Knitout.
+    // Actual pass-oriented Kniterate KCode still requires its separate backend.
+    let compiled = compile_knit_doc(
+        &panel_doc,
+        &kniterate,
+        Some(&qual),
+        Some("test-yarn-lot-sha256"),
+        None,
+    )
+    .unwrap();
     let ko = export_knitout_v2(&compiled).unwrap();
-    let kc = export_kniterate_kc(&compiled, &kniterate).unwrap();
-    assert!(kc.kc_text.contains("GRIPPER_IN 1"));
-    assert!(!kc.cert.hardware_execution_authorized);
+    assert_eq!(
+        export_kniterate_kc(&compiled, &kniterate).unwrap_err().code,
+        RefusalCode::UnqualifiedProcess
+    );
+    assert!(!ko.cert.hardware_execution_authorized);
 
     let hand = export_hand_knit_document(&panel_doc, "2026-11-27T08:00").unwrap();
     assert!(
@@ -198,8 +208,14 @@ fn knitting_end_to_end_swatch_panel_raglan_and_tier_a_b_exports() {
     let mut bad_panel = panel_spec.clone();
     bad_panel.has_hood_or_neck_drawstring = true;
     let bad_doc = draft_shaped_panel(&bad_panel, &gauge, &kniterate).unwrap();
-    let err_drawstring = compile_knit_doc(&bad_doc, &kniterate, Some(&qual), None, None)
-        .expect_err("EN 14682 must refuse child drawstring");
+    let err_drawstring = compile_knit_doc(
+        &bad_doc,
+        &kniterate,
+        Some(&qual),
+        Some("test-yarn-lot-sha256"),
+        None,
+    )
+    .expect_err("EN 14682 must refuse child drawstring");
     assert_eq!(err_drawstring.code, RefusalCode::MaterialProcessHazard);
     let err_hand_drawstring = export_hand_knit_document(&bad_doc, "2026-11-27T08:00")
         .expect_err("EN 14682 must refuse child drawstring in hand-knit chart export");
@@ -210,7 +226,7 @@ fn knitting_end_to_end_swatch_panel_raglan_and_tier_a_b_exports() {
     let err_tier_b = refuse_proprietary_binary_target(&shima, "DAT").unwrap_err();
     assert_eq!(err_tier_b.code, RefusalCode::OpaqueProprietaryTarget);
 
-    // 6. Seamless tubular raglan pullover compiles and verifies bit-deterministically
+    // 6. The supported shaped torso tube compiles deterministically, with both beds retained.
     let raglan = RaglanPulloverSpec {
         name: "toddler_raglan".to_string(),
         wearer_age_class: WearerAgeClass::InfantUnder3,
@@ -218,16 +234,30 @@ fn knitting_end_to_end_swatch_panel_raglan_and_tier_a_b_exports() {
         chest_girth_mm: 520.0,
         yoke_depth_mm: 120.0,
         body_length_below_arm_mm: 180.0,
-        collar_rib_courses: 6,
-        hem_rib_courses: 6,
+        collar_rib_courses: 0,
+        hem_rib_courses: 0,
         cam_setting: 7.0,
         yarn_id: "merino-200tex".to_string(),
         carrier_id: CarrierId("1".to_string()),
         has_hood_or_neck_drawstring: false,
     };
     let rag_doc = draft_seamless_raglan_tube(&raglan, &gauge, &kniterate).unwrap();
-    let rag1 = compile_knit_doc(&rag_doc, &kniterate, Some(&qual), None, None).unwrap();
-    let rag2 = compile_knit_doc(&rag_doc, &kniterate, Some(&qual), None, None).unwrap();
+    let rag1 = compile_knit_doc(
+        &rag_doc,
+        &kniterate,
+        Some(&qual),
+        Some("test-yarn-lot-sha256"),
+        None,
+    )
+    .unwrap();
+    let rag2 = compile_knit_doc(
+        &rag_doc,
+        &kniterate,
+        Some(&qual),
+        Some("test-yarn-lot-sha256"),
+        None,
+    )
+    .unwrap();
     assert_eq!(rag1.cert.program_sha256, rag2.cert.program_sha256);
     assert_eq!(ko.knitout_sha256, compiled.cert.program_sha256);
 

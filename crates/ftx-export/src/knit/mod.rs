@@ -1,6 +1,6 @@
 //! Knitting machine & human hand-knit exporters (`FTX-K06`, `FTX-K07`):
 //! - Verified CMU Knitout v2 (`.k`) + sealed `ftx-machine-cert/1` + `Exp-3` calibration swatch kits;
-//! - Kniterate 7E `.kc` emitter (`knitout-backend-kniterate` open dialect);
+//! - Explicit Kniterate `.kc` refusal until an actual pass-oriented KCode backend is implemented;
 //! - Brother KH-930 / KH-270 AYAB 1-bit indexed PNG + synchronized manual-carriage checklist;
 //! - Human hand-knit pure-vector CYC SVG & PDF charts with dedicated acceptance checks;
 //! - Fail-closed Tier-B proprietary refusal (`OpaqueProprietaryTarget`) for Shima/Stoll binaries.

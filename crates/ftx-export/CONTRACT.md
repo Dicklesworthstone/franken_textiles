@@ -1358,6 +1358,16 @@ stay visible; there is no averaging or inferred probability. `tests/material_sce
 checks standalone equality, complete admission, cross-case ties/tradeoffs, interval uncertainty,
 protocol isolation, binding failures and bounded work. Numerical cases do not establish garment fit.
 
+**Knitting machine-format boundary.** Verified Knitout v2 (`.k`), certificates and human charts
+remain available. Kniterate `.kc` requires the actual pass-oriented KCode format; the former
+`HEADER`/`GRIPPER_IN`/`KNIT` instruction text was not that format. Direct `.kc` export and purported
+read-back verification return `unqualified_process` until a real backend and independent fixtures
+are implemented. Profile, program and certificate mismatches retain their distinct failures.
+Native and WASM callers preserve the valid `.k`/charts, expose `backend_export_refusal`, and mark
+the result `machine_executable: false`; the browser also rejects stale engines offering fake `.kc`.
+External conversion through `textiles-lab/knitout-backend-kniterate` remains a separate operator
+workflow. Neither format conversion nor software VM checks authorize hardware execution.
+
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
 outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` for a projector page over
 200 in; `io` for an unreadable output directory.

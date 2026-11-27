@@ -156,11 +156,17 @@ function renderSwatch(res) {
   const dl = document.getElementById("swatchDownloads");
   const svgBox = document.getElementById("swatchSvgBox");
   const pre = document.getElementById("swatchPre");
-  // Validate SVG chart before exposing any download links or updating preview state.
-  renderSvg(svgBox, res.chart_svg);
+  // Retire prior downloads even when an outdated engine's response is refused.
   clearDownloads(dl);
+  out.hidden = true;
+  if (res.machine_executable !== false || res.kc_text) {
+    throw new Error("This engine returned an unqualified machine export. Rebuild and reload the current WASM bundle; Kniterate requires conversion of the verified Knitout file.");
+  }
+  renderSvg(svgBox, res.chart_svg);
   makeDownload(dl, "swatch.k", res.knitout_text, "text/plain");
-  if (res.kc_text) makeDownload(dl, "swatch.kc", res.kc_text, "text/plain");
+  if (res.backend_export_refusal) {
+    makeDownload(dl, "backend_export_refusal.json", JSON.stringify(res.backend_export_refusal, null, 2), "application/json");
+  }
   if (res.ayab_png_base64) {
     makeDownload(dl, "swatch_ayab.png", decodeBase64Bytes(res.ayab_png_base64), "image/png");
   }
@@ -171,7 +177,11 @@ function renderSwatch(res) {
   makeDownload(dl, "swatch_cert.json", JSON.stringify(res.cert, null, 2), "application/json");
   makeDownload(dl, "swatch_qualification_template.json", JSON.stringify(res.qualification_template, null, 2), "application/json");
 
+  const conversionNotice = res.backend_export_refusal
+    ? `Machine conversion required [${res.backend_export_refusal.code}]: ${res.backend_export_refusal.message}\n${(res.backend_export_refusal.repairs || []).join("\n")}\n\n`
+    : "";
   pre.textContent =
+    conversionNotice +
     `=== Certificate (hardware_execution_authorized=${res.cert.hardware_execution_authorized}) ===\n` +
     JSON.stringify(res.cert, null, 2) +
     "\n\n=== Knitout v2 (first 40 lines) ===\n" +
@@ -190,7 +200,7 @@ function renderPanel(res) {
     makeDownload(dl, "panel_metadata.json", JSON.stringify(res.metadata, null, 2), "application/json");
   }
   document.getElementById("panelSummary").textContent =
-    `Drafted ${res.stitch_count} stitches (${res.short_row_turns} anchored short-row turns) · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed} · fit_claimed=${res.fit_claimed}`;
+    `Drafted ${res.stitch_count} stitches for a straight-top panel · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed} · fit_claimed=${res.fit_claimed}`;
   document.getElementById("panelPre").textContent =
     JSON.stringify(res.metadata, null, 2) + "\n\n" + res.instructions_text;
   out.hidden = false;
@@ -338,6 +348,7 @@ runSwatchBtn.addEventListener("click", () => {
     showError(String(err?.message || err));
     return;
   }
+  const materialSha256 = document.getElementById("swatchMaterialSha256").value.trim();
   const request = ++reqId;
   latestRequestByKind.swatch = request;
   statusEl.textContent = "Generating verified calibration swatch kit…";
@@ -347,6 +358,7 @@ runSwatchBtn.addEventListener("click", () => {
     payload: {
       machine: document.getElementById("swatchMachine").value,
       yarn_id: document.getElementById("swatchYarn").value.trim() || "merino-200tex",
+      ...(materialSha256 ? { material_sha256: materialSha256 } : {}),
       needles,
       courses_per_zone: coursesPerZone,
       cam_settings: cams,
@@ -375,10 +387,13 @@ runPanelBtn.addEventListener("click", () => {
   }
   const machine = document.getElementById("panelMachine").value;
   const defaults = PANEL_MACHINE_DEFAULTS[machine] || PANEL_MACHINE_DEFAULTS["kniterate-7e"];
+  if (rib > 0 && (machine === "brother-kh930-ayab" || machine === "brother-kh270-ayab")) {
+    statusEl.textContent = "Unsupported construction.";
+    showError("This single-bed Brother profile cannot form the requested rib. Set Rib Hem Courses to zero or choose a double-bed profile.");
+    return;
+  }
   const armholeDepth = Math.min(95, Math.max(10, Math.round(length * 0.31)));
   const armholeInset = Math.min(36, Math.max(0, Math.round(chest * 0.13)));
-  const neckWidth = Math.min(105, Math.max(20, Math.round(chest * 0.375)));
-  const neckDepth = Math.min(24, Math.max(6, Math.round(armholeDepth * 0.25)));
   const request = ++reqId;
   latestRequestByKind.panel = request;
   statusEl.textContent = "Drafting measured shaped panel…";
@@ -395,8 +410,8 @@ runPanelBtn.addEventListener("click", () => {
         length_mm: length,
         armhole_depth_mm: armholeDepth,
         armhole_inset_total_mm: armholeInset,
-        neck_width_mm: neckWidth,
-        neck_depth_mm: neckDepth,
+        neck_width_mm: 0,
+        neck_depth_mm: 0,
         rib_hem_courses: rib,
         cam_setting: defaults.cam_setting,
         yarn_id: "merino-200tex",
