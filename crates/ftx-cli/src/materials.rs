@@ -408,25 +408,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
-    if action == "study-on-body" {
-        known_options(args, "materials", &[])?;
-        let [pattern, request, body, model] = &args.positional[2..] else {
-            return Err(bad_input(
-                "usage: ftx materials study-on-body PATTERN.json STUDY.json BODY.json MODEL.ftxbody",
-            ));
-        };
-        let result = scenario::manufacturing(pattern, request, body, model)?;
-        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
-        return Ok((result, 0, text));
-    }
-    if action == "scenario-study" {
-        known_options(args, "materials", &[])?;
-        let [pattern, request, scenario, measurements, model] = &args.positional[2..] else {
-            return Err(bad_input(
-                "usage: ftx materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody",
-            ));
-        };
-        let result = scenario::run(pattern, request, scenario, measurements, model)?;
+    if matches!(action, "study" | "study-on-body" | "scenario-study") {
+        known_options(args, "materials", &["adopt", "out"])?;
+        let words: Vec<_> = args.positional[1..].iter().map(String::as_str).collect();
+        let result = screen::study_command(
+            &words,
+            args.options.get("adopt").map(String::as_str),
+            args.options.get("out").map(String::as_str),
+        )?;
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
@@ -457,7 +446,6 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if matches!(
         action,
         "screen"
-            | "study"
             | "pressure-condition"
             | "compression-stack"
             | "bind-changes"
@@ -479,10 +467,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             ("bind-changes", [pattern, changes, out]) => {
                 screen::bind_changes(pattern, changes, out)?
             }
-            ("study", [pattern, request]) => screen::study(pattern, request)?,
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json | pressure-condition REQUEST.json | compression-stack REQUEST.json | treatment REQUEST.json | treatment-pattern PATTERN.json REQUEST.json [NEW-PATTERN.json] | bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json",
+                    "usage: ftx materials screen REQUEST.json | pressure-condition REQUEST.json | compression-stack REQUEST.json | treatment REQUEST.json | treatment-pattern PATTERN.json REQUEST.json [NEW-PATTERN.json] | bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json",
                 ));
             }
         };

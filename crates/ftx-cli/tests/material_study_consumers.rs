@@ -27,7 +27,7 @@ fn request() -> Value {
             "objectives":[{"metric":"used_stock_mass_kg","direction":"minimize"}]}})
 }
 
-fn run(main: bool, dir: &Path) -> Value {
+fn study_output(main: bool, dir: &Path, extra: &[&str]) -> std::process::Output {
     let mut command = Command::new(if main {
         env!("CARGO_BIN_EXE_ftx")
     } else {
@@ -37,10 +37,15 @@ fn run(main: bool, dir: &Path) -> Value {
     if main {
         command.args(["--json", "materials"]);
     }
-    let out = command
+    command
         .args(["study", "pattern.json", "study.json"])
+        .args(extra)
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+fn run(main: bool, dir: &Path) -> Value {
+    let out = study_output(main, dir, &[]);
     assert!(
         out.status.success(),
         "{} / {}",
@@ -522,6 +527,34 @@ fn both_native_commands_expand_design_material_pairs_and_preserve_exact_replay()
     for main in [false, true] {
         let report = run(main, &dir);
         assert_eq!(report, expected);
+        let rows = report["alternatives"].as_array().unwrap();
+        let chosen = rows.iter().find(|row| {
+            row["design"]["geometry_changed"] == true
+                && row["binding"]["status"] == "available"
+                && report.get("comparison").is_none_or(|comparison| {
+                    comparison["alternatives"].as_array().unwrap().iter().any(|candidate| {
+                        candidate["key"] == row["key"] && candidate["eligible"] == true
+                    })
+                })
+        }).expect("fixture must include an admissible altered pattern");
+        let key = chosen["key"].as_str().unwrap();
+        let out = format!("adopted-{main}.json");
+        let flags = ["--adopt", key, "--out", &out];
+        let saved = study_output(main, &dir, &flags);
+        assert!(saved.status.success(), "{}", String::from_utf8_lossy(&saved.stderr));
+        let result: Value = serde_json::from_slice(&saved.stdout).unwrap();
+        let result = result.get("result").unwrap_or(&result);
+        assert_eq!(result["adopted_pattern"]["key"], key);
+        assert_eq!(result["adopted_pattern"]["pattern_sha256"], chosen["binding"]["result"]["pattern_sha256"]);
+        let expected_bytes = chosen["binding"]["result"]["pattern_json"].as_str().unwrap();
+        assert_eq!(fs::read_to_string(dir.join(&out)).unwrap(), expected_bytes);
+        assert!(!study_output(main, &dir, &flags).status.success());
+        assert_eq!(fs::read_to_string(dir.join(&out)).unwrap(), expected_bytes);
+        let refused = rows.iter().find(|row| row["binding"]["status"] == "refused").unwrap();
+        for denied in [refused["key"].as_str().unwrap(), "no-such-alternative"] {
+            assert!(!study_output(main, &dir, &["--adopt", denied, "--out", "refused/pattern.json"]).status.success());
+        }
+        assert!(!dir.join("refused").exists());
         for row in report["alternatives"].as_array().unwrap() {
             let design = &row["design"];
             if design["key"] == "unbalanced-seam" {
@@ -1053,6 +1086,9 @@ fn both_study_binaries_compare_real_stock_without_losing_independent_roll_result
     assert_eq!(expected["hardware_execution_authorized"], false);
     for main in [false, true] {
         assert_eq!(run(main, &dir), expected);
+        let denied = study_output(main, &dir, &["--adopt", "roll", "--out", "excluded/pattern.json"]);
+        assert!(!denied.status.success());
+        assert!(!dir.join("excluded").exists());
     }
     // Replay source locks while retaining the same physical inventory, without consuming it.
     let mut replay = input;

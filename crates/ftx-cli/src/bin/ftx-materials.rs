@@ -18,7 +18,7 @@ mod finite_stock;
 #[path = "../materials/nonlinear.rs"]
 mod nonlinear_calibration;
 #[path = "../materials/scenario.rs"]
-mod scenarios;
+mod scenario;
 #[path = "../materials/screen.rs"]
 mod screening;
 #[path = "../materials/sewing_selection.rs"]
@@ -58,9 +58,9 @@ ftx-materials catalog [SEARCH]
 ftx-materials freeze ID [--allow-estimates]
 ftx-materials compare FIRST_ID SECOND_ID [--allow-estimates]
 ftx-materials screen REQUEST.json
-ftx-materials study PATTERN.json REQUEST.json
-ftx-materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody
-ftx-materials study-on-body PATTERN.json STUDY.json BODY.json MODEL.ftxbody
+ftx-materials study PATTERN.json REQUEST.json [--adopt KEY --out NEW-PATTERN.json]
+ftx-materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody [--adopt KEY --out NEW-PATTERN.json]
+ftx-materials study-on-body PATTERN.json STUDY.json BODY.json MODEL.ftxbody [--adopt KEY --out NEW-PATTERN.json]
 ftx-materials stock-plan PATTERN.json STOCK.json
 ftx-materials stock-identities PATTERN.json STOCK.json
 ftx-materials stock-price PATTERN.json STOCK.json PRICING.json
@@ -116,6 +116,8 @@ ftx-materials sew-select PATTERN.json REQUEST.json
 ftx-materials sew-stitches PATTERN.json OPTIONS.json
 ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
 ftx-materials sew-cell-svg PATTERN.json OPTIONS.json CELL-ID OPERATION-ID NEW.svg
+
+`--adopt` saves the named evaluated alternative's exact bound pattern to a new file. Requested comparison policies must admit the alternative.
 
 JSON output. `show` includes a portable selection, missing-property coverage and separate steady/transient readiness.
 `inspect` reads a selection file and shares the browser's source/capability report; consent comes from the file.
@@ -275,18 +277,14 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["treatment-pattern", pattern, request, out] => {
             screening::treatment_pattern(pattern, request, Some(out))
         }
-        ["study", pattern, request] => screening::study(pattern, request),
-        ["study-on-body", pattern, request, body, model] => {
-            scenarios::manufacturing(pattern, request, body, model)
+        ["study" | "study-on-body" | "scenario-study", ..] => {
+            let (inputs, key, out) = match words.as_slice() {
+                [inputs @ .., "--adopt", key, "--out", out]
+                | [inputs @ .., "--out", out, "--adopt", key] => (inputs, Some(*key), Some(*out)),
+                inputs => (inputs, None, None),
+            };
+            screening::study_command(inputs, key, out)
         }
-        [
-            "scenario-study",
-            pattern,
-            request,
-            scenario,
-            measurements,
-            model,
-        ] => scenarios::run(pattern, request, scenario, measurements, model),
         ["stock-plan", pattern, request] => finite_stock::plan(pattern, request),
         ["stock-identities", pattern, request] => finite_stock::identities(pattern, request),
         ["stock-price", pattern, request, pricing] => {
