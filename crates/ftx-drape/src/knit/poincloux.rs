@@ -323,15 +323,16 @@ pub fn calibrate_knit_prior_to_uniaxial_strips(
     let course_scale = fit_axis(course_obs, 1)?;
     let mut card = prior.clone();
     card.evidence = Evidence::Estimate;
-    card.membrane.k_w_toe *= wale_scale;
-    card.membrane.k_w_lock *= wale_scale;
-    card.membrane.k_c_toe *= course_scale;
-    card.membrane.k_c_lock *= course_scale;
-    // Scale coupling conservatively by geometric mean so SPD holds strictly
+    card.membrane.q11 *= wale_scale;
+    card.membrane.c1111 *= wale_scale;
+    card.membrane.q22 *= course_scale;
+    card.membrane.c2222 *= course_scale;
+    // Scale coupling, shear, and jamming barrier conservatively by geometric mean so SPD holds strictly
     let gm = (wale_scale * course_scale).sqrt();
-    card.membrane.k_wc *= gm;
-    card.membrane.k_shear *= gm;
-    card.membrane.k_jam *= gm;
+    card.membrane.q12 *= gm;
+    card.membrane.q66 *= gm;
+    card.membrane.c1122 *= gm;
+    card.membrane.kappa_jam *= gm;
     card.validate()?;
 
     let mut sq_sum = 0.0;
@@ -417,5 +418,49 @@ mod tests {
             card.validate().unwrap_err().code,
             RefusalCode::VerificationMismatch
         );
+    }
+
+    #[test]
+    fn calibrate_knit_prior_scales_wale_and_course_stiffness_and_preserves_estimate_evidence() {
+        let prior = RveHomogenizedKnitCard {
+            schema: "ftx-knit-rve-card/1".to_string(),
+            id: "jersey-rve-prior".to_string(),
+            frankensim_rve_sha256: "abc123".to_string(),
+            evidence: Evidence::Estimate,
+            hill_mandel_residual: 4.2e-7,
+            membrane: CoupledKnitMembrane::reference_stockinette_estimate(),
+            bending: AsymmetricKnitBending::reference_stockinette_estimate(),
+            rest_pore_fraction: 0.08,
+            pore_strain_slope: 0.35,
+        };
+        let scale = 1.6;
+        let wale_obs: Vec<(f64, f64)> = [0.05, 0.12, 0.22]
+            .into_iter()
+            .map(|e| {
+                (
+                    e,
+                    scale * prior.membrane.evaluate([e, 0.0, 0.0]).unwrap().stress[0],
+                )
+            })
+            .collect();
+        let course_obs: Vec<(f64, f64)> = [0.05, 0.15, 0.28]
+            .into_iter()
+            .map(|e| {
+                (
+                    e,
+                    scale * prior.membrane.evaluate([0.0, e, 0.0]).unwrap().stress[1],
+                )
+            })
+            .collect();
+        let fit = calibrate_knit_prior_to_uniaxial_strips(&prior, &wale_obs, &course_obs).unwrap();
+        assert_eq!(fit.card.evidence, Evidence::Estimate);
+        assert!((fit.wale_scale - scale).abs() < 1e-12, "{}", fit.wale_scale);
+        assert!(
+            (fit.course_scale - scale).abs() < 1e-12,
+            "{}",
+            fit.course_scale
+        );
+        assert!(fit.rms_residual_n_m < 1e-12, "{}", fit.rms_residual_n_m);
+        assert!(fit.card.validate().is_ok());
     }
 }

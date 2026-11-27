@@ -2592,9 +2592,9 @@ mod tests {
             parameter_bounds: vec![[0.5, 2.0], [0.5, 2.0], [0.5, 2.0], [-4.0, 4.0]],
             response_family: Some(family::Family {
                 model: family::MODEL.into(),
-                warp: shape_curve(&[[-0.35, -8.0], [0.0, 0.0], [0.12, 3.0], [0.5, 28.0]]),
-                weft: shape_curve(&[[-0.35, -5.0], [0.0, 0.0], [0.12, 1.5], [0.5, 16.0]]),
-                shear: shape_curve(&[[-0.4, -3.0], [0.0, 0.0], [0.4, 3.0]]),
+                warp: shape_curve(&[[-0.5, -12.0], [0.0, 0.0], [0.18, 4.5], [0.8, 42.0]]),
+                weft: shape_curve(&[[-0.5, -7.5], [0.0, 0.0], [0.18, 2.25], [0.8, 24.0]]),
+                shear: shape_curve(&[[-0.8, -6.0], [0.0, 0.0], [0.8, 6.0]]),
                 allow_estimated_shapes: true,
             }),
             nonlinear: None,
@@ -2637,9 +2637,9 @@ mod tests {
         sj1_nl.parameter_bounds.clear();
         sj1_nl.nonlinear = Some(Nonlinear {
             strain_knots: [
-                vec![-0.35, 0.0, 0.12, 0.5],
-                vec![-0.35, 0.0, 0.12, 0.5],
-                vec![-0.4, 0.0, 0.4],
+                vec![-0.5, 0.0, 0.18, 0.8],
+                vec![-0.5, 0.0, 0.18, 0.8],
+                vec![-0.8, 0.0, 0.8],
             ],
             tangent_bounds: [
                 vec![[10.0, 60.0], [10.0, 60.0], [20.0, 120.0]],
@@ -2656,6 +2656,11 @@ mod tests {
         );
 
         // 3. End-to-end SJ1 nonlinear calibration solve-count reduction vs FD baseline.
+        sj1_nl.controls = Controls {
+            tolerance_m: 1e-9,
+            force_tolerance_n: 1e-6,
+            max_newton: 100,
+        };
         sj1_nl.policy.max_iterations = 6;
         sj1_nl.policy.max_forward_solves = 16_000;
         sj1_nl.policy.sensitivity = SensitivityMode::FiniteDifference;
@@ -2683,6 +2688,10 @@ mod tests {
         assert!(
             (best_adj - best_fd).abs() <= 1e-3 * (1.0 + best_fd),
             "SJ1 nonlinear FIT SSE mismatch: adjoint={best_adj} vs fd={best_fd}"
+        );
+        eprintln!(
+            "SJ1 9-param nonlinear calibrate: adjoint forward_solves={} adjoint_solves={} vs fd forward_solves={} (best_sse adj={best_adj:.6} fd={best_fd:.6})",
+            adj.forward_solves, adj.adjoint_solves, fd.forward_solves
         );
     }
 

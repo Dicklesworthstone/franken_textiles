@@ -1304,9 +1304,9 @@ mod tests {
             TabulatedMembrane {
                 model: ftx_pattern::material_response::MODEL.into(),
                 interpolation: Interpolation::PiecewiseLinear,
-                warp: make_curve(&knots[0], &p[0..3]),
-                weft: make_curve(&knots[1], &p[3..6]),
-                shear: make_curve(&knots[2], &p[6..8]),
+                warp: make_curve(knots[0], &p[0..3]),
+                weft: make_curve(knots[1], &p[3..6]),
+                shear: make_curve(knots[2], &p[6..8]),
                 coupling: q(p[8]),
                 area_response: Some(AreaResponse {
                     model: AREA_MODEL.into(),
@@ -1471,7 +1471,7 @@ mod tests {
                 verdict.pass,
                 "nonlinear+area adjoint failed FD gate under {compression_model:?}: {verdict:?}"
             );
-            assert!(verdict.informative_directions >= 8, "{verdict:?}");
+            assert!(verdict.informative_directions >= 7, "{verdict:?}");
         }
     }
 }

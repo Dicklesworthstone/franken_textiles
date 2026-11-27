@@ -174,7 +174,7 @@ impl DyeOpticsModel {
             *k = 0.015 + 0.045 * det::exp(-((lam - 400.0) / 55.0) * ((lam - 400.0) / 55.0));
         }
 
-        let mut make_card = |id: &str, peak_nm: f64, width_nm: f64, strength: f64| {
+        let make_card = |id: &str, peak_nm: f64, width_nm: f64, strength: f64| {
             let mut k_unit = [0.0; SPECTRAL_NODES];
             for (i, k) in k_unit.iter_mut().enumerate() {
                 let lam = 400.0 + 10.0 * (i as f64);

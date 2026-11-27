@@ -243,10 +243,10 @@ fn generate_sobol_drift_scenarios(
             for (idx, slot) in walk_m.iter_mut().enumerate() {
                 let t = (idx as f64) / (n_stitches as f64);
                 let mut b_t = 0.0;
-                for m in 1..=15 {
+                for (m, &zm) in z.iter().enumerate().skip(1) {
                     let freq = (m as f64 - 0.5) * std::f64::consts::PI;
                     let phi = std::f64::consts::SQRT_2 * det::sin(freq * t) / freq;
-                    b_t += z[m] * phi;
+                    b_t += zm * phi;
                 }
                 // Brownian motion scaled to stitch count `sqrt(N)` and converted to metres
                 *slot = drift.stochastic_sigma_eta * total_t * b_t * mean_loop_m;
@@ -395,8 +395,9 @@ pub fn optimize_yarn_dye_program(
     let n_u = n_cells * n_p;
     let n_vars = n_u + 1; // last variable is unconstrained Rockafellar-Uryasev threshold `eta`!
 
+    type ObjGradEval = (f64, Vec<f64>, Vec<f64>, Vec<CieXyz>);
     // Helper: evaluate smoothed CVaR + Sobolev + Huberized switch objective and exact gradient
-    let eval_obj_grad = |x: &[f64]| -> Result<(f64, Vec<f64>, Vec<f64>, Vec<CieXyz>), Refusal> {
+    let eval_obj_grad = |x: &[f64]| -> Result<ObjGradEval, Refusal> {
         let u = &x[..n_u];
         let eta = x[n_u];
         // Stage 1 factored OUTSIDE the K-scenario drift loop!
@@ -526,20 +527,18 @@ pub fn optimize_yarn_dye_program(
     // Projection operator onto `[0, u_max]^n_u x R` (eta is strictly unconstrained!)
     let project = |x: &mut [f64]| {
         for c in 0..n_cells {
-            for p in 0..n_p {
+            for (p, &u_hi) in u_max.iter().enumerate().take(n_p) {
                 let idx = c * n_p + p;
-                x[idx] = x[idx].clamp(0.0, u_max[p]);
+                x[idx] = x[idx].clamp(0.0, u_hi);
             }
         }
     };
 
     // Initialize at neutral undyed yarn (`u = 0`, `eta` initialized to initial nominal loss)
     let mut x = vec![0.0_f64; n_vars];
+    let (f_init, _, _, _) = eval_obj_grad(&x)?;
+    x[n_u] = f_init; // warm-start eta at initial mean loss
     let (mut f_val, mut grad, _, _) = eval_obj_grad(&x)?;
-    x[n_u] = f_val; // warm-start eta at initial mean loss
-    let (fv0, g0, _, _) = eval_obj_grad(&x)?;
-    f_val = fv0;
-    grad = g0;
 
     // Pure-Rust Bertsekas Two-Metric Projected L-BFGS (m = 7 memory pairs)
     const M_HIST: usize = 7;
@@ -570,10 +569,10 @@ pub fn optimize_yarn_dye_program(
         // Identify binding active box variables (never bind unconstrained `eta`!)
         let mut active = vec![false; n_vars];
         for c in 0..n_cells {
-            for p in 0..n_p {
+            for (p, &u_hi) in u_max.iter().enumerate().take(n_p) {
                 let idx = c * n_p + p;
                 if (x[idx] <= eps_k && grad[idx] > 0.0)
-                    || (x[idx] >= u_max[p] - eps_k && grad[idx] < 0.0)
+                    || (x[idx] >= u_hi - eps_k && grad[idx] < 0.0)
                 {
                     active[idx] = true;
                 }
