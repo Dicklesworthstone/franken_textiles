@@ -56,7 +56,7 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
 
 <section id="swatchSection">
   <h2>1. Stepped Calibration Swatch Kit (Exp-3)</h2>
-  <p>Before running any garment program on a knitting machine, knit, wash, and block a hard-capped calibration swatch (<code>CalibrationSwatchOnly</code>: max 80 needles, 160 courses, 60% speed, 70% takedown) to measure real yarn gauge, shrinkage, and drift.</p>
+  <p>Before running any garment program on a knitting machine, knit, wash, and block a hard-capped calibration swatch (<code>CalibrationSwatchOnly</code>: max 80 needles, 200 courses, 50% speed, 60% takedown, 40 m yarn) to measure real yarn gauge, shrinkage, and drift.</p>
   <div class="row">
     <label>Machine Profile
       <select id="swatchMachine">
@@ -107,9 +107,8 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
     </label>
     <label>Wearer Age Class (required)
       <select id="panelAgeClass">
-        <option value="toddler_12_36m">Toddler (12–36 mo)</option>
-        <option value="infant_0_12m">Infant (0–12 mo)</option>
-        <option value="child_3_12y">Child (3–12 y)</option>
+        <option value="infant_under3">Infant / Toddler (&lt; 3 yr)</option>
+        <option value="child3_to14">Child (3–14 yr)</option>
         <option value="adult">Adult</option>
       </select>
     </label>
@@ -152,7 +151,8 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
     <label>Wearer Age Class
       <select id="dyeAgeClass">
         <option value="calibration_swatch_only">Calibration Swatch Only (emits CSV/G-code)</option>
-        <option value="toddler_12_36m">Toddler (12–36 mo · requires Exp-4 fastness)</option>
+        <option value="infant_under3">Infant / Toddler (&lt; 3 yr · requires Exp-4 fastness)</option>
+        <option value="child3_to14">Child (3–14 yr · requires Exp-4 fastness)</option>
         <option value="adult">Adult (requires Exp-4 fastness)</option>
       </select>
     </label>
@@ -207,7 +207,7 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
       <div class="preview-box">
         <h4>5-Regime Pareto Frontier</h4>
         <table id="dyeParetoTable">
-          <thead><tr><th>Regime</th><th>P50 ΔE₀₀</th><th>P95 ΔE₀₀</th><th>Hardware</th></tr></thead>
+          <thead><tr><th>Regime</th><th>Feasible</th><th>P95 ΔE₀₀</th><th>Complexity</th><th>Rationale</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>

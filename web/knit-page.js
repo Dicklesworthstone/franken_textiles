@@ -7,6 +7,15 @@ const runDyeBtn = document.getElementById("runDye");
 
 let worker = null;
 let reqId = 0;
+const latestRequestByKind = { swatch: 0, panel: 0, dye: 0 };
+const targetByRequest = new Map();
+const downloadUrlsByContainer = new WeakMap();
+
+const PANEL_MACHINE_DEFAULTS = {
+  "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1" },
+  "brother-kh930-ayab": { needle_pitch_mm: 4.5, carrier_id: "A" },
+  "hand-knit": { needle_pitch_mm: 4.0, carrier_id: "1" },
+};
 
 function showError(msg) {
   errorEl.textContent = msg;
@@ -18,9 +27,22 @@ function clearError() {
   errorEl.hidden = true;
 }
 
+function clearDownloads(container) {
+  const urls = downloadUrlsByContainer.get(container);
+  if (urls) {
+    for (const url of urls) URL.revokeObjectURL(url);
+  }
+  downloadUrlsByContainer.set(container, []);
+  container.textContent = "";
+}
+
 function makeDownload(container, filename, text, mime = "text/plain") {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const urls = downloadUrlsByContainer.get(container) || [];
+  urls.push(url);
+  downloadUrlsByContainer.set(container, urls);
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+  a.href = url;
   a.download = filename;
   a.textContent = `Download ${filename}`;
   container.append(a);
@@ -67,7 +89,7 @@ function renderSwatch(res) {
   const dl = document.getElementById("swatchDownloads");
   const svgBox = document.getElementById("swatchSvgBox");
   const pre = document.getElementById("swatchPre");
-  dl.innerHTML = "";
+  clearDownloads(dl);
   makeDownload(dl, "swatch.k", res.knitout_text, "text/plain");
   if (res.kc_text) makeDownload(dl, "swatch.kc", res.kc_text, "text/plain");
   if (res.ayab_checklist) {
@@ -115,15 +137,34 @@ function renderDye(res, targetPixels, targetW, targetH) {
   drawGridCanvas(document.getElementById("dyePredCanvas"), wales, courses, flipped);
 
   const tbody = document.querySelector("#dyeParetoTable tbody");
-  tbody.innerHTML = "";
+  tbody.textContent = "";
   for (const row of res.pareto_regimes || []) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${row.regime}</td><td>${row.estimated_delta_e00_p50.toFixed(2)}</td><td>${row.estimated_delta_e00_p95.toFixed(2)}</td><td>${row.hardware_complexity}</td>`;
+    const feasibleText = row.feasible
+      ? "Yes"
+      : row.refusal_reason
+        ? `No (${row.refusal_reason})`
+        : "No";
+    const p95Text = Number.isFinite(row.expected_delta_e00_p95)
+      ? row.expected_delta_e00_p95.toFixed(2)
+      : "—";
+    const cells = [
+      String(row.regime ?? ""),
+      feasibleText,
+      p95Text,
+      String(row.complexity_rank ?? "—"),
+      String(row.rationale ?? ""),
+    ];
+    for (const text of cells) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.append(td);
+    }
     tbody.append(tr);
   }
 
   const dl = document.getElementById("dyeDownloads");
-  dl.innerHTML = "";
+  clearDownloads(dl);
   makeDownload(dl, "dye_program.json", JSON.stringify(res.program, null, 2), "application/json");
   if (res.schedule_csv) makeDownload(dl, "dye_schedule.csv", res.schedule_csv, "text/csv");
   if (res.controller_gcode) makeDownload(dl, "dye_controller.gcode", res.controller_gcode, "text/plain");
@@ -134,8 +175,6 @@ function renderDye(res, targetPixels, targetW, targetH) {
     : "Wearable age classes require an Exp-4 fastness qualification receipt before emitting controller G-code; JSON dye program is ready for review.";
   out.hidden = false;
 }
-
-let lastTarget = { pixels: [], w: 1, h: 1 };
 
 function startWorker() {
   worker = new Worker("knit-worker.js", { type: "module" });
@@ -149,17 +188,24 @@ function startWorker() {
       statusEl.textContent = "Engine unavailable.";
       showError(msg.message);
     } else if (msg.type === "refusal") {
+      targetByRequest.delete(msg.request);
       statusEl.textContent = `Refused (${msg.code}).`;
       showError(`[${msg.code}] ${msg.message}`);
     } else if (msg.type === "error") {
+      targetByRequest.delete(msg.request);
       statusEl.textContent = "Error.";
       showError(msg.message);
     } else if (msg.type === "result") {
+      const target = targetByRequest.get(msg.request);
+      targetByRequest.delete(msg.request);
+      if (msg.request && latestRequestByKind[msg.kind] && msg.request !== latestRequestByKind[msg.kind]) {
+        return;
+      }
       clearError();
       statusEl.textContent = `Completed ${msg.kind}.`;
       if (msg.kind === "swatch") renderSwatch(msg.result);
       else if (msg.kind === "panel") renderPanel(msg.result);
-      else if (msg.kind === "dye") renderDye(msg.result, lastTarget.pixels, lastTarget.w, lastTarget.h);
+      else if (msg.kind === "dye" && target) renderDye(msg.result, target.pixels, target.w, target.h);
     }
   };
 }
@@ -168,10 +214,12 @@ runSwatchBtn.addEventListener("click", () => {
   clearError();
   const cams = document.getElementById("swatchCams").value
     .split(",").map((s) => Number(s.trim())).filter((v) => Number.isFinite(v));
+  const request = ++reqId;
+  latestRequestByKind.swatch = request;
   statusEl.textContent = "Generating verified calibration swatch kit…";
   worker.postMessage({
     type: "swatch",
-    request: ++reqId,
+    request,
     payload: {
       machine: document.getElementById("swatchMachine").value,
       yarn_id: document.getElementById("swatchYarn").value.trim() || "merino-200tex",
@@ -184,12 +232,16 @@ runSwatchBtn.addEventListener("click", () => {
 
 runPanelBtn.addEventListener("click", () => {
   clearError();
+  const machine = document.getElementById("panelMachine").value;
+  const defaults = PANEL_MACHINE_DEFAULTS[machine] || PANEL_MACHINE_DEFAULTS["kniterate-7e"];
+  const request = ++reqId;
+  latestRequestByKind.panel = request;
   statusEl.textContent = "Drafting measured shaped panel…";
   worker.postMessage({
     type: "panel",
-    request: ++reqId,
+    request,
     payload: {
-      machine: document.getElementById("panelMachine").value,
+      machine,
       panel: {
         name: "workbench_panel",
         wearer_age_class: document.getElementById("panelAgeClass").value,
@@ -203,14 +255,15 @@ runPanelBtn.addEventListener("click", () => {
         rib_hem_courses: Number(document.getElementById("panelRib").value),
         cam_setting: 7.0,
         yarn_id: "merino-200tex",
-        carrier_id: "1",
+        carrier_id: defaults.carrier_id,
         has_hood_or_neck_drawstring: false,
       },
       gauge: {
         wales_per_100mm: 22.0,
         courses_per_100mm: 30.0,
+        needle_pitch_mm: defaults.needle_pitch_mm,
         yarn_tex: 200.0,
-        measured_after_wash_block: false,
+        relaxed_after_wash: false,
       },
     },
   });
@@ -222,15 +275,17 @@ runDyeBtn.addEventListener("click", () => {
   const wales = Number(document.getElementById("dyeWales").value);
   const preset = document.getElementById("dyePreset").value;
   const pixels = buildPresetPixels(preset, wales, courses);
-  lastTarget = { pixels, w: wales, h: courses };
+  const request = ++reqId;
+  latestRequestByKind.dye = request;
+  targetByRequest.set(request, { pixels, w: wales, h: courses });
   statusEl.textContent = "Running Kubelka–Munk + Sobol-CVaR Bertsekas L-BFGS optimizer…";
   worker.postMessage({
     type: "dye",
-    request: ++reqId,
+    request,
     payload: {
       machine: document.getElementById("dyeMachine").value,
       wearer_age_class: document.getElementById("dyeAgeClass").value,
-      regime: "regime2_b_planned_pooling",
+      regime: preset === "horizon" ? "regime1_a_stripes" : "regime1_b_circular_pooling",
       width: wales,
       height: courses,
       srgb_u8: pixels,

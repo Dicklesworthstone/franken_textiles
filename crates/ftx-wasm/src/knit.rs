@@ -256,18 +256,52 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
             "interactive browser dye target raster must be within 1..=64 x 1..=64 pixels",
         ));
     }
-    let courses = req.grid[0].clamp(2, 40);
-    let wales = req.grid[1].clamp(2, 40);
+    let [courses, wales] = req.grid;
+    if !(2..=40).contains(&courses) || !(2..=40).contains(&wales) {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "interactive browser dye grid [{courses}, {wales}] must be within 2..=40 x 2..=40"
+            ),
+        ));
+    }
+    if !(1..=40).contains(&req.max_iters) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "interactive browser dye max_iters {} must be within 1..=40",
+                req.max_iters
+            ),
+        ));
+    }
+    Refusal::finite("drift_eps", req.drift_eps)?;
+    Refusal::finite("drift_sigma_eta", req.drift_sigma_eta)?;
+    Refusal::finite("wick_mm", req.wick_mm)?;
+    if req.drift_sigma_eta < 0.0 || req.wick_mm < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "drift_sigma_eta and wick_mm cannot be negative",
+        ));
+    }
     let machine = resolve_dye_machine(&req.machine)?;
     let target = if req.alpha_weight.is_empty() {
         TargetRaster::from_opaque_srgb(req.width, req.height, req.srgb_u8)?
     } else {
+        let mut h = ftx_core::receipt::Sha256::new();
+        h.update(&req.width.to_le_bytes());
+        h.update(&req.height.to_le_bytes());
+        for px in &req.srgb_u8 {
+            h.update(px);
+        }
+        for &a in &req.alpha_weight {
+            h.update(&a.to_le_bytes());
+        }
         TargetRaster::new(
             req.width,
             req.height,
             req.srgb_u8,
             req.alpha_weight,
-            [0; 32],
+            h.finalize(),
         )?
     };
 
@@ -280,7 +314,7 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
     let n_cells = ((courses * wales) as usize / 2).clamp(8, 128);
     let tr_cfg = CapillaryTransportConfig {
         ds_m: stitch_map.total_yarn_length_m / (n_cells as f64),
-        sigma_wick_m: (req.wick_mm * 0.001).max(0.0),
+        sigma_wick_m: req.wick_mm * 0.001,
         rf_retardations: machine
             .primaries
             .iter()
@@ -305,7 +339,7 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
         cvar_tau: 0.5,
         lambda_smooth: 0.05,
         lambda_switch: 0.02,
-        max_iters: req.max_iters.clamp(1, 40),
+        max_iters: req.max_iters,
         skin_underlayer_xyz: srgb_u8_to_xyz_d65([215, 180, 155]),
         ciede_eps_c: 1e-4,
         drift,
@@ -472,6 +506,86 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("G1 E")
+        );
+
+        // Verify exact browser knit-page.js panel preview & Pareto fields round-trip cleanly.
+        let panel_req = json!({
+            "machine": "brother-kh930-ayab",
+            "panel": {
+                "name": "workbench_panel",
+                "wearer_age_class": "infant_under3",
+                "hem_width_mm": 250.0,
+                "chest_width_mm": 280.0,
+                "length_mm": 310.0,
+                "armhole_depth_mm": 95.0,
+                "armhole_inset_total_mm": 36.0,
+                "neck_width_mm": 105.0,
+                "neck_depth_mm": 24.0,
+                "rib_hem_courses": 6,
+                "cam_setting": 7.0,
+                "yarn_id": "merino-200tex",
+                "carrier_id": "A",
+                "has_hood_or_neck_drawstring": false
+            },
+            "gauge": {
+                "wales_per_100mm": 22.0,
+                "courses_per_100mm": 30.0,
+                "needle_pitch_mm": 4.5,
+                "yarn_tex": 200.0,
+                "relaxed_after_wash": false
+            }
+        })
+        .to_string();
+        let panel_out: Value =
+            serde_json::from_str(&knit_panel_preview_json(&panel_req).unwrap()).unwrap();
+        assert_eq!(panel_out["svg_checks_passed"], true);
+        assert_eq!(panel_out["fit_claimed"], false);
+        assert_eq!(panel_out["hardware_execution_authorized"], false);
+
+        let first_pareto = &dye_out["pareto_regimes"][0];
+        assert!(first_pareto["expected_delta_e00_p95"].as_f64().is_some());
+        assert!(first_pareto["complexity_rank"].as_u64().is_some());
+        assert!(first_pareto["feasible"].as_bool().is_some());
+
+        // Refuse out-of-range grid / negative wick / zero max_iters instead of silently clamping.
+        let bad_grid = json!({
+            "machine": "piezo-cmyk",
+            "wearer_age_class": "calibration_swatch_only",
+            "regime": "regime1_b_circular_pooling",
+            "width": 4,
+            "height": 4,
+            "srgb_u8": pixels,
+            "grid": [0, 6],
+            "is_circular": true,
+            "drift_eps": 0.002,
+            "drift_sigma_eta": 0.015,
+            "wick_mm": 1.5,
+            "max_iters": 12
+        })
+        .to_string();
+        assert_eq!(
+            dye_optimize_json(&bad_grid).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+
+        let bad_wick = json!({
+            "machine": "piezo-cmyk",
+            "wearer_age_class": "calibration_swatch_only",
+            "regime": "regime1_b_circular_pooling",
+            "width": 4,
+            "height": 4,
+            "srgb_u8": pixels,
+            "grid": [6, 6],
+            "is_circular": true,
+            "drift_eps": 0.002,
+            "drift_sigma_eta": 0.015,
+            "wick_mm": -0.5,
+            "max_iters": 12
+        })
+        .to_string();
+        assert_eq!(
+            dye_optimize_json(&bad_wick).unwrap_err().code,
+            RefusalCode::OutOfRange
         );
     }
 }
