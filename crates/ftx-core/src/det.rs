@@ -540,6 +540,209 @@ fn atan_core(t: f64) -> f64 {
     t * p
 }
 
+/// ULP budget for [`cbrt`].
+pub const CBRT_ULP_BUDGET: u64 = 2;
+
+/// Real cube root `x^(1/3)`, deterministic strict mode (zero platform libm).
+///
+/// Uses an IEEE-754 bit-level initial seed (`bits / 3 + 0x2a9f_7893_0000_0000`) with exact power-of-two
+/// pre/post-scaling (`2^±54` / `2^∓18`) for subnormals and huge values near `f64::MAX`, followed by
+/// three cubically convergent Halley iterations. Bit-identical with `/dp/frankensim` `fs_math::det::cbrt`.
+#[must_use]
+pub fn cbrt(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 || x.is_infinite() {
+        return x;
+    }
+    let neg = x.is_sign_negative();
+    let ax = x.abs();
+    const SCALE_UP: f64 = 18_014_398_509_481_984.0; // 2^54 (exact)
+    const SCALE_DOWN: f64 = 1.0 / SCALE_UP; // 2^-54 (exact)
+    const POST_DOWN: f64 = 1.0 / 262_144.0; // 2^-18 (exact)
+    const POST_UP: f64 = 262_144.0; // 2^18 (exact)
+    let (scaled, post) = if ax < f64::MIN_POSITIVE {
+        (ax * SCALE_UP, POST_DOWN)
+    } else if ax > 1.0e200 {
+        (ax * SCALE_DOWN, POST_UP)
+    } else {
+        (ax, 1.0)
+    };
+    let mut y = f64::from_bits(scaled.to_bits() / 3 + 0x2a9f_7893_0000_0000);
+    for _ in 0..3 {
+        let y3 = y * y * y;
+        y *= (y3 + 2.0 * scaled) / (2.0 * y3 + scaled);
+    }
+    let res = y * post;
+    if neg { -res } else { res }
+}
+
+/// `2/sqrt(pi)` as double-double, lifted from frankensim `fs-math/src/det.rs`.
+fn two_over_sqrt_pi_dd() -> crate::dd::Dd {
+    use crate::dd::Dd;
+    let pi = Dd::from_pair(std::f64::consts::PI, 1.224_646_799_147_353_2e-16);
+    Dd::from_f64(2.0) / pi.sqrt()
+}
+
+/// Error function `erf(x)`, deterministic strict mode (lifted from frankensim `fs-math/src/det.rs`).
+#[must_use]
+pub fn erf(x: f64) -> f64 {
+    use crate::dd::Dd;
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    let sign = if x.is_sign_negative() { -1.0 } else { 1.0 };
+    let a = x.abs();
+    if a >= 6.0 {
+        return sign;
+    }
+    if a <= 3.0 {
+        sign * erf_dd_small(a).to_f64()
+    } else {
+        sign * (Dd::from_f64(1.0) - erfc_dd_large(a)).to_f64()
+    }
+}
+
+/// Complementary error function `erfc(x)`, deterministic strict mode (lifted from frankensim `fs-math/src/det.rs`).
+#[must_use]
+pub fn erfc(x: f64) -> f64 {
+    use crate::dd::Dd;
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 1.0;
+    }
+    if x < 0.0 {
+        let a = -x;
+        return if a >= 6.0 {
+            2.0
+        } else if a <= 3.0 {
+            (Dd::from_f64(1.0) + erf_dd_small(a)).to_f64()
+        } else {
+            (Dd::from_f64(2.0) - erfc_dd_large(a)).to_f64()
+        };
+    }
+    if x <= 3.0 {
+        (Dd::from_f64(1.0) - erf_dd_small(x)).to_f64()
+    } else if x >= 27.5 {
+        0.0
+    } else {
+        erfc_dd_large(x).to_f64()
+    }
+}
+
+fn erf_dd_small(a: f64) -> crate::dd::Dd {
+    use crate::dd::Dd;
+    let x = Dd::from_f64(a);
+    let x2 = x * x;
+    let mut term = x;
+    let mut sum = x;
+    for k in 1..=90_i32 {
+        term = term * x2 / Dd::from_f64(f64::from(k));
+        let contrib = term / Dd::from_f64(2.0_f64.mul_add(f64::from(k), 1.0));
+        sum = if k % 2 == 1 {
+            sum - contrib
+        } else {
+            sum + contrib
+        };
+        if contrib.hi.abs() < 1e-35 * sum.hi.abs() {
+            break;
+        }
+    }
+    sum * two_over_sqrt_pi_dd()
+}
+
+fn erfc_dd_large(x: f64) -> crate::dd::Dd {
+    use crate::dd::Dd;
+    let xd = Dd::from_f64(x);
+    let mut cf = xd;
+    for k in (1..=60_i32).rev() {
+        cf = xd + Dd::from_f64(f64::from(k) / 2.0) / cf;
+    }
+    let x2 = xd * xd;
+    let e = Dd::from_f64(exp(-x2.hi)) * (Dd::from_f64(1.0) - Dd::from_f64(x2.lo));
+    let pi = Dd::from_pair(std::f64::consts::PI, 1.224_646_799_147_353_2e-16);
+    e / pi.sqrt() / cf
+}
+
+/// Real power `x^y`, deterministic strict mode (lifted from frankensim `fs-math/src/det.rs`).
+#[must_use]
+#[allow(clippy::float_cmp)]
+pub fn pow(x: f64, y: f64) -> f64 {
+    if y == 0.0 {
+        return 1.0;
+    }
+    if x == 1.0 {
+        return 1.0;
+    }
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    let y_int = y.fract() == 0.0 && y.abs() < 9.0e15;
+    let y_odd = y_int && (y / 2.0).fract() != 0.0;
+    if x == 0.0 {
+        return match (y > 0.0, y_odd && x.is_sign_negative()) {
+            (true, true) => -0.0,
+            (true, false) => 0.0,
+            (false, true) => f64::NEG_INFINITY,
+            (false, false) => f64::INFINITY,
+        };
+    }
+    if x.is_infinite() || y.is_infinite() {
+        let ax = x.abs();
+        if y.is_infinite() && ax == 1.0 {
+            return 1.0;
+        }
+        let big = if y.is_infinite() {
+            if (ax > 1.0) == (y > 0.0) {
+                f64::INFINITY
+            } else {
+                0.0
+            }
+        } else if y > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+        let neg = x.is_sign_negative() && y_odd;
+        return if neg { -big } else { big };
+    }
+    if x < 0.0 {
+        if !y_int {
+            return f64::NAN;
+        }
+        let mag = pow(-x, y);
+        return if y_odd { -mag } else { mag };
+    }
+    if y_int && y.abs() <= 512.0 {
+        let mut base = if y > 0.0 { x } else { 1.0 / x };
+        let mut n = y.abs() as u64;
+        let mut acc = 1.0_f64;
+        while n > 0 {
+            if n & 1 == 1 {
+                acc *= base;
+            }
+            base *= base;
+            n >>= 1;
+        }
+        return acc;
+    }
+    if y == 0.5 {
+        return sqrt(x);
+    }
+    if y == -0.5 {
+        return 1.0 / sqrt(x);
+    }
+    let lx = ln(x);
+    let (p_hi, p_lo) = crate::eft::two_prod(y, lx);
+    if !p_hi.is_finite() {
+        return exp(p_hi);
+    }
+    exp(p_hi) * (1.0 + p_lo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,5 +903,52 @@ mod tests {
             let exact = (u128::from(m).pow(3)) as f64 / 2f64.powi(60);
             assert_eq!(cube(x), exact, "m = {m}");
         }
+    }
+
+    #[test]
+    fn cbrt_pow_erf_erfc_meet_accuracy_and_specials() {
+        assert_eq!(cbrt(0.0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(cbrt(-0.0).to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(cbrt(27.0), 3.0);
+        assert_eq!(cbrt(-8.0), -2.0);
+        assert!(cbrt(f64::NAN).is_nan());
+        assert_eq!(cbrt(f64::INFINITY), f64::INFINITY);
+        assert_eq!(cbrt(f64::NEG_INFINITY), f64::NEG_INFINITY);
+        for &x in &[
+            f64::MIN_POSITIVE * 0.25,
+            1e-315,
+            1e-300,
+            1e-9,
+            0.008_856,
+            1.0,
+            1e150,
+            1e300,
+            f64::MAX,
+            -f64::MAX,
+        ] {
+            let got = cbrt(x);
+            let want = x.cbrt();
+            assert!(
+                ulp_distance(got, want) <= CBRT_ULP_BUDGET,
+                "cbrt({x}): got={got} want={want} ulp={}",
+                ulp_distance(got, want)
+            );
+        }
+        assert!(max_ulp((-1e6, 1e6), 20_000, cbrt, f64::cbrt) <= CBRT_ULP_BUDGET);
+
+        // erf / erfc identities
+        assert_eq!(erf(0.0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(erfc(0.0), 1.0);
+        assert!((erf(1.0) - 0.842_700_792_949_714_9).abs() < 1e-15);
+        assert!((erfc(3.5) - 7.430_983_723_666_372e-7).abs() < 1e-15);
+        assert_eq!(erf(-1.5).to_bits(), (-erf(1.5)).to_bits());
+        assert!((erf(2.5) + erfc(2.5) - 1.0).abs() < 1e-15);
+
+        // pow specials and continuous exponents
+        assert_eq!(pow(2.0, 10.0), 1024.0);
+        assert_eq!(pow(9.0, 0.5), 3.0);
+        assert_eq!(pow(1.0, f64::NAN), 1.0);
+        assert!(pow(-2.0, 0.5).is_nan());
+        assert!((pow(2.5, 1.37) - 2.5_f64.powf(1.37)).abs() < 1e-14);
     }
 }

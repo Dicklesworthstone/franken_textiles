@@ -35,6 +35,16 @@ pub enum RefusalCode {
     IntersectingTrajectory,
     /// A file could not be read or written.
     Io,
+    /// A physical process (knitting swatch, dye bleed/fastness, coupon) is unqualified or `UNCERTAIN`.
+    UnqualifiedProcess,
+    /// A proprietary binary machine target cannot be safely generated directly (handoff IR only).
+    OpaqueProprietaryTarget,
+    /// A discrete fabrication machine program violates carrier, bed, needle, or rail invariants.
+    MachineStateInfeasible,
+    /// A material or process exceeds physical safety bounds (strain, tension, dwell, scorch, child safety).
+    MaterialProcessHazard,
+    /// A sealed receipt, qualification digest, or hardware profile hash failed verification.
+    VerificationMismatch,
 }
 
 impl RefusalCode {
@@ -55,6 +65,11 @@ impl RefusalCode {
             Self::IntersectingStart => "intersecting_start",
             Self::IntersectingTrajectory => "intersecting_trajectory",
             Self::Io => "io",
+            Self::UnqualifiedProcess => "unqualified_process",
+            Self::OpaqueProprietaryTarget => "opaque_proprietary_target",
+            Self::MachineStateInfeasible => "machine_state_infeasible",
+            Self::MaterialProcessHazard => "material_process_hazard",
+            Self::VerificationMismatch => "verification_mismatch",
         }
     }
 }

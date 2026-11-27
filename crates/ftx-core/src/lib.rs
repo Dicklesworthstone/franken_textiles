@@ -16,7 +16,9 @@
 
 pub mod aruco;
 pub mod curve;
+pub mod dd;
 pub mod det;
+pub mod eft;
 pub mod exact;
 pub mod intersection;
 pub mod linalg;
@@ -26,6 +28,7 @@ pub mod pole;
 pub mod polyline;
 pub mod py;
 pub mod pyjson;
+pub mod raster;
 pub mod receipt;
 pub mod refusal;
 pub mod response_curve;
@@ -35,5 +38,6 @@ pub mod vec;
 
 pub use curve::{Curve, CurveError, CurveKind};
 pub use polyline::End;
+pub use raster::TargetRaster;
 pub use refusal::{Refusal, RefusalCode};
 pub use vec::{Mat3, Vec2, Vec3};

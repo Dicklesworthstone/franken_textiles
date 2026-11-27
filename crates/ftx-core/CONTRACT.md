@@ -36,10 +36,18 @@ Body and drape geometry: metres, 3D, z up. Nothing here converts between them.
   2,000 independent integer-oracle cases cover regional whole-triangle material selection.
 
 **Determinism class.** Bit-identical across targets. The elementary functions use only correctly rounded
-IEEE operations (lifted from frankensim `fs-math/src/det.rs` at `f58c1acb`, unchanged bodies; trig refuses
-|x| > 2²⁰ with NaN instead of Payne–Hanek reduction). Sums run in fixed orders (numpy's pairwise order for
-totals). Checked: frankensim's 25,000-sample golden hash and the fixtures below pass on aarch64-apple,
-x86-64-linux and wasm32-wasip1 (Node WASI).
+IEEE operations (lifted from frankensim `fs-math/src/{det.rs,dd.rs,eft.rs}`, unchanged bodies; `det::cbrt`
+uses an IEEE bit-level seed with exact power-of-two scaling and three Halley steps matching
+`fs_math::det::cbrt`; trig refuses |x| > 2²⁰ with NaN instead of Payne–Hanek reduction). Sums run in fixed
+orders (numpy's pairwise order for totals). Checked: frankensim's 25,000-sample golden hash and the
+fixtures below pass on aarch64-apple, x86-64-linux and wasm32-wasip1 (Node WASI).
+
+`raster::TargetRaster` is a zero-dependency POD carrying straight sRGB pixels, explicit `[0, 1]` foreground
+`alpha_weight`, and `source_sha256` across the `ftx-trace` → `ftx-pattern`/`ftx-drape` seam without leaking
+image decoders into numerical crates. `receipt::canonical_json_sha256` hashes `Serialize` values with
+`BTreeMap`-ordered keys and `-0.0 → 0.0` normalization, refusing non-finite values fail-closed. `RefusalCode`
+includes five process-generic variants (`unqualified_process`, `opaque_proprietary_target`,
+`machine_state_infeasible`, `material_process_hazard`, `verification_mismatch`).
 
 **Parity with the reference.** Bit-exact with numpy 2.5.4 for `linspace`, `cumsum`, `sum`, `interp`,
 segment norms and quadratic/linear Bézier samples. Cubic Bézier samples use a correctly rounded x³ where

@@ -211,6 +211,66 @@ pub fn sha256_hex(data: &[u8]) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Canonical SHA-256 of any `Serialize` value for sealed cross-crate receipts.
+///
+/// Serializes via `serde_json::Value` (which stores object keys in deterministic `BTreeMap` order),
+/// recursively normalizes `-0.0 -> 0.0`, refuses non-finite numbers fail-closed, and returns the
+/// lowercase hex SHA-256 of the compact canonical UTF-8 JSON bytes.
+///
+/// # Errors
+/// [`crate::RefusalCode::InvalidDocument`] if serialization fails, or
+/// [`crate::RefusalCode::NonFinite`] if any floating-point value is NaN or infinite.
+pub fn canonical_json_sha256<T: Serialize>(value: &T) -> Result<String, crate::Refusal> {
+    let mut json = serde_json::to_value(value).map_err(|e| {
+        crate::Refusal::new(
+            crate::RefusalCode::InvalidDocument,
+            format!("cannot serialize canonical receipt payload: {e}"),
+        )
+    })?;
+    canonicalize_json_value(&mut json)?;
+    let bytes = serde_json::to_vec(&json).map_err(|e| {
+        crate::Refusal::new(
+            crate::RefusalCode::InvalidDocument,
+            format!("cannot encode canonical receipt JSON: {e}"),
+        )
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn canonicalize_json_value(value: &mut Value) -> Result<(), crate::Refusal> {
+    match value {
+        Value::Number(num) => {
+            if let Some(f) = num.as_f64() {
+                if !f.is_finite() {
+                    return Err(crate::Refusal::new(
+                        crate::RefusalCode::NonFinite,
+                        "canonical receipt JSON contains a non-finite number",
+                    ));
+                }
+                if f == 0.0 && f.is_sign_negative() {
+                    if let Some(pos_zero) = serde_json::Number::from_f64(0.0) {
+                        *num = pos_zero;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for item in items {
+                canonicalize_json_value(item)?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for v in map.values_mut() {
+                canonicalize_json_value(v)?;
+            }
+            Ok(())
+        }
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +330,38 @@ mod tests {
         assert_eq!(a.inputs[0].bytes, 2);
         assert_eq!(a.outputs[0].sha256, sha256_hex(b"[]"));
         assert_eq!(a.parameters["seam_tol_mm"], 3.0);
+    }
+
+    #[test]
+    fn canonical_json_sha256_normalizes_neg_zero_and_key_order() {
+        use serde_json::json;
+        let a = json!({"b": -0.0, "a": [1.0, -0.0]});
+        let b = json!({"a": [1.0, 0.0], "b": 0.0});
+        assert_eq!(
+            canonical_json_sha256(&a).unwrap(),
+            canonical_json_sha256(&b).unwrap()
+        );
+        // Non-finite floats fail closed via serde_json/canonicalize
+        let bad = [f64::NAN];
+        let err = canonical_json_sha256(&bad).unwrap_err();
+        assert!(matches!(
+            err.code,
+            crate::RefusalCode::NonFinite | crate::RefusalCode::InvalidDocument
+        ));
+    }
+
+    #[test]
+    fn process_refusal_codes_serialize_stably() {
+        use crate::RefusalCode;
+        for (code, want) in [
+            (RefusalCode::UnqualifiedProcess, "unqualified_process"),
+            (RefusalCode::OpaqueProprietaryTarget, "opaque_proprietary_target"),
+            (RefusalCode::MachineStateInfeasible, "machine_state_infeasible"),
+            (RefusalCode::MaterialProcessHazard, "material_process_hazard"),
+            (RefusalCode::VerificationMismatch, "verification_mismatch"),
+        ] {
+            assert_eq!(code.as_str(), want);
+            assert_eq!(serde_json::to_string(&code).unwrap(), format!("\"{want}\""));
+        }
     }
 }
