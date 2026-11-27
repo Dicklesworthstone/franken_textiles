@@ -1,9 +1,10 @@
-//! Open-limb Anny body shell adapter implementing Seam 1 (`ftx_core::shaping::ShapingSurface`)
-//! for 3D-to-knit harmonic AutoKnit drafting (`FTX-K12`).
+//! Uncapped, conforming plane-clipped shells for 3D-to-knit drafting (`FTX-K12`).
 //!
-//! Clips posed `SkinMesh` geometry along `BodyFrames` anatomical planes WITHOUT inserting end-caps,
-//! offsets along area-weighted outward normals with clearance clamping and degeneracy refusal,
-//! and extracts ordered open boundary rings (`t = 0` start hem/cuffs, `t = 1` end neck/top).
+//! The generic tube path preserves shared edge intersections and the actual clipping planes.
+//! A torso request requires its real landmarks and an already segmented torso tube. Full-body
+//! sleeve/armhole extraction is not implemented and refuses instead of returning a horizontal
+//! slice of unrelated anatomy. Offsets and their local inversion checks do not certify global
+//! self-collision freedom.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,10 +16,10 @@ use ftx_core::{Refusal, RefusalCode, Vec3};
 use crate::drape::SkinMesh;
 use crate::landmarks::BodyFrames;
 
-/// Adapter exposing a posed Anny [`SkinMesh`] and [`BodyFrames`] through [`ShapingSurface`].
+/// Adapter exposing a supplied body region through `ShapingSurface`.
 #[derive(Clone, Debug)]
 pub struct AnnyKnitShell<'a> {
-    /// Posed outward-wound body skin mesh (metres, z-up).
+    /// Outward-wound source geometry (metres, z-up); anatomical regions must be pre-segmented.
     pub skin: &'a SkinMesh,
     /// Anatomical landmark heights and part frames (millimetres).
     pub frames: &'a BodyFrames,
@@ -33,22 +34,21 @@ impl ShapingSurface for AnnyKnitShell<'_> {
         ease: &EaseProfile,
     ) -> Result<EaseShellMesh, Refusal> {
         validate_ease_profile(ease)?;
-        let floor_m = self.frames.floor_z * 0.001;
-        let lm_m = |name: &str, fallback_offset_m: f64| -> f64 {
-            self.frames
-                .landmarks
-                .get(name)
-                .map_or(floor_m + fallback_offset_m, |&h_mm| floor_m + h_mm * 0.001)
-        };
-        let z_waist = lm_m("waist", 0.55);
-        let z_neck = lm_m("snp", 0.92);
         let (z_low, z_high, offset_mm) = match region {
-            KnitShellRegion::Torso | KnitShellRegion::FullUpperBody => {
-                (z_waist, z_neck, ease.torso_radial_mm)
+            KnitShellRegion::Torso => {
+                let low = landmark_height_m(self.frames, "waist")?;
+                let high = landmark_height_m(self.frames, "snp")?;
+                require_torso_source(self.skin, self.frames, low, high)?;
+                (low, high, ease.torso_radial_mm)
             }
-            KnitShellRegion::LeftSleeve | KnitShellRegion::RightSleeve => {
-                let z_lo = z_waist + 0.15 * (z_neck - z_waist);
-                (z_lo, z_neck, ease.limb_radial_mm)
+            KnitShellRegion::FullUpperBody
+            | KnitShellRegion::LeftSleeve
+            | KnitShellRegion::RightSleeve => {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "anatomical sleeve and full-upper-body knit shells require region segmentation and named wrist/armhole rings; a global height slab cannot supply them",
+                )
+                .repair("Supply an explicitly segmented tube to the tube shell builder."));
             }
             KnitShellRegion::Tube => {
                 if self.skin.vertices.is_empty() {
@@ -64,7 +64,16 @@ impl ShapingSurface for AnnyKnitShell<'_> {
                     zmin = zmin.min(v.z);
                     zmax = zmax.max(v.z);
                 }
-                let span = (zmax - zmin).max(0.05);
+                let span = zmax - zmin;
+                Refusal::finite("tube height", span)?;
+                if span <= 0.0 {
+                    return Err(Refusal::new(
+                        RefusalCode::DegenerateGeometry,
+                        "a tube shell needs positive source height",
+                    ));
+                }
+                // Retain the generic tube's explicit five-percent end trim, without inventing
+                // a minimum anatomical height for short or flat input geometry.
                 (zmin + 0.05 * span, zmax - 0.05 * span, ease.torso_radial_mm)
             }
         };
@@ -80,10 +89,74 @@ impl ShapingSurface for AnnyKnitShell<'_> {
     }
 }
 
-/// Validates [`EaseProfile`] finiteness and explicit opt-in for negative wearing ease.
+fn landmark_height_m(frames: &BodyFrames, name: &str) -> Result<f64, Refusal> {
+    Refusal::finite("body floor height", frames.floor_z)?;
+    let height = frames.landmarks.get(name).ok_or_else(|| {
+        Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("a torso knit shell requires the body's {name} landmark"),
+        )
+    })?;
+    Refusal::finite("body landmark height", *height)?;
+    let world_m = (frames.floor_z + height) * 0.001;
+    Refusal::finite("body landmark world height", world_m)?;
+    Ok(world_m)
+}
+
+fn position_key(p: Vec3) -> [u64; 3] {
+    [p.x, p.y, p.z].map(|v| if v == 0.0 { 0 } else { v.to_bits() })
+}
+
+fn require_torso_source(
+    skin: &SkinMesh,
+    frames: &BodyFrames,
+    low: f64,
+    high: f64,
+) -> Result<(), Refusal> {
+    if frames.torso_points.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "a torso knit shell needs source anatomical torso membership",
+        ));
+    }
+    let torso: BTreeSet<_> = frames
+        .torso_points
+        .iter()
+        .copied()
+        .map(position_key)
+        .collect();
+    for tri in &skin.triangles {
+        let mut points = [Vec3::ZERO; 3];
+        for (slot, &index) in points.iter_mut().zip(tri) {
+            *slot = *skin.vertices.get(index).ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "skin mesh triangle index out of bounds",
+                )
+            })?;
+        }
+        if points.iter().all(|p| p.z <= low) || points.iter().all(|p| p.z >= high) {
+            continue;
+        }
+        // BodyFrames stores these same original posed vertices multiplied by 1000. Exact
+        // membership keeps an arm or a generated cap from being relabelled as torso anatomy.
+        if points
+            .iter()
+            .any(|&p| !torso.contains(&position_key(p * 1000.0)))
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "torso shell input includes retained limb or unclassified vertices; supply an anatomically segmented torso tube",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates `EaseProfile` finiteness and explicit opt-in for negative wearing ease.
 ///
 /// # Errors
-/// [`RefusalCode::NonFinite`] or [`RefusalCode::OutOfRange`].
+/// `NonFinite` or `OutOfRange`.
 pub fn validate_ease_profile(ease: &EaseProfile) -> Result<(), Refusal> {
     Refusal::finite("torso_radial_mm", ease.torso_radial_mm)?;
     Refusal::finite("limb_radial_mm", ease.limb_radial_mm)?;
@@ -106,11 +179,84 @@ pub fn validate_ease_profile(ease: &EaseProfile) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// Clips an outward-wound closed or open triangle mesh to `[z_low_m, z_high_m]` without capping,
-/// applies clearance-clamped radial normal offset, and extracts ordered open boundary rings.
+// Every incident face reuses the same intersection index and interpolation order. The second
+// clipping plane may intersect an edge shortened by the first; those endpoints are shared too.
+fn clip_polygon(
+    polygon: &[usize],
+    vertices: &mut Vec<Vec3>,
+    intersections: &mut BTreeMap<(u8, usize, usize), usize>,
+    plane: u8,
+    z: f64,
+    above: bool,
+) -> Result<Vec<usize>, Refusal> {
+    let mut result = Vec::with_capacity(polygon.len() + 1);
+    let Some(&last) = polygon.last() else {
+        return Ok(result);
+    };
+    let inside = |p: Vec3| if above { p.z >= z } else { p.z <= z };
+    let mut previous = last;
+    for &current in polygon {
+        let previous_inside = inside(vertices[previous]);
+        let current_inside = inside(vertices[current]);
+        if previous_inside != current_inside {
+            let a = previous.min(current);
+            let b = previous.max(current);
+            let crossing = if vertices[a].z == z {
+                a
+            } else if vertices[b].z == z {
+                b
+            } else if let Some(&index) = intersections.get(&(plane, a, b)) {
+                index
+            } else {
+                let p = vertices[a];
+                let q = vertices[b];
+                let denominator = q.z - p.z;
+                let t = (z - p.z) / denominator;
+                if !denominator.is_finite() || !t.is_finite() || !(0.0..=1.0).contains(&t) {
+                    return Err(Refusal::new(
+                        RefusalCode::NonFinite,
+                        "a shell clipping intersection is not representable",
+                    ));
+                }
+                let point = Vec3::new((1.0 - t) * p.x + t * q.x, (1.0 - t) * p.y + t * q.y, z);
+                if !point.is_finite() {
+                    return Err(Refusal::new(
+                        RefusalCode::NonFinite,
+                        "shell clipping produced a non-finite intersection",
+                    ));
+                }
+                let index = vertices.len();
+                vertices.push(point);
+                intersections.insert((plane, a, b), index);
+                index
+            };
+            if result.last() != Some(&crossing) {
+                result.push(crossing);
+            }
+        }
+        if current_inside && result.last() != Some(&current) {
+            result.push(current);
+        }
+        previous = current;
+    }
+    if result.len() > 1 && result.first() == result.last() {
+        result.pop();
+    }
+    Ok(result)
+}
+
+/// Clips a supplied tube mesh to `[z_low_m, z_high_m]` without adding caps, applies the
+/// requested normal offset, and extracts its two ordered open boundary rings.
+///
+/// Straddling faces are split conformingly; faces wholly on a clipping plane are omitted.
+/// The retained surface must be connected with exactly one boundary on each clipping plane.
+/// Branched anatomy and pre-existing openings inside the slab require a separate region/ring
+/// specification. Clipping planes constrain the source shell before normal offsets.
 ///
 /// # Errors
-/// [`RefusalCode::DegenerateGeometry`] if fewer than 2 boundary rings exist or any offset triangle collapses.
+/// `DegenerateGeometry` for a missing/ambiguous boundary, disconnected or inconsistently wound
+/// geometry, or an inverted/collapsed offset triangle. Non-representable arithmetic refuses;
+/// inward ease beyond the conservative local edge guard returns `OutOfRange`.
 pub fn build_ease_shell_from_mesh(
     vertices: &[Vec3],
     triangles: &[[usize; 3]],
@@ -141,6 +287,8 @@ pub fn build_ease_shell_from_mesh(
         Refusal::finite("vertex.y", v.y)?;
         Refusal::finite("vertex.z", v.z)?;
     }
+    let mut clipped_vertices = vertices.to_vec();
+    let mut intersections = BTreeMap::new();
     let mut kept_tris = Vec::new();
     for &[a, b, c] in triangles {
         if a >= vertices.len() || b >= vertices.len() || c >= vertices.len() {
@@ -149,36 +297,62 @@ pub fn build_ease_shell_from_mesh(
                 "skin mesh triangle index out of bounds",
             ));
         }
-        let cz = (vertices[a].z + vertices[b].z + vertices[c].z) / 3.0;
-        if cz >= z_low_m && cz <= z_high_m {
-            kept_tris.push([a, b, c]);
+        let corners = [vertices[a], vertices[b], vertices[c]];
+        if corners.iter().all(|p| p.z <= z_low_m) || corners.iter().all(|p| p.z >= z_high_m) {
+            continue;
+        }
+        let lower = clip_polygon(
+            &[a, b, c],
+            &mut clipped_vertices,
+            &mut intersections,
+            0,
+            z_low_m,
+            true,
+        )?;
+        let polygon = clip_polygon(
+            &lower,
+            &mut clipped_vertices,
+            &mut intersections,
+            1,
+            z_high_m,
+            false,
+        )?;
+        // Sutherland-Hodgman clipping keeps this polygon convex and retains face winding.
+        for i in 1..polygon.len().saturating_sub(1) {
+            kept_tris.push([polygon[0], polygon[i], polygon[i + 1]]);
         }
     }
     if kept_tris.len() < 4 {
         return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
-            "anatomical plane clip left fewer than 4 triangles",
+            "plane clipping left fewer than 4 triangles",
         ));
     }
 
-    // Compact vertex numbering deterministically
-    let mut remap: BTreeMap<usize, u32> = BTreeMap::new();
-    let mut compact_verts: Vec<Vec3> = Vec::new();
-    let mut compact_tris: Vec<[u32; 3]> = Vec::with_capacity(kept_tris.len());
-    for [a, b, c] in kept_tris {
-        let mut idx3 = [0u32; 3];
-        for (slot, orig) in idx3.iter_mut().zip([a, b, c]) {
-            let new_idx = *remap.entry(orig).or_insert_with(|| {
-                let id = compact_verts.len() as u32;
-                compact_verts.push(vertices[orig]);
-                id
-            });
-            *slot = new_idx;
+    let mut remap = BTreeMap::new();
+    let mut compact_verts = Vec::new();
+    let mut compact_tris = Vec::with_capacity(kept_tris.len());
+    for tri in kept_tris {
+        let mut indices = [0u32; 3];
+        for (slot, original) in indices.iter_mut().zip(tri) {
+            let index = if let Some(&index) = remap.get(&original) {
+                index
+            } else {
+                let index = u32::try_from(compact_verts.len()).map_err(|_| {
+                    Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        "shell vertex count exceeds u32",
+                    )
+                })?;
+                compact_verts.push(clipped_vertices[original]);
+                remap.insert(original, index);
+                index
+            };
+            *slot = index;
         }
-        compact_tris.push(idx3);
+        compact_tris.push(indices);
     }
 
-    // Compute area-weighted outward vertex normals and local shortest incident edge length
     let n = compact_verts.len();
     let mut normals = vec![Vec3::ZERO; n];
     let mut min_edge = vec![f64::INFINITY; n];
@@ -188,6 +362,18 @@ pub fn build_ease_shell_from_mesh(
         let vb = compact_verts[b];
         let vc = compact_verts[c];
         let n_tri = (vb - va).cross(vc - va);
+        if !n_tri.norm2().is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "clipped shell triangle area overflows",
+            ));
+        }
+        if n_tri.norm2() == 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "clipped shell contains a collapsed triangle",
+            ));
+        }
         normals[a] += n_tri;
         normals[b] += n_tri;
         normals[c] += n_tri;
@@ -207,28 +393,57 @@ pub fn build_ease_shell_from_mesh(
     let mut offset_verts = Vec::with_capacity(n);
     for i in 0..n {
         let nn = normals[i].norm();
-        let dir = if nn > 1e-14 {
+        if !nn.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "shell offset normal overflows",
+            ));
+        }
+        let dir = if nn > 0.0 {
             normals[i] / nn
         } else {
             Vec3::ZERO
         };
-        // Clamp negative inward offset to <= 35% of local shortest edge to prevent fold-over
-        let safe_off = if effective_offset < 0.0 && min_edge[i].is_finite() {
-            effective_offset.max(-0.35 * min_edge[i])
-        } else {
-            effective_offset
-        };
-        let p = compact_verts[i] + dir * safe_off;
+        // This retained local edge threshold is a conservative admission guard, not a
+        // self-collision certificate. Never silently change the requested negative ease.
+        if effective_offset < 0.0
+            && min_edge[i].is_finite()
+            && effective_offset < -0.35 * min_edge[i]
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "requested inward ease {} m exceeds the conservative local limit {} m at shell vertex {i}",
+                    -effective_offset,
+                    0.35 * min_edge[i],
+                ),
+            )
+            .repair("Reduce the negative radial ease, or supply a shell whose local edges support the requested offset."));
+        }
+        let p = compact_verts[i] + dir * effective_offset;
+        if !p.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "shell offset position overflows",
+            ));
+        }
         offset_verts.push(p);
     }
 
-    // Verify no triangle flipped or collapsed after offset
     for &[ia, ib, ic] in &compact_tris {
         let (a, b, c) = (ia as usize, ib as usize, ic as usize);
         let n_old =
             (compact_verts[b] - compact_verts[a]).cross(compact_verts[c] - compact_verts[a]);
         let n_new = (offset_verts[b] - offset_verts[a]).cross(offset_verts[c] - offset_verts[a]);
-        if n_new.norm2() <= 1e-16 || n_old.dot(n_new) <= 0.0 {
+        let area2 = n_new.norm2();
+        let orientation = n_old.dot(n_new);
+        if !area2.is_finite() || !orientation.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "offset shell triangle geometry overflows",
+            ));
+        }
+        if area2 == 0.0 || orientation <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::DegenerateGeometry,
                 "ease offset inverted or collapsed a shell triangle; reduce inward/excessive ease",
@@ -236,13 +451,12 @@ pub fn build_ease_shell_from_mesh(
         }
     }
 
-    // Extract directed boundary half-edges (edges appearing in only one triangle) while rejecting
-    // duplicate same-direction half-edges (inconsistent winding or non-manifold fan).
-    let mut seen_half_edges: BTreeSet<(u32, u32)> = BTreeSet::new();
-    let mut directed_edges: BTreeSet<(u32, u32)> = BTreeSet::new();
-    for &[a, b, c] in &compact_tris {
+    let mut seen_half_edges = BTreeMap::new();
+    let mut directed_edges = BTreeSet::new();
+    let mut adjacent = vec![Vec::new(); compact_tris.len()];
+    for (face, &[a, b, c]) in compact_tris.iter().enumerate() {
         for (u, v) in [(a, b), (b, c), (c, a)] {
-            if !seen_half_edges.insert((u, v)) {
+            if seen_half_edges.insert((u, v), face).is_some() {
                 return Err(Refusal::new(
                     RefusalCode::DegenerateGeometry,
                     format!(
@@ -250,88 +464,113 @@ pub fn build_ease_shell_from_mesh(
                     ),
                 ));
             }
+            if let Some(&other) = seen_half_edges.get(&(v, u)) {
+                adjacent[face].push(other);
+                adjacent[other].push(face);
+            }
             if !directed_edges.remove(&(v, u)) {
                 directed_edges.insert((u, v));
             }
         }
     }
-    let mut next_map: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut reached = vec![false; compact_tris.len()];
+    let mut pending = vec![0usize];
+    reached[0] = true;
+    while let Some(face) = pending.pop() {
+        for &other in &adjacent[face] {
+            if !reached[other] {
+                reached[other] = true;
+                pending.push(other);
+            }
+        }
+    }
+    if reached.iter().any(|&seen| !seen) {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "clipped shell has disconnected surface components",
+        ));
+    }
+
+    let mut next_map = BTreeMap::new();
+    let mut incoming = BTreeSet::new();
     for &(u, v) in &directed_edges {
-        if next_map.insert(u, v).is_some() {
+        if next_map.insert(u, v).is_some() || !incoming.insert(v) {
             return Err(Refusal::new(
                 RefusalCode::DegenerateGeometry,
-                format!(
-                    "non-manifold pinch boundary vertex {u} has multiple outgoing boundary edges"
-                ),
+                "clipped shell has a branching or pinched boundary",
             ));
         }
     }
 
-    let mut visited: BTreeSet<u32> = BTreeSet::new();
-    let mut raw_rings: Vec<(f64, Vec<u32>, f64)> = Vec::new();
+    let mut visited = BTreeSet::new();
+    let mut boundary_rings = Vec::new();
     for &start in next_map.keys() {
         if visited.contains(&start) {
             continue;
         }
-        let mut loop_verts = Vec::new();
+        let mut ring = Vec::new();
         let mut cur = start;
-        let mut closed = false;
-        while visited.insert(cur) {
-            loop_verts.push(cur);
-            if let Some(&nxt) = next_map.get(&cur) {
-                if nxt == start {
-                    closed = true;
-                    break;
-                }
-                cur = nxt;
-            } else {
+        loop {
+            if !visited.insert(cur) {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "clipped shell boundary does not close as a simple loop",
+                ));
+            }
+            ring.push(cur);
+            cur = *next_map.get(&cur).ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "clipped shell has an open boundary chain",
+                )
+            })?;
+            if cur == start {
                 break;
             }
         }
-        if closed && loop_verts.len() >= 3 {
-            let mut perim = 0.0_f64;
-            let mut z_sum = 0.0_f64;
-            for i in 0..loop_verts.len() {
-                let p0 = offset_verts[loop_verts[i] as usize];
-                let p1 = offset_verts[loop_verts[(i + 1) % loop_verts.len()] as usize];
-                perim += (p1 - p0).norm();
-                z_sum += p0.z;
-            }
-            let mean_z = z_sum / loop_verts.len() as f64;
-            raw_rings.push((mean_z, loop_verts, perim));
+        if ring.len() < 3 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "clipped shell boundary has fewer than 3 vertices",
+            ));
         }
+        let is_start = ring.iter().all(|&v| compact_verts[v as usize].z == z_low_m);
+        let is_end = ring
+            .iter()
+            .all(|&v| compact_verts[v as usize].z == z_high_m);
+        if !is_start && !is_end {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "shell has an opening away from its clipping planes; declare anatomical rings before shaping",
+            ));
+        }
+        let mut perimeter_m = 0.0;
+        for i in 0..ring.len() {
+            let p = offset_verts[ring[i] as usize];
+            let q = offset_verts[ring[(i + 1) % ring.len()] as usize];
+            perimeter_m += (q - p).norm();
+        }
+        Refusal::finite("shell boundary perimeter", perimeter_m)?;
+        if perimeter_m <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "shell boundary has zero perimeter",
+            ));
+        }
+        boundary_rings.push(BoundaryRing {
+            name: if is_start { "start_ring_0" } else { "top_ring" }.into(),
+            is_start,
+            vertices: ring,
+            perimeter_m,
+        });
     }
-    if raw_rings.len() < 2 {
+    if boundary_rings.len() != 2 || boundary_rings.iter().filter(|r| r.is_start).count() != 1 {
         return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
-            format!(
-                "clipped knit shell has {} open boundary ring(s); expected >= 2 (hem and neck/top)",
-                raw_rings.len()
-            ),
+            "a tube shell requires exactly one lower and one upper boundary ring",
         ));
     }
-
-    // Sort rings ascending by mean z with deterministic vertex-list tie-breaking:
-    // highest ring is end (`t = 1`), lower rings are start (`t = 0`).
-    raw_rings.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    let n_rings = raw_rings.len();
-    let boundary_rings = raw_rings
-        .into_iter()
-        .enumerate()
-        .map(|(idx, (_mz, verts, perim))| {
-            let is_start = idx + 1 < n_rings;
-            BoundaryRing {
-                name: if is_start {
-                    format!("start_ring_{idx}")
-                } else {
-                    "top_ring".to_string()
-                },
-                is_start,
-                vertices: verts,
-                perimeter_m: perim,
-            }
-        })
-        .collect();
+    boundary_rings.sort_by_key(|ring| !ring.is_start);
 
     Ok(EaseShellMesh {
         vertices_m: offset_verts.into_iter().map(|v| [v.x, v.y, v.z]).collect(),
@@ -344,7 +583,254 @@ pub fn build_ease_shell_from_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::landmarks::Frame;
     use ftx_core::det;
+
+    fn square_tube(levels: &[f64]) -> (Vec<Vec3>, Vec<[usize; 3]>) {
+        let mut vertices = Vec::new();
+        for &z in levels {
+            for (x, y) in [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)] {
+                vertices.push(Vec3::new(x, y, z));
+            }
+        }
+        let mut faces = Vec::new();
+        for layer in 0..levels.len() - 1 {
+            for side in 0..4 {
+                let a = 4 * layer + side;
+                let b = 4 * layer + (side + 1) % 4;
+                faces.push([a, b, b + 4]);
+                faces.push([a, b + 4, a + 4]);
+            }
+        }
+        (vertices, faces)
+    }
+
+    fn area(shell: &EaseShellMesh) -> f64 {
+        let vertices: Vec<_> = shell
+            .vertices_m
+            .iter()
+            .map(|p| Vec3::new(p[0], p[1], p[2]))
+            .collect();
+        shell
+            .triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| vertices[i as usize]);
+                0.5 * (b - a).cross(c - a).norm()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn straddling_faces_share_exact_plane_boundaries_and_preserve_area() {
+        let (vertices, triangles) = square_tube(&[0.0, 1.0]);
+        let shell =
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, 0.0, 0.0, "synthetic")
+                .unwrap();
+        assert_eq!(shell.boundary_rings.len(), 2);
+        assert_eq!(shell.vertices_m.len(), 16);
+        assert_eq!(shell.triangles.len(), 16);
+        assert!(shell.vertices_m.iter().all(|p| p[2] == 0.2 || p[2] == 0.8));
+        assert!((area(&shell) - 4.0 * 0.2 * 0.6).abs() < 1e-14);
+        for (ring, z) in shell.boundary_rings.iter().zip([0.2, 0.8]) {
+            assert!(
+                ring.vertices
+                    .iter()
+                    .all(|&v| shell.vertices_m[v as usize][2] == z)
+            );
+            assert!((ring.perimeter_m - 0.8).abs() < 1e-14);
+        }
+        // Closed rings, one edge-connected surface and the exact source side area jointly check
+        // the shared diagonal/vertical crossings; separate per-face duplicates cannot pass.
+        let again =
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, 0.0, 0.0, "synthetic")
+                .unwrap();
+        assert_eq!(shell, again);
+    }
+
+    #[test]
+    fn clipping_at_existing_vertices_has_no_duplicate_or_collapsed_faces() {
+        let (vertices, triangles) = square_tube(&[0.0, 0.2, 0.8, 1.0]);
+        let shell =
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, 0.0, 0.0, "synthetic")
+                .unwrap();
+        assert_eq!(shell.vertices_m.len(), 8);
+        assert_eq!(shell.triangles.len(), 8);
+        assert!((area(&shell) - 0.48).abs() < 1e-14);
+    }
+
+    #[test]
+    fn tapered_shell_clipping_retains_the_analytic_cross_sections() {
+        let (mut vertices, triangles) = square_tube(&[0.0, 1.0]);
+        for p in &mut vertices {
+            p.x *= 1.0 + p.z;
+            p.y *= 1.0 + p.z;
+        }
+        let shell =
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.25, 0.75, 0.0, 0.0, "synthetic")
+                .unwrap();
+        assert!((shell.boundary_rings[0].perimeter_m - 1.0).abs() < 1e-14);
+        assert!((shell.boundary_rings[1].perimeter_m - 1.4).abs() < 1e-14);
+        let expected = 4.0 * 0.3 * (0.5_f64 * 0.5 + 0.05 * 0.05).sqrt();
+        assert!((area(&shell) - expected).abs() < 1e-14);
+    }
+
+    #[test]
+    fn inward_ease_is_applied_exactly_or_refused() {
+        let (vertices, triangles) = square_tube(&[0.0, 1.0]);
+        let original =
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, 0.0, 0.0, "synthetic")
+                .unwrap();
+        let inward =
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, -0.001, 0.0, "synthetic")
+                .unwrap();
+        assert_eq!(original.triangles, inward.triangles);
+        for (p, q) in original.vertices_m.iter().zip(&inward.vertices_m) {
+            let displacement = Vec3::new(p[0] - q[0], p[1] - q[1], p[2] - q[2]).norm();
+            assert!((displacement - 0.001).abs() < 1e-14);
+        }
+        let error =
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, -0.1, 0.0, "synthetic")
+                .unwrap_err();
+        assert_eq!(error.code, RefusalCode::OutOfRange);
+        assert!(error.message.contains("inward ease"));
+    }
+
+    #[test]
+    fn disconnected_or_undeclared_open_regions_refuse() {
+        let (mut vertices, mut triangles) = square_tube(&[0.0, 1.0]);
+        let (other, faces) = square_tube(&[0.0, 1.0]);
+        let base = vertices.len();
+        vertices.extend(other.into_iter().map(|p| p + Vec3::new(1.0, 0.0, 0.0)));
+        triangles.extend(faces.into_iter().map(|t| t.map(|i| i + base)));
+        assert_eq!(
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, 0.0, 0.0, "synthetic")
+                .unwrap_err()
+                .code,
+            RefusalCode::DegenerateGeometry,
+        );
+        let (vertices, triangles) = square_tube(&[0.3, 0.7]);
+        assert_eq!(
+            build_ease_shell_from_mesh(&vertices, &triangles, 0.2, 0.8, 0.0, 0.0, "synthetic")
+                .unwrap_err()
+                .code,
+            RefusalCode::DegenerateGeometry,
+        );
+    }
+
+    fn frames() -> BodyFrames {
+        let axis = Frame {
+            origin: Vec3::ZERO,
+            up: Vec3::new(0.0, 0.0, 1.0),
+            front: Vec3::new(0.0, -1.0, 0.0),
+            lat: Vec3::new(1.0, 0.0, 0.0),
+        };
+        BodyFrames {
+            torso: axis,
+            arm_r: axis,
+            arm_l: axis,
+            leg_r: axis,
+            leg_l: axis,
+            floor_z: -500.0,
+            tip_h: 0.0,
+            tip_h_l: 0.0,
+            upper_arm_radius: 0.0,
+            upper_arm_radius_l: 0.0,
+            arm_length: 0.0,
+            arm_length_l: 0.0,
+            landmarks: BTreeMap::new(),
+            neck: axis,
+            head_bone: Vec3::ZERO,
+            shoulder_joint_r: Vec3::ZERO,
+            torso_points: Vec::new(),
+            leg_points: Vec::new(),
+            leg_points_l: Vec::new(),
+            leg_landmarks_l: [0.0; 3],
+        }
+    }
+
+    #[test]
+    fn torso_landmarks_are_required_and_use_the_actual_floor() {
+        let mut frames = frames();
+        assert_eq!(
+            landmark_height_m(&frames, "waist").unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        frames.landmarks.insert("waist".into(), 700.0);
+        assert_eq!(landmark_height_m(&frames, "waist").unwrap(), 0.2);
+        frames.landmarks.insert("waist".into(), f64::NAN);
+        assert_eq!(
+            landmark_height_m(&frames, "waist").unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+        frames.landmarks.insert("waist".into(), 700.0);
+        frames.floor_z = f64::INFINITY;
+        assert_eq!(
+            landmark_height_m(&frames, "waist").unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+    }
+
+    #[test]
+    fn adapter_requires_segmented_torso_and_refuses_invented_limb_regions() {
+        let (vertices, mut triangles) = square_tube(&[0.0, 1.0]);
+        triangles.extend([[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7]]);
+        let faces: Vec<[u32; 3]> = triangles
+            .iter()
+            .map(|triangle| triangle.map(|index| u32::try_from(index).unwrap()))
+            .collect();
+        let skin = crate::drape::skin_mesh(&vertices, &faces).unwrap();
+        let mut frames = frames();
+        frames.landmarks.insert("waist".into(), 700.0);
+        frames.landmarks.insert("snp".into(), 1300.0);
+        frames.torso_points = skin.vertices.iter().map(|p| *p * 1000.0).collect();
+        let ease = EaseProfile {
+            torso_radial_mm: 0.0,
+            limb_radial_mm: 0.0,
+            min_clearance_mm: 0.0,
+            allow_negative_ease: false,
+        };
+        {
+            let adapter = AnnyKnitShell {
+                skin: &skin,
+                frames: &frames,
+                source_body_sha256: "synthetic".into(),
+            };
+            let torso = adapter
+                .build_ease_shell(KnitShellRegion::Torso, &ease)
+                .unwrap();
+            assert_eq!(torso.boundary_rings.len(), 2);
+            assert!((area(&torso) - 0.48).abs() < 1e-14);
+            assert!(
+                adapter
+                    .build_ease_shell(KnitShellRegion::Tube, &ease)
+                    .is_ok()
+            );
+            for region in [
+                KnitShellRegion::LeftSleeve,
+                KnitShellRegion::RightSleeve,
+                KnitShellRegion::FullUpperBody,
+            ] {
+                assert_eq!(
+                    adapter.build_ease_shell(region, &ease).unwrap_err().code,
+                    RefusalCode::InvalidDocument,
+                );
+            }
+        }
+        frames.torso_points.pop();
+        let adapter = AnnyKnitShell {
+            skin: &skin,
+            frames: &frames,
+            source_body_sha256: "synthetic".into(),
+        };
+        assert_eq!(
+            adapter
+                .build_ease_shell(KnitShellRegion::Torso, &ease)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument,
+        );
+    }
 
     #[test]
     fn clips_open_shell_offsets_and_extracts_two_boundary_rings() {
@@ -375,10 +861,8 @@ mod tests {
         assert_eq!(shell.boundary_rings.len(), 2);
         assert!(shell.boundary_rings[0].is_start);
         assert!(!shell.boundary_rings[1].is_start);
-        // Offset radius 0.12 + 0.01 = 0.13m -> perimeter ~ 2*pi*0.13 = 0.8168m (polygon chord slightly less)
         assert!((shell.boundary_rings[0].perimeter_m - 0.81).abs() < 0.03);
 
-        // Negative ease refused without opt-in
         let bad = EaseProfile {
             torso_radial_mm: -5.0,
             limb_radial_mm: 0.0,
@@ -390,41 +874,38 @@ mod tests {
             RefusalCode::OutOfRange
         );
 
-        // Non-finite vertex & negative min_clearance_m fail closed
         let mut nan_verts = verts.clone();
         nan_verts[0].x = f64::NAN;
         assert_eq!(
             build_ease_shell_from_mesh(&nan_verts, &tris, 0.10, 0.40, 0.01, 0.002, "body-sha")
                 .unwrap_err()
                 .code,
-            RefusalCode::NonFinite
+            RefusalCode::NonFinite,
         );
         assert_eq!(
             build_ease_shell_from_mesh(&verts, &tris, 0.10, 0.40, 0.01, -0.001, "body-sha")
                 .unwrap_err()
                 .code,
-            RefusalCode::OutOfRange
+            RefusalCode::OutOfRange,
         );
 
-        // Non-manifold bowtie pinch vertex sharing two boundary loops must refuse cleanly
         let bowtie_verts = vec![
-            Vec3::new(0.0, 0.0, 0.2),    // 0: pinch vertex
-            Vec3::new(0.1, 0.0, 0.2),    // 1
-            Vec3::new(0.05, 0.1, 0.2),   // 2
-            Vec3::new(-0.1, 0.0, 0.2),   // 3
-            Vec3::new(-0.05, -0.1, 0.2), // 4
-            Vec3::new(0.0, 0.05, 0.25),  // 5
-            Vec3::new(0.0, -0.05, 0.25), // 6
+            Vec3::new(0.0, 0.0, 0.2),
+            Vec3::new(0.1, 0.0, 0.2),
+            Vec3::new(0.05, 0.1, 0.2),
+            Vec3::new(-0.1, 0.0, 0.2),
+            Vec3::new(-0.05, -0.1, 0.2),
+            Vec3::new(0.0, 0.05, 0.25),
+            Vec3::new(0.0, -0.05, 0.25),
         ];
         let bowtie_tris = vec![[0, 1, 2], [0, 3, 4], [1, 2, 5], [3, 4, 6]];
         assert_eq!(
             build_ease_shell_from_mesh(&bowtie_verts, &bowtie_tris, 0.0, 0.5, 0.0, 0.0, "body-sha")
                 .unwrap_err()
                 .code,
-            RefusalCode::DegenerateGeometry
+            RefusalCode::DegenerateGeometry,
         );
 
-        // Inconsistently wound adjacent triangles inside the kept slab [0.10, 0.40] must refuse cleanly.
         let mut flipped_tris = tris.clone();
         let mid_tri = 4 * 2 * n_theta;
         flipped_tris[mid_tri] = [
@@ -436,7 +917,7 @@ mod tests {
             build_ease_shell_from_mesh(&verts, &flipped_tris, 0.10, 0.40, 0.01, 0.002, "body-sha")
                 .unwrap_err()
                 .code,
-            RefusalCode::DegenerateGeometry
+            RefusalCode::DegenerateGeometry,
         );
     }
 }
