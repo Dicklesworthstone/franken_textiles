@@ -15,6 +15,7 @@ pub use constitutive::{
     assess_knit_shell_state, cayley_hamilton_inv_sqrt_2x2,
 };
 pub use poincloux::{
-    LocalAuditPatchInput, LocalAuditPatchResult, PoinclouxParams, PoinclouxPoint,
-    RveHomogenizedKnitCard, audit_local_knit_patch, poincloux_uniaxial_curve,
+    KnitPriorCalibrationResult, LocalAuditPatchInput, LocalAuditPatchResult, PoinclouxParams,
+    PoinclouxPoint, RveHomogenizedKnitCard, audit_local_knit_patch,
+    calibrate_knit_prior_to_uniaxial_strips, poincloux_uniaxial_curve,
 };

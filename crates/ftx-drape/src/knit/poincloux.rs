@@ -117,7 +117,8 @@ pub fn poincloux_uniaxial_curve(
         let ratio = (ew.max(0.0)) / eps_jam;
         // Loop arc conservation drives large effective knit Poisson contraction nu_eff ~ 0.65..1.1
         let ec_free = -0.72 * ew - 0.18 * ew * ew;
-        let current_course = (params.rest_course_m * (1.0 + ec_free)).max(2.0 * params.yarn_radius_m);
+        let current_course =
+            (params.rest_course_m * (1.0 + ec_free)).max(2.0 * params.yarn_radius_m);
         // Planar elastica force per stitch: linear bending stiffness + (1 - ratio)^(-3/2) jamming divergence
         let denom = (1.0 - ratio).max(1e-6);
         let f_stitch = if ew >= 0.0 {
@@ -261,6 +262,102 @@ pub fn audit_local_knit_patch(
     })
 }
 
+/// Result of calibrating a [`CoupledKnitMembrane`] against uniaxial strip observations anchored to
+/// an offline [`RveHomogenizedKnitCard`] prior (`FTX-K11`, closing `ftx-ki1`/`ftx-ki4` honestly).
+///
+/// Because 3-cut uniaxial strips cannot independently identify biaxial jamming or out-of-plane
+/// bending, the resulting card remains strictly [`Evidence::Estimate`] (never `Measured`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KnitPriorCalibrationResult {
+    /// Calibrated card tagged strictly [`Evidence::Estimate`].
+    pub card: RveHomogenizedKnitCard,
+    /// Fitted dimensionless wale stiffness scale factor relative to the RVE prior.
+    pub wale_scale: f64,
+    /// Fitted dimensionless course stiffness scale factor relative to the RVE prior.
+    pub course_scale: f64,
+    /// Root-mean-square stress residual in N/m across all supplied observations.
+    pub rms_residual_n_m: f64,
+}
+
+/// Calibrates the wale and course stiffness scales of an offline [`RveHomogenizedKnitCard`] prior
+/// against measured uniaxial strip observations `(strain, stress_n_m)` via closed-form least squares
+/// clamped to `[0.1, 10.0]` (`FTX-K11`). Unobserved biaxial/bending directions stay anchored to the
+/// independent RVE prior and the card stays tagged [`Evidence::Estimate`].
+///
+/// # Errors
+/// [`RefusalCode::InvalidDocument`] or [`RefusalCode::OutOfRange`] on empty/non-finite inputs.
+pub fn calibrate_knit_prior_to_uniaxial_strips(
+    prior: &RveHomogenizedKnitCard,
+    wale_obs: &[(f64, f64)],
+    course_obs: &[(f64, f64)],
+) -> Result<KnitPriorCalibrationResult, Refusal> {
+    prior.validate()?;
+    if wale_obs.is_empty() || course_obs.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "uniaxial knit prior calibration requires both wale and course observations",
+        ));
+    }
+    let fit_axis = |obs: &[(f64, f64)], axis: usize| -> Result<f64, Refusal> {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for &(eps, stress_obs) in obs {
+            Refusal::finite("strain", eps)?;
+            Refusal::finite("stress_n_m", stress_obs)?;
+            let mut e = [0.0; 3];
+            e[axis] = eps;
+            let pred = prior.membrane.evaluate(e)?.stress[axis];
+            num += pred * stress_obs;
+            den += pred * pred;
+        }
+        if den <= 1e-18 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "uniaxial observations have zero prior excitation",
+            ));
+        }
+        Ok((num / den).clamp(0.1, 10.0))
+    };
+
+    let wale_scale = fit_axis(wale_obs, 0)?;
+    let course_scale = fit_axis(course_obs, 1)?;
+    let mut card = prior.clone();
+    card.evidence = Evidence::Estimate;
+    card.membrane.k_w_toe *= wale_scale;
+    card.membrane.k_w_lock *= wale_scale;
+    card.membrane.k_c_toe *= course_scale;
+    card.membrane.k_c_lock *= course_scale;
+    // Scale coupling conservatively by geometric mean so SPD holds strictly
+    let gm = (wale_scale * course_scale).sqrt();
+    card.membrane.k_wc *= gm;
+    card.membrane.k_shear *= gm;
+    card.membrane.k_jam *= gm;
+    card.validate()?;
+
+    let mut sq_sum = 0.0;
+    let mut count = 0usize;
+    for &(eps, stress_obs) in wale_obs {
+        let pred = card.membrane.evaluate([eps, 0.0, 0.0])?.stress[0];
+        let r = pred - stress_obs;
+        sq_sum += r * r;
+        count += 1;
+    }
+    for &(eps, stress_obs) in course_obs {
+        let pred = card.membrane.evaluate([0.0, eps, 0.0])?.stress[1];
+        let r = pred - stress_obs;
+        sq_sum += r * r;
+        count += 1;
+    }
+    let rms_residual_n_m = (sq_sum / (count as f64)).sqrt();
+
+    Ok(KnitPriorCalibrationResult {
+        card,
+        wale_scale,
+        course_scale,
+        rms_residual_n_m,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,9 +376,14 @@ mod tests {
             assert!(curve[i].strain_course_free < 0.0);
         }
         // Tangent modulus increases sharply near jamming
-        let slope_low = (curve[2].tension_frictionless_n_m - curve[1].tension_frictionless_n_m) / 0.10;
-        let slope_hi = (curve[4].tension_frictionless_n_m - curve[3].tension_frictionless_n_m) / 0.07;
-        assert!(slope_hi > 1.5 * slope_low, "expected jamming stiffening: {slope_low} vs {slope_hi}");
+        let slope_low =
+            (curve[2].tension_frictionless_n_m - curve[1].tension_frictionless_n_m) / 0.10;
+        let slope_hi =
+            (curve[4].tension_frictionless_n_m - curve[3].tension_frictionless_n_m) / 0.07;
+        assert!(
+            slope_hi > 1.5 * slope_low,
+            "expected jamming stiffening: {slope_low} vs {slope_hi}"
+        );
     }
 
     #[test]
