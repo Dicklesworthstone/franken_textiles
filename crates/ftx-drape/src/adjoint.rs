@@ -342,6 +342,31 @@ pub fn orthotropic_chain_rule(
 }
 
 impl Solver {
+    fn validate_adjoint_state(&self) -> Result<(), Refusal> {
+        if self.x.len() != self.model.rest.len()
+            || self.model.compression.len() != self.model.membranes.len()
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "adjoint solve requires cloth positions and compression arrays matching the model topology",
+            ));
+        }
+        if self.x.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "adjoint solve requires finite cloth positions",
+            ));
+        }
+        self.check_liquid_mass()?;
+        self.damping.validate()?;
+        self.check_static_air_load()?;
+        self.check_constitutive_models()?;
+        self.model.check_membrane_domains(&self.x)?;
+        self.model.check_panel_bending_domains(&self.x)?;
+        self.model.check_dihedral_domains(&self.x)?;
+        Ok(())
+    }
+
     /// Solve the static-equilibrium adjoint system `H(x*) λ = ∂J/∂x` on free DOFs.
     ///
     /// Reuses the cached `LdltFactor` if it already matches the exact tangent `H(x*)` to
@@ -353,14 +378,7 @@ impl Solver {
     /// [`RefusalCode::NotConverged`] if `H(x*)` is singular or the linear residual exceeds
     /// tolerance.
     pub fn equilibrium_adjoint(&mut self, dj_dx: &[Vec3]) -> Result<AdjointSolution, Refusal> {
-        if self.x.len() != self.model.rest.len()
-            || self.model.compression.len() != self.model.membranes.len()
-        {
-            return Err(Refusal::new(
-                RefusalCode::OutOfRange,
-                "adjoint solve requires cloth positions and compression arrays matching the model topology",
-            ));
-        }
+        self.validate_adjoint_state()?;
         if dj_dx.len() != self.x.len() {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
@@ -371,19 +389,12 @@ impl Solver {
                 ),
             ));
         }
-        if dj_dx.iter().any(|v| !v.is_finite()) || self.x.iter().any(|v| !v.is_finite()) {
+        if dj_dx.iter().any(|v| !v.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
                 "adjoint solve requires finite positions and objective gradient",
             ));
         }
-        self.check_liquid_mass()?;
-        self.damping.validate()?;
-        self.check_static_air_load()?;
-        self.check_constitutive_models()?;
-        self.model.check_membrane_domains(&self.x)?;
-        self.model.check_panel_bending_domains(&self.x)?;
-        self.model.check_dihedral_domains(&self.x)?;
         let rhs = self.pack_free(dj_dx);
         let nfree = rhs.len();
         if nfree == 0 || rhs.iter().all(|&v| v == 0.0) {
@@ -503,7 +514,7 @@ impl Solver {
                 "explicit objective and reaction derivatives must be finite",
             ));
         }
-        self.check_constitutive_models()?;
+        self.validate_adjoint_state()?;
         if !self.is_memoryless_elastic_for_adjoint() {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -1473,5 +1484,28 @@ mod tests {
             );
             assert!(verdict.informative_directions >= 7, "{verdict:?}");
         }
+    }
+
+    #[test]
+    fn equilibrium_adjoint_with_reactions_refuses_non_finite_state_before_hessian_mul() {
+        let mut solver = sagging_sheet(320.0, 210.0, 0.24, 55.0, 4e-4);
+        solver.static_solve().unwrap();
+        let n = solver.x.len();
+        let dj_dx = vec![Vec3::ZERO; n];
+        let rxn_weights = vec![Vec3::new(1.0, 0.0, 0.0); n];
+
+        let mut bad_x = solver.clone();
+        bad_x.x[0].x = f64::NAN;
+        let err = bad_x
+            .equilibrium_adjoint_with_reactions(&dj_dx, &rxn_weights)
+            .unwrap_err();
+        assert_eq!(err.code, RefusalCode::NonFinite);
+
+        let mut short_x = solver;
+        short_x.x.pop();
+        let err = short_x
+            .equilibrium_adjoint_with_reactions(&dj_dx[..n - 1], &rxn_weights[..n - 1])
+            .unwrap_err();
+        assert_eq!(err.code, RefusalCode::OutOfRange);
     }
 }
