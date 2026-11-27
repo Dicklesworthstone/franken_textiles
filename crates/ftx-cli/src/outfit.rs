@@ -35,21 +35,27 @@ fn budget(message: &str) -> Refusal {
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, Refusal> {
-    let file = File::open(path).map_err(|e| workspace::io_error(path, e))?;
-    if !file
-        .metadata()
-        .map_err(|e| workspace::io_error(path, e))?
-        .is_file()
-    {
-        return Err(bad_input(format!(
-            "{} must be a regular input file",
-            path.display()
-        )));
+    let io = |e| workspace::io_error(path, e);
+    let not_regular = || bad_input(format!("{} must be a regular input file", path.display()));
+    let meta = fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(not_regular());
+    }
+    if meta.len() > MAX_FILE {
+        return Err(budget("outfit input exceeds the 64 MiB per-file budget"));
+    }
+    let file = File::open(path).map_err(io)?;
+    let fd_meta = file.metadata().map_err(io)?;
+    if !fd_meta.is_file() {
+        return Err(not_regular());
+    }
+    if fd_meta.len() > MAX_FILE {
+        return Err(budget("outfit input exceeds the 64 MiB per-file budget"));
     }
     let mut bytes = Vec::new();
     file.take(MAX_FILE + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| workspace::io_error(path, e))?;
+        .map_err(io)?;
     if bytes.len() as u64 > MAX_FILE {
         return Err(budget("outfit input exceeds the 64 MiB per-file budget"));
     }

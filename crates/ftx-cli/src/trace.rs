@@ -49,14 +49,15 @@ fn source_image(args: &Args) -> Result<Option<ftx_trace::raster::Bgr>, Refusal> 
         .get("image")
         .map(|p| {
             // Never follow a filename embedded in pattern metadata. Only --image authorizes I/O.
-            let bytes = std::fs::read(p).map_err(|e| workspace::io_error(Path::new(p), e))?;
+            let bytes = crate::read_regular_bounded(Path::new(p), 64 * 1024 * 1024, "trace image")?;
             ftx_trace::raster::image::load_image_with_limit(&bytes, 16_000_000).map_err(bad_input)
         })
         .transpose()
 }
 
 fn read_text(path: &str) -> Result<String, Refusal> {
-    std::fs::read_to_string(path).map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))
+    let bytes = crate::read_regular_bounded(Path::new(path), 64 * 1024 * 1024, "trace input")?;
+    String::from_utf8(bytes).map_err(|e| bad_input(format!("{path}: {e}")))
 }
 
 fn read_doc(path: &str) -> Result<PatternDoc, Refusal> {
@@ -443,8 +444,7 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
         marks: true,
         dashes: !args.options.contains_key("no-dashes"),
     };
-    let bytes =
-        std::fs::read(image).map_err(|e| Refusal::new(RefusalCode::Io, format!("{image}: {e}")))?;
+    let bytes = crate::read_regular_bounded(Path::new(image), 64 * 1024 * 1024, "trace image")?;
     let img = load_image(&bytes).map_err(|e| bad_input(format!("{image}: {e}")))?;
     let source = std::fs::canonicalize(image)
         .map_or_else(|_| image.to_string(), |p| p.display().to_string());

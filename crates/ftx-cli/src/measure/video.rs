@@ -61,6 +61,13 @@ pub(super) fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal
         )));
     }
     let file = File::open(path).map_err(|e| io(path, e))?;
+    let fd_meta = file.metadata().map_err(|e| io(path, e))?;
+    if !fd_meta.is_file() || fd_meta.len() > limit as u64 {
+        return Err(bad_input(format!(
+            "{} must be a regular file of at most {limit} bytes",
+            path.display()
+        )));
+    }
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)

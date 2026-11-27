@@ -35,7 +35,7 @@ mod two_start;
 mod workspace;
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -308,9 +308,55 @@ fn bad_input(m: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, m)
 }
 
+pub(crate) fn read_regular_bounded(
+    path: &std::path::Path,
+    limit: u64,
+    label: &str,
+) -> Result<Vec<u8>, Refusal> {
+    let io = |e| workspace::io_error(path, e);
+    let not_regular = || {
+        bad_input(format!(
+            "{}: {label} must be a regular file",
+            path.display()
+        ))
+    };
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "{}: {label} exceeds {limit} byte input budget",
+                path.display()
+            ),
+        )
+    };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(not_regular());
+    }
+    if meta.len() > limit {
+        return Err(budget());
+    }
+    let file = std::fs::File::open(path).map_err(io)?;
+    let fd_meta = file.metadata().map_err(io)?;
+    if !fd_meta.is_file() {
+        return Err(not_regular());
+    }
+    if fd_meta.len() > limit {
+        return Err(budget());
+    }
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() as u64 > limit {
+        return Err(budget());
+    }
+    Ok(bytes)
+}
+
 fn read_json(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
-    let bytes =
-        std::fs::read(path).map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+    const MAX_JSON_BYTES: u64 = 64 * 1024 * 1024;
+    let bytes = read_regular_bounded(std::path::Path::new(path), MAX_JSON_BYTES, "JSON input")?;
     let v = serde_json::from_slice(&bytes).map_err(|e| bad_input(format!("{path}: {e}")))?;
     Ok((v, bytes))
 }
@@ -3760,5 +3806,115 @@ mod tests {
             cmd_drape(&drape_args).unwrap_err().code,
             RefusalCode::InvalidDocument
         );
+    }
+
+    #[test]
+    fn core_cli_readers_refuse_directories_oversized_and_unix_fifos() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftx-cli-core-readers-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        let missing = read_regular_bounded(&dir.join("absent.json"), 16, "JSON").unwrap_err();
+        assert_eq!(missing.code, RefusalCode::Io);
+
+        let dir_err = read_regular_bounded(&dir, 16, "JSON").unwrap_err();
+        assert_eq!(dir_err.code, RefusalCode::InvalidDocument);
+        assert!(dir_err.message.contains("regular file"));
+
+        let exact = dir.join("exact.json");
+        std::fs::write(&exact, br#"{"ok":true}"#).unwrap();
+        let (value, raw) = read_json(exact.to_str().unwrap()).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(raw, br#"{"ok":true}"#);
+
+        assert_eq!(
+            fold::bytes(&dir, 64).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        let fabric_dir =
+            parse(&["drape", "p.json", "--fabric", dir_str].map(String::from)).unwrap();
+        assert_eq!(
+            fabric::load(&fabric_dir)
+                .err()
+                .expect("directory fabric input must refuse")
+                .code,
+            RefusalCode::InvalidDocument
+        );
+        let import_dir = parse(
+            &[
+                "import",
+                "garmentcode",
+                dir_str,
+                "--out",
+                dir.join("new-import").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            import::cmd_import(&import_dir).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+
+        let big = dir.join("big.json");
+        std::fs::write(&big, vec![b'a'; 65]).unwrap();
+        assert_eq!(
+            read_regular_bounded(&big, 64, "JSON").unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+        assert_eq!(
+            fold::bytes(&big, 64).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+
+        #[cfg(unix)]
+        {
+            let fifo = dir.join("input.fifo");
+            let created = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(created, "mkfifo should create test FIFO");
+            let fifo_str = fifo.to_str().unwrap();
+            assert_eq!(
+                read_regular_bounded(&fifo, 64, "JSON").unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+            assert_eq!(
+                fold::bytes(&fifo, 64).unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+            let fabric_fifo =
+                parse(&["drape", "p.json", "--fabric", fifo_str].map(String::from)).unwrap();
+            assert_eq!(
+                fabric::load(&fabric_fifo)
+                    .err()
+                    .expect("FIFO fabric input must refuse")
+                    .code,
+                RefusalCode::InvalidDocument
+            );
+            let import_fifo = parse(
+                &[
+                    "import",
+                    "garmentcode",
+                    fifo_str,
+                    "--out",
+                    dir.join("new-import-fifo").to_str().unwrap(),
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+            assert_eq!(
+                import::cmd_import(&import_fifo).unwrap_err().code,
+                RefusalCode::InvalidDocument
+            );
+        }
     }
 }

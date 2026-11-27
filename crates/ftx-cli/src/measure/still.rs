@@ -13,26 +13,33 @@ const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, Refusal> {
     let io = |e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()));
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "still-window input exceeds 16 MiB",
+        )
+    };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(bad_input("still-window input must be a regular file"));
+    }
+    if meta.len() > MAX_INPUT_BYTES {
+        return Err(budget());
+    }
     let file = std::fs::File::open(path).map_err(io)?;
     let metadata = file.metadata().map_err(io)?;
     if !metadata.is_file() {
         return Err(bad_input("still-window input must be a regular file"));
     }
     if metadata.len() > MAX_INPUT_BYTES {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "still-window input exceeds 16 MiB",
-        ));
+        return Err(budget());
     }
     let mut bytes = Vec::new();
     file.take(MAX_INPUT_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(io)?;
     if bytes.len() as u64 > MAX_INPUT_BYTES {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "still-window input exceeds 16 MiB",
-        ));
+        return Err(budget());
     }
     Ok(bytes)
 }

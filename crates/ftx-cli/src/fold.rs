@@ -35,16 +35,28 @@ fn read_bounded(mut reader: impl Read, path: &Path, limit: usize) -> Result<Vec<
 }
 
 pub(super) fn bytes(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
-    let f = File::open(path).map_err(|e| workspace::io_error(path, e))?;
-    if !f
-        .metadata()
-        .map_err(|e| workspace::io_error(path, e))?
-        .is_file()
-    {
-        return Err(bad_input(format!(
-            "{}: expected a regular input file",
-            path.display()
-        )));
+    let io = |e| workspace::io_error(path, e);
+    let not_regular = || bad_input(format!("{}: expected a regular input file", path.display()));
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{}: exceeds {limit} byte input budget", path.display()),
+        )
+    };
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(not_regular());
+    }
+    if meta.len() > limit as u64 {
+        return Err(budget());
+    }
+    let f = File::open(path).map_err(io)?;
+    let fd_meta = f.metadata().map_err(io)?;
+    if !fd_meta.is_file() {
+        return Err(not_regular());
+    }
+    if fd_meta.len() > limit as u64 {
+        return Err(budget());
     }
     read_bounded(f, path, limit)
 }

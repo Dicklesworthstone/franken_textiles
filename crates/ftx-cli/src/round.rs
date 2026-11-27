@@ -194,7 +194,8 @@ pub(super) fn ledger(ws: &Path) -> Result<Vec<Value>, Refusal> {
     if !regular(&path, false)? {
         return Ok(Vec::new());
     }
-    let text = fs::read_to_string(&path).map_err(|e| io(&path, e))?;
+    let raw = crate::read_regular_bounded(&path, 64 * 1024 * 1024, "rounds.jsonl")?;
+    let text = String::from_utf8(raw).map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
     if !text.is_empty() && !text.ends_with('\n') {
         return Err(bad_input(
             "rounds.jsonl has an incomplete final line; repair it before adding a round",
@@ -293,12 +294,18 @@ impl WorkspaceBody {
     pub(super) fn read(ws: &Path, args: &Args) -> Result<Self, Refusal> {
         let path = ws.join("measurements.json");
         let previous = if regular(&path, false)? {
-            Some(fs::read(&path).map_err(|e| io(&path, e))?)
+            Some(crate::read_regular_bounded(
+                &path,
+                64 * 1024 * 1024,
+                "workspace measurements",
+            )?)
         } else {
             None
         };
         let bytes = match args.options.get("measurements") {
-            Some(src) => fs::read(src).map_err(|e| io(Path::new(src), e))?,
+            Some(src) => {
+                crate::read_regular_bounded(Path::new(src), 64 * 1024 * 1024, "measurements input")?
+            }
             None => previous
                 .clone()
                 .ok_or_else(|| bad_input("no workspace measurements; pass --measurements M"))?,
@@ -331,7 +338,9 @@ impl WorkspaceBody {
         };
         if self.changed {
             // Recheck after reservation; never replace an intervening writer's body with our stale one.
-            if fs::read(&path).map_err(|e| io(&path, e))? != *previous {
+            if crate::read_regular_bounded(&path, 64 * 1024 * 1024, "workspace measurements")?
+                != *previous
+            {
                 return Err(bad_input(
                     "workspace measurements changed during this run; retry with the current body",
                 ));
@@ -918,7 +927,12 @@ fn simulate(
             super::workspace::replace(&rd.join("sim/sim_report.json"), &updated)?;
             let viewer_path = rd.join("sim/fold_viewer.html");
             if regular(&viewer_path, false)? {
-                let raw_html = fs::read_to_string(&viewer_path).map_err(|e| io(&viewer_path, e))?;
+                let raw_html = String::from_utf8(crate::read_regular_bounded(
+                    &viewer_path,
+                    64 * 1024 * 1024,
+                    "fold viewer HTML",
+                )?)
+                .map_err(|e| bad_input(format!("{}: {e}", viewer_path.display())))?;
                 let synced = ftx_drape::animation::sync_viewer_report(
                     super::VIEWER_TEMPLATE,
                     &raw_html,

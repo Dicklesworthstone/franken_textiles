@@ -226,9 +226,10 @@ pub(super) fn cmd_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
     crate::round::regular(&out, true)?;
     let manifest_path = out.join(format!("{}_export_manifest.json", ctx.style));
     let existing = if crate::round::regular(&manifest_path, false)? {
-        let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
-            Refusal::new(RefusalCode::Io, format!("{}: {e}", manifest_path.display()))
-        })?;
+        let bytes =
+            crate::read_regular_bounded(&manifest_path, 16 * 1024 * 1024, "export manifest")?;
+        let text = String::from_utf8(bytes)
+            .map_err(|e| bad_input(format!("{}: {e}", manifest_path.display())))?;
         Some(
             PyJson::parse(&text)
                 .map_err(|e| bad_input(format!("{}: {e}", manifest_path.display())))?,

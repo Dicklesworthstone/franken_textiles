@@ -198,8 +198,18 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None
     };
     let mut header = [0; 24];
-    std::fs::File::open(&path)
-        .and_then(|mut f| f.read_exact(&mut header))
+    let mut file = std::fs::File::open(&path).map_err(|e| crate::workspace::io_error(&path, e))?;
+    if !file
+        .metadata()
+        .map_err(|e| crate::workspace::io_error(&path, e))?
+        .is_file()
+    {
+        return Err(bad_input(format!(
+            "{}: expected a regular still image file",
+            path.display()
+        )));
+    }
+    file.read_exact(&mut header)
         .map_err(|e| crate::workspace::io_error(&path, e))?;
     if !header.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR") {
         return Err(bad_input("invalid native PNG header"));

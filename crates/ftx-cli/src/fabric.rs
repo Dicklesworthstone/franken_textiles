@@ -138,11 +138,16 @@ pub(super) fn load(args: &Args) -> Result<Option<Input>, Refusal> {
             ),
         )
     };
-    let file =
-        File::open(path).map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
-    let metadata = file
-        .metadata()
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+    let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
+    let meta = std::fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(bad_input("material input requires a regular JSON file"));
+    }
+    if meta.len() > limit {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    let metadata = file.metadata().map_err(io)?;
     if !metadata.is_file() {
         return Err(bad_input("material input requires a regular JSON file"));
     }
@@ -150,9 +155,7 @@ pub(super) fn load(args: &Args) -> Result<Option<Input>, Refusal> {
         return Err(budget());
     }
     let mut bytes = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(io)?;
     if bytes.len() as u64 > limit {
         return Err(budget());
     }

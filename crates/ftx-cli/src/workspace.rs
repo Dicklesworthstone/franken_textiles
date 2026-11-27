@@ -108,7 +108,7 @@ pub(super) fn replace(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
 }
 
 pub(super) fn read(path: &Path) -> Result<Value, Refusal> {
-    let bytes = fs::read(path).map_err(|e| io_error(path, e))?;
+    let bytes = crate::read_regular_bounded(path, 64 * 1024 * 1024, "workspace JSON")?;
     serde_json::from_slice(&bytes).map_err(|e| bad_input(format!("{}: {e}", path.display())))
 }
 
@@ -166,14 +166,11 @@ impl Workspace {
     ) -> Result<Option<String>, Refusal> {
         check_adoption(&self.root, &evidence.bytes, update)?;
         let path = self.root.join("measurements.json");
-        let old = match fs::read(&path) {
-            Ok(old) => old,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                write_new(&path, &evidence.bytes)?;
-                return Ok(None);
-            }
-            Err(e) => return Err(io_error(&path, e)),
-        };
+        if !crate::round::regular(&path, false)? {
+            write_new(&path, &evidence.bytes)?;
+            return Ok(None);
+        }
+        let old = crate::read_regular_bounded(&path, 64 * 1024 * 1024, "workspace measurements")?;
         if old == evidence.bytes {
             return Ok(None);
         }
@@ -208,16 +205,17 @@ impl Workspace {
 
 pub(super) fn check_adoption(root: &Path, new: &[u8], update: bool) -> Result<(), Refusal> {
     let path = root.join("measurements.json");
-    no_link(&path)?;
-    match fs::read(&path) {
-        Ok(old) if old != new && !update => Err(bad_input(format!(
+    if !crate::round::regular(&path, false)? {
+        return Ok(());
+    }
+    let old = crate::read_regular_bounded(&path, 64 * 1024 * 1024, "workspace measurements")?;
+    if old != new && !update {
+        return Err(bad_input(format!(
             "{} differs from the supplied measurements. A workspace is one body: add --update-measurements to adopt the new file (the old one is kept), or start a new workspace.",
             path.display()
-        ))),
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(io_error(&path, e)),
+        )));
     }
+    Ok(())
 }
 
 fn numbered_rounds(root: &Path) -> Result<Vec<(u64, PathBuf)>, Refusal> {

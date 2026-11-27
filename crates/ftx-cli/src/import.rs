@@ -12,23 +12,35 @@ use serde_json::{Value, json};
 use super::{Args, bad_input, known_options, required, workspace};
 
 fn read_bounded(path: &str) -> Result<String, Refusal> {
-    let file = File::open(path).map_err(|e| workspace::io_error(Path::new(path), e))?;
-    if !file
-        .metadata()
-        .map_err(|e| workspace::io_error(Path::new(path), e))?
-        .is_file()
-    {
-        return Err(bad_input(format!("{path}: expected a regular input file")));
+    let io = |e| workspace::io_error(Path::new(path), e);
+    let not_regular = || bad_input(format!("{path}: expected a regular input file"));
+    let budget = || {
+        Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{path}: import JSON exceeds {MAX_JSON_BYTES} bytes"),
+        )
+    };
+    let meta = fs::metadata(path).map_err(io)?;
+    if !meta.is_file() {
+        return Err(not_regular());
+    }
+    if meta.len() > MAX_JSON_BYTES as u64 {
+        return Err(budget());
+    }
+    let file = File::open(path).map_err(io)?;
+    let fd_meta = file.metadata().map_err(io)?;
+    if !fd_meta.is_file() {
+        return Err(not_regular());
+    }
+    if fd_meta.len() > MAX_JSON_BYTES as u64 {
+        return Err(budget());
     }
     let mut bytes = Vec::new();
     file.take(MAX_JSON_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| workspace::io_error(Path::new(path), e))?;
+        .map_err(io)?;
     if bytes.len() > MAX_JSON_BYTES {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            format!("{path}: import JSON exceeds {MAX_JSON_BYTES} bytes"),
-        ));
+        return Err(budget());
     }
     String::from_utf8(bytes).map_err(|e| bad_input(format!("{path}: {e}")))
 }
