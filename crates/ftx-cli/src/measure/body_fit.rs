@@ -102,11 +102,17 @@ fn read_model_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
         return Err(budget());
     }
     let file = File::open(path).map_err(io)?;
-    if !file.metadata().map_err(io)?.is_file() {
+    let fd_meta = file.metadata().map_err(io)?;
+    if !fd_meta.is_file() {
         return Err(bad_input("body model input must be a regular file"));
     }
+    if fd_meta.len() > limit {
+        return Err(budget());
+    }
     let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes).map_err(io)?;
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
     if bytes.len() as u64 > limit {
         return Err(budget());
     }

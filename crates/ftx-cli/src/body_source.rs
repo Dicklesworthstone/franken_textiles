@@ -36,15 +36,15 @@ fn bytes(path: &Path, limit: u64) -> Result<Vec<u8>, Refusal> {
         return Err(budget());
     }
     let file = File::open(path).map_err(|e| workspace::io_error(path, e))?;
-    if !file
-        .metadata()
-        .map_err(|e| workspace::io_error(path, e))?
-        .is_file()
-    {
+    let fd_meta = file.metadata().map_err(|e| workspace::io_error(path, e))?;
+    if !fd_meta.is_file() {
         return Err(bad_input("body-fit inputs must be regular files"));
     }
+    if fd_meta.len() > limit {
+        return Err(budget());
+    }
     let mut out = Vec::new();
-    file.take(limit + 1)
+    file.take(limit.saturating_add(1))
         .read_to_end(&mut out)
         .map_err(|e| workspace::io_error(path, e))?;
     if out.len() as u64 > limit {

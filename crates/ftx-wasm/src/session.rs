@@ -441,21 +441,34 @@ impl PosableBody {
 
     // Angles vary linearly in time, but the baked surface is only linear between its samples.
     // The union of both arms' sample crossings partitions the displayed path into the exact
-    // vertex chords the moving-body solver checks. Include the final endpoint exactly once.
+    // vertex chords the moving-body solver checks. Coalesce crossings within `KNOT_MERGE_FRACTION`
+    // of an endpoint or an earlier crossing: at most 1e-6 of a move (< 2e-4 deg, sub-micrometre
+    // on a limb) prevents 1-ULP symmetric two-arm discrepancies or near-knot endpoints from
+    // generating sub-nanosecond segments or f32-indistinguishable replay timestamps, without ever
+    // shortcutting a macroscopic sample excursion. Include the final endpoint exactly once.
     fn motion_fractions(&self, from: [f64; 2], to: [f64; 2]) -> Vec<f64> {
-        let mut fractions = vec![1.0];
+        const KNOT_MERGE_FRACTION: f64 = 1e-6;
+        let mut raw = Vec::new();
         for (from, to) in from.into_iter().zip(to) {
             if from == to {
                 continue;
             }
             for &angle in &self.angles {
                 if angle > from.min(to) && angle < from.max(to) {
-                    fractions.push((angle - from) / (to - from));
+                    raw.push((angle - from) / (to - from));
                 }
             }
         }
-        fractions.sort_unstable_by(f64::total_cmp);
-        fractions.dedup();
+        raw.sort_unstable_by(f64::total_cmp);
+        let mut fractions = Vec::with_capacity(raw.len() + 1);
+        let mut previous = 0.0;
+        for fraction in raw {
+            if fraction - previous > KNOT_MERGE_FRACTION && 1.0 - fraction > KNOT_MERGE_FRACTION {
+                fractions.push(fraction);
+                previous = fraction;
+            }
+        }
+        fractions.push(1.0);
         fractions
     }
 
@@ -1183,6 +1196,74 @@ mod tests {
         );
         assert_eq!(body.motion_fractions([10.0, 20.0], [20.0, 10.0]), vec![1.0]);
         assert_eq!(body.motion_fractions([15.0, 15.0], [15.0, 15.0]), vec![1.0]);
+
+        // Mirror-symmetric two-arm moves whose raw crossing fractions differ by 1 ULP in f64
+        // must collapse onto a single crossing instead of leaving a 1e-16 sliver segment.
+        let left_raw = (45.0_f64 - 35.1) / (65.1 - 35.1);
+        let right_raw = (55.0_f64 - 64.9) / (34.9 - 64.9);
+        assert_ne!(left_raw, right_raw);
+        body.angles = vec![30.0, 45.0, 55.0, 70.0];
+        let symmetric = body.motion_fractions([35.1, 64.9], [65.1, 34.9]);
+        assert_eq!(symmetric.len(), 3);
+        assert!((symmetric[0] - 0.33).abs() < 1e-12);
+        assert!((symmetric[1] - 0.663_333_333_333_333_3).abs() < 1e-12);
+        assert_eq!(symmetric[2], 1.0);
+
+        // Near-start and near-endpoint crossings within 1e-6 coalesce without hiding real knots.
+        body.angles = vec![35.0, 40.0, 45.0];
+        assert_eq!(
+            body.motion_fractions([35.0, 35.0], [40.000_000_1, 35.0]),
+            vec![1.0]
+        );
+        assert_eq!(
+            body.motion_fractions([39.999_999_99, 35.0], [45.0, 35.0]),
+            vec![1.0]
+        );
+        assert_eq!(
+            body.motion_fractions([35.0, 35.0], [40.000_1, 35.0]).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn near_knot_and_symmetric_two_arm_moves_advance_without_spurious_time_refusals() {
+        // Near-endpoint crossing: previously failed with indistinguishable f32 replay times.
+        let mut near_end = turning_session();
+        near_end.carry_m = Some(0.03);
+        near_end.advance(40.000_000_1, 35.0, 0.25).unwrap();
+        assert_eq!(near_end.arms(), [40.000_000_1, 35.0]);
+
+        // Near-start crossing: previously failed with a sub-1e-9 s initial segment duration.
+        let mut near_start = turning_session();
+        near_start.carry_m = Some(0.03);
+        near_start.advance(39.999_999_99, 35.0, 0.125).unwrap();
+        near_start.advance(45.0, 35.0, 0.125).unwrap();
+        assert_eq!(near_start.arms(), [45.0, 35.0]);
+
+        // Mirror-symmetric two-arm crossing with 1-ULP raw fraction separation: previously failed
+        // with a 2.77e-17 s segment between left and right crossings.
+        let mut symmetric = session(0.0);
+        symmetric.body.angles = vec![30.0, 45.0, 55.0, 70.0];
+        for surface in [&mut symmetric.body.collision, &mut symmetric.body.display] {
+            for _ in 0..2 {
+                surface.left.offsets.push(vec![Vec3::ZERO; 2 * RING]);
+                surface.right.offsets.push(Vec::new());
+            }
+        }
+        symmetric.motion.max_step_s = 0.05;
+        symmetric.arms = [35.1, 64.9];
+        let samples = symmetric.advance(65.1, 34.9, 0.25).unwrap();
+        let stride = 1 + symmetric.cloth().len();
+        let times: Vec<f32> = samples.chunks_exact(stride).map(|s| s[0]).collect();
+        assert!(times.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(times.last(), Some(&0.25));
+        assert_eq!(
+            symmetric.last_move()["body_sample_times_s"]
+                .as_array()
+                .map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(symmetric.arms(), [65.1, 34.9]);
     }
 
     #[test]
