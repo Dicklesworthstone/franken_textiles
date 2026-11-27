@@ -297,17 +297,87 @@ fn box_kernel_weights(a: f64, b: f64, ds: f64, n_cells: usize) -> Vec<(usize, f6
     weights
 }
 
-/// Overflow-safe smooth positive part `psi_tau(z) = tau * ln(1 + exp(z / tau))` and derivative `sigmoid(z / tau)`.
+/// Overflow-safe smooth positive part `psi_tau(z) = tau * ln(1 + exp(z / tau))` and derivative
+/// `sigmoid(z / tau)`.
 fn softplus_and_deriv(z: f64, tau: f64) -> (f64, f64) {
     let t = z / tau;
     if t > 35.0 {
         (z, 1.0)
     } else if t < -35.0 {
         (0.0, 0.0)
+    } else if t >= 0.0 {
+        let em = det::exp(-t);
+        (z + tau * det::ln(1.0 + em), 1.0 / (1.0 + em))
     } else {
-        let e = det::exp(t);
-        (tau * det::ln(1.0 + e), e / (1.0 + e))
+        let ep = det::exp(t);
+        (tau * det::ln(1.0 + ep), ep / (1.0 + ep))
     }
+}
+
+/// Solves the strictly convex 1D Rockafellar–Uryasev smoothed CVaR inner minimization
+/// `min_eta [ eta + (1 / ((1 - alpha) * K)) * sum_k psi_tau(L_k - eta) ]` to machine precision,
+/// returning `(cvar_value, weights)` where `weights[k] = sigmoid((L_k - eta*) / tau) / ((1-alpha)*K)`
+/// satisfies `sum_k weights[k] == 1` and gives the exact Envelope-Theorem gradient `sum_k w_k dL_k/du`.
+fn solve_smooth_cvar(losses: &[f64], alpha: f64, tau: f64) -> (f64, Vec<f64>) {
+    let k_n = losses.len();
+    debug_assert!(k_n > 0);
+    let tail_prob = (1.0 - alpha).clamp(0.01, 0.999);
+    let tau = tau.max(1e-4);
+    let inv_tail = 1.0 / (tail_prob * (k_n as f64));
+    let mut l_min = f64::INFINITY;
+    let mut l_max = f64::NEG_INFINITY;
+    for &l in losses {
+        l_min = l_min.min(l);
+        l_max = l_max.max(l);
+    }
+    // Exact closed bracket where F'(eta) = 1 - inv_tail * sum sigmoid((L_k - eta)/tau) crosses 0:
+    // sigmoid(-shift / tau) == tail_prob => shift = tau * ln((1 - tail_prob) / tail_prob).
+    let shift = tau * det::ln((1.0 - tail_prob) / tail_prob);
+    let mut lo = l_min + shift;
+    let mut hi = l_max + shift;
+    let mut eta = 0.5 * (lo + hi);
+    if hi - lo > 1e-13 * (1.0 + hi.abs() + lo.abs()) {
+        for _ in 0..48 {
+            let mut sum_sig = 0.0;
+            let mut sum_dsig = 0.0;
+            for &l in losses {
+                let (_, sig) = softplus_and_deriv(l - eta, tau);
+                sum_sig += sig;
+                sum_dsig += sig * (1.0 - sig);
+            }
+            let f_prime = 1.0 - inv_tail * sum_sig;
+            if f_prime.abs() < 1e-13 {
+                break;
+            }
+            if f_prime < 0.0 {
+                lo = eta;
+            } else {
+                hi = eta;
+            }
+            let f_second = (inv_tail / tau) * sum_dsig;
+            let newton = if f_second > 1e-18 {
+                eta - f_prime / f_second
+            } else {
+                f64::NAN
+            };
+            eta = if newton.is_finite() && newton > lo && newton < hi {
+                newton
+            } else {
+                0.5 * (lo + hi)
+            };
+            if hi - lo <= 1e-13 * (1.0 + hi.abs() + lo.abs()) {
+                break;
+            }
+        }
+    }
+    let mut cvar = eta;
+    let mut weights = Vec::with_capacity(k_n);
+    for &l in losses {
+        let (sp, sig) = softplus_and_deriv(l - eta, tau);
+        cvar += inv_tail * sp;
+        weights.push(inv_tail * sig);
+    }
+    (cvar, weights)
 }
 
 /// Runs CVaR-robust inverse yarn dyeing optimization (`FTX-K15`) via pure-Rust Bertsekas Two-Metric
@@ -393,13 +463,11 @@ pub fn optimize_yarn_dye_program(
 
     let u_max: Vec<f64> = machine.primaries.iter().map(|p| p.max_dose_per_m).collect();
     let n_u = n_cells * n_p;
-    let n_vars = n_u + 1; // last variable is unconstrained Rockafellar-Uryasev threshold `eta`!
 
     type ObjGradEval = (f64, Vec<f64>, Vec<f64>, Vec<CieXyz>);
-    // Helper: evaluate smoothed CVaR + Sobolev + Huberized switch objective and exact gradient
-    let eval_obj_grad = |x: &[f64]| -> Result<ObjGradEval, Refusal> {
-        let u = &x[..n_u];
-        let eta = x[n_u];
+    // Helper: evaluate reduced-variable smoothed CVaR (exact inner eta*(u) via Envelope Theorem)
+    // + Sobolev H^1 + Huberized switch objective and exact analytical gradient w.r.t. doses `u`.
+    let eval_obj_grad = |u: &[f64]| -> Result<ObjGradEval, Refusal> {
         // Stage 1 factored OUTSIDE the K-scenario drift loop!
         let tr = forward_capillary_transport(u, n_cells, transport_cfg)?;
 
@@ -463,17 +531,10 @@ pub fn optimize_yarn_dye_program(
             scen_losses[k] = loss_k;
         }
 
-        // Smoothed Rockafellar-Uryasev CVaR epigraph:
-        //   J_cvar = eta + (1 / ((1 - alpha) * K)) * sum_k psi_tau(L_k - eta)
-        let inv_tail = 1.0 / ((1.0 - cfg.cvar_alpha).max(0.01) * (n_scen as f64));
-        let mut obj = eta;
-        let mut d_eta = 1.0;
+        // Exact inner Rockafellar-Uryasev CVaR epigraph minimization + Envelope-Theorem weights
+        let (mut obj, scen_weights) = solve_smooth_cvar(&scen_losses, cfg.cvar_alpha, cfg.cvar_tau);
         let mut adj_cell_xyz = vec![[0.0_f64; 3]; n_cells];
-        for k in 0..n_scen {
-            let (sp, sig) = softplus_and_deriv(scen_losses[k] - eta, cfg.cvar_tau.max(1e-4));
-            obj += inv_tail * sp;
-            let wk = inv_tail * sig;
-            d_eta -= wk;
+        for (k, &wk) in scen_weights.iter().enumerate() {
             for c in 0..n_cells {
                 adj_cell_xyz[c][0] += wk * scen_adj_xyz[k][c][0];
                 adj_cell_xyz[c][1] += wk * scen_adj_xyz[k][c][1];
@@ -518,13 +579,10 @@ pub fn optimize_yarn_dye_program(
             }
         }
 
-        let mut grad = Vec::with_capacity(n_vars);
-        grad.extend_from_slice(&grad_u);
-        grad.push(d_eta);
-        Ok((obj, grad, scen_losses, nominal_stitch_xyz))
+        Ok((obj, grad_u, scen_losses, nominal_stitch_xyz))
     };
 
-    // Projection operator onto `[0, u_max]^n_u x R` (eta is strictly unconstrained!)
+    // Projection operator onto `[0, u_max]^n_u`
     let project = |x: &mut [f64]| {
         for c in 0..n_cells {
             for (p, &u_hi) in u_max.iter().enumerate().take(n_p) {
@@ -534,24 +592,21 @@ pub fn optimize_yarn_dye_program(
         }
     };
 
-    // Initialize at neutral undyed yarn (`u = 0`, `eta` initialized to initial nominal loss)
-    let mut x = vec![0.0_f64; n_vars];
-    let (f_init, _, _, _) = eval_obj_grad(&x)?;
-    x[n_u] = f_init; // warm-start eta at initial mean loss
+    // Initialize at neutral undyed yarn (`u = 0`)
+    let mut x = vec![0.0_f64; n_u];
     let (mut f_val, mut grad, _, _) = eval_obj_grad(&x)?;
 
     // Pure-Rust Bertsekas Two-Metric Projected L-BFGS (m = 7 memory pairs)
     const M_HIST: usize = 7;
     let mut s_hist: Vec<Vec<f64>> = Vec::new();
     let mut y_hist: Vec<Vec<f64>> = Vec::new();
-    let mut rho_hist: Vec<f64> = Vec::new();
     let mut iters_done = 0usize;
 
     for iter in 0..cfg.max_iters {
         iters_done = iter + 1;
         // Projected gradient residual norm & Bertsekas active-set tolerance eps_k
         let mut x_pg = x.clone();
-        for i in 0..n_vars {
+        for i in 0..n_u {
             x_pg[i] -= grad[i];
         }
         project(&mut x_pg);
@@ -566,8 +621,8 @@ pub fn optimize_yarn_dye_program(
         }
         let eps_k = 1e-4_f64.min(pg_norm);
 
-        // Identify binding active box variables (never bind unconstrained `eta`!)
-        let mut active = vec![false; n_vars];
+        // Identify binding active box variables
+        let mut active = vec![false; n_u];
         for c in 0..n_cells {
             for (p, &u_hi) in u_max.iter().enumerate().take(n_p) {
                 let idx = c * n_p + p;
@@ -579,116 +634,141 @@ pub fn optimize_yarn_dye_program(
             }
         }
 
-        // Two-loop L-BFGS restricted to free variables + diagonal gradient step on active variables
+        // Two-loop L-BFGS restricted strictly to SPD free-subspace curvature pairs
         let mut q = grad.clone();
-        for i in 0..n_vars {
+        for i in 0..n_u {
             if active[i] {
                 q[i] = 0.0;
             }
         }
         let m = s_hist.len();
+        let mut rho_free = vec![0.0; m];
         let mut alphas = vec![0.0; m];
+        let mut last_gamma = None;
         for k in (0..m).rev() {
+            let mut sy_f = 0.0;
+            let mut yy_f = 0.0;
             let mut dot_sq = 0.0;
-            for i in 0..n_vars {
+            for i in 0..n_u {
                 if !active[i] {
+                    sy_f += s_hist[k][i] * y_hist[k][i];
+                    yy_f += y_hist[k][i] * y_hist[k][i];
                     dot_sq += s_hist[k][i] * q[i];
                 }
             }
-            alphas[k] = rho_hist[k] * dot_sq;
-            for i in 0..n_vars {
-                if !active[i] {
-                    q[i] -= alphas[k] * y_hist[k][i];
+            if sy_f > 1e-14 && yy_f > 1e-14 {
+                let rho_k = 1.0 / sy_f;
+                rho_free[k] = rho_k;
+                if last_gamma.is_none() {
+                    last_gamma = Some((sy_f / yy_f).clamp(1e-5, 1e3));
+                }
+                alphas[k] = rho_k * dot_sq;
+                for i in 0..n_u {
+                    if !active[i] {
+                        q[i] -= alphas[k] * y_hist[k][i];
+                    }
                 }
             }
         }
-        let gamma = if m > 0 {
-            let sy: f64 = s_hist[m - 1]
-                .iter()
-                .zip(&y_hist[m - 1])
-                .enumerate()
-                .filter(|(i, _)| !active[*i])
-                .map(|(_, (s, y))| s * y)
-                .sum();
-            let yy: f64 = y_hist[m - 1]
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !active[*i])
-                .map(|(_, y)| y * y)
-                .sum();
-            if sy > 1e-14 && yy > 1e-14 {
-                (sy / yy).clamp(1e-4, 1e3)
+        let g_max = grad
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !active[*i])
+            .map(|(_, v)| v.abs())
+            .fold(0.0_f64, f64::max);
+        let gamma = last_gamma.unwrap_or_else(|| {
+            if g_max > 1e-12 {
+                (0.25 / g_max).clamp(1e-5, 1.0)
             } else {
                 1.0
             }
-        } else {
-            (1.0 / pg_norm.max(1.0)).min(1.0)
-        };
+        });
         let mut r: Vec<f64> = q.iter().map(|&v| gamma * v).collect();
         for k in 0..m {
+            if rho_free[k] == 0.0 {
+                continue;
+            }
             let mut dot_yr = 0.0;
-            for i in 0..n_vars {
+            for i in 0..n_u {
                 if !active[i] {
                     dot_yr += y_hist[k][i] * r[i];
                 }
             }
-            let beta = rho_hist[k] * dot_yr;
-            for i in 0..n_vars {
+            let beta = rho_free[k] * dot_yr;
+            for i in 0..n_u {
                 if !active[i] {
                     r[i] += s_hist[k][i] * (alphas[k] - beta);
                 }
             }
         }
-        let mut dir = vec![0.0; n_vars];
+        let mut dir = vec![0.0; n_u];
         let mut dir_dot_g = 0.0;
-        for i in 0..n_vars {
-            dir[i] = if active[i] { -grad[i] } else { -r[i] };
+        for i in 0..n_u {
+            dir[i] = if active[i] { -gamma * grad[i] } else { -r[i] };
             dir_dot_g += dir[i] * grad[i];
         }
         if dir_dot_g >= 0.0 {
-            // Reset to negative gradient descent if curvature pair lost positivity
-            for i in 0..n_vars {
-                dir[i] = -grad[i];
+            for i in 0..n_u {
+                dir[i] = -gamma * grad[i];
             }
         }
 
-        // Projected Armijo backtracking line search
-        let mut step = 1.0;
+        // Projected Armijo backtracking line search (with clean steepest-descent fallback on stall)
         let mut accepted = false;
-        let mut x_next = vec![0.0; n_vars];
+        let mut x_next = vec![0.0; n_u];
         let mut f_next = f_val;
         let mut g_next = grad.clone();
-        for _ in 0..16 {
-            for i in 0..n_vars {
-                x_next[i] = x[i] + step * dir[i];
+        for attempt in 0..2 {
+            if attempt == 1 {
+                s_hist.clear();
+                y_hist.clear();
+                let sd_scale = if g_max > 1e-12 {
+                    (0.25 / g_max).clamp(1e-5, 1.0)
+                } else {
+                    1.0
+                };
+                for i in 0..n_u {
+                    dir[i] = -sd_scale * grad[i];
+                }
             }
-            project(&mut x_next);
-            let actual_dec: f64 = (0..n_vars).map(|i| grad[i] * (x_next[i] - x[i])).sum();
-            let (ft, gt, _, _) = eval_obj_grad(&x_next)?;
-            if ft <= f_val + 1e-4 * actual_dec {
-                f_next = ft;
-                g_next = gt;
-                accepted = true;
+            let mut step = 1.0;
+            for _ in 0..18 {
+                for i in 0..n_u {
+                    x_next[i] = x[i] + step * dir[i];
+                }
+                project(&mut x_next);
+                let actual_dec: f64 = (0..n_u).map(|i| grad[i] * (x_next[i] - x[i])).sum();
+                if actual_dec >= 0.0 {
+                    step *= 0.5;
+                    continue;
+                }
+                let (ft, gt, _, _) = eval_obj_grad(&x_next)?;
+                if ft <= f_val + 1e-4 * actual_dec {
+                    f_next = ft;
+                    g_next = gt;
+                    accepted = true;
+                    break;
+                }
+                step *= 0.5;
+            }
+            if accepted {
                 break;
             }
-            step *= 0.5;
         }
         if !accepted {
             break;
         }
 
-        let s_vec: Vec<f64> = (0..n_vars).map(|i| x_next[i] - x[i]).collect();
-        let y_vec: Vec<f64> = (0..n_vars).map(|i| g_next[i] - grad[i]).collect();
+        let s_vec: Vec<f64> = (0..n_u).map(|i| x_next[i] - x[i]).collect();
+        let y_vec: Vec<f64> = (0..n_u).map(|i| g_next[i] - grad[i]).collect();
         let sy: f64 = s_vec.iter().zip(&y_vec).map(|(a, b)| a * b).sum();
-        if sy > 1e-12 {
+        if sy > 1e-14 {
             if s_hist.len() == M_HIST {
                 s_hist.remove(0);
                 y_hist.remove(0);
-                rho_hist.remove(0);
             }
             s_hist.push(s_vec);
             y_hist.push(y_vec);
-            rho_hist.push(1.0 / sy);
         }
         x = x_next;
         f_val = f_next;
@@ -1016,5 +1096,34 @@ mod tests {
         assert!(pareto[0].feasible);
         assert!(!pareto[2].feasible); // benchtop lacks optical fiducial sensor
         assert!(pareto[3].feasible); // benchtop has dancer accumulator
+    }
+
+    #[test]
+    fn smooth_cvar_envelope_weights_sum_to_one_and_match_central_fd() {
+        let losses = [12.0, 48.0, 105.0, 22.0, 91.0, 140.0, 65.0, 118.0];
+        let alpha = 0.85;
+        let tau = 0.75;
+        let (val, weights) = solve_smooth_cvar(&losses, alpha, tau);
+        assert!(val.is_finite());
+        let w_sum: f64 = weights.iter().sum();
+        assert!(
+            (w_sum - 1.0).abs() < 1e-11,
+            "CVaR envelope weights must sum to 1, got {w_sum}"
+        );
+        let h = 1e-5;
+        for i in 0..losses.len() {
+            let mut lp = losses;
+            let mut lm = losses;
+            lp[i] += h;
+            lm[i] -= h;
+            let (vp, _) = solve_smooth_cvar(&lp, alpha, tau);
+            let (vm, _) = solve_smooth_cvar(&lm, alpha, tau);
+            let fd = (vp - vm) / (2.0 * h);
+            assert!(
+                (weights[i] - fd).abs() < 1e-7,
+                "CVaR weight[{i}] mismatch: analytic={} fd={fd}",
+                weights[i]
+            );
+        }
     }
 }
