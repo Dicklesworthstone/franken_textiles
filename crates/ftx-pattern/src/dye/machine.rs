@@ -337,7 +337,10 @@ impl DyeMachineProfile {
             ("max_line_speed_m_s", self.max_line_speed_m_s),
             ("max_line_accel_m_s2", self.max_line_accel_m_s2),
             ("scorch_max_dwell_s", self.scorch_max_dwell_s),
-            ("applicator_to_feeder_path_m", self.applicator_to_feeder_path_m),
+            (
+                "applicator_to_feeder_path_m",
+                self.applicator_to_feeder_path_m,
+            ),
             ("entry_tension_n", self.entry_tension_n),
         ] {
             Refusal::finite(name, v)?;
@@ -359,6 +362,60 @@ impl DyeMachineProfile {
                 RefusalCode::OutOfRange,
                 "dye machine physical dimensions and limits must be positive",
             ));
+        }
+        for p in &self.primaries {
+            if p.id.trim().is_empty() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "dye primary requires a non-empty id",
+                ));
+            }
+            Refusal::finite("max_dose_per_m", p.max_dose_per_m)?;
+            Refusal::finite("rf_retardation", p.rf_retardation)?;
+            Refusal::finite("min_fixation_dwell_s", p.min_fixation_dwell_s)?;
+            if !(0.0 < p.rf_retardation && p.rf_retardation <= 1.0)
+                || p.max_dose_per_m <= 0.0
+                || p.min_fixation_dwell_s < 0.0
+            {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "primary '{}' has invalid rf_retardation, max_dose_per_m, or min_fixation_dwell_s",
+                        p.id
+                    ),
+                ));
+            }
+            if p.k_spectrum.len() != p.s_spectrum.len() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!(
+                        "primary '{}' k_spectrum and s_spectrum length mismatch",
+                        p.id
+                    ),
+                ));
+            }
+            for &v in p.k_spectrum.iter().chain(p.s_spectrum.iter()) {
+                Refusal::finite("spectral_ks", v)?;
+                if v < 0.0 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("primary '{}' contains negative spectral K/S value", p.id),
+                    ));
+                }
+            }
+        }
+        for pin in &self.guide_capstan_pins {
+            Refusal::finite("wrap_angle_rad", pin.wrap_angle_rad)?;
+            Refusal::finite("mu_friction", pin.mu_friction)?;
+            if pin.wrap_angle_rad < 0.0 || pin.mu_friction < 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "capstan pin '{}' wrap_angle_rad and mu_friction cannot be negative",
+                        pin.label
+                    ),
+                ));
+            }
         }
         let max_fix_dwell = self
             .primaries
@@ -383,14 +440,6 @@ impl DyeMachineProfile {
                     self.scorch_max_dwell_s
                 ),
             ));
-        }
-        for p in &self.primaries {
-            if !(0.0 < p.rf_retardation && p.rf_retardation <= 1.0) || p.max_dose_per_m <= 0.0 {
-                return Err(Refusal::new(
-                    RefusalCode::OutOfRange,
-                    format!("primary '{}' has invalid rf_retardation or max_dose_per_m", p.id),
-                ));
-            }
         }
         if let Some(acc) = &self.accumulator {
             acc.validate()?;

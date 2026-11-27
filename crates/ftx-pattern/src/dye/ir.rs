@@ -173,6 +173,12 @@ impl YarnDyeProgram {
                 ),
             ));
         }
+        if self.name.trim().is_empty() || self.yarn_id.trim().is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "dye program requires non-empty name and yarn_id",
+            ));
+        }
         if self.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
             && !self.not_for_garment_wear
         {
@@ -210,7 +216,10 @@ impl YarnDyeProgram {
             if seg.s_start_m < 0.0 || seg.s_end_m <= seg.s_start_m {
                 return Err(Refusal::new(
                     RefusalCode::DegenerateGeometry,
-                    format!("segment {idx} has invalid arc range [{}, {}]", seg.s_start_m, seg.s_end_m),
+                    format!(
+                        "segment {idx} has invalid arc range [{}, {}]",
+                        seg.s_start_m, seg.s_end_m
+                    ),
                 ));
             }
             if let Some(pe) = prev_end {
@@ -228,13 +237,19 @@ impl YarnDyeProgram {
             if seg.target_speed_m_s <= 0.0 {
                 return Err(Refusal::new(
                     RefusalCode::MaterialProcessHazard,
-                    format!("segment {idx} has non-positive line speed {}", seg.target_speed_m_s),
+                    format!(
+                        "segment {idx} has non-positive line speed {}",
+                        seg.target_speed_m_s
+                    ),
                 ));
             }
             if seg.doses.len() != n_ch {
                 return Err(Refusal::new(
                     RefusalCode::InvalidDocument,
-                    format!("segment {idx} dose channel count {} != {n_ch}", seg.doses.len()),
+                    format!(
+                        "segment {idx} dose channel count {} != {n_ch}",
+                        seg.doses.len()
+                    ),
                 ));
             }
             for &d in &seg.doses {
@@ -247,13 +262,39 @@ impl YarnDyeProgram {
                 }
             }
         }
-        if self.regime == DyeingRegime::Regime3InlineDancer {
-            let Some(tl) = &self.regime3_intake_timeline else {
+        for (name, opt) in [
+            ("expected_delta_e00_p50", self.expected_delta_e00_p50),
+            ("expected_delta_e00_p95", self.expected_delta_e00_p95),
+            ("gamut_floor_delta_e00", self.gamut_floor_delta_e00),
+        ] {
+            if let Some(v) = opt {
+                Refusal::finite(name, v)?;
+                if v < 0.0 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("{name} cannot be negative (got {v})"),
+                    ));
+                }
+            }
+        }
+        if let Some(frac) = self.unreproducible_energy_fraction {
+            Refusal::finite("unreproducible_energy_fraction", frac)?;
+            if !(0.0..=1.0).contains(&frac) {
                 return Err(Refusal::new(
-                    RefusalCode::InvalidDocument,
-                    "Regime III inline dancer dyeing requires explicit regime3_intake_timeline",
+                    RefusalCode::OutOfRange,
+                    format!("unreproducible_energy_fraction must be in [0, 1] (got {frac})"),
                 ));
-            };
+            }
+        }
+        if self.regime == DyeingRegime::Regime3InlineDancer
+            && self.regime3_intake_timeline.is_none()
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "Regime III inline dancer dyeing requires explicit regime3_intake_timeline",
+            ));
+        }
+        if let Some(tl) = &self.regime3_intake_timeline {
             Refusal::finite("dt_verify_s", tl.dt_verify_s)?;
             if tl.events.is_empty() || tl.dt_verify_s <= 0.0 {
                 return Err(Refusal::new(

@@ -111,19 +111,44 @@ impl YarnDyeingQualification {
         for (k, v) in [
             ("wick_dispersion_mm", self.wick_dispersion_mm),
             ("shrinkage_axial_pct", self.shrinkage_axial_pct),
-            ("wet_tenacity_retention_ratio", self.wet_tenacity_retention_ratio),
+            (
+                "wet_tenacity_retention_ratio",
+                self.wet_tenacity_retention_ratio,
+            ),
             ("yarn_breaking_force_n", self.yarn_breaking_force_n),
         ] {
             Refusal::finite(k, v)?;
         }
         if self.wick_dispersion_mm < 0.0
             || self.wet_tenacity_retention_ratio <= 0.0
+            || self.wet_tenacity_retention_ratio > 1.5
             || self.yarn_breaking_force_n <= 0.0
         {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "invalid wick dispersion, wet tenacity retention, or breaking force",
             ));
+        }
+        if let Some(tg) = self.yarn_tg_c {
+            Refusal::finite("yarn_tg_c", tg)?;
+        }
+        if let Some(grade) = self.iso_105_c06_grade {
+            Refusal::finite("iso_105_c06_grade", grade)?;
+            if !(1.0..=5.0).contains(&grade) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("iso_105_c06_grade must be in [1.0, 5.0] (got {grade})"),
+                ));
+            }
+        }
+        if let Some(grade) = self.iso_105_x12_wet_rub_grade {
+            Refusal::finite("iso_105_x12_wet_rub_grade", grade)?;
+            if !(1.0..=5.0).contains(&grade) {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("iso_105_x12_wet_rub_grade must be in [1.0, 5.0] (got {grade})"),
+                ));
+            }
         }
         if wearer.is_child() {
             if !self.washing_off_validated {
@@ -288,5 +313,95 @@ mod tests {
                 .code,
             RefusalCode::MaterialProcessHazard
         );
+
+        // NaN / out-of-range ISO fastness grades must never silently bypass child/infant gates.
+        let mut nan_wash = q.clone();
+        nan_wash.iso_105_c06_grade = Some(f64::NAN);
+        assert_eq!(
+            nan_wash
+                .validate_for_wearer(WearerAgeClass::Child3To14, "mat", "dm")
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        let mut nan_rub = q.clone();
+        nan_rub.saliva_fastness_validated = true;
+        nan_rub.iso_105_x12_wet_rub_grade = Some(f64::NAN);
+        assert_eq!(
+            nan_rub
+                .validate_for_wearer(WearerAgeClass::InfantUnder3, "mat", "dm")
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        let mut bad_grade = q;
+        bad_grade.iso_105_c06_grade = Some(6.0);
+        assert_eq!(
+            bad_grade
+                .validate_for_wearer(WearerAgeClass::Child3To14, "mat", "dm")
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+    }
+
+    #[test]
+    fn dye_machine_and_program_reject_nan_dwell_capstan_and_metric_bypasses() {
+        let prof = DyeMachineProfile::benchtop_piezo_cmyk();
+        let mut nan_dwell = prof.clone();
+        nan_dwell.primaries[0].min_fixation_dwell_s = f64::NAN;
+        assert_eq!(
+            nan_dwell.validate().unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+
+        let mut nan_dose = prof.clone();
+        nan_dose.primaries[0].max_dose_per_m = f64::NAN;
+        assert_eq!(
+            nan_dose.validate().unwrap_err().code,
+            RefusalCode::NonFinite
+        );
+
+        let mut nan_pin = prof.clone();
+        nan_pin.guide_capstan_pins[0].mu_friction = f64::NAN;
+        assert_eq!(nan_pin.validate().unwrap_err().code, RefusalCode::NonFinite);
+
+        let mut neg_pin = prof;
+        neg_pin.guide_capstan_pins[0].wrap_angle_rad = -0.1;
+        assert_eq!(
+            neg_pin.validate().unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+
+        let mut prog = YarnDyeProgram {
+            schema: DYE_PROGRAM_SCHEMA.to_string(),
+            name: "stripe".to_string(),
+            run_id: 0,
+            yarn_id: "cotton".to_string(),
+            wearer_age_class: WearerAgeClass::Adult,
+            regime: DyeingRegime::Regime1AStripes,
+            machine_sha256: "m".to_string(),
+            qualification_sha256: None,
+            startup_leader_m: 1.0,
+            shutdown_trailer_m: 0.5,
+            segments: vec![DyeSegment {
+                s_start_m: 0.0,
+                s_end_m: 1.0,
+                target_speed_m_s: 0.08,
+                doses: vec![0.5],
+                fiducial_mark: false,
+            }],
+            regime3_intake_timeline: None,
+            expected_delta_e00_p50: Some(f64::NAN),
+            expected_delta_e00_p95: None,
+            gamut_floor_delta_e00: None,
+            unreproducible_energy_fraction: None,
+            not_for_garment_wear: false,
+            metadata: BTreeMap::new(),
+        };
+        assert_eq!(prog.validate().unwrap_err().code, RefusalCode::NonFinite);
+        prog.expected_delta_e00_p50 = Some(1.0);
+        prog.unreproducible_energy_fraction = Some(1.5);
+        assert_eq!(prog.validate().unwrap_err().code, RefusalCode::OutOfRange);
     }
 }
