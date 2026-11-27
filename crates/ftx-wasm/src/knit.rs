@@ -444,15 +444,14 @@ pub fn default_carrier() -> CarrierId {
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    let mut chunks = bytes.chunks_exact(3);
-    for chunk in &mut chunks {
+    let (chunks, rem) = bytes.as_chunks::<3>();
+    for chunk in chunks {
         let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
         out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
         out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
         out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
         out.push(TABLE[(n & 0x3f) as usize] as char);
     }
-    let rem = chunks.remainder();
     if rem.len() == 1 {
         let n = u32::from(rem[0]) << 16;
         out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
@@ -707,7 +706,7 @@ mod tests {
             let bytes = input.as_bytes();
             assert_eq!(bytes.len() % 4, 0);
             let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-            for chunk in bytes.chunks_exact(4) {
+            for chunk in bytes.as_chunks::<4>().0 {
                 let a = val(chunk[0]).unwrap();
                 let b = val(chunk[1]).unwrap();
                 out.push((a << 2) | (b >> 4));
