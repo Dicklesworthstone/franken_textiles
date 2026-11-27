@@ -569,11 +569,144 @@ pub fn load_png_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, Strin
     decode_png_with_limit(bytes, max_pixels, false)
 }
 
-fn decode_png_with_limit(
+/// Decodes a PNG, JPEG or WebP target motif into a straight-sRGB [`ftx_core::TargetRaster`]
+/// preserving explicit PNG/WebP transparency in `alpha_weight` (bypassing `over_white` flattening).
+///
+/// # Errors
+/// [`RefusalCode::BudgetExceeded`] if `max_pixels` or the 64 MiB encoded limit is exceeded, or
+/// [`RefusalCode::InvalidDocument`] for unsupported/corrupt image payloads.
+pub fn load_target_raster_with_limit(
     bytes: &[u8],
     max_pixels: usize,
-    strict_palette: bool,
-) -> Result<Bgr, String> {
+) -> Result<ftx_core::TargetRaster, Refusal> {
+    if bytes.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "target motif image exceeds 64 MiB encoded input",
+        ));
+    }
+    let map_err = |message: String| {
+        let code = if message.contains("pixel") && message.contains("budget")
+            || message.contains("more than")
+        {
+            RefusalCode::BudgetExceeded
+        } else {
+            RefusalCode::InvalidDocument
+        };
+        Refusal::new(code, message)
+    };
+    let mut hasher = ftx_core::receipt::Sha256::new();
+    hasher.update(bytes);
+    let source_sha256 = hasher.finalize();
+
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        let (w, h, srgb_u8, alpha_weight) =
+            decode_png_rgba_with_limit(bytes, max_pixels).map_err(map_err)?;
+        let w = u32::try_from(w)
+            .map_err(|_| Refusal::new(RefusalCode::BudgetExceeded, "PNG width exceeds u32"))?;
+        let h = u32::try_from(h)
+            .map_err(|_| Refusal::new(RefusalCode::BudgetExceeded, "PNG height exceeds u32"))?;
+        ftx_core::TargetRaster::new(w, h, srgb_u8, alpha_weight, source_sha256)
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        let (w, h, srgb_u8, alpha_weight) =
+            super::webp::decode_rgba(bytes, max_pixels).map_err(map_err)?;
+        let w = u32::try_from(w)
+            .map_err(|_| Refusal::new(RefusalCode::BudgetExceeded, "WebP width exceeds u32"))?;
+        let h = u32::try_from(h)
+            .map_err(|_| Refusal::new(RefusalCode::BudgetExceeded, "WebP height exceeds u32"))?;
+        ftx_core::TargetRaster::new(w, h, srgb_u8, alpha_weight, source_sha256)
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        let bgr = super::jpeg::decode(bytes, max_pixels).map_err(map_err)?;
+        let w = u32::try_from(bgr.w)
+            .map_err(|_| Refusal::new(RefusalCode::BudgetExceeded, "JPEG width exceeds u32"))?;
+        let h = u32::try_from(bgr.h)
+            .map_err(|_| Refusal::new(RefusalCode::BudgetExceeded, "JPEG height exceeds u32"))?;
+        let srgb_u8: Vec<[u8; 3]> = bgr
+            .data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[b, g, r]| [r, g, b])
+            .collect();
+        let alpha_weight = vec![1.0_f32; srgb_u8.len()];
+        ftx_core::TargetRaster::new(w, h, srgb_u8, alpha_weight, source_sha256)
+    } else {
+        Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "target motif must be a PNG, JPEG, or WebP file",
+        ))
+    }
+}
+
+/// Decodes a PNG into straight (un-composited) sRGB pixels and normalized `[0, 1]` alpha weights.
+fn decode_png_rgba_with_limit(
+    bytes: &[u8],
+    max_pixels: usize,
+) -> Result<(usize, usize, Vec<[u8; 3]>, Vec<f32>), String> {
+    let decoded = decode_png_raw_samples(bytes, max_pixels)?;
+    let to8 = |v: u16| -> u8 {
+        match decoded.depth {
+            16 => (v >> 8) as u8,
+            8 => v as u8,
+            4 => (v * 0x11) as u8,
+            2 => (v * 0x55) as u8,
+            _ => {
+                if v == 0 {
+                    0
+                } else {
+                    255
+                }
+            }
+        }
+    };
+    let n = decoded.w * decoded.h;
+    let mut srgb = Vec::with_capacity(n);
+    let mut alpha = Vec::with_capacity(n);
+    for i in 0..n {
+        let s = &decoded.px[i * decoded.ch..(i + 1) * decoded.ch];
+        let (rgb, a_u8) = match decoded.color {
+            0 => {
+                let v = to8(s[0]);
+                ([v, v, v], 255)
+            }
+            2 => ([to8(s[0]), to8(s[1]), to8(s[2])], 255),
+            3 => {
+                let k = usize::from(s[0]);
+                let rgb = decoded
+                    .plte
+                    .get(3 * k..3 * k + 3)
+                    .map_or([0, 0, 0], |p| [p[0], p[1], p[2]]);
+                let a = decoded
+                    .trns
+                    .as_ref()
+                    .and_then(|t| t.get(k).copied())
+                    .unwrap_or(255);
+                (rgb, a)
+            }
+            4 => {
+                let v = to8(s[0]);
+                ([v, v, v], to8(s[1]))
+            }
+            _ => ([to8(s[0]), to8(s[1]), to8(s[2])], to8(s[3])),
+        };
+        srgb.push(rgb);
+        alpha.push(f32::from(a_u8) / 255.0_f32);
+    }
+    Ok((decoded.w, decoded.h, srgb, alpha))
+}
+
+struct DecodedPngSamples {
+    w: usize,
+    h: usize,
+    depth: u8,
+    color: u8,
+    ch: usize,
+    plte: Vec<u8>,
+    trns: Option<Vec<u8>>,
+    px: Vec<u16>,
+}
+
+fn decode_png_raw_samples(bytes: &[u8], max_pixels: usize) -> Result<DecodedPngSamples, String> {
     if bytes.starts_with(&[0xff, 0xd8, 0xff])
         || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
     {
@@ -682,7 +815,6 @@ fn decode_png_with_limit(
     if raw.len() != expected {
         return Err("PNG scanline byte count does not match its header".into());
     }
-    // Every pixel's samples, in raster order, allocated only after validating the compressed data.
     let mut px: Vec<u16> = vec![0; pixels.checked_mul(ch).ok_or("PNG sample count overflow")?];
     let mut off = 0;
     for &(x0, y0, dx, dy) in passes {
@@ -708,6 +840,34 @@ fn decode_png_with_limit(
             }
         }
     }
+    Ok(DecodedPngSamples {
+        w,
+        h,
+        depth,
+        color,
+        ch,
+        plte,
+        trns,
+        px,
+    })
+}
+
+fn decode_png_with_limit(
+    bytes: &[u8],
+    max_pixels: usize,
+    strict_palette: bool,
+) -> Result<Bgr, String> {
+    let DecodedPngSamples {
+        w,
+        h,
+        depth,
+        color,
+        ch,
+        plte,
+        trns,
+        px,
+    } = decode_png_raw_samples(bytes, max_pixels)?;
+    let pixels = w * h;
     let to8 = |v: u16| -> u8 {
         match depth {
             16 => (v >> 8) as u8,
@@ -1051,5 +1211,37 @@ mod decode_budget_tests {
         );
         raw.push(0);
         assert!(load_png_with_limit(&png(5, 5, 1, &raw), 25).is_err());
+    }
+
+    #[test]
+    fn target_raster_preserves_straight_rgba_alpha_without_white_compositing() {
+        // 2x1 8-bit RGBA PNG: pixel 0 is transparent red (200,10,20,0), pixel 1 is half-alpha green (10,200,30,128).
+        let raw = [0u8, 200, 10, 20, 0, 10, 200, 30, 128];
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = Vec::new();
+        header.extend(2u32.to_be_bytes());
+        header.extend(1u32.to_be_bytes());
+        header.extend([8, 6, 0, 0, 0]);
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+        for (kind, data) in [
+            (b"IHDR", header.as_slice()),
+            (b"IDAT", compressed.as_slice()),
+            (b"IEND", &[][..]),
+        ] {
+            bytes.extend((data.len() as u32).to_be_bytes());
+            bytes.extend(kind);
+            bytes.extend(data);
+            bytes.extend(crc32(&[kind, data]).to_be_bytes());
+        }
+        let raster = load_target_raster_with_limit(&bytes, 16).unwrap();
+        assert_eq!((raster.width, raster.height), (2, 1));
+        assert_eq!(raster.srgb_u8[0], [200, 10, 20]);
+        assert_eq!(raster.alpha_weight[0], 0.0);
+        assert_eq!(raster.srgb_u8[1], [10, 200, 30]);
+        assert!((raster.alpha_weight[1] - 128.0 / 255.0).abs() < 1e-6);
+
+        // Meanwhile legacy load_png_with_limit keeps Pillow over_white parity unchanged.
+        let legacy = load_png_with_limit(&bytes, 16).unwrap();
+        assert_eq!(&legacy.data[0..3], &[255, 255, 255]);
     }
 }

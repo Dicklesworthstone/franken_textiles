@@ -54,6 +54,57 @@ struct Frame<'a> {
     h: usize,
 }
 
+/// Decodes a WebP into straight (un-composited) sRGB pixels and normalized `[0, 1]` alpha weights
+/// for [`ftx_core::TargetRaster`], bypassing `over_white` flattening.
+///
+/// # Errors
+/// A damaged or truncated file, or a canvas over `max_pixels`.
+pub fn decode_rgba(
+    bytes: &[u8],
+    max_pixels: usize,
+) -> Result<(usize, usize, Vec<[u8; 3]>, Vec<f32>), String> {
+    let has_alpha = features_have_alpha(bytes).ok_or("WebP: bad file header")?;
+    let (frame, (w, h), (xo, yo)) = demux(bytes)?;
+    if w.checked_mul(h)
+        .filter(|&p| p <= max_pixels)
+        .and_then(|p| p.checked_mul(4))
+        .is_none()
+    {
+        return Err(format!("WebP {w}×{h}: more than {max_pixels} pixels"));
+    }
+    let (fw, fh) = (frame.w, frame.h);
+    let decoded: Vec<u8> = if frame.lossless {
+        let argb = webp_lossless::decode_image(frame.payload, fw, fh)?;
+        argb.iter()
+            .flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8])
+            .collect()
+    } else {
+        let alpha = frame.alpha.map(|a| decode_alpha(a, fw, fh)).transpose()?;
+        decode_vp8(frame.payload, fw, fh, alpha.as_deref())?
+    };
+    let rgba = if (fw, fh) == (w, h) {
+        decoded
+    } else {
+        let mut canvas = vec![0u8; w * h * 4];
+        for (y, row) in decoded.chunks_exact(fw * 4).enumerate() {
+            let at = ((yo + y) * w + xo) * 4;
+            canvas[at..at + fw * 4].copy_from_slice(row);
+        }
+        canvas
+    };
+    let mut srgb = Vec::with_capacity(w * h);
+    let mut alpha_weight = Vec::with_capacity(w * h);
+    for &[r, g, b, a] in rgba.as_chunks::<4>().0 {
+        srgb.push([r, g, b]);
+        alpha_weight.push(if has_alpha {
+            f32::from(a) / 255.0_f32
+        } else {
+            1.0_f32
+        });
+    }
+    Ok((w, h, srgb, alpha_weight))
+}
+
 /// Decodes a WebP as Pillow 12.3 does for `Image.open(f)` and `load_image`, returned as OpenCV's BGR.
 ///
 /// # Errors
