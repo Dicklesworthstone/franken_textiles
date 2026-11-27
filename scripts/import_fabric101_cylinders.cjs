@@ -9,13 +9,51 @@ const { createHash } = require("node:crypto");
 const revision = "510519be0657a341a1a84fdb5c24be156ac83c9f";
 const specimens = require("./fabric101-cylinders.json");
 const stages = ["twist", "compression", "friction"];
+const MAX_REGULAR_FILE_BYTES = 5_000_000;
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRegularFile(filePath, label, maxBytes = MAX_REGULAR_FILE_BYTES) {
+  const lstat = fs.lstatSync(filePath);
+  if (!lstat.isFile()) throw Error("Input must be a regular file: " + label);
+  if (lstat.size > maxBytes) throw Error("Input exceeds pinned file size limit: " + label);
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+  const fd = fs.openSync(filePath, flags);
+  try {
+    const fstat = fs.fstatSync(fd);
+    if (!fstat.isFile()) throw Error("Input must be a regular file: " + label);
+    if (fstat.size > maxBytes) throw Error("Input exceeds pinned file size limit: " + label);
+    const chunks = [];
+    const buf = Buffer.allocUnsafe(Math.min(65536, maxBytes + 1));
+    let total = 0;
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      total += n;
+      if (total > maxBytes) throw Error("Input exceeds pinned file size limit: " + label);
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 function loadPinned(root, base, pins, name, sources) {
-  const file = path.join(root, base, name);
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile()) throw Error("Recording must be a regular file: " + name);
-  if (stat.size > 5_000_000) throw Error("Recording exceeds pinned file size limit: " + name);
-  const raw = fs.readFileSync(file);
+  const rootStat = fs.statSync(root);
+  if (!rootStat.isDirectory()) throw Error("Release root must be a directory: " + root);
+  const relParts = (base + name).split("/").filter(Boolean);
+  let cur = root;
+  for (let i = 0; i < relParts.length - 1; i++) {
+    cur = path.join(cur, relParts[i]);
+    const dirStat = fs.lstatSync(cur);
+    if (!dirStat.isDirectory()) throw Error("Recording directory must not traverse symlinks: " + name);
+  }
+  const file = path.join(cur, relParts.at(-1));
+  const raw = readRegularFile(file, name, MAX_REGULAR_FILE_BYTES);
   const blob = createHash("sha1").update("blob " + raw.length + "\0").update(raw).digest("hex");
   if (blob !== pins[name]) throw Error("Recording differs from the pinned Git blob: " + name);
   sources[base + name] = { git_blob: blob, sha256: createHash("sha256").update(raw).digest("hex") };
@@ -51,18 +89,29 @@ function readTares(text) {
   const result = {};
   let stage;
   for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const title = /^\*\*(.+)\*\*$/.exec(line);
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const title = /^\*\*(.+)\*\*$/.exec(trimmed);
     if (title) {
-      stage = {};
-      result[title[1]] = stage;
-    } else {
-      const parts = line.split(",");
-      const [name, value, unit] = parts;
-      if (!stage || parts.length < 2 || parts.length > 3 || !name.trim() || !value.trim() || !Number.isFinite(Number(value))) {
+      const stageName = title[1].trim();
+      if (!stageName || FORBIDDEN_KEYS.has(stageName) || Object.hasOwn(result, stageName)) {
         throw Error("Invalid tare measurement");
       }
-      stage[name] = { value: Number(value), unit: unit ?? null };
+      stage = {};
+      result[stageName] = stage;
+    } else {
+      const parts = line.split(",");
+      if (!stage || parts.length < 2 || parts.length > 3) {
+        throw Error("Invalid tare measurement");
+      }
+      const key = parts[0].trim();
+      const rawValue = parts[1].trim();
+      const rawUnit = parts.length === 3 ? (parts[2].trim() || null) : null;
+      if (!key || FORBIDDEN_KEYS.has(key) || Object.hasOwn(stage, key) ||
+          !rawValue || !Number.isFinite(Number(rawValue))) {
+        throw Error("Invalid tare measurement");
+      }
+      stage[key] = { value: Number(rawValue), unit: rawUnit };
     }
   }
   if (result["After Pretension"]?.pret_moved?.unit !== "mm") throw Error("Missing measured mounting travel");
@@ -162,6 +211,9 @@ function acquire(root, direction, name = "L01", selectedRepeat) {
 function twistIndices(rows, tolerance, observed = []) {
   if (!Number.isFinite(tolerance) || tolerance <= 0) throw Error("Positive rotation error tolerance required");
   if (!Array.isArray(rows) || rows.length < 2) throw Error("Expected multiple instrument samples");
+  if (!rows.every(r => Array.isArray(r) && r.length >= 5 && r.every(Number.isFinite))) {
+    throw Error("Twist replay requires finite 5-column instrument samples");
+  }
   if (rows[0][3] !== 0 || rows.some((r, i) => r[1] !== 0 || (i && r[0] <= rows[i - 1][0]))) {
     throw Error("Twist replay needs zero starting rotation, fixed axial position and distinct times");
   }
@@ -183,9 +235,11 @@ function twistIndices(rows, tolerance, observed = []) {
     if (indices.length > 129) throw Error("Measured twist needs more than 129 native waypoints");
     const [left, right] = segments.pop(), a = rows[left], b = rows[right];
     const slope = (b[3] - a[3]) / (b[0] - a[0]);
+    if (!Number.isFinite(slope)) throw Error("Nonfinite rotation slope in twist recording");
     let worst = 0, split = left;
     for (let i = left + 1; i < right; i++) {
       const error = Math.abs(rows[i][3] - (a[3] + slope * (rows[i][0] - a[0])));
+      if (!Number.isFinite(error)) throw Error("Nonfinite rotation error in twist recording");
       if (error > worst) { worst = error; split = i; }
     }
     if (worst <= tolerance) maxError = Math.max(maxError, worst);
@@ -198,8 +252,12 @@ function twistIndices(rows, tolerance, observed = []) {
 }
 
 function replay(acquisition, template, tolerance, mounting, observed = []) {
-  if (template?.schema !== "ftx-cylinder-experiment/1" || !template.material || !template.fixture) {
+  if (!isPlainObject(template) || template.schema !== "ftx-cylinder-experiment/1" ||
+      !isPlainObject(template.material) || !isPlainObject(template.fixture)) {
     throw Error("Expected an ftx-cylinder-experiment/1 template with a material and fixture");
+  }
+  if (template.controls !== undefined && !isPlainObject(template.controls)) {
+    throw Error("Invalid template integration controls");
   }
   if (!["named-direction-axial", "named-direction-circumferential"].includes(mounting)) {
     throw Error("Declare a mounting convention for the source directory direction");
@@ -222,7 +280,7 @@ function replay(acquisition, template, tolerance, mounting, observed = []) {
       Math.abs(axis[1]) !== (warpAxial ? 1 : 0) || !axis.every(Number.isFinite)) {
     throw Error("Template warp_axis disagrees with the declared mounting for " + acquisition.direction);
   }
-  const rows = acquisition.phases.twist;
+  const rows = acquisition?.phases?.twist;
   const { indices, maxError } = twistIndices(rows, tolerance, observed);
   const loading = indices.map(i => ({ time_s: rows[i][0] - rows[0][0], rotation_deg: rows[i][3],
     axial_displacement_m: 0, clamp_slip_m: 0 }));
@@ -231,8 +289,12 @@ function replay(acquisition, template, tolerance, mounting, observed = []) {
     throw Error("Invalid template integration controls");
   }
   const steps = loading.slice(1).reduce((n, p, i) => n + Math.ceil((p.time_s - loading[i].time_s) / step), 0);
-  if (steps > limit) throw Error("Template integration budget cannot cover the measured twist");
-  const travel = acquisition.protocol.measured_pretension_travel_mm * 0.001;
+  if (!Number.isFinite(steps) || steps > limit) {
+    throw Error("Template integration budget cannot cover the measured twist");
+  }
+  const measuredTravelMm = acquisition?.protocol?.measured_pretension_travel_mm;
+  if (!Number.isFinite(measuredTravelMm)) throw Error("Missing measured mounting travel");
+  const travel = measuredTravelMm * 0.001;
   const request = { ...template, fixture: { ...fixture, rotating_holder: "lower", pretension_displacement_m: travel }, loading };
   // Only this recorded twist stage is replayed; the template may describe a different protocol.
   delete request.nominal_protocol;
@@ -281,10 +343,15 @@ function calibration(root, templateBytes, mapBytes) {
       typeof map.accessed_on !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(map.accessed_on)) {
     throw Error("Expected a dated ftx-fabric101-twist-map/1 for a pinned specimen");
   }
-  const material = template.material;
-  if (template.schema !== "ftx-cylinder-calibration/1" || !Array.isArray(template.experiments) ||
-      template.experiments.length || template.admit_cylindrical_shell_model !== true ||
-      !Array.isArray(template.targets) || !template.targets.length || template.targets.length > 5 || !material?.sources ||
+  const material = isPlainObject(template) ? template.material : null;
+  if (!isPlainObject(template) || template.schema !== "ftx-cylinder-calibration/1" ||
+      !Array.isArray(template.experiments) || template.experiments.length ||
+      template.admit_cylindrical_shell_model !== true ||
+      !Array.isArray(template.targets) || !template.targets.length || template.targets.length > 5 ||
+      !isPlainObject(material) || !isPlainObject(material.sources) ||
+      (material.structure !== undefined && !isPlainObject(material.structure)) ||
+      (template.controls !== undefined && !isPlainObject(template.controls)) ||
+      (template.policy !== undefined && !isPlainObject(template.policy)) ||
       material.membrane_relaxation || ["membrane_plasticity_model", "membrane_damage_model", "bending_plasticity_model"]
         .some(key => Object.hasOwn(material.structure ?? {}, key)) || template.policy?.sensitivity === "adjoint") {
     throw Error("Expected an admitted memoryless calibration/1 template with targets, empty experiments and timed finite differences");
@@ -369,7 +436,11 @@ function main(args) {
   if (args[0] === "--calibration") {
     if (args.length !== 5) throw Error("Usage: --calibration RELEASE TEMPLATE.json TWIST_MAP.json NEW_REQUEST.json");
     const [, root, template, map, output] = args;
-    const { request, receipt } = calibration(root, fs.readFileSync(template), fs.readFileSync(map));
+    const { request, receipt } = calibration(
+      root,
+      readRegularFile(template, template),
+      readRegularFile(map, map),
+    );
     const encoded = JSON.stringify(request, null, 2) + "\n";
     fs.writeFileSync(output, encoded, { flag: "wx" });
     process.stdout.write(JSON.stringify({ ...receipt, request_sha256: sha256(encoded) }) + "\n");
@@ -393,7 +464,7 @@ function main(args) {
   }
   const result = acquire(root, direction, options.get("--specimen"), options.get("--repeat"));
   if (templatePath) {
-    const template = JSON.parse(fs.readFileSync(templatePath, "utf8"));
+    const template = JSON.parse(readRegularFile(templatePath, templatePath).toString("utf8"));
     const { request, receipt } = replay(result, template, Number(angleError), mounting);
     const encoded = JSON.stringify(request, null, 2) + "\n";
     receipt.request_sha256 = createHash("sha256").update(encoded).digest("hex");

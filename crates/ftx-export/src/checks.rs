@@ -809,29 +809,39 @@ fn py_tuple(v: &[f64]) -> String {
 #[must_use]
 pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) -> Vec<CheckItem> {
     let mut out = Vec::new();
-    let nums = |v: &Value| -> Vec<f64> {
-        v.as_array()
-            .map(|a| a.iter().filter_map(Value::as_f64).collect())
-            .unwrap_or_default()
+    let exact_nums = |v: &Value, len: usize| -> Option<Vec<f64>> {
+        let a = v.as_array()?;
+        if a.len() != len {
+            return None;
+        }
+        a.iter()
+            .map(|x| x.as_f64().filter(|f| f.is_finite()))
+            .collect()
     };
     let (bbox, height) = match master {
         None => (
-            nums(&hpgl["cut_bbox"]),
-            nums(&hpgl["sheet_mm"]).get(1).copied().unwrap_or(0.0),
+            exact_nums(&hpgl["cut_bbox"], 4),
+            exact_nums(&hpgl["sheet_mm"], 2)
+                .and_then(|s| (s[0] > 0.0 && s[1] > 0.0).then_some(s[1])),
         ),
         Some(m) => {
+            let want = exact_nums(&m["cut_bbox"], 4);
             let ok = match hpgl.get("cut_bbox") {
                 None => true,
-                Some(v) => {
-                    let got = nums(v);
-                    let want = nums(&m["cut_bbox"]);
-                    got.len() == 4
-                        && want.len() == 4
-                        && got.iter().zip(&want).all(|(a, b)| (a - b).abs() <= 0.01)
-                }
+                Some(v) => match (exact_nums(v, 4), want.as_ref()) {
+                    (Some(got), Some(want)) => {
+                        got.iter().zip(want).all(|(a, b)| (a - b).abs() <= 0.01)
+                    }
+                    _ => false,
+                },
             };
             out.push(CheckItem::new("hpgl.same_layout_as_master", file, ok, ""));
-            (nums(&m["cut_bbox"]), m["height_mm"].as_f64().unwrap_or(0.0))
+            (
+                want,
+                m["height_mm"]
+                    .as_f64()
+                    .filter(|h| h.is_finite() && *h > 0.0),
+            )
         }
     };
     let (mut pen, mut xs, mut ys, mut bad_sp2) = (0i64, Vec::new(), Vec::new(), false);
@@ -853,7 +863,16 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
             }
         }
     }
-    if bad_sp2 || xs.is_empty() || ys.is_empty() || bbox.len() != 4 {
+    let (Some(bbox), Some(height)) = (bbox, height) else {
+        out.push(CheckItem::new(
+            "hpgl.bbox",
+            file,
+            false,
+            "malformed cut_bbox or sheet height",
+        ));
+        return out;
+    };
+    if bad_sp2 || xs.is_empty() || ys.is_empty() {
         out.push(CheckItem::new(
             "hpgl.bbox",
             file,
@@ -1697,7 +1716,13 @@ mod tests {
     #[test]
     fn check_hpgl_rejects_malformed_cut_bbox_and_odd_sp2_coords() {
         let master = json!({"cut_bbox": [0.0, 0.0, 100.0, 50.0], "height_mm": 100.0});
-        for bad_bbox in [json!([]), json!([0.0, 0.0]), json!("bad"), json!(null)] {
+        for bad_bbox in [
+            json!([]),
+            json!([0.0, 0.0]),
+            json!([0.0, 0.0, "junk", 100.0, 50.0]),
+            json!("bad"),
+            json!(null),
+        ] {
             let hpgl = json!({"cut_bbox": bad_bbox});
             let items = check_hpgl(
                 "IN;SP2;PU0,2000;PD4000,4000;",
@@ -1710,6 +1735,23 @@ mod tests {
                     .iter()
                     .any(|c| c.check == "hpgl.same_layout_as_master" && !c.ok),
                 "malformed cut_bbox {bad_bbox} must fail hpgl.same_layout_as_master: {items:?}"
+            );
+        }
+        // Missing/non-positive master height_mm or malformed sheet_mm must fail hpgl.bbox even when rotated.
+        for (m, h) in [
+            (
+                Some(json!({"cut_bbox": [0.0, 0.0, 100.0, 50.0], "height_mm": 0.0})),
+                json!({"rotate_90": true}),
+            ),
+            (
+                None,
+                json!({"cut_bbox": [0.0, 0.0, 100.0, 50.0], "sheet_mm": [100.0, "junk", 100.0], "rotate_90": true}),
+            ),
+        ] {
+            let items = check_hpgl("IN;SP2;PU0,2000;PD4000,4000;", "bad.plt", m.as_ref(), &h);
+            assert!(
+                items.iter().any(|c| c.check == "hpgl.bbox" && !c.ok),
+                "malformed height_mm/sheet_mm must fail hpgl.bbox: {items:?}"
             );
         }
         for bad_plt in [

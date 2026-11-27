@@ -35,6 +35,13 @@ test("rejects modified acquisition bytes before returning measurements", t => {
   fs.unlinkSync(path.join(folder, "head.dat"));
   fs.symlinkSync(target, path.join(folder, "head.dat"));
   assert.throws(() => acquire(root, "warp"), /regular file/);
+  // Also reject symlinked intermediate directories inside the release tree.
+  const outsideDir = path.join(root, "outside-run");
+  fs.mkdirSync(outsideDir);
+  fs.writeFileSync(path.join(outsideDir, "head.dat"), "some other specimen");
+  fs.rmSync(folder, { recursive: true });
+  fs.symlinkSync(outsideDir, folder);
+  assert.throws(() => acquire(root, "warp"), /traverse symlinks/);
 });
 
 test("native replay retains holds, reversals, mounting displacement and the template material", () => {
@@ -75,25 +82,36 @@ test("native replay retains holds, reversals, mounting displacement and the temp
   assert.equal(receipt.rotation_sign, 1);
 });
 
-test("refuses to silently omit axial movement or excessive rotation reversals", () => {
+test("refuses to silently omit axial movement, non-finite samples or excessive rotation reversals", () => {
   assert.throws(() => twistIndices([], 2), /multiple instrument samples/);
   assert.throws(() => twistIndices([[0, 0, 0, 0, 0]], 2), /multiple instrument samples/);
+  assert.throws(() => twistIndices([[0, 0, 0, 0, 0], [1, 0, 0, Number.NaN, 0]], 2), /finite 5-column/);
+  assert.throws(() => twistIndices([[0, 0, 0, 0, 0], [Number.NaN, 0, 0, 1, 0]], 2), /finite 5-column/);
+  assert.throws(() => twistIndices([[0, 0, 0, 0, 0], [1, 0, 0, Number.POSITIVE_INFINITY, 0]], 2), /finite 5-column/);
+  assert.throws(() => twistIndices([[0, 0, 0, 0], [1, 0, 0, 1]], 2), /finite 5-column/);
   const rows = Array.from({ length: 130 }, (_, i) => [i, 0, 0, i % 2, 0]);
   assert.throws(() => twistIndices(rows, 2), /129/);
   rows[4][1] = 1;
   assert.throws(() => twistIndices(rows, 2), /fixed axial/);
 });
 
-test("readTares rejects blank values, blank names and extra columns", () => {
-  const valid = "**After Pretension**\npret_moved,-1.25,mm\n";
-  assert.equal(readTares(valid)["After Pretension"].pret_moved.value, -1.25);
+test("readTares rejects blank values, blank names, duplicates, prototype keys and extra columns", () => {
+  const valid = "**After Pretension**\n pret_moved , -1.25 , mm \ndimensionless,4,\n";
+  const parsed = readTares(valid);
+  assert.deepEqual(parsed["After Pretension"].pret_moved, { value: -1.25, unit: "mm" });
+  assert.deepEqual(parsed["After Pretension"].dimensionless, { value: 4, unit: null });
   for (const bad of [
     "**After Pretension**\npret_moved,   ,mm\n",
     "**After Pretension**\n ,-1.25,mm\n",
     "**After Pretension**\npret_moved,-1.25,mm,extra\n",
+    "**After Pretension**\npret_moved,-1.25,mm\npret_moved,-1.0,mm\n",
+    "**After Pretension**\npret_moved,-1.25,mm\n**After Pretension**\nother,1,mm\n",
+    "**__proto__**\npolluted,1,mm\n**After Pretension**\npret_moved,-1.25,mm\n",
+    "**After Pretension**\nconstructor,1,mm\npret_moved,-1.25,mm\n",
   ]) {
     assert.throws(() => readTares(bad), /Invalid tare measurement/);
   }
+  assert.throws(() => readTares("**After Pretension**\npret_moved,-1.25,   \n"), /mounting travel/);
 });
 
 test("replays complete pinned linen recordings in both directions", { skip: !process.env.FABRIC101_RELEASE }, () => {
@@ -166,9 +184,16 @@ function inverseInputs() {
     accessed_on: "2026-11-25", recordings: [recording("warp", "fit", [0, 1]), recording("weft", "check", [1, 0])] }];
 }
 
-test("refuses unsupported calibration templates and ambiguous acquisition identities", () => {
+test("refuses unsupported calibration templates and ambiguous acquisition identities", t => {
   const [template, map] = inverseInputs();
   const run = (t, m) => calibration(".", JSON.stringify(t), JSON.stringify(m));
+  assert.throws(() => run(null, map), /memoryless/);
+  assert.throws(() => run([], map), /memoryless/);
+  assert.throws(() => run({ ...template, material: { ...template.material, sources: ["bad"] } }, map), /memoryless/);
+  assert.throws(() => run({ ...template, material: { ...template.material, sources: "bad" } }, map), /memoryless/);
+  assert.throws(() => run({ ...template, material: { ...template.material, structure: [] } }, map), /memoryless/);
+  assert.throws(() => run({ ...template, controls: [] }, map), /memoryless/);
+  assert.throws(() => run({ ...template, policy: [] }, map), /memoryless/);
   assert.throws(() => run({ ...template, schema: "ftx-cylinder-calibration/2" }, map), /memoryless/);
   assert.throws(() => run({ ...template, experiments: [{}] }, map), /empty experiments/);
   assert.throws(() => run({ ...template, policy: { ...template.policy, sensitivity: "adjoint" } }, map), /finite differences/);
@@ -182,6 +207,23 @@ test("refuses unsupported calibration templates and ambiguous acquisition identi
   assert.throws(() => run(template, withRow({ rows: Array.from({length: 65}, (_, i) => i) })), /64 total/);
   assert.throws(() => run(template, withRow({ mounting_source: "unknown" })), /retained source/);
   assert.throws(() => run({ ...template, allow_estimated_observations: false }, map), /admit estimates/);
+
+  // CLI --calibration rejects symlinked template/map inputs before parsing.
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-cal-link-"));
+  t.after(() => fs.rmSync(folder, { recursive: true }));
+  const realTpl = path.join(folder, "real-template.json");
+  const realMap = path.join(folder, "real-map.json");
+  const linkTpl = path.join(folder, "link-template.json");
+  fs.writeFileSync(realTpl, JSON.stringify(template));
+  fs.writeFileSync(realMap, JSON.stringify(map));
+  fs.symlinkSync(realTpl, linkTpl);
+  const res = require("node:child_process").spawnSync(
+    process.execPath,
+    [__filename.replace("test_import", "import"), "--calibration", ".", linkTpl, realMap, path.join(folder, "out.json")],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /regular file/);
 });
 
 test("emits signed sampled FIT and CHECK experiments directly from two pinned knit recordings",

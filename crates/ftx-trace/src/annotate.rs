@@ -119,9 +119,13 @@ pub fn mirror_piece(piece: &mut Piece) {
         let out: Vec<Value> = a
             .iter()
             .filter_map(|r| {
-                let r: Vec<f64> = r.as_array()?.iter().filter_map(Value::as_f64).collect();
+                let raw = r.as_array()?;
+                if raw.len() != 3 {
+                    return None;
+                }
+                let r = [raw[0].as_f64()?, raw[1].as_f64()?, raw[2].as_f64()?];
                 let col = |j: usize| r[0] * m[0][j] + r[1] * m[1][j] + r[2] * m[2][j];
-                (r.len() == 3).then(|| json!([col(0), col(1), col(2)]))
+                Some(json!([col(0), col(1), col(2)]))
             })
             .collect();
         tr.insert("to_px".into(), Value::Array(out));
@@ -822,5 +826,20 @@ mod tests {
         mirror_piece(&mut empty);
         let [g0, g1] = empty.grain.as_ref().and_then(Grain::points).unwrap();
         assert!(g0.x.is_finite() && g0.y.is_finite() && g1.x.is_finite() && g1.y.is_finite());
+
+        // Malformed 4-element `to_px` rows containing non-numbers must not be silently condensed into 3-element rows.
+        let mut malformed = square_doc().pieces.remove(0);
+        malformed.extra.insert(
+            "trace".into(),
+            json!({
+                "to_px": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, "junk", 1.0, 0.0]
+                ]
+            }),
+        );
+        mirror_piece(&mut malformed);
+        let rows = malformed.extra["trace"]["to_px"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
     }
 }

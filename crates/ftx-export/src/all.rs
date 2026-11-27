@@ -1,6 +1,7 @@
 //! Every export of a pattern and the acceptance checks over a set of files (`docs/spec/03` §1.3, §7.13, §8.1).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode};
@@ -374,6 +375,8 @@ pub fn check_files(
         }
     }
     let mut master_pts = None;
+    let has_master =
+        man.get("master").is_some_and(|v| !v.is_null()) || listed.contains_key("svg_master");
     let master_file = man
         .get("master")
         .map(path_of)
@@ -392,36 +395,43 @@ pub fn check_files(
             }
             None => out.push(missing(&mfile)),
         }
+    } else if has_master {
+        out.push(CheckItem {
+            check: "manifest".into(),
+            file: man_name.clone(),
+            ok: false,
+            detail: "manifest master/svg_master entry has invalid file path".into(),
+        });
     }
     for key in &order {
         let Some(info) = listed.get(key) else {
             continue;
         };
         if key.starts_with("pdf_") {
-            let paper: Vec<f64> = info["paper_mm"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_f64)
-                .collect();
-            let pdf_file = path_of(info);
-            match files.get(&pdf_file) {
-                Some(b) if paper.len() == 2 && paper.iter().all(|v| v.is_finite() && *v > 0.0) => {
-                    out.extend(check_pdf(
-                        b,
-                        &pdf_file,
-                        [paper[0], paper[1]],
-                        info["kind"].as_str().unwrap_or(""),
-                        master_pts.as_deref(),
-                    ))
+            let paper = info["paper_mm"].as_array().and_then(|arr| {
+                if arr.len() != 2 {
+                    return None;
                 }
-                Some(_) => out.push(CheckItem {
+                let w = arr[0].as_f64()?;
+                let h = arr[1].as_f64()?;
+                (w.is_finite() && w > 0.0 && h.is_finite() && h > 0.0).then_some([w, h])
+            });
+            let pdf_file = path_of(info);
+            match (files.get(&pdf_file), paper) {
+                (Some(b), Some(paper)) => out.extend(check_pdf(
+                    b,
+                    &pdf_file,
+                    paper,
+                    info["kind"].as_str().unwrap_or(""),
+                    master_pts.as_deref(),
+                )),
+                (Some(_), None) => out.push(CheckItem {
                     check: "manifest".into(),
                     file: pdf_file,
                     ok: false,
                     detail: format!("manifest entry {key} has invalid paper_mm"),
                 }),
-                None => out.push(missing(&pdf_file)),
+                (None, _) => out.push(missing(&pdf_file)),
             }
         }
     }
@@ -443,28 +453,66 @@ pub fn check_files(
                 Some(raw) => match serde_json::from_slice::<Value>(raw) {
                     Ok(doc) => {
                         if let Some(pieces) = doc["pieces"].as_array() {
-                            if let Some(expected) = info["count"].as_u64()
-                                && u64::try_from(pieces.len()).ok() != Some(expected)
-                            {
-                                out.push(CheckItem {
-                                    check: "cutter.report".into(),
-                                    file: report.clone(),
-                                    ok: false,
-                                    detail: format!(
-                                        "cutter report lists {} piece(s), manifest expects {expected}",
-                                        pieces.len()
-                                    ),
-                                });
-                                reported_missing = true;
+                            if let Some(count_v) = info.get("count") {
+                                match count_v.as_u64() {
+                                    Some(expected)
+                                        if u64::try_from(pieces.len()).ok() == Some(expected) => {}
+                                    Some(expected) => {
+                                        out.push(CheckItem {
+                                            check: "cutter.report".into(),
+                                            file: report.clone(),
+                                            ok: false,
+                                            detail: format!(
+                                                "cutter report lists {} piece(s), manifest expects {expected}",
+                                                pieces.len()
+                                            ),
+                                        });
+                                        reported_missing = true;
+                                    }
+                                    None => {
+                                        out.push(CheckItem {
+                                            check: "cutter.report".into(),
+                                            file: report.clone(),
+                                            ok: false,
+                                            detail: "manifest cutter count must be a non-negative integer".into(),
+                                        });
+                                        reported_missing = true;
+                                    }
+                                }
                             }
+                            let mut seen_pieces = BTreeSet::new();
                             for piece in pieces {
                                 let pfile = path_of(piece);
-                                if pfile.is_empty() || !files.contains_key(&pfile) {
-                                    out.push(missing(if pfile.is_empty() {
-                                        &report
-                                    } else {
-                                        &pfile
-                                    }));
+                                let valid_cutter_svg =
+                                    pfile.strip_prefix(&dir_prefix).is_some_and(|base| {
+                                        !base.is_empty()
+                                            && !base.contains('/')
+                                            && base.ends_with(".svg")
+                                    });
+                                if pfile.is_empty() || !valid_cutter_svg {
+                                    out.push(CheckItem {
+                                        check: "cutter.report".into(),
+                                        file: if pfile.is_empty() {
+                                            report.clone()
+                                        } else {
+                                            pfile
+                                        },
+                                        ok: false,
+                                        detail: format!(
+                                            "cutter piece path must be a direct .svg file under {dir_prefix}"
+                                        ),
+                                    });
+                                    reported_missing = true;
+                                } else if !seen_pieces.insert(pfile.clone()) {
+                                    out.push(CheckItem {
+                                        check: "cutter.report".into(),
+                                        file: pfile,
+                                        ok: false,
+                                        detail: "cutter report lists duplicate piece file".into(),
+                                    });
+                                    reported_missing = true;
+                                } else if !files.contains_key(&pfile) {
+                                    out.push(missing(&pfile));
                                     reported_missing = true;
                                 }
                             }
@@ -565,16 +613,102 @@ pub fn check_files(
     out
 }
 
-/// Reads every regular file of an output directory (and of its regular sub-directories one level
-/// down) into a set, refusing symlinks at the root directory or any visited entry.
-///
-/// # Errors
-/// [`RefusalCode::Io`] when a path cannot be inspected or read; [`RefusalCode::InvalidDocument`]
-/// when `dir` is not a regular directory or any entry in `dir` (or one level down) is a symlink.
-pub fn read_dir_files(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Refusal> {
-    let io_at = |path: &Path, e: std::io::Error| {
-        Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()))
-    };
+/// Maximum byte size admitted for any single exported file when reading an export directory.
+const MAX_EXPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum cumulative byte size admitted across all files in an export directory.
+const MAX_EXPORT_DIR_BYTES: u64 = 256 * 1024 * 1024;
+
+fn io_at(path: &Path, e: std::io::Error) -> Refusal {
+    Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()))
+}
+
+fn sorted_dir_entries(dir: &Path) -> Result<Vec<std::fs::DirEntry>, Refusal> {
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| io_at(dir, e))? {
+        entries.push(entry.map_err(|e| io_at(dir, e))?);
+    }
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    Ok(entries)
+}
+
+fn read_regular_file_bounded(
+    path: &Path,
+    max_file_bytes: u64,
+    remaining_bytes: u64,
+) -> Result<Vec<u8>, Refusal> {
+    let lmeta = std::fs::symlink_metadata(path).map_err(|e| io_at(path, e))?;
+    if lmeta.file_type().is_symlink() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{}: expected a regular file, not a symlink", path.display()),
+        ));
+    }
+    if !lmeta.file_type().is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{}: expected a regular file", path.display()),
+        ));
+    }
+    if lmeta.len() > max_file_bytes {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "{}: file size {} exceeds limit {} bytes",
+                path.display(),
+                lmeta.len(),
+                max_file_bytes
+            ),
+        ));
+    }
+    if lmeta.len() > remaining_bytes {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "{}: directory byte budget exceeded (remaining {} bytes, file is {} bytes)",
+                path.display(),
+                remaining_bytes,
+                lmeta.len()
+            ),
+        ));
+    }
+    let file = std::fs::File::open(path).map_err(|e| io_at(path, e))?;
+    let fmeta = file.metadata().map_err(|e| io_at(path, e))?;
+    if !fmeta.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            format!("{}: expected a regular file", path.display()),
+        ));
+    }
+    let cap = max_file_bytes.min(remaining_bytes);
+    if fmeta.len() > cap {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "{}: file size {} exceeds remaining budget {} bytes",
+                path.display(),
+                fmeta.len(),
+                cap
+            ),
+        ));
+    }
+    let mut buf = Vec::new();
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut buf)
+        .map_err(|e| io_at(path, e))?;
+    if usize::try_from(cap).is_ok_and(|limit| buf.len() > limit) {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("{}: file size exceeds budget {} bytes", path.display(), cap),
+        ));
+    }
+    Ok(buf)
+}
+
+fn read_dir_files_with_limits(
+    dir: &Path,
+    max_file_bytes: u64,
+    max_dir_bytes: u64,
+) -> Result<BTreeMap<String, Vec<u8>>, Refusal> {
     let normalized: std::path::PathBuf = dir.components().collect();
     let root_meta = std::fs::symlink_metadata(&normalized).map_err(|e| io_at(dir, e))?;
     if !root_meta.file_type().is_dir() {
@@ -584,8 +718,8 @@ pub fn read_dir_files(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Refusal> 
         ));
     }
     let mut out = BTreeMap::new();
-    for entry in std::fs::read_dir(dir).map_err(|e| io_at(dir, e))? {
-        let entry = entry.map_err(|e| io_at(dir, e))?;
+    let mut remaining = max_dir_bytes;
+    for entry in sorted_dir_entries(&normalized)? {
         let path = entry.path();
         let ft = entry.file_type().map_err(|e| io_at(&path, e))?;
         if ft.is_symlink() {
@@ -602,8 +736,17 @@ pub fn read_dir_files(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Refusal> 
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         if ft.is_dir() {
-            for sub in std::fs::read_dir(&path).map_err(|e| io_at(&path, e))? {
-                let sub = sub.map_err(|e| io_at(&path, e))?;
+            let sub_meta = std::fs::symlink_metadata(&path).map_err(|e| io_at(&path, e))?;
+            if sub_meta.file_type().is_symlink() || !sub_meta.file_type().is_dir() {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!(
+                        "{}: expected a regular file or directory, not a symlink",
+                        path.display()
+                    ),
+                ));
+            }
+            for sub in sorted_dir_entries(&path)? {
                 let sp = sub.path();
                 let sft = sub.file_type().map_err(|e| io_at(&sp, e))?;
                 if sft.is_symlink() {
@@ -613,21 +756,45 @@ pub fn read_dir_files(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Refusal> 
                     ));
                 }
                 if sft.is_file() {
+                    let bytes = read_regular_file_bounded(&sp, max_file_bytes, remaining)?;
+                    remaining =
+                        remaining.saturating_sub(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
                     let sn = sp
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    out.insert(
-                        format!("{name}/{sn}"),
-                        std::fs::read(&sp).map_err(|e| io_at(&sp, e))?,
-                    );
+                    out.insert(format!("{name}/{sn}"), bytes);
+                } else if !sft.is_dir() {
+                    return Err(Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("{}: expected a regular file", sp.display()),
+                    ));
                 }
             }
         } else if ft.is_file() {
-            out.insert(name, std::fs::read(&path).map_err(|e| io_at(&path, e))?);
+            let bytes = read_regular_file_bounded(&path, max_file_bytes, remaining)?;
+            remaining = remaining.saturating_sub(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+            out.insert(name, bytes);
+        } else {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("{}: expected a regular file or directory", path.display()),
+            ));
         }
     }
     Ok(out)
+}
+
+/// Reads every regular file of an output directory (and of its regular sub-directories one level
+/// down) into a set, refusing symlinks, special files and oversized inputs.
+///
+/// # Errors
+/// [`RefusalCode::Io`] when a path cannot be inspected or read; [`RefusalCode::InvalidDocument`]
+/// when `dir` is not a regular directory or any visited entry is a symlink or non-regular special
+/// file; [`RefusalCode::BudgetExceeded`] when any file or the directory total exceeds the read
+/// byte caps.
+pub fn read_dir_files(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Refusal> {
+    read_dir_files_with_limits(dir, MAX_EXPORT_FILE_BYTES, MAX_EXPORT_DIR_BYTES)
 }
 
 #[cfg(test)]
@@ -785,5 +952,179 @@ mod tests {
             items.iter().any(|i| i.check == "cutter.report" && !i.ok),
             "u64 cutter count exceeding 2^32 must fail cutter.report: {items:?}"
         );
+    }
+
+    #[test]
+    fn check_files_rejects_malformed_cutter_count_piece_paths_paper_mm_and_master() {
+        let valid_svg = b"<svg width=\"10mm\" height=\"10mm\" viewBox=\"0 0 10 10\"><path d=\"M 0,0 L 10,0 L 10,10 Z\"/></svg>".to_vec();
+
+        // 1. Non-u64 cutter count (-1, "1", 1.5, null) must fail cutter.report instead of silently skipping.
+        for bad_count in [
+            serde_json::json!(-1),
+            serde_json::json!("1"),
+            serde_json::json!(1.5),
+            serde_json::Value::Null,
+        ] {
+            let mut files = BTreeMap::new();
+            files.insert(
+                "TEST_export_manifest.json".into(),
+                serde_json::json!({
+                    "schema": "fabric-pattern-export/1",
+                    "files": {
+                        "cutter": { "file": "cutter/report.json", "count": bad_count }
+                    }
+                })
+                .to_string()
+                .into_bytes(),
+            );
+            files.insert(
+                "cutter/report.json".into(),
+                serde_json::json!({ "pieces": [{ "file": "cutter/p.svg" }] })
+                    .to_string()
+                    .into_bytes(),
+            );
+            files.insert("cutter/p.svg".into(), valid_svg.clone());
+            let items = check_files(&files, "out", None);
+            assert!(
+                items.iter().any(|i| i.check == "cutter.report" && !i.ok),
+                "bad cutter count {bad_count} must fail cutter.report: {items:?}"
+            );
+        }
+
+        // 2. Cutter piece path outside dir_prefix, non-.svg, or duplicated must fail cutter.report.
+        for bad_pieces in [
+            serde_json::json!([{ "file": "other.svg" }]),
+            serde_json::json!([{ "file": "cutter/sub/p.svg" }]),
+            serde_json::json!([{ "file": "cutter/notes.txt" }]),
+            serde_json::json!([{ "file": "cutter/p.svg" }, { "file": "cutter/p.svg" }]),
+        ] {
+            let mut files = BTreeMap::new();
+            files.insert(
+                "TEST_export_manifest.json".into(),
+                serde_json::json!({
+                    "schema": "fabric-pattern-export/1",
+                    "files": {
+                        "cutter": { "file": "cutter/report.json" }
+                    }
+                })
+                .to_string()
+                .into_bytes(),
+            );
+            files.insert(
+                "cutter/report.json".into(),
+                serde_json::json!({ "pieces": bad_pieces })
+                    .to_string()
+                    .into_bytes(),
+            );
+            files.insert("cutter/p.svg".into(), valid_svg.clone());
+            files.insert("other.svg".into(), valid_svg.clone());
+            files.insert("cutter/sub/p.svg".into(), valid_svg.clone());
+            files.insert("cutter/notes.txt".into(), b"hi".to_vec());
+            let items = check_files(&files, "out", None);
+            assert!(
+                items.iter().any(|i| i.check == "cutter.report" && !i.ok),
+                "bad cutter pieces {bad_pieces} must fail cutter.report: {items:?}"
+            );
+        }
+
+        // 3. PDF paper_mm with extra non-numeric elements must not pass by filtering them out.
+        let mut pdf_files = BTreeMap::new();
+        pdf_files.insert(
+            "TEST_export_manifest.json".into(),
+            serde_json::json!({
+                "schema": "fabric-pattern-export/1",
+                "files": {
+                    "pdf_a4": { "file": "TEST_a4.pdf", "kind": "tiled", "paper_mm": [210, 297, "junk"] }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        pdf_files.insert("TEST_a4.pdf".into(), b"%PDF-1.4\n".to_vec());
+        let items = check_files(&pdf_files, "out", None);
+        assert!(
+            items
+                .iter()
+                .any(|i| i.check == "manifest" && !i.ok && i.detail.contains("paper_mm")),
+            "3-element paper_mm with junk must fail manifest check: {items:?}"
+        );
+
+        // 4. Present but empty/malformed svg_master entry must emit a failing manifest item.
+        let mut master_files = BTreeMap::new();
+        master_files.insert(
+            "TEST_export_manifest.json".into(),
+            serde_json::json!({
+                "schema": "fabric-pattern-export/1",
+                "files": {
+                    "svg_master": { "file": "" },
+                    "cutter": { "file": "cutter/report.json", "count": 1 }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        master_files.insert(
+            "cutter/report.json".into(),
+            serde_json::json!({ "pieces": [{ "file": "cutter/p.svg" }] })
+                .to_string()
+                .into_bytes(),
+        );
+        master_files.insert("cutter/p.svg".into(), valid_svg);
+        let items = check_files(&master_files, "out", None);
+        assert!(
+            items
+                .iter()
+                .any(|i| i.check == "manifest" && !i.ok && i.detail.contains("svg_master")),
+            "empty svg_master path must fail manifest check: {items:?}"
+        );
+    }
+
+    #[test]
+    fn read_dir_files_enforces_per_file_and_total_byte_budgets() {
+        let root = fresh_temp_dir("read-dir-budget");
+        fs::write(root.join("a.txt"), vec![b'a'; 10]).unwrap();
+        let sub = root.join("cutter");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("b.svg"), vec![b'b'; 10]).unwrap();
+
+        assert_eq!(read_dir_files_with_limits(&root, 10, 20).unwrap().len(), 2);
+
+        let err_file = read_dir_files_with_limits(&root, 9, 100).unwrap_err();
+        assert_eq!(err_file.code, RefusalCode::BudgetExceeded);
+
+        let err_dir = read_dir_files_with_limits(&root, 10, 15).unwrap_err();
+        assert_eq!(err_dir.code, RefusalCode::BudgetExceeded);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_dir_files_refuses_special_files_at_top_and_nested_levels() {
+        let root = fresh_temp_dir("read-dir-fifo");
+        let top_fifo = root.join("pipe");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&top_fifo)
+            .status()
+            .expect("mkfifo");
+        assert!(status.success(), "mkfifo failed");
+        let err = read_dir_files(&root).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular"), "{err}");
+        fs::remove_file(&top_fifo).unwrap();
+
+        let sub = root.join("cutter");
+        fs::create_dir_all(&sub).unwrap();
+        let sub_fifo = sub.join("pipe.svg");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&sub_fifo)
+            .status()
+            .expect("mkfifo");
+        assert!(status.success(), "mkfifo failed");
+        let err = read_dir_files(&root).unwrap_err();
+        assert_eq!(err.code, RefusalCode::InvalidDocument);
+        assert!(err.message.contains("regular"), "{err}");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
