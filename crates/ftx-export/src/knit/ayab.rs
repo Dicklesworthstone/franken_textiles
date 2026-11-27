@@ -118,8 +118,23 @@ pub fn export_brother_ayab(
         return Err(Refusal::new(
             RefusalCode::MaterialProcessHazard,
             "EN 14682 child-safety refusal: Brother AYAB export refuses hood or neck drawstrings on child/infant knitwear",
-        ));
+        )
+        .repair("remove hood/neck drawstrings and replace with ribbed shaping or concealed snaps"));
     }
+    if doc.wearer_age_class.is_infant() && doc.short_row_turns.iter().any(|turn| !turn.anchored) {
+        return Err(Refusal::new(
+            RefusalCode::MaterialProcessHazard,
+            "infant-safety refusal: Brother AYAB export refuses unanchored short-row eyelet holes on infant (<3 yr) knitwear",
+        )
+        .repair("anchor every short-row turn with a wrap-and-turn or German short-row double stitch"));
+    }
+
+    let primary_carrier = profile.carrier_ids.first().ok_or_else(|| {
+        Refusal::new(
+            RefusalCode::InvalidDocument,
+            "Brother AYAB machine profile must declare at least one yarn carrier",
+        )
+    })?;
 
     let mut min_w = i32::MAX;
     let mut max_w = i32::MIN;
@@ -129,6 +144,15 @@ pub fn export_brother_ayab(
     let mut operator_steps = Vec::new();
 
     for st in &doc.stitches {
+        if st.bed.is_slider() {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "stitch {} uses slider bed {:?}, which Brother AYAB machines do not support",
+                    st.id, st.bed
+                ),
+            ));
+        }
         min_w = min_w.min(st.wale);
         max_w = max_w.max(st.wale);
         max_c = max_c.max(st.course);
@@ -141,7 +165,7 @@ pub fn export_brother_ayab(
             || st
                 .carrier_ids
                 .first()
-                .is_some_and(|c| c.as_str() != profile.carrier_ids[0].as_str());
+                .is_some_and(|c| c.as_str() != primary_carrier.as_str());
         grid.insert((st.course, st.wale), bit);
         if matches!(
             st.kind,
@@ -154,6 +178,22 @@ pub fn export_brother_ayab(
             });
         }
     }
+    for turn in &doc.short_row_turns {
+        operator_steps.push(AyabOperatorStep {
+            row_number: turn.course + 1,
+            action: "short_row_turn".to_string(),
+            detail: format!(
+                "hold/turn at wale {} dir {:?} (anchored={})",
+                turn.turn_wale, turn.dir_after, turn.anchored
+            ),
+        });
+    }
+    operator_steps.sort_by(|a, b| {
+        a.row_number
+            .cmp(&b.row_number)
+            .then_with(|| a.action.cmp(&b.action))
+            .then_with(|| a.detail.cmp(&b.detail))
+    });
 
     let width_i64 = i64::from(max_w) - i64::from(min_w) + 1;
     let height_u64 = u64::from(max_c) + 1;
@@ -206,6 +246,7 @@ pub fn export_brother_ayab(
         raw.extend_from_slice(&row);
     }
     let png_bytes = encode_1bit_indexed_png(width, height, &raw);
+    verify_ayab_1bit_png(&png_bytes, width, height)?;
     let png_sha256 = sha256_hex(&png_bytes);
 
     let checklist = AyabSessionChecklist {
@@ -232,6 +273,166 @@ pub fn export_brother_ayab(
         checklist_json,
         cert: cert.clone(),
     })
+}
+
+/// Independently parses and verifies a Brother AYAB 1-bit indexed PNG byte stream (`FTX-K07`).
+///
+/// Checks PNG signature, chunk CRC32 checksums, `IHDR` (`bit_depth == 1`, `color_type == 3`,
+/// exact expected dimensions), exact 2-color white/black `PLTE`, zlib decompression of `IDAT`
+/// to exact unfiltered scanline size, and terminating `IEND`.
+///
+/// # Errors
+/// [`RefusalCode::VerificationMismatch`] if any PNG invariant or checksum fails.
+pub fn verify_ayab_1bit_png(
+    png_bytes: &[u8],
+    expected_width: u32,
+    expected_height: u32,
+) -> Result<(), Refusal> {
+    if png_bytes.len() < 8 || &png_bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "AYAB read-back failed: invalid PNG signature",
+        ));
+    }
+    let mut pos = 8usize;
+    let mut seen_ihdr = false;
+    let mut seen_plte = false;
+    let mut seen_iend = false;
+    let mut idat = Vec::new();
+    while pos < png_bytes.len() {
+        if pos + 12 > png_bytes.len() {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "AYAB read-back failed: truncated PNG chunk header",
+            ));
+        }
+        let len = u32::from_be_bytes([
+            png_bytes[pos],
+            png_bytes[pos + 1],
+            png_bytes[pos + 2],
+            png_bytes[pos + 3],
+        ]) as usize;
+        let kind = &png_bytes[pos + 4..pos + 8];
+        let data_start = pos + 8;
+        let data_end = data_start
+            .checked_add(len)
+            .and_then(|end| end.checked_add(4))
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::VerificationMismatch,
+                    "AYAB read-back failed: chunk length overflow",
+                )
+            })?;
+        if data_end > png_bytes.len() {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "AYAB read-back failed: truncated PNG chunk payload",
+            ));
+        }
+        let data = &png_bytes[data_start..data_start + len];
+        let crc_stored = u32::from_be_bytes([
+            png_bytes[data_start + len],
+            png_bytes[data_start + len + 1],
+            png_bytes[data_start + len + 2],
+            png_bytes[data_start + len + 3],
+        ]);
+        if crc32(&[kind, data]) != crc_stored {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "AYAB read-back failed: PNG chunk CRC32 mismatch",
+            ));
+        }
+        match kind {
+            b"IHDR" => {
+                if seen_ihdr || data.len() != 13 {
+                    return Err(Refusal::new(
+                        RefusalCode::VerificationMismatch,
+                        "AYAB read-back failed: malformed IHDR chunk",
+                    ));
+                }
+                let w = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                let h = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+                if w != expected_width
+                    || h != expected_height
+                    || data[8] != 1
+                    || data[9] != 3
+                    || data[10] != 0
+                    || data[11] != 0
+                    || data[12] != 0
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::VerificationMismatch,
+                        format!(
+                            "AYAB read-back failed: expected {expected_width}x{expected_height} 1-bit indexed PNG (got {w}x{h} depth={} color={})",
+                            data[8], data[9]
+                        ),
+                    ));
+                }
+                seen_ihdr = true;
+            }
+            b"PLTE" => {
+                if data != [255, 255, 255, 0, 0, 0] {
+                    return Err(Refusal::new(
+                        RefusalCode::VerificationMismatch,
+                        "AYAB read-back failed: PLTE must be exact 2-color white/black palette",
+                    ));
+                }
+                seen_plte = true;
+            }
+            b"IDAT" => idat.extend_from_slice(data),
+            b"IEND" => {
+                if !data.is_empty() || data_end != png_bytes.len() {
+                    return Err(Refusal::new(
+                        RefusalCode::VerificationMismatch,
+                        "AYAB read-back failed: malformed or non-final IEND chunk",
+                    ));
+                }
+                seen_iend = true;
+            }
+            _ => {}
+        }
+        pos = data_end;
+    }
+    if !seen_ihdr || !seen_plte || !seen_iend || idat.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "AYAB read-back failed: missing required IHDR/PLTE/IDAT/IEND chunk",
+        ));
+    }
+    let stride = (expected_width as usize).div_ceil(8);
+    let expected_raw_len = (expected_height as usize)
+        .checked_mul(stride + 1)
+        .ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "AYAB read-back failed: scanline size overflow",
+            )
+        })?;
+    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, expected_raw_len)
+        .map_err(|e| {
+            Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("AYAB read-back failed: zlib decode error ({e:?})"),
+            )
+        })?;
+    if raw.len() != expected_raw_len {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            format!(
+                "AYAB read-back failed: decoded {} bytes != expected {expected_raw_len}",
+                raw.len()
+            ),
+        ));
+    }
+    for row in 0..expected_height as usize {
+        if raw[row * (stride + 1)] != 0 {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("AYAB read-back failed: row {row} uses non-zero PNG filter byte"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn encode_1bit_indexed_png(width: u32, height: u32, raw_scanlines: &[u8]) -> Vec<u8> {
@@ -275,4 +476,77 @@ fn crc32(parts: &[&[u8]]) -> u32 {
         }
     }
     c ^ 0xffff_ffff
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftx_pattern::knit::{
+        CourseDir, ShortRowTurn, WearerAgeClass, compile_knit_doc, draft_calibration_swatch,
+    };
+
+    #[test]
+    fn ayab_readback_emits_short_row_steps_and_refuses_corrupt_png_or_unanchored_infant_turn() {
+        let kh930 = MachineProfile::brother_kh930_ayab();
+        let mut doc = draft_calibration_swatch(&kh930, "wool-150tex", 16, 6, &[5.0]).unwrap();
+        doc.short_row_turns.push(ShortRowTurn {
+            course: 3,
+            turn_wale: 8,
+            dir_after: CourseDir::Minus,
+            anchored: true,
+        });
+        let compiled = compile_knit_doc(&doc, &kh930, None, None, None).unwrap();
+        let bundle = export_brother_ayab(&doc, &kh930, &compiled.cert).unwrap();
+        assert!(
+            bundle
+                .checklist
+                .operator_steps
+                .iter()
+                .any(|s| s.action == "short_row_turn" && s.row_number == 4)
+        );
+        verify_ayab_1bit_png(
+            &bundle.png_bytes,
+            bundle.checklist.width_needles,
+            bundle.checklist.height_courses,
+        )
+        .unwrap();
+
+        // Corrupting a PNG byte triggers CRC32 verification failure.
+        let mut corrupt = bundle.png_bytes.clone();
+        corrupt[20] ^= 0xff;
+        assert_eq!(
+            verify_ayab_1bit_png(
+                &corrupt,
+                bundle.checklist.width_needles,
+                bundle.checklist.height_courses
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Infant garment with unanchored short-row turn refuses fail-closed.
+        let mut infant_doc = doc;
+        infant_doc.wearer_age_class = WearerAgeClass::InfantUnder3;
+        infant_doc.short_row_turns[0].anchored = false;
+        let mut infant_cert = compiled.cert.clone();
+        infant_cert = KnitMachineCert::seal(
+            infant_cert.program_sha256,
+            infant_cert.machine_sha256,
+            None,
+            None,
+            WearerAgeClass::InfantUnder3,
+            false,
+            infant_cert.checks_passed,
+            infant_cert.limitations,
+            infant_cert.four_claims,
+        )
+        .unwrap();
+        assert_eq!(
+            export_brother_ayab(&infant_doc, &kh930, &infant_cert)
+                .unwrap_err()
+                .code,
+            RefusalCode::MaterialProcessHazard
+        );
+    }
 }
