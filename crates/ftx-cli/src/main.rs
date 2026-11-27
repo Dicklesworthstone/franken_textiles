@@ -203,12 +203,12 @@ const USAGE: &str = "usage:
   ftx annotate DRAFT --names NAMES.json --out PATTERN [--json]
   ftx scale-fit PATTERN --target REF=LEN [--target REF=LEN ...] --out PATTERN [--json]
   ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250] [--label-tol 0.03] [--json]
-  ftx knit swatch --out DIR [--profile ID] [--yarn-id ID] [--needles N] [--courses-per-zone N] [--cam-settings C1,C2,...] [--json]
-  ftx knit draft --out DIR [--kind panel|raglan] [--profile ID] [--age-class infant|toddler|child|adult] [--target knitout|kniterate|ayab|hand-knit|all] [--json]
-  ftx knit verify --knitout FILE [--profile ID] [--age-class ...] [--json]
-  ftx knit poincloux [--out DIR] [--json]
-  ftx dye optimize --out DIR [--target-image PNG] [--profile piezo|dip] [--regime-mode flatbed|circular] [--age-class ...] [--max-iters N] [--json]
-  ftx dye verify --program FILE [--profile piezo|dip] [--age-class ...] [--json]
+  ftx knit swatch --out DIR [--machine ID] [--yarn ID] [--needles N] [--courses-per-zone N] [--cams C1,C2,...] [--created YYYY-MM-DDTHH:MM] [--json]
+  ftx knit draft --age-class infant|child|adult --out DIR [--style panel|raglan] [--machine ID] [--qual SWATCH.json] [--has-drawstring] [--json]
+  ftx knit verify PATTERN.knit.json [--machine ID] [--qual SWATCH.json] [--json]
+  ftx knit poincloux [--mu MU] [--json]
+  ftx dye optimize --out DIR [--machine piezo-cmyk|dip-3bath] [--age-class infant|child|adult|swatch] [--regime stripes|pooling|fiducial|inline|jacquard] [--circular] [--image PNG] [--courses N] [--wales N] [--cells N] [--max-iters N] [--dye-qual Q.json] [--json]
+  ftx dye verify PROGRAM.json [--machine piezo-cmyk|dip-3bath] [--dye-qual Q.json] [--out DIR] [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
