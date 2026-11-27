@@ -37,17 +37,22 @@ pinned `kat` / `kat_contact` digests:
   refuses honestly at `10 ms`/`5 ms` (unresolved `sew[0]` post-impact bounce) and converges, settles
   with zero gating flags, agrees between `AdaptiveIlu` and `ProjectedNewton`, and passes independent
   `ReplayContact` across all physical frames at `1 ms` (`40 × 60`, and also completes at `2 ms`/`0.5 ms`).
-- `adjoint`: IFT static-equilibrium adjoint (`Solver::equilibrium_adjoint`, reusing verified cached
-  `LdltFactor` or factoring exact `H(x*)` once), `Solver::nodal_reactions`,
-  `Solver::constitutive_gradient`, `Solver::reaction_gradient`, and
-  `Solver::constitutive_gradient_with_reactions` (exact `d/d[Q11, Q22, Q12, Q33]` and `d/dB` for
-  both free-DOF geometry objectives and fixed-DOF Dirichlet reaction forces/torques including
-  compression softening, refusing heterogeneous or history-bearing models fail-closed),
-  `orthotropic_chain_rule`, and fail-closed `verify_gradient`. Wired into `strip::fit` via
-  opt-in `Policy::sensitivity = SensitivityMode::Adjoint` (omitted when default `FiniteDifference`,
+- `adjoint`: IFT static-equilibrium adjoint (`Solver::equilibrium_adjoint`,
+  `Solver::equilibrium_adjoint_with_reactions`, reusing verified cached `LdltFactor` or factoring
+  exact `H(x*)` once), `Solver::nodal_reactions`, `Solver::constitutive_gradient`,
+  `Solver::reaction_gradient`, `Solver::constitutive_gradient_with_reactions` (exact
+  `d/d[Q11, Q22, Q12, Q33]` and `d/dB` for homogeneous elastic cloth),
+  `Solver::membrane_parameter_gradient_with_reactions` and `area_response_stress_derivatives`
+  (exact dynamic-length analytical pullbacks for memoryless nonlinear `TabulatedMembrane` and
+  `AreaResponse` laws, including compression softening and `H_{FD}` reaction coupling, refusing
+  heterogeneous overrides, panel bending, active friction, or material history fail-closed),
+  `orthotropic_chain_rule`, and fail-closed `verify_gradient`. Wired into `strip::fit` (refactored
+  off fixed `const N` onto dynamic `Vec<f64>`) via opt-in
+  `Policy::sensitivity = SensitivityMode::Adjoint` (omitted when default `FiniteDifference`,
   preserving legacy reports) together with `strip::measurement::gradient_dx` across `force_n`,
-  `mid_width`, and all four extensometer operators, refusing nonlinear/family/area models
-  fail-closed and reporting `Report::adjoint_solves`.
+  `mid_width`, and all four extensometer operators for scalar orthotropic, `response_family`,
+  `nonlinear`, and `area_response` (`Preserve` and `Identify`) models, reporting
+  `Report::adjoint_solves`.
 - `thermal::microclimate`: USSA-1976 dry air / NIST water-vapor `MoistAirState` (Buck 1996
   saturation), 12 validity-gated Nusselt correlations with `NusseltResult::to_exterior` producing
   explicit `Evidence::Estimate` records (never promoted to measured film data), N-patch

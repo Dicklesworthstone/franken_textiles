@@ -1241,3 +1241,37 @@ fn absent_family_preserves_existing_input_hash_and_frozen_scalar_selection() {
         serde_json::to_value(forward.material).unwrap()
     );
 }
+
+#[test]
+fn adjoint_calibration_matches_finite_difference_with_far_fewer_solves() {
+    let fd = baseline();
+    assert!(fd.accepted, "{:?}", fd.reasons);
+    assert_eq!(fd.adjoint_solves, 0);
+
+    let mut adj_in = input();
+    adj_in.policy.sensitivity = ftx_drape::strip::fit::SensitivityMode::Adjoint;
+    let adj = calibrate(&adj_in).unwrap();
+    assert!(adj.accepted, "{:?}", adj.reasons);
+    assert!(adj.domain_replay_verified);
+    assert!(adj.starts.iter().all(|s| s.converged));
+    assert!(adj.adjoint_solves > 0);
+    assert!(
+        adj.forward_solves * 3 < fd.forward_solves,
+        "response_family adjoint should cut forward solves: adjoint={} vs fd={}",
+        adj.forward_solves,
+        fd.forward_solves
+    );
+    for (a, f) in adj.parameters.iter().zip(&fd.parameters) {
+        assert!(
+            (a - f).abs() <= 1e-4 * (1.0 + f.abs()),
+            "response_family adjoint={a} diverged from fd={f}"
+        );
+    }
+    assert!(
+        (adj.excitation_pivot - fd.excitation_pivot).abs()
+            <= 1e-3 * (1.0 + fd.excitation_pivot.abs()),
+        "response_family excitation pivot mismatch: adjoint={} fd={}",
+        adj.excitation_pivot,
+        fd.excitation_pivot
+    );
+}

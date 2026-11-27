@@ -9,10 +9,12 @@
 //!   recomputed residual on `H(x*) λ = ∂J/∂x` passes the tight tolerance (`1e-11`), otherwise
 //!   factors `H(x*)` once;
 //! - provides exact elementwise parameter pullbacks `(∂R/∂Q)ᵀ λ` for homogeneous orthotropic
-//!   membrane stiffness `[Q11, Q22, Q12, Q33]` (plus analytical chain rule to `[E1, E2, ν12, G12]`)
-//!   and homogeneous hinge bending rigidity `B`;
-//! - refuses fail-closed when the model has heterogeneous, nonlinear, or history-dependent
-//!   constitutive fields that homogeneous `[Q, B]` does not parameterize;
+//!   membrane stiffness `[Q11, Q22, Q12, Q33]` (plus analytical chain rule to `[E1, E2, ν12, G12]`),
+//!   homogeneous hinge bending rigidity `B`, and general nonlinear/area membrane parameterizations
+//!   via [`Solver::membrane_parameter_gradient_with_reactions`] and
+//!   [`area_response_stress_derivatives`];
+//! - refuses fail-closed when the model has heterogeneous overrides, panel bending, active friction,
+//!   or history-dependent constitutive fields;
 //! - zero `unsafe`, zero `mul_add`, zero platform `libm`.
 
 use ftx_core::{Refusal, RefusalCode, Vec3};
@@ -176,6 +178,106 @@ pub struct ConstitutiveGradient {
     pub d_bending: f64,
     /// Underlying adjoint solve evidence.
     pub adjoint: AdjointSolution,
+}
+
+/// Per-element Green-strain and adjoint virtual-strain kinematics at a converged static cloth
+/// equilibrium, separated into softened separable kinematics (`eff_strain`, `w_sep`) and
+/// unsoftened raw kinematics (`raw_strain`, `w_raw`) used by physical-area energies.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MembranePullbackKinematics {
+    /// Membrane element index in `solver.model.membranes`.
+    pub element: usize,
+    /// Reference triangle area `A_e` (m²).
+    pub area: f64,
+    /// Softened/effective Green strain `[E11, E22, 2 E12]` passed to separable membrane laws.
+    pub eff_strain: [f64; 3],
+    /// Unsoftened physical Green strain `[E11, E22, 2 E12]` passed to physical-area laws.
+    pub raw_strain: [f64; 3],
+    /// Adjoint virtual strain `B_sep λ` conjugate to separable stress `S_sep`.
+    pub w_sep: [f64; 3],
+    /// Adjoint virtual strain `B_raw λ` conjugate to physical-area stress `S_area`.
+    pub w_raw: [f64; 3],
+}
+
+/// Total IFT gradient `dΦ/dθ = ∂Φ/∂θ − (∂R/∂θ)ᵀ λ` of a combined geometry/reaction functional
+/// with respect to an arbitrary dynamic parameter vector `θ`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParameterGradient {
+    /// Total derivative `dΦ / dθ_k` in caller parameter order.
+    pub d_theta: Vec<f64>,
+    /// Underlying adjoint solve evidence.
+    pub adjoint: AdjointSolution,
+}
+
+/// Exact second-Piola stress derivatives `[∂S_area/∂k₁, ∂S_area/∂k₂]` of the physical-area
+/// energy `W_area(J) = k₁ (J − 1)² + k₂ (ln J)²` with respect to its `[quadratic, log_squared]`
+/// coefficients at raw physical Green strain `[E11, E22, 2 E12]`.
+///
+/// Uses the same cancellation-resistant `J − 1` metric and deterministic `ln(J)` evaluation as
+/// `ftx_pattern::material_response::AreaResponse` (zero `mul_add`, zero platform `libm`).
+///
+/// # Errors
+/// [`RefusalCode::OutOfRange`] if the strain is non-finite or fails to define a positive-definite
+/// right Cauchy–Green metric `C = I + 2 E`; [`RefusalCode::NonFinite`] on arithmetic overflow.
+pub fn area_response_stress_derivatives(raw_strain: [f64; 3]) -> Result<[[f64; 3]; 2], Refusal> {
+    if raw_strain.iter().any(|v| !v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "area-response stress derivative requires finite Green strain",
+        ));
+    }
+    let [x, y, z] = raw_strain;
+    let a = 1.0 + 2.0 * x;
+    let b = 1.0 + 2.0 * y;
+    if !a.is_finite() || !b.is_finite() || a <= 0.0 || b <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "area-response stress derivative requires a positive-definite metric",
+        ));
+    }
+    let delta = 2.0 * x + 2.0 * y + (2.0 * x) * (2.0 * y) - z * z;
+    let determinant = if delta.abs() < 0.5 {
+        1.0 + delta
+    } else {
+        a * b - z * z
+    };
+    if !determinant.is_finite() || determinant <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "area-response stress derivative requires positive metric determinant",
+        ));
+    }
+    let j = ftx_core::det::sqrt(determinant);
+    let minus_one = if delta.abs() < 0.5 {
+        delta / (j + 1.0)
+    } else {
+        j - 1.0
+    };
+    let log_j = if minus_one.abs() >= 0.25 {
+        ftx_core::det::ln(j)
+    } else {
+        let t = minus_one / (2.0 + minus_one);
+        let sq = t * t;
+        let mut power = 1.0;
+        let mut sum = 1.0;
+        for n in 1..16 {
+            power *= sq;
+            sum += power / f64::from(2 * n + 1);
+        }
+        2.0 * t * sum
+    };
+    let inv_j = 1.0 / j;
+    let grad_j = [(1.0 + 2.0 * y) * inv_j, (1.0 + 2.0 * x) * inv_j, -z * inv_j];
+    let c1 = 2.0 * minus_one;
+    let c2 = 2.0 * log_j * inv_j;
+    let out = [grad_j.map(|g| c1 * g), grad_j.map(|g| c2 * g)];
+    if out.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "area-response stress derivative overflowed",
+        ));
+    }
+    Ok(out)
 }
 
 /// Analytical chain rule converting `dJ / d[Q11, Q22, Q12, Q33]` into
@@ -368,6 +470,168 @@ impl Solver {
         self.constitutive_gradient_with_reactions(&zero_x, reaction_weights, [0.0; 4], 0.0)
     }
 
+    /// Solve the unified static-equilibrium adjoint system for a combined geometry objective
+    /// (`dj_dx`) and fixed-DOF Dirichlet reaction functional (`reaction_weights`):
+    /// `H_{FF} λ_F = ∂J/∂x_F + H_{FD} c_D` with `λ_D = -c_D` on fixed DOFs.
+    ///
+    /// Admits memoryless conservative cloth models including characterized nonlinear and
+    /// physical-area membrane laws (`element_responses`), reusing the cached exact `LdltFactor`
+    /// whenever valid.
+    ///
+    /// # Errors
+    /// Refuses fail-closed on length mismatch, non-finite inputs, heterogeneous overrides,
+    /// panel bending, active friction, material history fields, or adjoint linear-residual failure.
+    pub fn equilibrium_adjoint_with_reactions(
+        &mut self,
+        dj_dx: &[Vec3],
+        reaction_weights: &[Vec3],
+    ) -> Result<AdjointSolution, Refusal> {
+        if dj_dx.len() != self.x.len() || reaction_weights.len() != self.x.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "adjoint input lengths ({}, {}) must match vertex count {}",
+                    dj_dx.len(),
+                    reaction_weights.len(),
+                    self.x.len()
+                ),
+            ));
+        }
+        if dj_dx.iter().any(|v| !v.is_finite()) || reaction_weights.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "explicit objective and reaction derivatives must be finite",
+            ));
+        }
+        self.check_constitutive_models()?;
+        if !self.is_memoryless_elastic_for_adjoint() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "equilibrium_adjoint_with_reactions requires a memoryless conservative cloth model \
+                 (no per-element material overrides, panel bending, material history, or active friction)",
+            ));
+        }
+        let has_fixed_weights = reaction_weights
+            .iter()
+            .enumerate()
+            .any(|(i, w)| (0..3).any(|k| self.is_fixed_dof(i, k) && w[k] != 0.0));
+        let eff_dj_dx: Vec<Vec3> = if has_fixed_weights {
+            let h_fd_c = self.fixed_to_free_hessian_mul(reaction_weights);
+            let h_fd_nodal = self.unpack_free(&h_fd_c);
+            dj_dx
+                .iter()
+                .zip(&h_fd_nodal)
+                .map(|(&a, &b)| a + b)
+                .collect()
+        } else {
+            dj_dx.to_vec()
+        };
+        let mut adjoint = self.equilibrium_adjoint(&eff_dj_dx)?;
+        // Set λ_D = -c_D on fixed (Dirichlet) DOFs so -(∂R/∂θ)ᵀ λ = c_Dᵀ (∂R_D/∂θ) - λ_Fᵀ (∂R_F/∂θ).
+        if has_fixed_weights {
+            for (i, w) in reaction_weights.iter().enumerate() {
+                if self.is_fixed_dof(i, 0) {
+                    adjoint.lambda[i].x = -w.x;
+                }
+                if self.is_fixed_dof(i, 1) {
+                    adjoint.lambda[i].y = -w.y;
+                }
+                if self.is_fixed_dof(i, 2) {
+                    adjoint.lambda[i].z = -w.z;
+                }
+            }
+        }
+        Ok(adjoint)
+    }
+
+    /// Compute exact IFT sensitivities `dΦ/dθ = ∂Φ/∂θ − (∂R/∂θ)ᵀ λ` of a combined geometry and
+    /// Dirichlet-reaction functional with respect to an arbitrary dynamic membrane parameter vector
+    /// `θ` (supporting scalar orthotropic, `TabulatedMembrane`, `AreaResponse`, and future
+    /// memoryless nonlinear membrane parameterizations).
+    ///
+    /// Reuses the converged static exact `LdltFactor` across channels at the same equilibrium. The
+    /// callback receives each membrane element's exact softened and raw virtual-strain kinematics
+    /// and accumulates `A_e (∂S_sep/∂θ · w_sep + ∂S_area/∂θ · w_raw)` into `pull`.
+    ///
+    /// # Errors
+    /// Same admission and linear-residual refusals as
+    /// [`Solver::equilibrium_adjoint_with_reactions`], plus any callback or non-finite refusal.
+    pub fn membrane_parameter_gradient_with_reactions<F>(
+        &mut self,
+        dj_dx: &[Vec3],
+        reaction_weights: &[Vec3],
+        dj_dtheta: &[f64],
+        mut accumulate_element_pullback: F,
+    ) -> Result<ParameterGradient, Refusal>
+    where
+        F: FnMut(&MembranePullbackKinematics, &mut [f64]) -> Result<(), Refusal>,
+    {
+        if dj_dtheta.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "explicit parameter derivatives must be finite",
+            ));
+        }
+        let adjoint = self.equilibrium_adjoint_with_reactions(dj_dx, reaction_weights)?;
+        let lam = &adjoint.lambda;
+        let mut pull = vec![0.0f64; dj_dtheta.len()];
+        for (i, e) in self.model.membranes.iter().enumerate() {
+            let mat: Membrane = self.model.material(i);
+            let mut f1 = Vec3::ZERO;
+            let mut f2 = Vec3::ZERO;
+            for (a, &vi) in e.v.iter().enumerate() {
+                f1 += self.x[vi] * e.g[a][0];
+                f2 += self.x[vi] * e.g[a][1];
+            }
+            let raw_strain = [
+                0.5 * (f1.dot(f1) - 1.0),
+                0.5 * (f2.dot(f2) - 1.0),
+                f1.dot(f2),
+            ];
+            let mut w_raw = [0.0; 3];
+            for (a, &vi) in e.v.iter().enumerate() {
+                let (ga0, ga1) = (e.g[a][0], e.g[a][1]);
+                let lv = lam[vi];
+                w_raw[0] += ga0 * f1.dot(lv);
+                w_raw[1] += ga1 * f2.dot(lv);
+                w_raw[2] += ga0 * f2.dot(lv) + ga1 * f1.dot(lv);
+            }
+            let (eff_strain, w_sep) = if self.model.compression_model == CompressionModel::Principal
+                && mat.compression != [1.0; 2]
+            {
+                let mapped = principal_strain_jets(raw_strain, &mat);
+                (
+                    mapped.map(|v| v.v),
+                    mapped.map(|v| v.g[0] * w_raw[0] + v.g[1] * w_raw[1] + v.g[2] * w_raw[2]),
+                )
+            } else {
+                let (eff, dphi, _) = soften(raw_strain, &mat);
+                (eff, [dphi[0] * w_raw[0], dphi[1] * w_raw[1], w_raw[2]])
+            };
+            let kin = MembranePullbackKinematics {
+                element: i,
+                area: e.area,
+                eff_strain,
+                raw_strain,
+                w_sep,
+                w_raw,
+            };
+            accumulate_element_pullback(&kin, &mut pull)?;
+        }
+        let d_theta: Vec<f64> = dj_dtheta
+            .iter()
+            .zip(&pull)
+            .map(|(&direct, &p)| direct - p)
+            .collect();
+        if d_theta.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "membrane parameter gradient pullback overflowed",
+            ));
+        }
+        Ok(ParameterGradient { d_theta, adjoint })
+    }
+
     /// Unified exact IFT sensitivity of `Φ(p) = J(x_F(p), Q, B) + c_Dᵀ R_D(x_F(p), x_D, Q, B)`,
     /// combining a free-DOF geometry objective (`dj_dx`) and a fixed-DOF Dirichlet reaction
     /// functional (`reaction_weights` restricted to fixed DOFs).
@@ -412,87 +676,22 @@ impl Solver {
             ));
         }
 
-        let has_fixed_weights = reaction_weights
-            .iter()
-            .enumerate()
-            .any(|(i, w)| (0..3).any(|k| self.is_fixed_dof(i, k) && w[k] != 0.0));
-        let eff_dj_dx: Vec<Vec3> = if has_fixed_weights {
-            let h_fd_c = self.fixed_to_free_hessian_mul(reaction_weights);
-            let h_fd_nodal = self.unpack_free(&h_fd_c);
-            dj_dx
-                .iter()
-                .zip(&h_fd_nodal)
-                .map(|(&a, &b)| a + b)
-                .collect()
-        } else {
-            dj_dx.to_vec()
-        };
-
-        let mut adjoint = self.equilibrium_adjoint(&eff_dj_dx)?;
-        // Set λ_D = -c_D on fixed (Dirichlet) DOFs so -(∂R/∂p)ᵀ λ = c_Dᵀ (∂R_D/∂p) - λ_Fᵀ (∂R_F/∂p).
-        if has_fixed_weights {
-            for (i, w) in reaction_weights.iter().enumerate() {
-                if self.is_fixed_dof(i, 0) {
-                    adjoint.lambda[i].x = -w.x;
-                }
-                if self.is_fixed_dof(i, 1) {
-                    adjoint.lambda[i].y = -w.y;
-                }
-                if self.is_fixed_dof(i, 2) {
-                    adjoint.lambda[i].z = -w.z;
-                }
-            }
-        }
-        let lam = &adjoint.lambda;
-
-        // Membrane pullback: (∂R/∂Q)ᵀ λ = Σ_e A_e [e0*w0, e1*w1, e1*w0 + e0*w1, e2*w2].
-        let mut pull_q = [0.0f64; 4];
-        for (i, e) in self.model.membranes.iter().enumerate() {
-            let mat: Membrane = self.model.material(i);
-            let mut f1 = Vec3::ZERO;
-            let mut f2 = Vec3::ZERO;
-            for (a, &vi) in e.v.iter().enumerate() {
-                f1 += self.x[vi] * e.g[a][0];
-                f2 += self.x[vi] * e.g[a][1];
-            }
-            let raw = [
-                0.5 * (f1.dot(f1) - 1.0),
-                0.5 * (f2.dot(f2) - 1.0),
-                f1.dot(f2),
-            ];
-            let (eff, w) = if self.model.compression_model == CompressionModel::Principal
-                && mat.compression != [1.0; 2]
-            {
-                let mapped = principal_strain_jets(raw, &mat);
-                let mut raw_w = [0.0; 3];
-                for (a, &vi) in e.v.iter().enumerate() {
-                    let (ga0, ga1) = (e.g[a][0], e.g[a][1]);
-                    let lv = lam[vi];
-                    raw_w[0] += ga0 * f1.dot(lv);
-                    raw_w[1] += ga1 * f2.dot(lv);
-                    raw_w[2] += ga0 * f2.dot(lv) + ga1 * f1.dot(lv);
-                }
-                (
-                    mapped.map(|v| v.v),
-                    mapped.map(|v| v.g[0] * raw_w[0] + v.g[1] * raw_w[1] + v.g[2] * raw_w[2]),
-                )
-            } else {
-                let (eff, dphi, _) = soften(raw, &mat);
-                let mut w = [0.0; 3];
-                for (a, &vi) in e.v.iter().enumerate() {
-                    let (ga0, ga1) = (e.g[a][0], e.g[a][1]);
-                    let lv = lam[vi];
-                    w[0] += dphi[0] * ga0 * f1.dot(lv);
-                    w[1] += dphi[1] * ga1 * f2.dot(lv);
-                    w[2] += ga0 * f2.dot(lv) + ga1 * f1.dot(lv);
-                }
-                (eff, w)
-            };
-            pull_q[0] += e.area * eff[0] * w[0];
-            pull_q[1] += e.area * eff[1] * w[1];
-            pull_q[2] += e.area * (eff[1] * w[0] + eff[0] * w[1]);
-            pull_q[3] += e.area * eff[2] * w[2];
-        }
+        let membrane_grad = self.membrane_parameter_gradient_with_reactions(
+            dj_dx,
+            reaction_weights,
+            &dj_dq,
+            |kin, pull| {
+                let a = kin.area;
+                let e = kin.eff_strain;
+                let w = kin.w_sep;
+                pull[0] += a * e[0] * w[0];
+                pull[1] += a * e[1] * w[1];
+                pull[2] += a * (e[1] * w[0] + e[0] * w[1]);
+                pull[3] += a * e[2] * w[2];
+                Ok(())
+            },
+        )?;
+        let lam = &membrane_grad.adjoint.lambda;
 
         // Hinge bending pullback: (∂R/∂B)ᵀ λ = Σ_h w_h (Σ_a k_a x_a) · (Σ_a k_a λ_a).
         let mut pull_b = 0.0f64;
@@ -507,10 +706,10 @@ impl Solver {
         }
 
         let dq = [
-            dj_dq[0] - pull_q[0],
-            dj_dq[1] - pull_q[1],
-            dj_dq[2] - pull_q[2],
-            dj_dq[3] - pull_q[3],
+            membrane_grad.d_theta[0],
+            membrane_grad.d_theta[1],
+            membrane_grad.d_theta[2],
+            membrane_grad.d_theta[3],
         ];
         let d_bending = dj_db - pull_b;
         if dq.iter().any(|v| !v.is_finite()) || !d_bending.is_finite() {
@@ -522,7 +721,7 @@ impl Solver {
         Ok(ConstitutiveGradient {
             dq,
             d_bending,
-            adjoint,
+            adjoint: membrane_grad.adjoint,
         })
     }
 }
@@ -959,5 +1158,320 @@ mod tests {
         frictionless.model.compression.push([1.0, 1.0]);
         let err = frictionless.equilibrium_adjoint(&dl_dx).unwrap_err();
         assert_eq!(err.code, ftx_core::RefusalCode::OutOfRange);
+    }
+
+    #[test]
+    fn area_response_stress_derivatives_match_compiled_area_law_across_branches() {
+        use ftx_pattern::material_response::{
+            AREA_MODEL, AreaResponse, Interpolation, StressCurve, TabulatedMembrane,
+        };
+        use ftx_pattern::materials::{Evidence, Quantity, Source};
+        use std::collections::BTreeMap;
+
+        let cond = BTreeMap::from([
+            ("specimen".into(), "test-area".into()),
+            ("conditioning".into(), "synthetic".into()),
+        ]);
+        let sources = BTreeMap::from([(
+            "s".into(),
+            Source {
+                reference: "test:area-deriv".into(),
+                accessed_on: "2026-11-27".into(),
+                note: "synthetic area derivative parity check".into(),
+            },
+        )]);
+        let make_compiled = |k1: f64, k2: f64| {
+            let curve = |slope: f64| StressCurve {
+                points: vec![[-0.4, -0.4 * slope], [0.0, 0.0], [0.8, 0.8 * slope]],
+                source: "s".into(),
+                evidence: Evidence::Estimate,
+                method: "test".into(),
+                conditions: cond.clone(),
+            };
+            let q = |v: f64| Quantity {
+                value: v,
+                unit: "N/m".into(),
+                evidence: Evidence::Estimate,
+                source: "s".into(),
+                method: "test".into(),
+                conditions: cond.clone(),
+                bounds: None,
+            };
+            TabulatedMembrane {
+                model: ftx_pattern::material_response::MODEL.into(),
+                interpolation: Interpolation::PiecewiseLinear,
+                warp: curve(200.0),
+                weft: curve(150.0),
+                shear: curve(60.0),
+                coupling: q(20.0),
+                area_response: Some(AreaResponse {
+                    model: AREA_MODEL.into(),
+                    quadratic: q(k1),
+                    log_squared: q(k2),
+                    area_ratio_range: [0.3, 2.5],
+                    conditions: cond.clone(),
+                }),
+            }
+            .compile(&sources, true)
+            .unwrap()
+        };
+        let unit_k1 = make_compiled(1.0, 0.0);
+        let unit_k2 = make_compiled(0.0, 1.0);
+        // Test zero strain, small near-1 J (atanh series branch), negative/sheared contraction,
+        // and large dilation (|J - 1| >= 0.25 det::ln branch).
+        for strain in [
+            [0.0, 0.0, 0.0],
+            [0.03, -0.015, 0.02],
+            [-0.12, -0.08, -0.14],
+            [0.35, 0.25, 0.18],
+        ] {
+            let [d1, d2] = area_response_stress_derivatives(strain).unwrap();
+            let s1 = unit_k1.evaluate_area(strain).unwrap().stress;
+            let s2 = unit_k2.evaluate_area(strain).unwrap().stress;
+            for axis in 0..3 {
+                assert!(
+                    (d1[axis] - s1[axis]).abs() <= 1e-13 * (1.0 + s1[axis].abs()),
+                    "strain={strain:?} axis={axis}: d1={} != s1={}",
+                    d1[axis],
+                    s1[axis]
+                );
+                assert!(
+                    (d2[axis] - s2[axis]).abs() <= 1e-13 * (1.0 + s2[axis].abs()),
+                    "strain={strain:?} axis={axis}: d2={} != s2={}",
+                    d2[axis],
+                    s2[axis]
+                );
+            }
+        }
+        assert!(area_response_stress_derivatives([f64::NAN, 0.0, 0.0]).is_err());
+        assert!(area_response_stress_derivatives([-0.55, 0.0, 0.0]).is_err());
+        assert!(area_response_stress_derivatives([0.0, 0.0, 1.2]).is_err());
+    }
+
+    #[test]
+    fn ift_nonlinear_and_area_membrane_gradient_matches_central_fd_under_both_compression_models() {
+        use ftx_pattern::material_response::{
+            AREA_MODEL, AreaResponse, Interpolation, StressCurve, TabulatedMembrane,
+        };
+        use ftx_pattern::materials::{Evidence, Quantity, Source};
+        use std::collections::BTreeMap;
+
+        let cond = BTreeMap::from([
+            ("specimen".into(), "test-nl-area".into()),
+            ("conditioning".into(), "synthetic".into()),
+        ]);
+        let sources = BTreeMap::from([(
+            "s".into(),
+            Source {
+                reference: "test:nl-area-adjoint".into(),
+                accessed_on: "2026-11-27".into(),
+                note: "synthetic nonlinear+area 3D adjoint check".into(),
+            },
+        )]);
+        let knots: [&[f64]; 3] = [
+            &[-0.25, 0.0, 0.03, 0.35],
+            &[-0.25, 0.0, 0.03, 0.35],
+            &[-0.35, 0.0, 0.35],
+        ];
+        let build_compiled = |p: &[f64]| {
+            // p = [w_neg, w_p1, w_p2, f_neg, f_p1, f_p2, sh_neg, sh_pos, kc, k1, k2]
+            let make_curve = |k: &[f64], slopes: &[f64]| {
+                let origin = k.iter().position(|&v| v == 0.0).unwrap();
+                let mut pts: Vec<[f64; 2]> = k.iter().map(|&e| [e, 0.0]).collect();
+                for i in origin..k.len() - 1 {
+                    pts[i + 1][1] = pts[i][1] + slopes[i] * (k[i + 1] - k[i]);
+                }
+                for i in (0..origin).rev() {
+                    pts[i][1] = pts[i + 1][1] - slopes[i] * (k[i + 1] - k[i]);
+                }
+                StressCurve {
+                    points: pts,
+                    source: "s".into(),
+                    evidence: Evidence::Estimate,
+                    method: "test".into(),
+                    conditions: cond.clone(),
+                }
+            };
+            let q = |v: f64| Quantity {
+                value: v,
+                unit: "N/m".into(),
+                evidence: Evidence::Estimate,
+                source: "s".into(),
+                method: "test".into(),
+                conditions: cond.clone(),
+                bounds: None,
+            };
+            TabulatedMembrane {
+                model: ftx_pattern::material_response::MODEL.into(),
+                interpolation: Interpolation::PiecewiseLinear,
+                warp: make_curve(&knots[0], &p[0..3]),
+                weft: make_curve(&knots[1], &p[3..6]),
+                shear: make_curve(&knots[2], &p[6..8]),
+                coupling: q(p[8]),
+                area_response: Some(AreaResponse {
+                    model: AREA_MODEL.into(),
+                    quadratic: q(p[9]),
+                    log_squared: q(p[10]),
+                    area_ratio_range: [0.5, 1.8],
+                    conditions: cond.clone(),
+                }),
+            }
+            .compile(&sources, true)
+            .unwrap()
+        };
+
+        let p0 = [
+            220.0, 280.0, 460.0, 140.0, 180.0, 310.0, 55.0, 75.0, 22.0, 28.0, 16.0,
+        ];
+        for compression_model in [CompressionModel::AxisAligned, CompressionModel::Principal] {
+            let make = |p: &[f64]| {
+                let compiled = build_compiled(p);
+                let [e1, e2, nu, g12] = compiled.reference_moduli().unwrap();
+                let (rest, tris) = grid(0.12, 0.08, 3, 2, Vec2::ZERO);
+                // Stretch along x, compress slightly along y, shear and deflect out-of-plane so
+                // positive/negative branches, both positive knots, compression softening, and area
+                // response all contribute nontrivially.
+                let x: Vec<Vec3> = rest
+                    .iter()
+                    .map(|pt| {
+                        let s = pt.x / 0.12;
+                        Vec3::new(
+                            pt.x * 1.07,
+                            pt.y * 0.985 + 0.012 * s,
+                            0.01 * s * (1.0 - 0.25 * s),
+                        )
+                    })
+                    .collect();
+                let fixed: Vec<[bool; 3]> = rest
+                    .iter()
+                    .map(|pt| {
+                        if pt.x == 0.0 || (pt.x - 0.12).abs() < 1e-12 {
+                            [true, true, true]
+                        } else {
+                            [false, false, false]
+                        }
+                    })
+                    .collect();
+                let mat = Membrane::orthotropic(e1, e2, nu, g12, 0.2);
+                let mut model = ClothModel::new(rest, &tris, mat, 4e-4, 0.2).unwrap();
+                model.compression_model = compression_model;
+                model
+                    .set_membrane_responses(&vec![Some(compiled); tris.len()])
+                    .unwrap();
+                let mut s = Solver::new(model, x, &fixed, Vec3::new(0.0, 0.4, -9.81));
+                s.tol = 1e-14;
+                s
+            };
+
+            let mut base = make(&p0);
+            base.static_solve().unwrap();
+            assert!(!base.is_homogeneous_elastic_for_adjoint());
+            assert!(base.is_memoryless_elastic_for_adjoint());
+
+            let dj_dx: Vec<Vec3> = base
+                .x
+                .iter()
+                .map(|&pt| pt + Vec3::new(0.15, -0.25, 0.8))
+                .collect();
+            let rxn_weights: Vec<Vec3> = base
+                .model
+                .rest
+                .iter()
+                .zip(&base.x)
+                .map(|(r, pt)| {
+                    if (r.x - 0.12).abs() < 1e-12 {
+                        Vec3::new(1.0 - 1.5 * pt.y, 1.5 * pt.x, 0.4)
+                    } else {
+                        Vec3::ZERO
+                    }
+                })
+                .collect();
+            // Homogeneous constitutive_gradient must still refuse nonlinear element_responses.
+            assert_eq!(
+                base.constitutive_gradient(&dj_dx, [0.0; 4], 0.0)
+                    .unwrap_err()
+                    .code,
+                RefusalCode::OutOfRange
+            );
+
+            let pullback = |kin: &MembranePullbackKinematics, pull: &mut [f64]| {
+                let mut offset = 0usize;
+                for (axis, k) in knots.iter().enumerate() {
+                    let origin = k.iter().position(|&v| v == 0.0).unwrap();
+                    let eps = kin.eff_strain[axis];
+                    let wa = kin.area * kin.w_sep[axis];
+                    if eps > 0.0 {
+                        for i in origin..k.len() - 1 {
+                            if eps <= k[i] {
+                                break;
+                            }
+                            pull[offset + i] += wa * (eps.min(k[i + 1]) - k[i]);
+                        }
+                    } else if eps < 0.0 {
+                        for i in (0..origin).rev() {
+                            if eps >= k[i + 1] {
+                                break;
+                            }
+                            pull[offset + i] -= wa * (k[i + 1] - eps.max(k[i]));
+                        }
+                    }
+                    offset += k.len() - 1;
+                }
+                pull[8] += kin.area
+                    * (kin.eff_strain[1] * kin.w_sep[0] + kin.eff_strain[0] * kin.w_sep[1]);
+                let [ds1, ds2] = area_response_stress_derivatives(kin.raw_strain)?;
+                pull[9] += kin.area
+                    * (ds1[0] * kin.w_raw[0] + ds1[1] * kin.w_raw[1] + ds1[2] * kin.w_raw[2]);
+                pull[10] += kin.area
+                    * (ds2[0] * kin.w_raw[0] + ds2[1] * kin.w_raw[1] + ds2[2] * kin.w_raw[2]);
+                Ok(())
+            };
+            let grad = base
+                .membrane_parameter_gradient_with_reactions(
+                    &dj_dx,
+                    &rxn_weights,
+                    &[0.0; 11],
+                    pullback,
+                )
+                .unwrap();
+            assert!(!grad.adjoint.reused_factor);
+            // Second channel at the same converged equilibrium must reuse the cached SPD LDLT factor.
+            let second = base
+                .membrane_parameter_gradient_with_reactions(
+                    &dj_dx,
+                    &rxn_weights,
+                    &[0.0; 11],
+                    pullback,
+                )
+                .unwrap();
+            assert!(second.adjoint.reused_factor);
+            assert_eq!(second.d_theta, grad.d_theta);
+
+            let eval_phi = |p: &[f64]| -> f64 {
+                let mut s = make(p);
+                s.x = base.x.clone();
+                s.static_solve().unwrap();
+                let geom: f64 =
+                    s.x.iter()
+                        .map(|pt| 0.5 * pt.norm2() + Vec3::new(0.15, -0.25, 0.8).dot(*pt))
+                        .sum();
+                let rxn = s.nodal_reactions();
+                let force: f64 = rxn_weights.iter().zip(&rxn).map(|(w, r)| w.dot(*r)).sum();
+                geom + force
+            };
+            let dirs: Vec<Vec<f64>> = (0..p0.len())
+                .map(|k| {
+                    let mut d = vec![0.0; p0.len()];
+                    d[k] = 1.0;
+                    d
+                })
+                .collect();
+            let verdict = verify_gradient(&eval_phi, &p0, &grad.d_theta, &dirs, 1e-4, 1e-5);
+            assert!(
+                verdict.pass,
+                "nonlinear+area adjoint failed FD gate under {compression_model:?}: {verdict:?}"
+            );
+            assert!(verdict.informative_directions >= 8, "{verdict:?}");
+        }
     }
 }

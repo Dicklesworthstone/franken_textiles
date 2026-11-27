@@ -416,38 +416,42 @@ fn adjoint_calibration_supports_all_four_extensometer_operators() {
 }
 
 #[test]
-fn adjoint_sensitivity_refuses_nonlinear_family_and_area_models_fail_closed() {
-    let mut nonlinear = input();
-    nonlinear.policy.sensitivity = SensitivityMode::Adjoint;
-    nonlinear.parameter_bounds.clear();
-    nonlinear.nonlinear = Some(ftx_drape::strip::fit::nonlinear::Nonlinear {
-        strain_knots: [
-            vec![-0.2, 0.0, 0.25],
-            vec![-0.2, 0.0, 0.25],
-            vec![-0.3, 0.0, 0.3],
-        ],
-        tangent_bounds: [
-            vec![[200.0, 400.0], [200.0, 400.0]],
-            vec![[100.0, 260.0], [100.0, 260.0]],
-            vec![[40.0, 100.0], [40.0, 100.0]],
-        ],
-        coupling_bounds: [10.0, 60.0],
-    });
-    let err = calibrate(&nonlinear).unwrap_err();
-    assert_eq!(err.code, RefusalCode::InvalidDocument);
-    assert!(err.message.contains("adjoint strip sensitivity"), "{err}");
+fn adjoint_calibrates_scalar_area_model_with_far_fewer_solves() {
+    let base: Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json"
+    ))
+    .unwrap();
+    let fd = calibrate(&base).unwrap();
+    assert!(fd.accepted, "{:#?}", fd.reasons);
+    let mut adj_in = base;
+    adj_in.policy.sensitivity = SensitivityMode::Adjoint;
+    let adj = calibrate(&adj_in).unwrap();
+    assert!(adj.accepted, "{:#?}", adj.reasons);
+    assert!(adj.domain_replay_verified);
+    assert!(adj.adjoint_solves > 0);
+    assert!(
+        adj.forward_solves * 4 < fd.forward_solves,
+        "scalar+area adjoint should drastically cut forward solves: adjoint={} vs fd={}",
+        adj.forward_solves,
+        fd.forward_solves
+    );
+    for (a, f) in adj.parameters.iter().zip(&fd.parameters) {
+        assert!(
+            (a - f).abs() <= 1e-4 * (1.0 + f.abs()),
+            "scalar+area adjoint={a} diverged from fd={f}"
+        );
+    }
+    assert!(
+        (adj.excitation_pivot - fd.excitation_pivot).abs()
+            <= 1e-3 * (1.0 + fd.excitation_pivot.abs()),
+        "scalar+area excitation pivot mismatch: adjoint={} fd={}",
+        adj.excitation_pivot,
+        fd.excitation_pivot
+    );
+}
 
-    let mut with_area = input();
-    with_area.policy.sensitivity = SensitivityMode::Adjoint;
-    with_area.area_response = Some(ftx_drape::strip::fit::area::Area::Identify {
-        parameter_bounds: [[10.0, 200.0], [10.0, 200.0]],
-        area_ratio_range: Some([0.7, 1.3]),
-        scalar_green_strain_range: Some([[-0.2, 0.25], [-0.2, 0.25], [-0.3, 0.3]]),
-    });
-    let err = calibrate(&with_area).unwrap_err();
-    assert_eq!(err.code, RefusalCode::InvalidDocument);
-    assert!(err.message.contains("adjoint strip sensitivity"), "{err}");
-
+#[test]
+fn orphan_membrane_damage_refuses_in_strip_fit_and_experiment() {
     // Orphan membrane_damage_model without membrane_plasticity_model fails closed in strip fit
     // and strip experiment.
     let mut orphan_damage = input();

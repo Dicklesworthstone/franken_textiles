@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::{Refusal, RefusalCode, Vec3, linalg::lstsq, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, Vec3, det, receipt::sha256_hex};
 use ftx_pattern::{
     material_calibration::{Partition, fitted_domain},
     material_catalog::Selection,
@@ -93,8 +93,8 @@ pub enum SensitivityMode {
     #[default]
     FiniteDifference,
     /// Exact implicit-function-theorem (IFT) adjoint pullback reusing the converged static LDLᵀ
-    /// factor. Supported for homogeneous scalar orthotropic identification only; refuses
-    /// fail-closed for nonlinear, declared-shape or area-response models.
+    /// factor across scalar orthotropic, `response_family`, `nonlinear`, and `area_response`
+    /// models.
     Adjoint,
 }
 
@@ -533,9 +533,12 @@ fn area_template(input: &Input) -> Option<&ftx_pattern::material_response::AreaR
         .and_then(|r| r.area_response.as_ref())
 }
 
-fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
-    let bounds = bounds(input);
-    std::array::from_fn(|i| bounds[i][0] + p[i] * (bounds[i][1] - bounds[i][0]))
+fn physical(bounds: &[[f64; 2]], p: &[f64]) -> Vec<f64> {
+    bounds
+        .iter()
+        .zip(p)
+        .map(|(&[lo, hi], &coord)| lo + coord * (hi - lo))
+        .collect()
 }
 
 fn validate(input: &Input) -> Result<(), Refusal> {
@@ -550,15 +553,6 @@ fn validate(input: &Input) -> Result<(), Refusal> {
     {
         return Err(invalid(
             "strip identification currently fits separable membrane laws and cannot identify or discard an existing area response; use an area-capable characterization model",
-        ));
-    }
-    if input.policy.sensitivity == SensitivityMode::Adjoint
-        && (input.response_family.is_some()
-            || input.nonlinear.is_some()
-            || input.area_response.is_some())
-    {
-        return Err(invalid(
-            "adjoint strip sensitivity supports homogeneous scalar orthotropic identification only; nonlinear, response_family and area_response models require finite_difference sensitivity",
         ));
     }
     if input.response_family.is_some() && input.nonlinear.is_some() {
@@ -843,15 +837,134 @@ fn extensometer_predictions(
         .collect()
 }
 
-fn evaluate<const N: usize>(
+/// Deterministic minimum-norm least-squares solve `A x ≈ b` for dynamic column count `n`,
+/// matching `ftx_core::linalg::lstsq`'s one-sided Jacobi SVD sweep order, scaling, and `rcond`
+/// cutoff (zero `mul_add`, zero platform `libm`).
+fn lstsq_dynamic(a: &[Vec<f64>], b: &[f64], n: usize) -> Vec<f64> {
+    const MAX_SWEEPS: usize = 64;
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "lstsq_dynamic: one right-hand side per row"
+    );
+    let m = a.len();
+    if m == 0 || n == 0 {
+        return vec![0.0; n];
+    }
+    assert!(
+        a.iter().all(|row| row.len() == n),
+        "lstsq_dynamic: row width mismatch"
+    );
+    if a.iter().flatten().any(|v| !v.is_finite()) || b.iter().any(|v| !v.is_finite()) {
+        return vec![f64::NAN; n];
+    }
+    let a_max = a
+        .iter()
+        .flatten()
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    let a_scale = if a_max > 0.0 && !(1e-60..=1e60).contains(&a_max) {
+        a_max
+    } else {
+        1.0
+    };
+    let b_max = b.iter().copied().map(f64::abs).fold(0.0_f64, f64::max);
+    let b_scale = if b_max > 0.0 && !(1e-60..=1e60).contains(&b_max) {
+        b_max
+    } else {
+        1.0
+    };
+    let mut u: Vec<Vec<f64>> = (0..n)
+        .map(|j| {
+            if a_scale == 1.0 {
+                a.iter().map(|row| row[j]).collect()
+            } else {
+                a.iter().map(|row| row[j] / a_scale).collect()
+            }
+        })
+        .collect();
+    let mut v = vec![vec![0.0; n]; n];
+    for (i, row) in v.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    for _ in 0..MAX_SWEEPS {
+        let mut rotated = false;
+        for p in 0..n {
+            for q in p + 1..n {
+                let (mut alpha, mut beta, mut gamma) = (0.0, 0.0, 0.0);
+                for i in 0..m {
+                    alpha += u[p][i] * u[p][i];
+                    beta += u[q][i] * u[q][i];
+                    gamma += u[p][i] * u[q][i];
+                }
+                if gamma == 0.0 || gamma.abs() <= f64::EPSILON * (alpha.sqrt() * beta.sqrt()) {
+                    continue;
+                }
+                rotated = true;
+                let zeta = (beta - alpha) / (2.0 * gamma);
+                let t = zeta.signum() / (zeta.abs() + det::hypot(1.0, zeta));
+                let c = 1.0 / det::hypot(1.0, t);
+                let s = c * t;
+                for i in 0..m {
+                    let (up, uq) = (u[p][i], u[q][i]);
+                    u[p][i] = c * up - s * uq;
+                    u[q][i] = s * up + c * uq;
+                }
+                for row in &mut v {
+                    let (vp, vq) = (row[p], row[q]);
+                    row[p] = c * vp - s * vq;
+                    row[q] = s * vp + c * vq;
+                }
+            }
+        }
+        if !rotated {
+            break;
+        }
+    }
+    let sigma: Vec<f64> = (0..n)
+        .map(|j| u[j].iter().map(|x| x * x).sum::<f64>().sqrt())
+        .collect();
+    let sigma_max = sigma.iter().copied().fold(0.0, f64::max);
+    let cutoff = f64::EPSILON * (m.max(n) as f64) * sigma_max;
+    let mut x = vec![0.0; n];
+    for j in 0..n {
+        if sigma[j] <= cutoff {
+            continue;
+        }
+        let dot: f64 = if b_scale == 1.0 {
+            u[j].iter().zip(b).map(|(ui, bi)| ui * bi).sum()
+        } else {
+            u[j].iter().zip(b).map(|(ui, bi)| ui * (bi / b_scale)).sum()
+        };
+        let proj = dot / (sigma[j] * sigma[j]);
+        for (k, xk) in x.iter_mut().enumerate() {
+            *xk += v[k][j] * proj;
+        }
+    }
+    if a_scale != 1.0 || b_scale != 1.0 {
+        let ratio = b_scale / a_scale;
+        for xk in &mut x {
+            if ratio.is_finite() && ratio > 0.0 {
+                *xk *= ratio;
+            } else {
+                *xk = (*xk * b_scale) / a_scale;
+            }
+        }
+    }
+    x
+}
+
+fn evaluate(
     input: &Input,
-    p: [f64; N],
+    param_bounds: &[[f64; 2]],
+    p: &[f64],
     budget: &mut Budget<'_>,
 ) -> Result<Evaluation, ForwardFailure> {
     let mut residuals = Vec::new();
     let keep_solvers = input.policy.sensitivity == SensitivityMode::Adjoint;
     let mut adjoint_states = Vec::new();
-    let parameters = physical(input, p);
+    let parameters = physical(param_bounds, p);
     for experiment in input
         .experiments
         .iter()
@@ -912,35 +1025,106 @@ fn evaluate<const N: usize>(
     })
 }
 
-fn adjoint_jacobian<const N: usize>(
+fn adjoint_jacobian(
     input: &Input,
-    p: [f64; N],
+    param_bounds: &[[f64; 2]],
+    p: &[f64],
     budget: &mut Budget<'_>,
     eval: &mut Evaluation,
-) -> Result<Vec<[f64; N]>, Refusal> {
-    if N != 4
-        || input.response_family.is_some()
-        || input.nonlinear.is_some()
-        || input.area_response.is_some()
-    {
+) -> Result<Vec<Vec<f64>>, Refusal> {
+    let n = param_bounds.len();
+    if p.len() != n {
         return Err(invalid(
-            "adjoint strip Jacobian requires homogeneous scalar orthotropic identification",
+            "strip adjoint coordinate count does not match parameter bounds",
         ));
     }
-    let phys = physical(input, p);
-    let [e1, e2, nu12, g12] = four(&phys)?;
-    let param_bounds = bounds(input);
-    let widths = [
-        param_bounds[0][1] - param_bounds[0][0],
-        param_bounds[1][1] - param_bounds[1][0],
-        param_bounds[2][1] - param_bounds[2][0],
-        param_bounds[3][1] - param_bounds[3][0],
-    ];
+    let phys = physical(param_bounds, p);
+    let widths: Vec<f64> = param_bounds.iter().map(|&[lo, hi]| hi - lo).collect();
+    let base = base_parameters(input, &phys);
+    let base_len = base.len();
+    let identifies_area = input
+        .area_response
+        .as_ref()
+        .is_some_and(area::Area::identifies);
+    let expected = base_len + if identifies_area { 2 } else { 0 };
+    if n != expected {
+        return Err(invalid(
+            "strip adjoint parameter count does not match active constitutive mode",
+        ));
+    }
+    let family = budget.family.as_ref();
+    let nonlinear = input.nonlinear.as_ref();
+    let scalar_base = if family.is_none() && nonlinear.is_none() {
+        Some(four(base)?)
+    } else {
+        None
+    };
+    let adjoint_solves = &mut budget.adjoint_solves;
+    let zeros_p = vec![0.0; n];
     let mut rows = Vec::with_capacity(eval.residuals.len());
     let mut solved = eval.adjoint_states.iter_mut();
-    let scaled_row = |dq: [f64; 4], scale: f64| -> Result<[f64; N], Refusal> {
-        let d_ortho = crate::adjoint::orthotropic_chain_rule(e1, e2, nu12, g12, dq)?;
-        let row = std::array::from_fn(|k| d_ortho[k] * widths[k] / scale);
+    let mut channel_row = |solver: &mut Solver,
+                           dj_dx: &[Vec3],
+                           reaction_weights: &[Vec3],
+                           scale: f64|
+     -> Result<Vec<f64>, Refusal> {
+        let grad = solver.membrane_parameter_gradient_with_reactions(
+            dj_dx,
+            reaction_weights,
+            &zeros_p,
+            |kin, pull| {
+                if let Some(family) = family {
+                    family.accumulate_pullback(
+                        kin.eff_strain,
+                        kin.w_sep,
+                        kin.area,
+                        &mut pull[..base_len],
+                    )?;
+                } else if let Some(model) = nonlinear {
+                    model.accumulate_pullback(
+                        kin.eff_strain,
+                        kin.w_sep,
+                        kin.area,
+                        &mut pull[..base_len],
+                    )?;
+                } else {
+                    let a = kin.area;
+                    let e = kin.eff_strain;
+                    let w = kin.w_sep;
+                    pull[0] += a * e[0] * w[0];
+                    pull[1] += a * e[1] * w[1];
+                    pull[2] += a * (e[1] * w[0] + e[0] * w[1]);
+                    pull[3] += a * e[2] * w[2];
+                }
+                if identifies_area {
+                    let [ds_dk1, ds_dk2] =
+                        crate::adjoint::area_response_stress_derivatives(kin.raw_strain)?;
+                    let a = kin.area;
+                    let w = kin.w_raw;
+                    pull[base_len] += a * (ds_dk1[0] * w[0] + ds_dk1[1] * w[1] + ds_dk1[2] * w[2]);
+                    pull[base_len + 1] +=
+                        a * (ds_dk2[0] * w[0] + ds_dk2[1] * w[1] + ds_dk2[2] * w[2]);
+                }
+                Ok(())
+            },
+        )?;
+        *adjoint_solves += 1;
+        let mut d_phys = grad.d_theta;
+        if let Some([e1, e2, nu12, g12]) = scalar_base {
+            let d_ortho = crate::adjoint::orthotropic_chain_rule(
+                e1,
+                e2,
+                nu12,
+                g12,
+                [d_phys[0], d_phys[1], d_phys[2], d_phys[3]],
+            )?;
+            d_phys[..4].copy_from_slice(&d_ortho);
+        }
+        let row: Vec<f64> = d_phys
+            .iter()
+            .zip(&widths)
+            .map(|(&d, &w)| d * w / scale)
+            .collect();
         if row.iter().any(|v| !v.is_finite()) {
             return Err(invalid("strip adjoint sensitivity overflow"));
         }
@@ -953,6 +1137,7 @@ fn adjoint_jacobian<const N: usize>(
     {
         let [nx, ny] = experiment.fixture.cells;
         let n_verts = (nx + 1) * (ny + 1);
+        let zero_verts = vec![Vec3::ZERO; n_verts];
         let mut upper_weights = vec![Vec3::ZERO; n_verts];
         for (i, w) in upper_weights.iter_mut().enumerate() {
             if i / (nx + 1) == ny {
@@ -963,9 +1148,12 @@ fn adjoint_jacobian<const N: usize>(
             let (state, solver) = solved.next().ok_or_else(|| {
                 invalid("missing converged strip solver state for adjoint sensitivity")
             })?;
-            let grad_force = solver.reaction_gradient(&upper_weights)?;
-            budget.adjoint_solves += 1;
-            rows.push(scaled_row(grad_force.dq, point.scale_n)?);
+            rows.push(channel_row(
+                solver,
+                &zero_verts,
+                &upper_weights,
+                point.scale_n,
+            )?);
 
             if let Some(width) = &point.mid_width {
                 let mid = (ny / 2) * (nx + 1);
@@ -978,17 +1166,13 @@ fn adjoint_jacobian<const N: usize>(
                 let mut dj_dx = vec![Vec3::ZERO; n_verts];
                 dj_dx[mid + nx] = unit;
                 dj_dx[mid] = -unit;
-                let grad_width = solver.constitutive_gradient(&dj_dx, [0.0; 4], 0.0)?;
-                budget.adjoint_solves += 1;
-                rows.push(scaled_row(grad_width.dq, width.scale_m)?);
+                rows.push(channel_row(solver, &dj_dx, &zero_verts, width.scale_m)?);
             }
 
             for channel in &point.extensometers {
                 let dj_dx =
                     measurement::gradient_dx(&channel.operator, &experiment.fixture, state)?;
-                let grad_ext = solver.constitutive_gradient(&dj_dx, [0.0; 4], 0.0)?;
-                budget.adjoint_solves += 1;
-                rows.push(scaled_row(grad_ext.dq, channel.scale_m)?);
+                rows.push(channel_row(solver, &dj_dx, &zero_verts, channel.scale_m)?);
             }
         }
     }
@@ -1000,15 +1184,17 @@ fn adjoint_jacobian<const N: usize>(
     Ok(rows)
 }
 
-fn jacobian<const N: usize>(
+fn jacobian(
     input: &Input,
-    p: [f64; N],
+    param_bounds: &[[f64; 2]],
+    p: &[f64],
     budget: &mut Budget<'_>,
     center: Option<&Evaluation>,
-) -> Result<Vec<[f64; N]>, Refusal> {
-    let mut rows = Vec::new();
+) -> Result<Vec<Vec<f64>>, Refusal> {
+    let n = param_bounds.len();
+    let mut rows: Vec<Vec<f64>> = Vec::new();
     let mut computed_center = None;
-    for j in 0..N {
+    for j in 0..n {
         let mut delta = 1e-4;
         let mut admissible = [None, None];
         let mut refused = None;
@@ -1017,9 +1203,9 @@ fn jacobian<const N: usize>(
             let coordinates = [(p[j] - delta).max(0.0), (p[j] + delta).min(1.0)];
             let mut pair = [None, None];
             for (side, coordinate) in coordinates.into_iter().enumerate() {
-                let mut probe = p;
+                let mut probe = p.to_vec();
                 probe[j] = coordinate;
-                match evaluate(input, probe, budget) {
+                match evaluate(input, param_bounds, &probe, budget) {
                     Ok(value) => pair[side] = Some((coordinate, value)),
                     Err(ForwardFailure::Trial(refusal)) => refused = Some(refusal),
                     Err(ForwardFailure::Fatal(refusal)) => return Err(refusal),
@@ -1060,8 +1246,9 @@ fn jacobian<const N: usize>(
                 }));
             };
             if center.is_none() && computed_center.is_none() {
-                computed_center =
-                    Some(evaluate(input, p, budget).map_err(ForwardFailure::refusal)?);
+                computed_center = Some(
+                    evaluate(input, param_bounds, p, budget).map_err(ForwardFailure::refusal)?,
+                );
             }
             let middle = center
                 .or(computed_center.as_ref())
@@ -1075,7 +1262,7 @@ fn jacobian<const N: usize>(
                 .collect()
         };
         if rows.is_empty() {
-            rows = vec![[0.0; N]; column.len()];
+            rows = vec![vec![0.0; n]; column.len()];
         }
         for (row, value) in rows.iter_mut().zip(column) {
             row[j] = value;
@@ -1087,8 +1274,10 @@ fn jacobian<const N: usize>(
     Ok(rows)
 }
 
-fn norms<const N: usize>(j: &[[f64; N]]) -> [f64; N] {
-    std::array::from_fn(|k| j.iter().map(|row| row[k] * row[k]).sum::<f64>().sqrt())
+fn norms(j: &[Vec<f64>], n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|k| j.iter().map(|row| row[k] * row[k]).sum::<f64>().sqrt())
+        .collect()
 }
 
 /// Nonnegative maximum over an iterator that propagates any `NaN` rather than absorbing it into `0.0`.
@@ -1105,9 +1294,9 @@ fn max_or_nan(values: impl IntoIterator<Item = f64>) -> f64 {
     best
 }
 
-fn gradient<const N: usize>(j: &[[f64; N]], e: &Evaluation) -> f64 {
-    let scales = norms(j);
-    max_or_nan((0..N).map(|k| {
+fn gradient(j: &[Vec<f64>], n: usize, e: &Evaluation) -> f64 {
+    let scales = norms(j, n);
+    max_or_nan((0..n).map(|k| {
         let value = j
             .iter()
             .zip(&e.residuals)
@@ -1121,20 +1310,23 @@ fn gradient<const N: usize>(j: &[[f64; N]], e: &Evaluation) -> f64 {
     }))
 }
 
-fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
-    let scales = norms(j);
+fn excitation(j: &[Vec<f64>], n: usize) -> f64 {
+    if n == 0 {
+        return 0.0;
+    }
+    let scales = norms(j, n);
     if scales.iter().any(|s| !s.is_finite() || *s <= 1e-10) {
         return 0.0;
     }
-    let mut lower = [[0.0; N]; N];
+    let mut lower = vec![vec![0.0; n]; n];
     let mut pivot = 1.0_f64;
-    for i in 0..N {
+    for i in 0..n {
         for k in 0..=i {
             let dot = j
                 .iter()
                 .map(|row| (row[i] / scales[i]) * (row[k] / scales[k]))
                 .sum::<f64>();
-            let value = dot - (0..k).map(|n| lower[i][n] * lower[k][n]).sum::<f64>();
+            let value = dot - (0..k).map(|idx| lower[i][idx] * lower[k][idx]).sum::<f64>();
             if i == k {
                 if !value.is_finite() || value <= 0.0 {
                     return 0.0;
@@ -1149,15 +1341,17 @@ fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
     pivot
 }
 
-type SearchOutcome<const N: usize> = (Start, [f64; N], Evaluation, Option<Vec<[f64; N]>>);
+type SearchOutcome = (Start, Vec<f64>, Evaluation, Option<Vec<Vec<f64>>>);
 
-fn search<const N: usize>(
+fn search(
     input: &Input,
+    param_bounds: &[[f64; 2]],
     initial: f64,
     budget: &mut Budget<'_>,
-) -> Result<SearchOutcome<N>, Refusal> {
-    let mut p = [initial; N];
-    let mut e = evaluate(input, p, budget).map_err(ForwardFailure::refusal)?;
+) -> Result<SearchOutcome, Refusal> {
+    let n = param_bounds.len();
+    let mut p = vec![initial; n];
+    let mut e = evaluate(input, param_bounds, &p, budget).map_err(ForwardFailure::refusal)?;
     let mut lambda = 1e-3_f64;
     let mut converged = false;
     let mut iterations = 0;
@@ -1165,17 +1359,19 @@ fn search<const N: usize>(
     for _ in 0..input.policy.max_iterations {
         iterations += 1;
         let j = match input.policy.sensitivity {
-            SensitivityMode::FiniteDifference => jacobian(input, p, budget, Some(&e))?,
-            SensitivityMode::Adjoint => adjoint_jacobian(input, p, budget, &mut e)?,
+            SensitivityMode::FiniteDifference => {
+                jacobian(input, param_bounds, &p, budget, Some(&e))?
+            }
+            SensitivityMode::Adjoint => adjoint_jacobian(input, param_bounds, &p, budget, &mut e)?,
         };
-        if gradient(&j, &e) < 1e-6 {
+        if gradient(&j, n, &e) < 1e-6 {
             converged = true;
             if input.policy.sensitivity == SensitivityMode::Adjoint {
                 cached_adjoint_j = Some(j);
             }
             break;
         }
-        let scales = norms(&j);
+        let scales = norms(&j, n);
         if scales.iter().any(|s| *s <= 1e-10) {
             if input.policy.sensitivity == SensitivityMode::Adjoint {
                 cached_adjoint_j = Some(j);
@@ -1184,19 +1380,19 @@ fn search<const N: usize>(
         }
         let mut accepted = false;
         for _ in 0..10 {
-            let mut rows: Vec<[f64; N]> = j
+            let mut rows: Vec<Vec<f64>> = j
                 .iter()
-                .map(|row| std::array::from_fn(|k| row[k] / scales[k]))
+                .map(|row| (0..n).map(|k| row[k] / scales[k]).collect())
                 .collect();
             let mut target: Vec<f64> = e.residuals.iter().map(|r| -r).collect();
-            for k in 0..N {
-                let mut row = [0.0; N];
+            for k in 0..n {
+                let mut row = vec![0.0; n];
                 row[k] = lambda.sqrt();
                 rows.push(row);
                 target.push(0.0);
             }
-            let scaled = lstsq(&rows, &target);
-            let mut step: [f64; N] = std::array::from_fn(|k| scaled[k] / scales[k]);
+            let scaled = lstsq_dynamic(&rows, &target, n);
+            let mut step: Vec<f64> = (0..n).map(|k| scaled[k] / scales[k]).collect();
             let max = max_or_nan(step.iter().map(|v| v.abs()));
             if !max.is_finite() {
                 return Err(invalid("strip inverse step overflow"));
@@ -1205,8 +1401,8 @@ fn search<const N: usize>(
                 step.iter_mut().for_each(|v| *v *= 0.25 / max);
             }
             // Projection is an explicit bounded-search operation, never an input/property repair.
-            let candidate = std::array::from_fn(|k| (p[k] + step[k]).clamp(0.0, 1.0));
-            let trial = match evaluate(input, candidate, budget) {
+            let candidate: Vec<f64> = (0..n).map(|k| (p[k] + step[k]).clamp(0.0, 1.0)).collect();
+            let trial = match evaluate(input, param_bounds, &candidate, budget) {
                 Ok(trial) => trial,
                 Err(ForwardFailure::Trial(_)) => {
                     lambda *= 10.0;
@@ -1233,7 +1429,7 @@ fn search<const N: usize>(
     Ok((
         Start {
             initial_fraction: initial,
-            parameters: physical(input, p).to_vec(),
+            parameters: physical(param_bounds, &p),
             fit_sse: e.sse,
             converged,
             iterations,
@@ -1261,22 +1457,11 @@ fn quality(values: &[f64]) -> Quality {
 /// Invalid acquisition/source/model input, exhausted aggregate work, or any failed forward solve.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     validate(input)?;
-    match bounds(input).len() {
-        4 => calibrate_n::<4>(input),
-        6 => calibrate_n::<6>(input),
-        7 => calibrate_n::<7>(input),
-        8 => calibrate_n::<8>(input),
-        9 => calibrate_n::<9>(input),
-        10 => calibrate_n::<10>(input),
-        11 => calibrate_n::<11>(input),
-        12 => calibrate_n::<12>(input),
-        13 => calibrate_n::<13>(input),
-        14 => calibrate_n::<14>(input),
-        _ => Err(invalid("unsupported strip identification parameter count")),
+    let param_bounds = bounds(input);
+    let n = param_bounds.len();
+    if n == 0 {
+        return Err(invalid("unsupported strip identification parameter count"));
     }
-}
-
-fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let prior_response = input
         .material
         .membrane_response
@@ -1344,7 +1529,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let mut evaluations = Vec::new();
     let mut cached_jacobians = Vec::new();
     for initial in [0.25, 0.5, 0.75] {
-        let (start, p, eval, cached_j) = search::<N>(input, initial, &mut budget)?;
+        let (start, p, eval, cached_j) = search(input, &param_bounds, initial, &mut budget)?;
         starts.push(start);
         coordinates.push(p);
         evaluations.push(eval);
@@ -1353,16 +1538,22 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let best = (0..starts.len())
         .min_by(|&a, &b| starts[a].fit_sse.total_cmp(&starts[b].fit_sse))
         .unwrap_or(0);
-    let p = coordinates[best];
+    let p = coordinates[best].clone();
     let parameters = starts[best].parameters.clone();
     let j = match input.policy.sensitivity {
-        SensitivityMode::FiniteDifference => jacobian(input, p, &mut budget, None)?,
+        SensitivityMode::FiniteDifference => jacobian(input, &param_bounds, &p, &mut budget, None)?,
         SensitivityMode::Adjoint => match cached_jacobians[best].take() {
             Some(j) => j,
-            None => adjoint_jacobian(input, p, &mut budget, &mut evaluations[best])?,
+            None => adjoint_jacobian(
+                input,
+                &param_bounds,
+                &p,
+                &mut budget,
+                &mut evaluations[best],
+            )?,
         },
     };
-    let pivot = excitation(&j);
+    let pivot = excitation(&j, n);
     let mut reasons = Vec::new();
     if starts.iter().any(|s| !s.converged) {
         reasons.push("not all three bounded starts reached objective stationarity".into());
@@ -1384,7 +1575,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         if start.fit_sse <= starts[best].fit_sse + 1e-8 * (1.0 + starts[best].fit_sse)
             && coordinates[i]
                 .iter()
-                .zip(p)
+                .zip(&p)
                 .any(|(a, b)| (a - b).abs() > 0.02)
         {
             reasons.push("equivalent FIT minima have materially different coefficients".into());
@@ -1736,7 +1927,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                 descriptors
             }),
         parameter_bounds: if input.area_response.is_some() {
-            bounds(input)
+            param_bounds
         } else {
             input
                 .nonlinear
@@ -2012,6 +2203,7 @@ mod tests {
                 sensitivity: SensitivityMode::Adjoint,
             },
         };
+        let param_bounds = bounds(&input);
         let p = [0.37, 0.61, 0.43, 0.52];
         let mut adj_budget = Budget {
             used: 0,
@@ -2022,10 +2214,11 @@ mod tests {
             input: &input,
             recovery: SearchRecovery::default(),
         };
-        let mut eval = evaluate(&input, p, &mut adj_budget)
+        let mut eval = evaluate(&input, &param_bounds, &p, &mut adj_budget)
             .map_err(ForwardFailure::refusal)
             .unwrap();
-        let j_adj = adjoint_jacobian(&input, p, &mut adj_budget, &mut eval).unwrap();
+        let j_adj =
+            adjoint_jacobian(&input, &param_bounds, &p, &mut adj_budget, &mut eval).unwrap();
         assert_eq!(adj_budget.used, 3);
         assert_eq!(adj_budget.adjoint_solves, 18); // 3 strips * (1 force + 1 width + 4 extensometers)
 
@@ -2039,7 +2232,7 @@ mod tests {
             input: &input,
             recovery: SearchRecovery::default(),
         };
-        let j_fd = jacobian(&input, p, &mut fd_budget, None).unwrap();
+        let j_fd = jacobian(&input, &param_bounds, &p, &mut fd_budget, None).unwrap();
         assert_eq!(fd_budget.used, 24); // 2 * 4 params * 3 strips
         assert_eq!(j_adj.len(), j_fd.len());
         for (row_idx, (a_row, f_row)) in j_adj.iter().zip(&j_fd).enumerate() {
@@ -2052,6 +2245,445 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn assert_adjoint_matches_fd(input: &Input, p: &[f64], tol: f64, label: &str) {
+        validate(input).unwrap_or_else(|e| panic!("{label}: validate failed: {e}"));
+        let param_bounds = bounds(input);
+        let n = param_bounds.len();
+        assert_eq!(p.len(), n, "{label}: coordinate count mismatch");
+        let prepare_family = || {
+            input.response_family.as_ref().map(|f| {
+                family::Prepared::new(
+                    f,
+                    &input.material.sources,
+                    input.parameter_bounds.as_slice().try_into().unwrap(),
+                )
+                .unwrap()
+            })
+        };
+        let mut adj_in = input.clone();
+        adj_in.policy.sensitivity = SensitivityMode::Adjoint;
+        let mut adj_budget = Budget {
+            used: 0,
+            adjoint_solves: 0,
+            limit: 2000,
+            inherited_domain: None,
+            family: prepare_family(),
+            input: &adj_in,
+            recovery: SearchRecovery::default(),
+        };
+        let mut eval = evaluate(&adj_in, &param_bounds, p, &mut adj_budget)
+            .map_err(ForwardFailure::refusal)
+            .unwrap_or_else(|e| panic!("{label}: adjoint evaluate failed: {e}"));
+        let j_adj = adjoint_jacobian(&adj_in, &param_bounds, p, &mut adj_budget, &mut eval)
+            .unwrap_or_else(|e| panic!("{label}: adjoint_jacobian failed: {e}"));
+        assert!(adj_budget.adjoint_solves > 0, "{label}: no adjoint solves");
+
+        let mut fd_in = input.clone();
+        fd_in.policy.sensitivity = SensitivityMode::FiniteDifference;
+        let mut fd_budget = Budget {
+            used: 0,
+            adjoint_solves: 0,
+            limit: 4000,
+            inherited_domain: None,
+            family: prepare_family(),
+            input: &fd_in,
+            recovery: SearchRecovery::default(),
+        };
+        let j_fd = jacobian(&fd_in, &param_bounds, p, &mut fd_budget, None)
+            .unwrap_or_else(|e| panic!("{label}: fd jacobian failed: {e}"));
+        assert_eq!(j_adj.len(), j_fd.len(), "{label}: row count mismatch");
+        assert!(
+            adj_budget.used < fd_budget.used,
+            "{label}: adjoint forward solves {} did not beat FD {}",
+            adj_budget.used,
+            fd_budget.used
+        );
+        let mut max_rel = 0.0_f64;
+        for (row_idx, (a_row, f_row)) in j_adj.iter().zip(&j_fd).enumerate() {
+            assert_eq!(a_row.len(), n);
+            assert_eq!(f_row.len(), n);
+            for col_idx in 0..n {
+                let a = a_row[col_idx];
+                let f = f_row[col_idx];
+                let rel = (a - f).abs() / (1.0 + f.abs());
+                max_rel = max_rel.max(rel);
+                assert!(
+                    rel <= tol,
+                    "{label} row={row_idx} col={col_idx}: adjoint={a} fd={f} rel={rel:.3e}"
+                );
+            }
+        }
+        assert!(max_rel <= tol, "{label}: max_rel={max_rel:.3e}");
+    }
+
+    #[test]
+    fn lstsq_dynamic_matches_core_lstsq_across_regimes() {
+        use ftx_core::linalg::lstsq;
+        // Well-conditioned 5x4 system.
+        let a4: Vec<[f64; 4]> = vec![
+            [1.0, 0.2, -0.5, 2.0],
+            [0.3, 1.5, 0.4, -0.7],
+            [-0.8, 0.1, 2.2, 0.5],
+            [0.6, -0.9, 0.3, 1.8],
+            [1.1, 0.7, -0.2, -1.3],
+        ];
+        let b4 = [0.5, -1.2, 2.3, 0.8, -0.4];
+        let a4_dyn: Vec<Vec<f64>> = a4.iter().map(|r| r.to_vec()).collect();
+        let ref4 = lstsq(&a4, &b4);
+        let dyn4 = lstsq_dynamic(&a4_dyn, &b4, 4);
+        for (a, b) in ref4.iter().zip(&dyn4) {
+            assert_eq!(a.to_bits(), b.to_bits(), "bit mismatch: {a} vs {b}");
+        }
+
+        // Rank-deficient 3x3 system.
+        let a3: Vec<[f64; 3]> = vec![[1.0, 1.0, 2.0], [2.0, 2.0, 4.0], [3.0, 3.0, 6.0]];
+        let b3 = [1.0, 2.0, 3.0];
+        let a3_dyn: Vec<Vec<f64>> = a3.iter().map(|r| r.to_vec()).collect();
+        let ref3 = lstsq(&a3, &b3);
+        let dyn3 = lstsq_dynamic(&a3_dyn, &b3, 3);
+        for (a, b) in ref3.iter().zip(&dyn3) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+
+        // Extreme-scale system triggering a_scale and b_scale paths.
+        let a2: Vec<[f64; 2]> = vec![[1e90, 2e90], [3e90, -1e90], [-2e90, 4e90]];
+        let b2 = [5e-90, -3e-90, 7e-90];
+        let a2_dyn: Vec<Vec<f64>> = a2.iter().map(|r| r.to_vec()).collect();
+        let ref2 = lstsq(&a2, &b2);
+        let dyn2 = lstsq_dynamic(&a2_dyn, &b2, 2);
+        for (a, b) in ref2.iter().zip(&dyn2) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+    }
+
+    #[test]
+    fn adjoint_jacobian_matches_central_fd_across_all_nonlinear_and_area_modes() {
+        let tight = Controls {
+            tolerance_m: 1e-12,
+            force_tolerance_n: 1e-8,
+            max_newton: 100,
+        };
+        let ext_op = Operator::MaterialChord {
+            start_fraction: [0.2, 0.25],
+            end_fraction: [0.8, 0.75],
+        };
+        let add_extensometer = |input: &mut Input| {
+            if let Some(exp) = input
+                .experiments
+                .iter_mut()
+                .find(|e| e.partition == Partition::Fit)
+                && let Some(obs) = exp.observations.first_mut()
+            {
+                obs.extensometers.push(Extensometer {
+                    id: format!("{}-mc", obs.id),
+                    operator: ext_op.clone(),
+                    value_m: 0.05,
+                    scale_m: 0.001,
+                });
+            }
+        };
+
+        // 1. response_family (4 params).
+        let mut family_in: Input = serde_json::from_str(include_str!(
+            "../../../../examples/strip-identification/synthetic-nonlinear-calibration.json"
+        ))
+        .unwrap();
+        family_in.controls = tight.clone();
+        add_extensometer(&mut family_in);
+        assert_adjoint_matches_fd(
+            &family_in,
+            &[0.41, 0.58, 0.37, 0.63],
+            1e-6,
+            "response_family",
+        );
+
+        // 2. response_family + area_response::Identify (6 params).
+        let mut area_id_in: Input = serde_json::from_str(include_str!(
+            "../../../../examples/area-response/identify.json"
+        ))
+        .unwrap();
+        area_id_in.controls = tight.clone();
+        add_extensometer(&mut area_id_in);
+        assert_adjoint_matches_fd(
+            &area_id_in,
+            &[0.44, 0.53, 0.39, 0.48, 0.61, 0.36],
+            1e-6,
+            "response_family+area_identify",
+        );
+
+        // 3. response_family + area_response::Preserve (4 params).
+        let mut area_pres_in = area_id_in.clone();
+        area_pres_in.area_response = Some(area::Area::Preserve {
+            allow_estimates: true,
+            scalar_green_strain_range: None,
+        });
+        assert_adjoint_matches_fd(
+            &area_pres_in,
+            &[0.44, 0.53, 0.39, 0.48],
+            1e-6,
+            "response_family+area_preserve",
+        );
+
+        // 4. scalar + area_response::Identify (6 params) & Preserve (4 params).
+        let mut scalar_area_in: Input = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json"
+        ))
+        .unwrap();
+        scalar_area_in.controls = tight.clone();
+        add_extensometer(&mut scalar_area_in);
+        assert_adjoint_matches_fd(
+            &scalar_area_in,
+            &[0.42, 0.57, 0.46, 0.51, 0.38, 0.62],
+            1e-6,
+            "scalar+area_identify",
+        );
+
+        // 5. nonlinear independent signed intervals (9 params).
+        let mut nl_in: Input = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-nonlinear-clamped-strip.json"
+        ))
+        .unwrap();
+        nl_in.controls = tight.clone();
+        add_extensometer(&mut nl_in);
+        assert_adjoint_matches_fd(
+            &nl_in,
+            &[0.41, 0.53, 0.47, 0.38, 0.62, 0.44, 0.56, 0.35, 0.49],
+            1e-6,
+            "nonlinear_9param",
+        );
+
+        // 6. nonlinear + area_response::Identify (11 params) — exercises arbitrary dynamic N > 10.
+        let mut nl_area_in = nl_in.clone();
+        nl_area_in
+            .conditions
+            .insert("specimen".into(), "synthetic-nl-area".into());
+        nl_area_in
+            .conditions
+            .insert("conditioning".into(), "synthetic".into());
+        nl_area_in.area_response = Some(area::Area::Identify {
+            parameter_bounds: [[5.0, 45.0], [5.0, 35.0]],
+            area_ratio_range: Some([0.65, 1.55]),
+            scalar_green_strain_range: None,
+        });
+        assert_adjoint_matches_fd(
+            &nl_area_in,
+            &[
+                0.41, 0.53, 0.47, 0.38, 0.62, 0.44, 0.56, 0.35, 0.49, 0.52, 0.43,
+            ],
+            1e-6,
+            "nonlinear+area_identify_11param",
+        );
+    }
+
+    #[test]
+    fn adjoint_jacobian_and_solve_reduction_on_sperl_sj1_measured_strips() {
+        use ftx_pattern::material_catalog::knit_strips;
+        use ftx_pattern::material_response::StressCurve;
+
+        let acquired = knit_strips::parse_acquisition(include_str!(
+            "../../../ftx-pattern/src/material_catalog/knit-strip-measurements.json"
+        ))
+        .unwrap();
+        let mut material = textile_import::catalog()
+            .unwrap()
+            .resolve(&Selection {
+                id: "sperl2022/SJ1".into(),
+                ..Selection::default()
+            })
+            .unwrap()
+            .frozen_selection()
+            .record
+            .unwrap();
+        let bias = std::f64::consts::FRAC_1_SQRT_2;
+        let axes = [
+            (
+                knit_strips::Direction::Warp,
+                "warp",
+                [0.0, 1.0],
+                Partition::Fit,
+            ),
+            (
+                knit_strips::Direction::Weft,
+                "weft",
+                [1.0, 0.0],
+                Partition::Fit,
+            ),
+            (
+                knit_strips::Direction::Bias,
+                "bias",
+                [bias, bias],
+                Partition::Check,
+            ),
+        ];
+        let mut experiments = Vec::new();
+        for (dir, name, axis, partition) in axes {
+            let curve = acquired
+                .curves
+                .iter()
+                .find(|c| c.specimen == "SJ1" && c.direction == dir)
+                .unwrap();
+            let key = format!("strip_{name}");
+            material.sources.insert(key.clone(), curve.source.clone());
+            let observations = [0.1, 0.2, 0.3]
+                .into_iter()
+                .map(|ext| {
+                    let row = curve.exact_loading(ext).unwrap();
+                    Observation {
+                        id: format!("SJ1/{name}/{}/line-{}", curve.sha256, row.csv_line),
+                        extension_fraction: row.extension_fraction,
+                        force_n: row.force_n,
+                        scale_n: 0.05,
+                        mid_width: None,
+                        extensometers: vec![],
+                    }
+                })
+                .collect();
+            experiments.push(Experiment {
+                id: format!("Sperl2022/SJ1/{name}"),
+                fixture: Fixture {
+                    gauge_length_m: acquired.protocol.free_gauge_length_m,
+                    width_m: acquired.protocol.reference_width_m,
+                    warp_axis: axis,
+                    cells: [2, 4],
+                },
+                source: key,
+                evidence: Evidence::Measured,
+                partition,
+                observations,
+            });
+        }
+        let mut conditions = acquired.protocol.conditions.clone();
+        conditions.insert("specimen".into(), "Sperl2022:SJ1".into());
+        conditions.insert(
+            "conditioning".into(),
+            "Sperl2022 laboratory conditions (unreported RH/T)".into(),
+        );
+        material.sources.insert(
+            "sj1-shape".into(),
+            Source {
+                reference: "test:sj1-nonlinear-adjoint-shape".into(),
+                accessed_on: "2026-11-27".into(),
+                note: "Declared piecewise-linear test shape for SJ1 adjoint Jacobian verification; not measured curve evidence".into(),
+            },
+        );
+        let shape_curve = |pts: &[[f64; 2]]| StressCurve {
+            points: pts.to_vec(),
+            source: "sj1-shape".into(),
+            evidence: Evidence::Estimate,
+            method: "Declared stiffening test shape for SJ1 adjoint verification".into(),
+            conditions: conditions.clone(),
+        };
+        let tight = Controls {
+            tolerance_m: 1e-12,
+            force_tolerance_n: 1e-8,
+            max_newton: 100,
+        };
+        let base_sj1 = Input {
+            schema: "ftx-strip-calibration/1".into(),
+            material,
+            method:
+                "Sperl et al. (2022) SJ1 original loading-force rows; planar elastic strip test"
+                    .into(),
+            conditions,
+            fitted_on: "2026-11-27".into(),
+            experiments,
+            parameter_bounds: vec![[0.5, 2.0], [0.5, 2.0], [0.5, 2.0], [-4.0, 4.0]],
+            response_family: Some(family::Family {
+                model: family::MODEL.into(),
+                warp: shape_curve(&[[-0.35, -8.0], [0.0, 0.0], [0.12, 3.0], [0.5, 28.0]]),
+                weft: shape_curve(&[[-0.35, -5.0], [0.0, 0.0], [0.12, 1.5], [0.5, 16.0]]),
+                shear: shape_curve(&[[-0.4, -3.0], [0.0, 0.0], [0.4, 3.0]]),
+                allow_estimated_shapes: true,
+            }),
+            nonlinear: None,
+            area_response: Some(area::Area::Identify {
+                parameter_bounds: [[0.5, 15.0], [0.5, 15.0]],
+                area_ratio_range: Some([0.6, 1.8]),
+                scalar_green_strain_range: None,
+            }),
+            admit_planar_elastic_model: true,
+            allow_estimated_observations: false,
+            replace_existing: false,
+            allow_estimates: true,
+            controls: tight,
+            policy: Policy {
+                max_rms_scaled: 2.0,
+                max_peak_scaled: 4.0,
+                max_mesh_scaled: 2.0,
+                min_excitation_pivot: 1e-6,
+                max_iterations: 12,
+                max_forward_solves: 4000,
+                sensitivity: SensitivityMode::Adjoint,
+            },
+        };
+        // 1. SJ1 response_family + area_response::Identify (6 params): exact Jacobian parity < 1e-6.
+        assert_adjoint_matches_fd(
+            &base_sj1,
+            &[0.42, 0.55, 0.48, 0.52, 0.37, 0.61],
+            1e-6,
+            "sperl_sj1_family+area",
+        );
+
+        // 2. SJ1 independent signed nonlinear intervals (9 params, using warp/weft/bias as FIT
+        //    so 9 FIT force channels >= 9 parameters): exact Jacobian parity < 1e-6.
+        let mut sj1_nl = base_sj1.clone();
+        for exp in &mut sj1_nl.experiments {
+            exp.partition = Partition::Fit;
+        }
+        sj1_nl.response_family = None;
+        sj1_nl.area_response = None;
+        sj1_nl.parameter_bounds.clear();
+        sj1_nl.nonlinear = Some(Nonlinear {
+            strain_knots: [
+                vec![-0.35, 0.0, 0.12, 0.5],
+                vec![-0.35, 0.0, 0.12, 0.5],
+                vec![-0.4, 0.0, 0.4],
+            ],
+            tangent_bounds: [
+                vec![[10.0, 60.0], [10.0, 60.0], [20.0, 120.0]],
+                vec![[5.0, 40.0], [5.0, 40.0], [15.0, 90.0]],
+                vec![[3.0, 30.0], [3.0, 30.0]],
+            ],
+            coupling_bounds: [-3.0, 3.0],
+        });
+        assert_adjoint_matches_fd(
+            &sj1_nl,
+            &[0.45, 0.52, 0.38, 0.61, 0.44, 0.57, 0.49, 0.53, 0.51],
+            1e-6,
+            "sperl_sj1_nonlinear_9param",
+        );
+
+        // 3. End-to-end SJ1 nonlinear calibration solve-count reduction vs FD baseline.
+        sj1_nl.policy.max_iterations = 6;
+        sj1_nl.policy.max_forward_solves = 16_000;
+        sj1_nl.policy.sensitivity = SensitivityMode::FiniteDifference;
+        let fd = calibrate(&sj1_nl).unwrap();
+        let mut sj1_nl_adj = sj1_nl;
+        sj1_nl_adj.policy.sensitivity = SensitivityMode::Adjoint;
+        let adj = calibrate(&sj1_nl_adj).unwrap();
+        assert!(adj.adjoint_solves > 0);
+        assert!(
+            adj.forward_solves * 5 < fd.forward_solves,
+            "SJ1 9-param nonlinear adjoint should cut forward solves dramatically: adjoint={} vs fd={}",
+            adj.forward_solves,
+            fd.forward_solves
+        );
+        let best_fd = fd
+            .starts
+            .iter()
+            .map(|s| s.fit_sse)
+            .fold(f64::INFINITY, f64::min);
+        let best_adj = adj
+            .starts
+            .iter()
+            .map(|s| s.fit_sse)
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            (best_adj - best_fd).abs() <= 1e-3 * (1.0 + best_fd),
+            "SJ1 nonlinear FIT SSE mismatch: adjoint={best_adj} vs fd={best_fd}"
+        );
     }
 
     #[test]

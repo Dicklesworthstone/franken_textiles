@@ -64,6 +64,7 @@ pub(super) struct Prepared {
     sources: BTreeMap<String, Source>,
     candidate_source: String,
     domain: StrainDomain,
+    template: CompiledMembrane,
 }
 
 impl Prepared {
@@ -125,14 +126,16 @@ impl Prepared {
                 note: "Unpublished constant-coupling trial in the declared shape family; no measurement or accepted material is asserted.".into(),
             },
         );
-        let mut prepared = Self {
+        let template = Self::build_response(family, &candidate_source, [1.0, 1.0, 1.0, 0.0])
+            .compile(&sources, true)?;
+        let domain = StrainDomain::new(template.strain_range())?;
+        let prepared = Self {
             family: family.clone(),
             sources,
             candidate_source,
-            domain: StrainDomain::new([[0.0, 0.0]; 3])?,
+            domain,
+            template,
         };
-        let template = prepared.compile([1.0, 1.0, 1.0, 0.0])?;
-        prepared.domain = StrainDomain::new(template.strain_range())?;
         // Scaling positive directional tangents is monotone. The production compiler at the
         // smallest scales and largest |coupling| therefore checks the entire declared box.
         let coupling = bounds[3][0].abs().max(bounds[3][1].abs());
@@ -146,7 +149,11 @@ impl Prepared {
         self.domain
     }
 
-    pub(super) fn response(&self, parameters: [f64; 4]) -> TabulatedMembrane {
+    fn build_response(
+        family: &Family,
+        candidate_source: &str,
+        parameters: [f64; 4],
+    ) -> TabulatedMembrane {
         let curve = |shape: &StressCurve, scale: f64| {
             let mut curve = shape.clone();
             for point in &mut curve.points {
@@ -158,19 +165,52 @@ impl Prepared {
             model: ftx_pattern::material_response::MODEL.into(),
             interpolation: Interpolation::PiecewiseLinear,
             area_response: None,
-            warp: curve(&self.family.warp, parameters[0]),
-            weft: curve(&self.family.weft, parameters[1]),
-            shear: curve(&self.family.shear, parameters[2]),
+            warp: curve(&family.warp, parameters[0]),
+            weft: curve(&family.weft, parameters[1]),
+            shear: curve(&family.shear, parameters[2]),
             coupling: Quantity {
                 value: parameters[3],
                 unit: "N/m".into(),
                 evidence: Evidence::Estimate,
-                source: self.candidate_source.clone(),
+                source: candidate_source.to_owned(),
                 method: "Unpublished signed constant normal-coupling candidate in a fixed-shape inverse experiment.".into(),
                 conditions: BTreeMap::new(),
                 bounds: None,
             },
         }
+    }
+
+    pub(super) fn response(&self, parameters: [f64; 4]) -> TabulatedMembrane {
+        Self::build_response(&self.family, &self.candidate_source, parameters)
+    }
+
+    /// Accumulate one membrane element's pullback `A_e (∂S_sep/∂θ)ᵀ w_sep` for the four
+    /// `[warp_scale, weft_scale, shear_scale, normal_coupling]` family parameters.
+    pub(super) fn accumulate_pullback(
+        &self,
+        eff_strain: [f64; 3],
+        w_sep: [f64; 3],
+        area: f64,
+        out: &mut [f64],
+    ) -> Result<(), Refusal> {
+        if out.len() < 4 {
+            return Err(invalid(
+                "response_family adjoint pullback requires four base parameter slots",
+            ));
+        }
+        let unit = self
+            .template
+            .evaluate_separable(eff_strain)
+            .ok_or_else(|| {
+                invalid(
+                    "response_family strain left declared template support during adjoint pullback",
+                )
+            })?;
+        out[0] += area * unit.stress[0] * w_sep[0];
+        out[1] += area * unit.stress[1] * w_sep[1];
+        out[2] += area * unit.stress[2] * w_sep[2];
+        out[3] += area * (eff_strain[1] * w_sep[0] + eff_strain[0] * w_sep[1]);
+        Ok(())
     }
 
     pub(super) fn compile(&self, parameters: [f64; 4]) -> Result<CompiledMembrane, Refusal> {

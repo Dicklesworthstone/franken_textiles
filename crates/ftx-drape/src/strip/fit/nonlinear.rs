@@ -205,4 +205,57 @@ impl Nonlinear {
             },
         })
     }
+
+    /// Accumulate one membrane element's exact pullback `A_e (∂S_sep/∂θ)ᵀ w_sep` over all
+    /// signed interval tangents (warp, weft, shear) and the trailing normal-coupling parameter.
+    pub(super) fn accumulate_pullback(
+        &self,
+        eff_strain: [f64; 3],
+        w_sep: [f64; 3],
+        area: f64,
+        out: &mut [f64],
+    ) -> Result<(), Refusal> {
+        let expected = self.bounds().len();
+        if out.len() < expected {
+            return Err(invalid(
+                "nonlinear strip adjoint pullback parameter slice is shorter than interval count",
+            ));
+        }
+        let mut offset = 0usize;
+        for axis in 0..3 {
+            let knots = &self.strain_knots[axis];
+            let eps = eff_strain[axis];
+            let n_intervals = knots.len() - 1;
+            if !eps.is_finite() || eps < knots[0] || eps > knots[n_intervals] {
+                return Err(invalid(
+                    "nonlinear strip strain left declared knot support during adjoint pullback",
+                ));
+            }
+            let origin = knots
+                .iter()
+                .position(|&v| v == 0.0)
+                .ok_or_else(|| invalid("nonlinear strip origin is absent"))?;
+            let wa = area * w_sep[axis];
+            if wa != 0.0 {
+                if eps > 0.0 {
+                    for i in origin..n_intervals {
+                        if eps <= knots[i] {
+                            break;
+                        }
+                        out[offset + i] += wa * (eps.min(knots[i + 1]) - knots[i]);
+                    }
+                } else if eps < 0.0 {
+                    for i in (0..origin).rev() {
+                        if eps >= knots[i + 1] {
+                            break;
+                        }
+                        out[offset + i] -= wa * (knots[i + 1] - eps.max(knots[i]));
+                    }
+                }
+            }
+            offset += n_intervals;
+        }
+        out[offset] += area * (eff_strain[1] * w_sep[0] + eff_strain[0] * w_sep[1]);
+        Ok(())
+    }
 }

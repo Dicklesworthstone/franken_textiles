@@ -1395,7 +1395,17 @@ impl Solver {
             }
         };
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let l = self.model.membrane_local(i, &self.x);
+            let l = self.model.membrane_response(i).map_or_else(
+                || self.model.membrane_local(i, &self.x),
+                |law| {
+                    e.response_local_with_model(
+                        &self.x,
+                        law,
+                        &self.model.material(i),
+                        self.model.compression_model,
+                    )
+                },
+            );
             accum(&e.v, &l.hess);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
@@ -1517,18 +1527,21 @@ impl Solver {
         Ok(())
     }
 
-    pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
+    pub(crate) fn is_memoryless_elastic_for_adjoint(&self) -> bool {
         !self.model.is_heterogeneous()
             && self.model.bending_model.is_default()
             && self.model.hinges.iter().all(|h| h.rest_angle == 0.0)
             && self.model.element_materials.is_none()
-            && self.model.element_responses.is_none()
             && self.model.hinge_bending.is_none()
             && self.model.panel_bending.is_none()
             && self.relaxation.is_none()
             && self.plasticity.is_none()
             && self.membrane_plasticity.is_none()
             && !self.contact.as_ref().is_some_and(|c| c.has_friction())
+    }
+
+    pub(crate) fn is_homogeneous_elastic_for_adjoint(&self) -> bool {
+        self.is_memoryless_elastic_for_adjoint() && self.model.element_responses.is_none()
     }
 
     /// Test-only helper matching the legacy static / implicit-Euler potential signature.
