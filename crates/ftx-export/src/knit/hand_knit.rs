@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use ftx_core::receipt::sha256_hex;
-use ftx_core::{Refusal, Vec2};
+use ftx_core::{Refusal, RefusalCode, Vec2};
 use ftx_pattern::knit::{KnitDoc, LoopKind};
 
 use crate::checks::{CheckItem, pdf_objects};
@@ -44,6 +44,20 @@ pub fn export_hand_knit_document(
     created: &str,
 ) -> Result<HandKnitExportBundle, Refusal> {
     doc.validate()?;
+    if doc.wearer_age_class.is_child() && doc.has_hood_or_neck_drawstring {
+        return Err(Refusal::new(
+            RefusalCode::MaterialProcessHazard,
+            "EN 14682 child-safety refusal: hand-knit chart export refuses hood or neck drawstrings on child/infant knitwear",
+        )
+        .repair("remove hood/neck drawstrings and replace with ribbed shaping or concealed snaps"));
+    }
+    if doc.wearer_age_class.is_infant() && doc.short_row_turns.iter().any(|turn| !turn.anchored) {
+        return Err(Refusal::new(
+            RefusalCode::MaterialProcessHazard,
+            "infant-safety refusal: hand-knit chart export refuses unanchored short-row eyelet holes on infant (<3 yr) knitwear",
+        )
+        .repair("anchor every short-row turn with a wrap-and-turn or German short-row double stitch"));
+    }
 
     let mut min_w = i32::MAX;
     let mut max_w = i32::MIN;
@@ -55,8 +69,22 @@ pub fn export_hand_knit_document(
         max_c = max_c.max(st.course);
         grid.insert((st.course, st.wale), st.kind);
     }
-    let cols = (max_w - min_w + 1) as usize;
-    let rows = (max_c + 1) as usize;
+    let cols_i64 = i64::from(max_w) - i64::from(min_w) + 1;
+    let rows_u64 = u64::from(max_c) + 1;
+    if cols_i64 <= 0
+        || cols_i64 > 2_000
+        || rows_u64 > 5_000
+        || (cols_i64 as u64).saturating_mul(rows_u64) > 500_000
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "hand-knit chart grid {cols_i64} x {rows_u64} exceeds vector export budget (max 2000 cols, 5000 rows, 500000 cells)"
+            ),
+        ));
+    }
+    let cols = cols_i64 as usize;
+    let rows = rows_u64 as usize;
 
     // Layout geometry in mm (y down on page)
     let margin = 15.0;
@@ -130,7 +158,7 @@ pub fn export_hand_knit_document(
         }
         // Row index every 5 rows + row 1
         let row_num = course + 1;
-        if row_num == 1 || row_num % 5 == 0 {
+        if row_num == 1 || row_num.is_multiple_of(5) {
             let _ = write!(
                 svg,
                 r#"<text x="{x}" y="{y}" font-family="Helvetica, sans-serif" font-size="2.5">{row_num}</text>"#,
@@ -241,7 +269,7 @@ pub fn export_hand_knit_document(
             }
         }
         let row_num = course + 1;
-        if row_num == 1 || row_num % 5 == 0 {
+        if row_num == 1 || row_num.is_multiple_of(5) {
             cv.fill_gray(0.0);
             cv.text(
                 chart_x + chart_w + 2.0,
@@ -285,15 +313,15 @@ pub fn export_hand_knit_document(
     let _ = writeln!(instr, "# {title}");
     let _ = writeln!(instr, "{gauge_line}\n");
     for course in 0..=max_c {
-        let side = if course % 2 == 0 { "RS" } else { "WS" };
+        let side = if course.is_multiple_of(2) { "RS" } else { "WS" };
         let mut counts: Vec<(LoopKind, usize)> = Vec::new();
         for wale in min_w..=max_w {
             if let Some(&kind) = grid.get(&(course, wale)) {
-                if let Some(last) = counts.last_mut() {
-                    if last.0 == kind {
-                        last.1 += 1;
-                        continue;
-                    }
+                if let Some(last) = counts.last_mut()
+                    && last.0 == kind
+                {
+                    last.1 += 1;
+                    continue;
                 }
                 counts.push((kind, 1));
             }
@@ -323,12 +351,35 @@ pub fn check_hand_knit_svg(text: &str, file: &str) -> Vec<CheckItem> {
     let root = parsed.as_ref();
     let attr = |k: &str| root.and_then(|r| r.get(k)).unwrap_or("").to_string();
     let (w, h, vb) = (attr("width"), attr("height"), attr("viewBox"));
-    let mm_ok = root.is_some() && w.ends_with("mm") && h.ends_with("mm") && !vb.is_empty();
+    let mut mm_ok = root.is_some() && w.ends_with("mm") && h.ends_with("mm");
+    if mm_ok {
+        let v: Option<Vec<f64>> = vb.split_whitespace().map(|q| q.parse().ok()).collect();
+        let num = |s: &str| s[..s.len() - 2].trim().parse::<f64>().ok();
+        mm_ok = match (v, num(&w), num(&h)) {
+            (Some(v), Some(wv), Some(hv)) => {
+                v.len() == 4
+                    && wv.is_finite()
+                    && hv.is_finite()
+                    && wv > 0.0
+                    && hv > 0.0
+                    && v[0] == 0.0
+                    && v[1] == 0.0
+                    && (v[2] - wv).abs() < 1e-6
+                    && (v[3] - hv).abs() < 1e-6
+            }
+            _ => false,
+        };
+    }
+    let no_transform_ok = root.is_some_and(|r| {
+        !r.descendants()
+            .into_iter()
+            .any(|el| el.get("transform").is_some())
+    });
     vec![
         CheckItem {
             check: "hand_knit_svg.no_transform".to_string(),
             file: file.to_string(),
-            ok: !text.contains("transform"),
+            ok: no_transform_ok,
             detail: String::new(),
         },
         CheckItem {
@@ -360,9 +411,13 @@ pub fn check_hand_knit_pdf(bytes: &[u8], file: &str) -> Vec<CheckItem> {
     let header_ok = bytes.starts_with(b"%PDF-1.");
     let eof_ok = bytes.ends_with(b"%%EOF\n") || bytes.ends_with(b"%%EOF\r\n");
     let objs = pdf_objects(bytes);
-    let has_page = objs
+    let has_page = objs.values().any(|(dict, _)| {
+        let s = String::from_utf8_lossy(dict);
+        s.contains("/Type /Page") && !s.contains("/Type /Pages")
+    });
+    let has_decoded_stream = objs
         .values()
-        .any(|(dict, _)| String::from_utf8_lossy(dict).contains("/Type /Page"));
+        .any(|(_, stream)| stream.as_ref().is_some_and(|st| !st.is_empty()));
     let has_font = objs
         .values()
         .any(|(dict, _)| String::from_utf8_lossy(dict).contains("/BaseFont /Helvetica"));
@@ -376,7 +431,7 @@ pub fn check_hand_knit_pdf(bytes: &[u8], file: &str) -> Vec<CheckItem> {
         CheckItem {
             check: "hand_knit_pdf.pages_and_winansi_font".to_string(),
             file: file.to_string(),
-            ok: has_page && has_font,
+            ok: has_page && has_decoded_stream && has_font,
             detail: format!("objects={}", objs.len()),
         },
     ]
@@ -614,5 +669,78 @@ mod tests {
         let shima = MachineProfile::shima_seiki_12e_handoff();
         let err = refuse_proprietary_binary_target(&shima, ".dat").unwrap_err();
         assert_eq!(err.code, RefusalCode::OpaqueProprietaryTarget);
+    }
+
+    #[test]
+    fn knit_exporters_fail_closed_without_silent_clamping_or_false_svg_negatives() {
+        let kniterate = MachineProfile::kniterate_7e();
+        let mut doc = draft_calibration_swatch(&kniterate, "wool-200tex", 12, 4, &[6.0]).unwrap();
+        // Pattern whose name contains "transform" must NOT trigger SVG no_transform false negative!
+        doc.name = "transformer_vest".to_string();
+        let hand = export_hand_knit_document(&doc, "2026-11-27T08:00").unwrap();
+        assert!(
+            check_hand_knit_svg(&hand.svg_text, "vest.svg")
+                .iter()
+                .all(|c| c.ok)
+        );
+        // Actual SVG transform attribute MUST still fail!
+        let bad_svg = hand.svg_text.replace(
+            r#"<g id="cyc-legend">"#,
+            r#"<g id="cyc-legend" transform="scale(2)">"#,
+        );
+        assert!(
+            !check_hand_knit_svg(&bad_svg, "bad.svg")
+                .iter()
+                .all(|c| c.ok)
+        );
+        // PDF with only /Type /Pages and no page/stream must fail check_hand_knit_pdf
+        let fake_pdf =
+            b"%PDF-1.4\n1 0 obj\n<< /Type /Pages /BaseFont /Helvetica >>\nendobj\n%%EOF\n";
+        assert!(
+            !check_hand_knit_pdf(fake_pdf, "fake.pdf")
+                .iter()
+                .all(|c| c.ok)
+        );
+
+        // Extreme wale span refused cleanly with BudgetExceeded instead of overflowing/OOMing
+        let mut huge_doc = doc.clone();
+        huge_doc.stitches[0].wale = i32::MIN + 1;
+        huge_doc.stitches[1].wale = i32::MAX - 1;
+        assert_eq!(
+            export_hand_knit_document(&huge_doc, "2026-11-27T08:00")
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+
+        // Kniterate refuses tampered program digest, out-of-range dial, and swatch overspeed
+        let compiled = compile_knit_doc(&doc, &kniterate, None, None, None).unwrap();
+        let mut tampered = compiled.clone();
+        tampered
+            .program
+            .ops
+            .push(ftx_pattern::knit::KnitoutOp::Comment {
+                text: "tamper".to_string(),
+            });
+        assert_eq!(
+            export_kniterate_kc(&tampered, &kniterate).unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+
+        let mut bad_prof = kniterate.clone();
+        bad_prof.min_carrier_spacing = 1;
+        assert_eq!(
+            export_kniterate_kc(&compiled, &bad_prof).unwrap_err().code,
+            RefusalCode::MachineStateInfeasible
+        );
+
+        // Brother AYAB refuses mismatched cert machine hash
+        let kh930 = MachineProfile::brother_kh930_ayab();
+        assert_eq!(
+            export_brother_ayab(&doc, &kh930, &compiled.cert)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
     }
 }

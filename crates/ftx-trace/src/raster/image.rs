@@ -642,7 +642,7 @@ pub fn load_target_raster_with_limit(
 fn decode_png_rgba_with_limit(
     bytes: &[u8],
     max_pixels: usize,
-) -> Result<(usize, usize, Vec<[u8; 3]>, Vec<f32>), String> {
+) -> Result<super::StraightRgbaPixels, String> {
     let decoded = decode_png_raw_samples(bytes, max_pixels)?;
     let to8 = |v: u16| -> u8 {
         match decoded.depth {

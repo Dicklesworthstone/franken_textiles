@@ -202,6 +202,14 @@ impl RveHomogenizedKnitCard {
                 ),
             ));
         }
+        Refusal::finite("rest_pore_fraction", self.rest_pore_fraction)?;
+        Refusal::finite("pore_strain_slope", self.pore_strain_slope)?;
+        if !(0.0..1.0).contains(&self.rest_pore_fraction) || self.pore_strain_slope < 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "RVE card requires rest_pore_fraction in [0, 1) and pore_strain_slope >= 0",
+            ));
+        }
         self.membrane.validate()?;
         self.bending.validate()?;
         Ok(())
@@ -249,10 +257,21 @@ pub fn audit_local_knit_patch(
     wale_pitch_m: f64,
 ) -> Result<LocalAuditPatchResult, Refusal> {
     card.validate()?;
+    for (i, &k) in input.macro_curvature.iter().enumerate() {
+        Refusal::finite(&format!("macro_curvature[{i}]"), k)?;
+    }
+    Refusal::finite("patch_span_m", input.patch_span_m)?;
+    Refusal::finite("wale_pitch_m", wale_pitch_m)?;
+    if input.patch_span_m <= 0.0 || wale_pitch_m <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "patch_span_m and wale_pitch_m must be strictly positive",
+        ));
+    }
     let mem = card.membrane.evaluate(input.macro_strain)?;
     let bend = card.bending.evaluate_from_kappa(input.macro_curvature);
     let peak_resultant_n_m = (mem.stress[0] * mem.stress[0] + mem.stress[1] * mem.stress[1]).sqrt();
-    let estimated_peak_yarn_tension_n = peak_resultant_n_m * wale_pitch_m.max(1e-4);
+    let estimated_peak_yarn_tension_n = peak_resultant_n_m * wale_pitch_m;
     let pore_open_fraction = card.pore_open_fraction(input.macro_strain[0], input.macro_strain[1]);
     Ok(LocalAuditPatchResult {
         energy_density_j_m2: mem.energy_density + bend.energy_density,
@@ -314,6 +333,12 @@ pub fn calibrate_knit_prior_to_uniaxial_strips(
             return Err(Refusal::new(
                 RefusalCode::DegenerateGeometry,
                 "uniaxial observations have zero prior excitation",
+            ));
+        }
+        if num <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "uniaxial observations have non-positive projection onto prior stiffness",
             ));
         }
         Ok((num / den).clamp(0.1, 10.0))

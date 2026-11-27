@@ -450,14 +450,165 @@ pub struct KnitHysteresisBank {
     pub huber_eps: f64,
 }
 
+/// Exact incremental potential, stress, consistent tangent, and trial next state of
+/// [`KnitHysteresisBank::evaluate_potential_trial`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct KnitHysteresisEval {
+    /// Incremental play-bank potential density `Psi_inc(E; p_old)` in J/m² (`dPsi/dE == stress`).
+    pub energy_density: f64,
+    /// Additive hysteretic Voigt stress `[S11, S22, S12]` in N/m.
+    pub stress: [f64; 3],
+    /// Exact consistent SPD 3x3 tangent `dS/dE` in N/m.
+    pub tangent: [[f64; 3]; 3],
+    /// Pure-functional trial next state (commit only on accepted converged step!).
+    pub next_state: KnitHysteresisState,
+}
+
 impl KnitHysteresisBank {
+    /// Representative 2-mode single-jersey frictional play bank (tagged estimate until cyclic coupon fit).
+    #[must_use]
+    pub fn reference_jersey_estimate() -> Self {
+        Self {
+            thresholds: vec![0.02, 0.08],
+            weights: vec![12.0, 28.0],
+            huber_eps: 1e-3,
+        }
+    }
+
+    /// Validates threshold/weight lengths, finiteness, and `r_k > huber_eps > 0`, `w_k >= 0`.
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`], [`RefusalCode::OutOfRange`], or [`RefusalCode::NonFinite`].
+    pub fn validate(&self) -> Result<(), Refusal> {
+        if self.thresholds.len() != self.weights.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "KnitHysteresisBank thresholds and weights must have equal length",
+            ));
+        }
+        Refusal::finite("huber_eps", self.huber_eps)?;
+        if self.huber_eps <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "KnitHysteresisBank requires huber_eps > 0",
+            ));
+        }
+        for (k, (&rk, &wk)) in self.thresholds.iter().zip(&self.weights).enumerate() {
+            Refusal::finite(&format!("thresholds[{k}]"), rk)?;
+            Refusal::finite(&format!("weights[{k}]"), wk)?;
+            if rk <= self.huber_eps || wk < 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "KnitHysteresisBank mode {k} requires threshold ({rk}) > huber_eps ({}) and weight ({wk}) >= 0",
+                        self.huber_eps
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Initializes zero-strain committed history matching this play bank.
     #[must_use]
     pub fn zero_state(&self) -> KnitHysteresisState {
+        let n = self.thresholds.len().min(self.weights.len());
         KnitHysteresisState {
-            play_backstrain: vec![[0.0; 3]; self.thresholds.len()],
+            play_backstrain: vec![[0.0; 3]; n],
             dissipated_j_m2: 0.0,
         }
+    }
+
+    /// Pure-functional trial evaluation returning exact incremental potential density, stress,
+    /// consistent SPD tangent, and trial next state (`d(energy_density)/dE == stress`).
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] or [`RefusalCode::OutOfRange`] on invalid bank or non-finite strain/state.
+    pub fn evaluate_potential_trial(
+        &self,
+        e: [f64; 3],
+        committed: &KnitHysteresisState,
+    ) -> Result<KnitHysteresisEval, Refusal> {
+        self.validate()?;
+        if e.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "hysteresis strain is non-finite",
+            ));
+        }
+        if !committed.dissipated_j_m2.is_finite()
+            || committed.dissipated_j_m2 < 0.0
+            || committed
+                .play_backstrain
+                .iter()
+                .flatten()
+                .any(|v| !v.is_finite())
+        {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "committed hysteresis state is non-finite or negative",
+            ));
+        }
+        let n = self.thresholds.len();
+        let mut energy_density = 0.0;
+        let mut stress = [0.0; 3];
+        let mut tangent = [[0.0; 3]; 3];
+        let mut next = committed.clone();
+        if next.play_backstrain.len() != n {
+            next.play_backstrain.resize(n, [0.0; 3]);
+        }
+        let eps = self.huber_eps;
+        let eps2 = eps * eps;
+        for k in 0..n {
+            let rk = self.thresholds[k];
+            let wk = self.weights[k];
+            let p_old = next.play_backstrain[k];
+            let d = [e[0] - p_old[0], e[1] - p_old[1], e[2] - p_old[2]];
+            let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            let norm = (d2 + eps2).sqrt();
+            if norm > rk {
+                let scale = rk / norm;
+                let slip = 1.0 - scale;
+                let p_new = [
+                    p_old[0] + slip * d[0],
+                    p_old[1] + slip * d[1],
+                    p_old[2] + slip * d[2],
+                ];
+                let rel = [e[0] - p_new[0], e[1] - p_new[1], e[2] - p_new[2]];
+                // C^0-continuous energy, C^1-continuous stress, exact radial-return tangent:
+                // Psi_k = w_k * r_k * (norm - r_k) + 0.5 * w_k * (r_k^2 - eps^2)
+                energy_density += wk * (rk * (norm - rk) + 0.5 * (rk * rk - eps2));
+                for i in 0..3 {
+                    stress[i] += wk * rel[i];
+                }
+                let factor = wk * scale;
+                let inv_n2 = 1.0 / (norm * norm);
+                for i in 0..3 {
+                    tangent[i][i] += factor;
+                    for j in 0..3 {
+                        tangent[i][j] -= factor * d[i] * d[j] * inv_n2;
+                    }
+                }
+                let dp0 = p_new[0] - p_old[0];
+                let dp1 = p_new[1] - p_old[1];
+                let dp2 = p_new[2] - p_old[2];
+                let dp_norm = (dp0 * dp0 + dp1 * dp1 + dp2 * dp2).sqrt();
+                next.dissipated_j_m2 += wk * rk * dp_norm;
+                next.play_backstrain[k] = p_new;
+            } else {
+                energy_density += 0.5 * wk * d2;
+                for i in 0..3 {
+                    stress[i] += wk * d[i];
+                    tangent[i][i] += wk;
+                }
+            }
+        }
+        Ok(KnitHysteresisEval {
+            energy_density,
+            stress,
+            tangent,
+            next_state: next,
+        })
     }
 
     /// Pure-functional trial evaluation returning `(stress_delta, tangent_delta, trial_next_state)`.
@@ -467,14 +618,15 @@ impl KnitHysteresisBank {
         e: [f64; 3],
         committed: &KnitHysteresisState,
     ) -> ([f64; 3], [[f64; 3]; 3], KnitHysteresisState) {
+        let n = self.thresholds.len().min(self.weights.len());
         let mut stress = [0.0; 3];
         let mut tangent = [[0.0; 3]; 3];
         let mut next = committed.clone();
-        if next.play_backstrain.len() != self.thresholds.len() {
-            next.play_backstrain.resize(self.thresholds.len(), [0.0; 3]);
+        if next.play_backstrain.len() != n {
+            next.play_backstrain.resize(n, [0.0; 3]);
         }
         let eps = self.huber_eps.max(1e-8);
-        for k in 0..self.thresholds.len() {
+        for k in 0..n {
             let rk = self.thresholds[k].max(1e-8);
             let wk = self.weights[k].max(0.0);
             let p_old = next.play_backstrain[k];
@@ -502,10 +654,10 @@ impl KnitHysteresisBank {
                         tangent[i][j] -= factor * d[i] * d[j] * inv_n2;
                     }
                 }
-                let dp_norm = ((p_new[0] - p_old[0]).powi(2)
-                    + (p_new[1] - p_old[1]).powi(2)
-                    + (p_new[2] - p_old[2]).powi(2))
-                .sqrt();
+                let dp0 = p_new[0] - p_old[0];
+                let dp1 = p_new[1] - p_old[1];
+                let dp2 = p_new[2] - p_old[2];
+                let dp_norm = (dp0 * dp0 + dp1 * dp1 + dp2 * dp2).sqrt();
                 next.dissipated_j_m2 += wk * rk * dp_norm;
                 next.play_backstrain[k] = p_new;
             } else {
@@ -576,6 +728,17 @@ pub fn assess_knit_shell_state(
     crease_risk: f64,
     evidence: Evidence,
 ) -> Result<KnitShellAssessment, Refusal> {
+    for (name, val) in [
+        ("max_strain_ratio", max_strain_ratio),
+        ("min_jamming_margin", min_jamming_margin),
+        ("edge_curl_rad", edge_curl_rad),
+        ("rib_transition_shear", rib_transition_shear),
+        ("pore_open_fraction", pore_open_fraction),
+        ("hysteresis_drift_strain", hysteresis_drift_strain),
+        ("crease_risk", crease_risk),
+    ] {
+        Refusal::finite(name, val)?;
+    }
     let mut flags = Vec::new();
     if min_jamming_margin < 0.05 {
         flags.push(KnitHonestyFlag::KnitJamming);
@@ -719,5 +882,29 @@ mod tests {
         let (sig_unload, _, s2) = bank.evaluate_trial([0.0, 0.0, 0.0], &s1);
         assert!(sig_unload[0] < 0.0); // negative residual spring-back force on return to 0!
         assert!(s2.dissipated_j_m2 > s1.dissipated_j_m2);
+    }
+
+    #[test]
+    fn assess_knit_shell_state_refuses_nan_flag_inputs() {
+        for (rib, pore, drift) in [
+            (f64::NAN, 0.05, 0.01),
+            (0.05, f64::NAN, 0.01),
+            (0.05, 0.05, f64::NAN),
+        ] {
+            let err = assess_knit_shell_state(
+                "pat".to_string(),
+                "mat".to_string(),
+                1.1,
+                0.3,
+                0.1,
+                rib,
+                pore,
+                drift,
+                0.05,
+                Evidence::Estimate,
+            )
+            .unwrap_err();
+            assert_eq!(err.code, RefusalCode::NonFinite);
+        }
     }
 }

@@ -59,10 +59,7 @@ struct Frame<'a> {
 ///
 /// # Errors
 /// A damaged or truncated file, or a canvas over `max_pixels`.
-pub fn decode_rgba(
-    bytes: &[u8],
-    max_pixels: usize,
-) -> Result<(usize, usize, Vec<[u8; 3]>, Vec<f32>), String> {
+pub fn decode_rgba(bytes: &[u8], max_pixels: usize) -> Result<super::StraightRgbaPixels, String> {
     let has_alpha = features_have_alpha(bytes).ok_or("WebP: bad file header")?;
     let (frame, (w, h), (xo, yo)) = demux(bytes)?;
     if w.checked_mul(h)

@@ -294,7 +294,8 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
             h.update(px);
         }
         for &a in &req.alpha_weight {
-            h.update(&a.to_le_bytes());
+            let norm = if a == 0.0 { 0.0_f32 } else { a };
+            h.update(&norm.to_le_bytes());
         }
         TargetRaster::new(
             req.width,
@@ -355,11 +356,16 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
     let pareto = rank_five_regime_pareto(&target, &stitch_map, &machine, drift, 4);
 
     // Emit controller G-code/CSV automatically for CalibrationSwatchOnly; wearable garments require Exp-4 qual!
-    let verified_export = if req.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
-        verify_and_export_dye_program(&opt.program, &machine, None, None).ok()
-    } else {
-        None
-    };
+    // Surface any physical hazard refusal explicitly rather than swallowing it behind `.ok()`.
+    let (verified_export, controller_export_refusal) =
+        if req.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
+            match verify_and_export_dye_program(&opt.program, &machine, None, None) {
+                Ok(bundle) => (Some(bundle), None),
+                Err(refusal) => (None, Some(refusal)),
+            }
+        } else {
+            (None, None)
+        };
 
     let payload = json!({
         "delta_e00_p50": opt.delta_e00_p50,
@@ -376,6 +382,7 @@ pub fn dye_optimize_json(request_json: &str) -> Result<String, Refusal> {
         "schedule_csv": verified_export.as_ref().map(|b| &b.schedule_csv),
         "controller_gcode": verified_export.as_ref().map(|b| &b.controller_gcode),
         "cert": verified_export.as_ref().map(|b| &b.cert),
+        "controller_export_refusal": controller_export_refusal,
         "hardware_execution_authorized": false,
         "physical_dyeing_validated": false,
     });
@@ -507,6 +514,7 @@ mod tests {
                 .unwrap()
                 .contains("G1 E")
         );
+        assert!(dye_out["controller_export_refusal"].is_null());
 
         // Verify exact browser knit-page.js panel preview & Pareto fields round-trip cleanly.
         let panel_req = json!({

@@ -247,9 +247,9 @@ struct StackInput {
     boundary_resistance_m2_k_w: f64,
 }
 
-fn parse_study_args<'a>(
-    words: &[&'a str],
-) -> Result<(Vec<&'a str>, Option<&'a str>, Option<&'a str>), Refusal> {
+type StudyArgs<'a> = (Vec<&'a str>, Option<&'a str>, Option<&'a str>);
+
+fn parse_study_args<'a>(words: &[&'a str]) -> Result<StudyArgs<'a>, Refusal> {
     let mut inputs = Vec::with_capacity(words.len());
     let mut adopt: Option<&'a str> = None;
     let mut out: Option<&'a str> = None;

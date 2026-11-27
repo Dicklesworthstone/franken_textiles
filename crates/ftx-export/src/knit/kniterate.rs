@@ -33,6 +33,7 @@ pub fn export_kniterate_kc(
     bundle: &CompiledKnitBundle,
     profile: &MachineProfile,
 ) -> Result<KniterateExportBundle, Refusal> {
+    profile.validate()?;
     bundle.cert.verify_integrity()?;
     if profile.backend_kind != MachineBackendKind::KniterateKc {
         return Err(Refusal::new(
@@ -43,10 +44,28 @@ pub fn export_kniterate_kc(
             ),
         ));
     }
-    if profile.needle_count != 252 || profile.has_yarn_inserting_hooks || profile.has_sliders {
+    if profile.needle_count != 252
+        || profile.has_yarn_inserting_hooks
+        || profile.has_sliders
+        || profile.min_carrier_spacing < 2
+    {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
-            "Kniterate 7E profile must have 252 needles, no yarn-inserting hooks, and no sliders",
+            "Kniterate 7E profile must have 252 needles, min_carrier_spacing >= 2, no yarn-inserting hooks, and no sliders",
+        ));
+    }
+    let machine_sha256 = profile.canonical_sha256()?;
+    if bundle.cert.machine_sha256 != machine_sha256 {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "Kniterate `.kc` certificate machine_sha256 does not match target MachineProfile",
+        ));
+    }
+    let prog_sha256 = bundle.program.canonical_text_sha256()?;
+    if bundle.cert.program_sha256 != prog_sha256 {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "Kniterate `.kc` program text digest does not match sealed cert.program_sha256",
         ));
     }
 
@@ -59,7 +78,7 @@ pub fn export_kniterate_kc(
     let _ = writeln!(
         out,
         "HEADER MACHINE=KNITERATE_7E NEEDLES=252 CARRIER_SPACING={}",
-        profile.min_carrier_spacing.max(2)
+        profile.min_carrier_spacing
     );
 
     let default_speed = if bundle.cert.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
@@ -98,12 +117,20 @@ pub fn export_kniterate_kc(
                 }
             }
             KnitoutOp::Stitch { leading, trailing } => {
-                // Convert tenth-dial Knitout stitch numbers to Kniterate dial `0..=15`
-                let dial = (f64::from(*leading) / 10.0).clamp(0.0, 15.0);
+                // Convert tenth-dial Knitout stitch numbers to Kniterate dial `0..=15` (refuse out-of-range, never clamp)
+                if !(0..=150).contains(leading) || !(0..=150).contains(trailing) {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "op #{idx}: Kniterate stitch dial {leading}/{trailing} outside valid tenth-dial range 0..=150 (0.0..=15.0)"
+                        ),
+                    ));
+                }
+                let dial = f64::from(*leading) / 10.0;
                 let _ = writeln!(out, "STITCH {dial:.1} ; raw={leading}/{trailing}");
             }
             KnitoutOp::Rack { quarter_pitches } => {
-                if quarter_pitches % 4 != 0 || quarter_pitches.abs() > 16 {
+                if quarter_pitches % 4 != 0 || quarter_pitches.unsigned_abs() > 16 {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
                         format!(
@@ -211,19 +238,31 @@ pub fn export_kniterate_kc(
                 let _ = writeln!(out, "ROLLER_ADD {units}");
             }
             KnitoutOp::SpeedNumber { speed } => {
-                let capped =
-                    if bundle.cert.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
-                        (*speed).min(150)
-                    } else {
-                        *speed
-                    };
-                let _ = writeln!(out, "SPEED {capped}");
+                if bundle.cert.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
+                    && *speed > 150
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::MaterialProcessHazard,
+                        format!(
+                            "op #{idx}: CalibrationSwatchOnly speed {speed} exceeds Kniterate swatch cap 150"
+                        ),
+                    ));
+                }
+                let _ = writeln!(out, "SPEED {speed}");
             }
             KnitoutOp::PresserMode { mode } => {
                 let _ = writeln!(out, "; presser-mode {mode}");
             }
             KnitoutOp::CarrierSpacing { needles } => {
-                let _ = writeln!(out, "CARRIER_SPACING {}", (*needles).max(2));
+                if *needles < 2 {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{idx}: Kniterate carrier spacing {needles} is below required minimum 2"
+                        ),
+                    ));
+                }
+                let _ = writeln!(out, "CARRIER_SPACING {needles}");
             }
         }
     }

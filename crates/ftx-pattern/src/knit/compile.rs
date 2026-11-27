@@ -47,9 +47,13 @@ pub fn compile_knit_doc(
     let qual_sha = if doc.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
         || !profile.requires_calibration_swatch
     {
-        qualification
-            .map(KnitSwatchQualification::canonical_sha256)
-            .transpose()?
+        if let Some(q) = qualification {
+            let mat_sha = expected_material_sha256.unwrap_or(&q.material_sha256);
+            q.validate_for_production(mat_sha, &machine_sha256)?;
+            Some(q.canonical_sha256()?)
+        } else {
+            None
+        }
     } else {
         let Some(q) = qualification else {
             return Err(Refusal::new(
@@ -84,19 +88,22 @@ pub fn compile_knit_doc(
     }
     let carriers_vec: Vec<CarrierId> = used_carriers.into_iter().collect();
 
-    // Center pattern on the machine bed (`0..needle_count`)
-    let span_needles = (max_wale - min_wale + 1) as u32;
-    if span_needles > profile.needle_count {
+    // Center pattern on the machine bed (`0..needle_count`) without i32 subtraction overflow
+    let span_i64 = i64::from(max_wale) - i64::from(min_wale) + 1;
+    if span_i64 > i64::from(profile.needle_count) {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
             format!(
-                "pattern requires {span_needles} needles but machine '{}' has only {}",
+                "pattern requires {span_i64} needles but machine '{}' has only {}",
                 profile.id, profile.needle_count
             ),
         ));
     }
-    let bed_offset = ((profile.needle_count - span_needles) / 2) as i32 - min_wale;
-    let map_needle = |bed: Bed, wale: i32| -> Needle { Needle::new(bed, wale + bed_offset) };
+    let span_needles = span_i64 as u32;
+    let bed_offset_i64 = i64::from((profile.needle_count - span_needles) / 2) - i64::from(min_wale);
+    let map_needle = |bed: Bed, wale: i32| -> Needle {
+        Needle::new(bed, (i64::from(wale) + bed_offset_i64) as i32)
+    };
 
     let mut ops: Vec<KnitoutOp> = Vec::new();
     ops.push(KnitoutOp::Comment {
@@ -480,5 +487,51 @@ mod tests {
         assert!(txt.contains("inhook 1\n"));
         assert!(txt.contains("releasehook 1\n"));
         assert!(txt.contains("outhook 1\n"));
+    }
+
+    #[test]
+    fn compile_validates_optional_swatch_qual_and_handles_extreme_wale_span() {
+        let prof = MachineProfile::kniterate_7e();
+        let mut doc = draft_calibration_swatch(&prof, "merino-180tex", 12, 4, &[7.0]).unwrap();
+        let bad_qual = KnitSwatchQualification {
+            id: "bad".to_string(),
+            material_sha256: "mat".to_string(),
+            machine_sha256: "wrong-machine-hash".to_string(),
+            yarn_lot_id: "lot".to_string(),
+            was_washed_and_blocked: true,
+            wales_per_100mm: 24.0,
+            courses_per_100mm: 32.0,
+            thickness_mm: 2.0,
+            cam_stitch_setting: 7.0,
+            wick_dispersion_mm: None,
+            shrinkage_axial_pct: None,
+            yarn_intake_drift_eps: None,
+            yarn_intake_drift_sigma_eta: None,
+            evidence: Evidence::Measured,
+            source: Source {
+                reference: "local:sw".to_string(),
+                accessed_on: "2026-11-27".to_string(),
+                note: "sw".to_string(),
+            },
+            method: "flat dry".to_string(),
+            conditioning: BTreeMap::new(),
+            allow_estimates: false,
+        };
+        assert_eq!(
+            compile_knit_doc(&doc, &prof, Some(&bad_qual), None, None)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Extreme wale indices must return MachineStateInfeasible cleanly, never overflow i32
+        doc.stitches[0].wale = i32::MIN + 1;
+        doc.stitches[1].wale = i32::MAX - 1;
+        assert_eq!(
+            compile_knit_doc(&doc, &prof, None, None, None)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
     }
 }

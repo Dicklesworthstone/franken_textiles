@@ -51,18 +51,19 @@ impl ShapingSurface for AnnyKnitShell<'_> {
                 (z_lo, z_neck, ease.limb_radial_mm)
             }
             KnitShellRegion::Tube => {
-                let zmin = self
-                    .skin
-                    .vertices
-                    .iter()
-                    .map(|v| v.z)
-                    .fold(f64::INFINITY, f64::min);
-                let zmax = self
-                    .skin
-                    .vertices
-                    .iter()
-                    .map(|v| v.z)
-                    .fold(f64::NEG_INFINITY, f64::max);
+                if self.skin.vertices.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::DegenerateGeometry,
+                        "skin mesh has zero vertices",
+                    ));
+                }
+                let mut zmin = f64::INFINITY;
+                let mut zmax = f64::NEG_INFINITY;
+                for v in &self.skin.vertices {
+                    Refusal::finite("skin_vertex.z", v.z)?;
+                    zmin = zmin.min(v.z);
+                    zmax = zmax.max(v.z);
+                }
                 let span = (zmax - zmin).max(0.05);
                 (zmin + 0.05 * span, zmax - 0.05 * span, ease.torso_radial_mm)
             }
@@ -119,11 +120,26 @@ pub fn build_ease_shell_from_mesh(
     min_clearance_m: f64,
     source_body_sha256: &str,
 ) -> Result<EaseShellMesh, Refusal> {
+    Refusal::finite("z_low_m", z_low_m)?;
+    Refusal::finite("z_high_m", z_high_m)?;
+    Refusal::finite("radial_offset_m", radial_offset_m)?;
+    Refusal::finite("min_clearance_m", min_clearance_m)?;
+    if min_clearance_m < 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "min_clearance_m cannot be negative",
+        ));
+    }
     if z_high_m <= z_low_m {
         return Err(Refusal::new(
             RefusalCode::DegenerateGeometry,
             format!("clipping slab [{z_low_m}, {z_high_m}] m is empty"),
         ));
+    }
+    for v in vertices {
+        Refusal::finite("vertex.x", v.x)?;
+        Refusal::finite("vertex.y", v.y)?;
+        Refusal::finite("vertex.z", v.z)?;
     }
     let mut kept_tris = Vec::new();
     for &[a, b, c] in triangles {
@@ -231,7 +247,14 @@ pub fn build_ease_shell_from_mesh(
     }
     let mut next_map: BTreeMap<u32, u32> = BTreeMap::new();
     for &(u, v) in &directed_edges {
-        next_map.insert(u, v);
+        if next_map.insert(u, v).is_some() {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!(
+                    "non-manifold pinch boundary vertex {u} has multiple outgoing boundary edges"
+                ),
+            ));
+        }
     }
 
     let mut visited: BTreeSet<u32> = BTreeSet::new();
@@ -354,6 +377,40 @@ mod tests {
         assert_eq!(
             validate_ease_profile(&bad).unwrap_err().code,
             RefusalCode::OutOfRange
+        );
+
+        // Non-finite vertex & negative min_clearance_m fail closed
+        let mut nan_verts = verts.clone();
+        nan_verts[0].x = f64::NAN;
+        assert_eq!(
+            build_ease_shell_from_mesh(&nan_verts, &tris, 0.10, 0.40, 0.01, 0.002, "body-sha")
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            build_ease_shell_from_mesh(&verts, &tris, 0.10, 0.40, 0.01, -0.001, "body-sha")
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        // Non-manifold bowtie pinch vertex sharing two boundary loops must refuse cleanly
+        let bowtie_verts = vec![
+            Vec3::new(0.0, 0.0, 0.2),    // 0: pinch vertex
+            Vec3::new(0.1, 0.0, 0.2),    // 1
+            Vec3::new(0.05, 0.1, 0.2),   // 2
+            Vec3::new(-0.1, 0.0, 0.2),   // 3
+            Vec3::new(-0.05, -0.1, 0.2), // 4
+            Vec3::new(0.0, 0.05, 0.25),  // 5
+            Vec3::new(0.0, -0.05, 0.25), // 6
+        ];
+        let bowtie_tris = vec![[0, 1, 2], [0, 3, 4], [1, 2, 5], [3, 4, 6]];
+        assert_eq!(
+            build_ease_shell_from_mesh(&bowtie_verts, &bowtie_tris, 0.0, 0.5, 0.0, 0.0, "body-sha")
+                .unwrap_err()
+                .code,
+            RefusalCode::DegenerateGeometry
         );
     }
 }

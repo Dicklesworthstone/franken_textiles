@@ -95,6 +95,31 @@ pub fn export_brother_ayab(
             ),
         ));
     }
+    let machine_sha256 = profile.canonical_sha256()?;
+    if cert.machine_sha256 != machine_sha256 {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "Brother AYAB certificate machine_sha256 does not match target MachineProfile",
+        ));
+    }
+    if cert.automated_carriage_control {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "Brother AYAB certificate must report automated_carriage_control = false",
+        ));
+    }
+    if cert.wearer_age_class != doc.wearer_age_class {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "Brother AYAB certificate wearer_age_class does not match KnitDoc",
+        ));
+    }
+    if doc.wearer_age_class.is_child() && doc.has_hood_or_neck_drawstring {
+        return Err(Refusal::new(
+            RefusalCode::MaterialProcessHazard,
+            "EN 14682 child-safety refusal: Brother AYAB export refuses hood or neck drawstrings on child/infant knitwear",
+        ));
+    }
 
     let mut min_w = i32::MAX;
     let mut max_w = i32::MIN;
@@ -130,17 +155,25 @@ pub fn export_brother_ayab(
         }
     }
 
-    let width = (max_w - min_w + 1) as u32;
-    let height = max_c + 1;
-    if width == 0 || width > profile.needle_count {
+    let width_i64 = i64::from(max_w) - i64::from(min_w) + 1;
+    let height_u64 = u64::from(max_c) + 1;
+    if width_i64 <= 0 || width_i64 > i64::from(profile.needle_count) {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
             format!(
-                "AYAB image width {width} needles exceeds machine '{}' limit {}",
+                "AYAB image width {width_i64} needles exceeds machine '{}' limit {}",
                 profile.id, profile.needle_count
             ),
         ));
     }
+    if height_u64 > 10_000 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!("AYAB image height {height_u64} courses exceeds 10000-row export budget"),
+        ));
+    }
+    let width = width_i64 as u32;
+    let height = height_u64 as u32;
     let mode = if has_back {
         if !profile.has_back_bed {
             return Err(Refusal::new(

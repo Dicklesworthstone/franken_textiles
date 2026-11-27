@@ -46,7 +46,7 @@ pub struct VBedVmReport {
 struct HookState {
     loops: u8,
     tuck_depth: u8,
-    courses_knitted: u32,
+    last_active_course: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -178,8 +178,15 @@ pub fn verify_knitout_program(
         }
     }
 
-    if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
-        if let Some(sf) = ctx.speed_fraction
+    if let Some(sf) = ctx.speed_fraction {
+        Refusal::finite("speed_fraction", sf)?;
+        if !(0.0..=1.0).contains(&sf) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("speed_fraction {sf} must be within [0.0, 1.0]"),
+            ));
+        }
+        if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
             && sf > CalibrationSwatchCaps::MAX_SPEED_FRACTION
         {
             return Err(Refusal::new(
@@ -190,7 +197,16 @@ pub fn verify_knitout_program(
                 ),
             ));
         }
-        if let Some(tf) = ctx.takedown_fraction
+    }
+    if let Some(tf) = ctx.takedown_fraction {
+        Refusal::finite("takedown_fraction", tf)?;
+        if !(0.0..=1.0).contains(&tf) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("takedown_fraction {tf} must be within [0.0, 1.0]"),
+            ));
+        }
+        if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
             && tf > CalibrationSwatchCaps::MAX_TAKEDOWN_FRACTION
         {
             return Err(Refusal::new(
@@ -201,6 +217,16 @@ pub fn verify_knitout_program(
                 ),
             ));
         }
+    }
+
+    if program.header.width == 0 || program.header.width > profile.needle_count {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            format!(
+                "Knitout header width {} is outside machine '{}' bed range 1..={}",
+                program.header.width, profile.id, profile.needle_count
+            ),
+        ));
     }
 
     // Initialize known carriers from MachineProfile + header validation
@@ -236,6 +262,7 @@ pub fn verify_knitout_program(
     let mut max_loops_on_hook: u8 = 0;
     let mut max_tuck_depth: u8 = 0;
     let mut max_float_mm: f64 = 0.0;
+    let mut max_roller_imbalance: u32 = 0;
     let mut total_transfers: usize = 0;
     let mut active_min_needle: Option<i32> = None;
     let mut active_max_needle: Option<i32> = None;
@@ -275,7 +302,7 @@ pub fn verify_knitout_program(
                     ),
                 ));
             }
-            if needle.index < 0 || needle.index >= profile.needle_count as i32 {
+            if needle.index < 0 || i64::from(needle.index) >= i64::from(profile.needle_count) {
                 return Err(Refusal::new(
                     RefusalCode::MachineStateInfeasible,
                     format!(
@@ -296,6 +323,12 @@ pub fn verify_knitout_program(
     for (step, op) in program.ops.iter().enumerate() {
         match op {
             KnitoutOp::In { carriers: cs } => {
+                if cs.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: `in` requires at least one carrier"),
+                    ));
+                }
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
@@ -313,6 +346,12 @@ pub fn verify_knitout_program(
                 }
             }
             KnitoutOp::Out { carriers: cs } => {
+                if cs.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: `out` requires at least one carrier"),
+                    ));
+                }
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
@@ -344,6 +383,12 @@ pub fn verify_knitout_program(
                         ),
                     ));
                 }
+                if cs.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: `inhook` requires at least one carrier"),
+                    ));
+                }
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
@@ -369,6 +414,12 @@ pub fn verify_knitout_program(
                             "op #{step}: `releasehook` forbidden on machine '{}'",
                             profile.id
                         ),
+                    ));
+                }
+                if cs.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: `releasehook` requires at least one carrier"),
                     ));
                 }
                 for c in cs {
@@ -400,6 +451,12 @@ pub fn verify_knitout_program(
                         ),
                     ));
                 }
+                if cs.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: `outhook` requires at least one carrier"),
+                    ));
+                }
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
@@ -428,7 +485,8 @@ pub fn verify_knitout_program(
                         format!("op #{step}: racking forbidden in CalibrationSwatchOnly mode"),
                     ));
                 }
-                if quarter_pitches.abs() > profile.max_racking_quarter_pitches {
+                let abs_qp = quarter_pitches.unsigned_abs();
+                if abs_qp > profile.max_racking_quarter_pitches as u32 {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
                         format!(
@@ -438,7 +496,7 @@ pub fn verify_knitout_program(
                     ));
                 }
                 rack_quarter_pitches = *quarter_pitches;
-                max_abs_rack = max_abs_rack.max(quarter_pitches.abs());
+                max_abs_rack = max_abs_rack.max(abs_qp as i32);
             }
             KnitoutOp::Knit {
                 dir,
@@ -473,8 +531,10 @@ pub fn verify_knitout_program(
                     if let Some(prev_k) = st.last_knit_needle
                         && st.last_dir == Some(*dir)
                     {
-                        let span = (needle.index - prev_k).abs().saturating_sub(1);
-                        let float_mm = f64::from(span) * effective_wale_pitch_mm;
+                        let span = (i64::from(needle.index) - i64::from(prev_k))
+                            .unsigned_abs()
+                            .saturating_sub(1);
+                        let float_mm = (span as f64) * effective_wale_pitch_mm;
                         max_float_mm = max_float_mm.max(float_mm);
                     }
                     st.last_needle = Some(needle.index);
@@ -482,9 +542,13 @@ pub fn verify_knitout_program(
                     st.last_dir = Some(*dir);
                 }
                 let h = hooks.entry((needle.bed, needle.index)).or_default();
+                if h.loops > 0 && h.last_active_course > 0 {
+                    max_roller_imbalance = max_roller_imbalance
+                        .max(estimated_courses.saturating_sub(h.last_active_course + 1));
+                }
                 h.loops = 1;
                 h.tuck_depth = 0;
-                h.courses_knitted += 1;
+                h.last_active_course = estimated_courses;
                 max_loops_on_hook = max_loops_on_hook.max(h.loops);
             }
             KnitoutOp::Tuck {
@@ -517,13 +581,27 @@ pub fn verify_knitout_program(
                             format!("op #{step}: carrier '{}' tucked before `in`/`inhook`", c.0),
                         ));
                     }
+                    if let Some(prev_k) = st.last_knit_needle
+                        && st.last_dir == Some(*dir)
+                    {
+                        let span = (i64::from(needle.index) - i64::from(prev_k))
+                            .unsigned_abs()
+                            .saturating_sub(1);
+                        let float_mm = (span as f64) * effective_wale_pitch_mm;
+                        max_float_mm = max_float_mm.max(float_mm);
+                    }
                     st.last_needle = Some(needle.index);
                     st.last_knit_needle = Some(needle.index);
                     st.last_dir = Some(*dir);
                 }
                 let h = hooks.entry((needle.bed, needle.index)).or_default();
+                if h.loops > 0 && h.last_active_course > 0 {
+                    max_roller_imbalance = max_roller_imbalance
+                        .max(estimated_courses.saturating_sub(h.last_active_course + 1));
+                }
                 h.loops = h.loops.saturating_add(1);
                 h.tuck_depth = h.tuck_depth.saturating_add(1);
+                h.last_active_course = estimated_courses;
                 max_loops_on_hook = max_loops_on_hook.max(h.loops);
                 max_tuck_depth = max_tuck_depth.max(h.tuck_depth);
                 if h.loops > profile.max_loops_per_hook {
@@ -572,6 +650,12 @@ pub fn verify_knitout_program(
                         format!("op #{step}: `split` requires >= 1 active carrier"),
                     ));
                 }
+                if prev_pass_dir != Some(*dir) {
+                    estimated_courses += 1;
+                    prev_pass_dir = Some(*dir);
+                }
+                record_needle_span(from.index, &mut active_min_needle, &mut active_max_needle);
+                record_needle_span(to.index, &mut active_min_needle, &mut active_max_needle);
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
@@ -585,29 +669,47 @@ pub fn verify_knitout_program(
                             format!("op #{step}: inactive carrier '{}' in `split`", c.0),
                         ));
                     }
+                    if let Some(prev_k) = st.last_knit_needle
+                        && st.last_dir == Some(*dir)
+                    {
+                        let span = (i64::from(from.index) - i64::from(prev_k))
+                            .unsigned_abs()
+                            .saturating_sub(1);
+                        let float_mm = (span as f64) * effective_wale_pitch_mm;
+                        max_float_mm = max_float_mm.max(float_mm);
+                    }
                     st.last_needle = Some(from.index);
                     st.last_knit_needle = Some(from.index);
                     st.last_dir = Some(*dir);
                 }
-                let src_loops = hooks.get(&(from.bed, from.index)).map_or(0, |h| h.loops);
-                let dst = hooks.entry((to.bed, to.index)).or_default();
-                dst.loops = dst.loops.saturating_add(src_loops);
-                max_loops_on_hook = max_loops_on_hook.max(dst.loops);
-                if dst.loops > profile.max_loops_per_hook {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!(
-                            "op #{step}: `split` destination {} stack {} exceeds max_loops_per_hook {}",
-                            to.knitout_token(),
-                            dst.loops,
-                            profile.max_loops_per_hook
-                        ),
-                    ));
+                let (src_loops, src_last_course) = hooks
+                    .get(&(from.bed, from.index))
+                    .map_or((0, 0), |h| (h.loops, h.last_active_course));
+                if src_loops > 0 && src_last_course > 0 {
+                    max_roller_imbalance = max_roller_imbalance
+                        .max(estimated_courses.saturating_sub(src_last_course + 1));
+                }
+                if src_loops > 0 {
+                    let dst = hooks.entry((to.bed, to.index)).or_default();
+                    dst.loops = dst.loops.saturating_add(src_loops);
+                    dst.last_active_course = dst.last_active_course.max(src_last_course);
+                    max_loops_on_hook = max_loops_on_hook.max(dst.loops);
+                    if dst.loops > profile.max_loops_per_hook {
+                        return Err(Refusal::new(
+                            RefusalCode::MachineStateInfeasible,
+                            format!(
+                                "op #{step}: `split` destination {} stack {} exceeds max_loops_per_hook {}",
+                                to.knitout_token(),
+                                dst.loops,
+                                profile.max_loops_per_hook
+                            ),
+                        ));
+                    }
                 }
                 let src = hooks.entry((from.bed, from.index)).or_default();
                 src.loops = 1;
                 src.tuck_depth = 0;
-                src.courses_knitted += 1;
+                src.last_active_course = estimated_courses;
                 total_transfers += 1;
             }
             KnitoutOp::Xfer { from, to } => {
@@ -622,14 +724,18 @@ pub fn verify_knitout_program(
                 check_bed_and_bounds(*from, true, step)?;
                 check_bed_and_bounds(*to, true, step)?;
                 validate_bed_transfer_alignment(*from, *to, rack_quarter_pitches, step)?;
-                let src_loops = hooks.get(&(from.bed, from.index)).map_or(0, |h| h.loops);
+                let (src_loops, src_last_course) = hooks
+                    .get(&(from.bed, from.index))
+                    .map_or((0, 0), |h| (h.loops, h.last_active_course));
                 if let Some(src) = hooks.get_mut(&(from.bed, from.index)) {
                     src.loops = 0;
                     src.tuck_depth = 0;
+                    src.last_active_course = 0;
                 }
                 if src_loops > 0 {
                     let dst = hooks.entry((to.bed, to.index)).or_default();
                     dst.loops = dst.loops.saturating_add(src_loops);
+                    dst.last_active_course = dst.last_active_course.max(src_last_course);
                     max_loops_on_hook = max_loops_on_hook.max(dst.loops);
                     if dst.loops > profile.max_loops_per_hook {
                         return Err(Refusal::new(
@@ -651,6 +757,12 @@ pub fn verify_knitout_program(
                 carriers: cs,
             } => {
                 check_bed_and_bounds(*needle, false, step)?;
+                if cs.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: `miss` requires at least one active carrier"),
+                    ));
+                }
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
@@ -676,6 +788,7 @@ pub fn verify_knitout_program(
                 if let Some(h) = hooks.get_mut(&(needle.bed, needle.index)) {
                     h.loops = 0;
                     h.tuck_depth = 0;
+                    h.last_active_course = 0;
                 }
             }
             KnitoutOp::CarrierSpacing { needles } => {
@@ -715,8 +828,8 @@ pub fn verify_knitout_program(
     };
     if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
         if let Some([lo, hi]) = active_needle_range {
-            let span = (hi - lo + 1) as u32;
-            if span > CalibrationSwatchCaps::MAX_NEEDLES {
+            let span = (i64::from(hi) - i64::from(lo) + 1) as u64;
+            if span > u64::from(CalibrationSwatchCaps::MAX_NEEDLES) {
                 return Err(Refusal::new(
                     RefusalCode::MaterialProcessHazard,
                     format!(
@@ -737,16 +850,14 @@ pub fn verify_knitout_program(
         }
     }
 
-    // Check 5: Roller-imbalance bound across knitted needles
-    let mut min_c = u32::MAX;
-    let mut max_c = 0u32;
+    // Check 5: Roller-imbalance bound across needles still holding live loops (catches genuine
+    // short-row pileup without falsely flagging empty transferred rib/armhole hooks!)
     for h in hooks.values() {
-        if h.courses_knitted > 0 {
-            min_c = min_c.min(h.courses_knitted);
-            max_c = max_c.max(h.courses_knitted);
+        if h.loops > 0 && h.last_active_course > 0 {
+            max_roller_imbalance =
+                max_roller_imbalance.max(estimated_courses.saturating_sub(h.last_active_course));
         }
     }
-    let max_roller_imbalance = max_c.saturating_sub(min_c);
     if max_roller_imbalance > profile.max_roller_imbalance_courses {
         return Err(Refusal::new(
             RefusalCode::MaterialProcessHazard,
@@ -822,12 +933,12 @@ fn validate_bed_transfer_alignment(
             ),
         ));
     }
-    let rack_int = rack_quarter_pitches / 4;
+    let rack_int = i64::from(rack_quarter_pitches / 4);
     // Standard Knitout convention: back needle `b_j` aligns with front needle `f_{j + rack}`
     let aligned = if from_front {
-        from.index == to.index + rack_int
+        i64::from(from.index) == i64::from(to.index) + rack_int
     } else {
-        to.index == from.index + rack_int
+        i64::from(to.index) == i64::from(from.index) + rack_int
     };
     if !aligned {
         return Err(Refusal::new(
@@ -840,4 +951,276 @@ fn validate_bed_transfer_alignment(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::knit::ir::{KNITOUT_SCHEMA, KnitoutHeader};
+
+    fn minimal_program(profile: &MachineProfile, ops: Vec<KnitoutOp>) -> KnitoutProgram {
+        KnitoutProgram {
+            schema: KNITOUT_SCHEMA.to_string(),
+            header: KnitoutHeader {
+                machine: profile.id.clone(),
+                gauge: format!("{}", profile.gauge_e),
+                width: profile.needle_count,
+                position: "Center".to_string(),
+                carriers: vec![CarrierId("1".to_string())],
+                extra: BTreeMap::new(),
+            },
+            ops,
+        }
+    }
+
+    #[test]
+    fn vm_rejects_nan_speed_takedown_i32_min_rack_and_empty_carrier_ops() {
+        let prof = MachineProfile::kniterate_7e();
+        let ok_prog = minimal_program(
+            &prof,
+            vec![
+                KnitoutOp::In {
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Knit {
+                    dir: CourseDir::Plus,
+                    needle: Needle::new(Bed::Front, 10),
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Out {
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+            ],
+        );
+
+        let nan_speed_ctx = KnitSafetyContext {
+            wearer_age_class: WearerAgeClass::CalibrationSwatchOnly,
+            blocked_wale_pitch_mm: prof.needle_pitch_mm,
+            source_doc: None,
+            speed_fraction: Some(f64::NAN),
+            takedown_fraction: Some(0.5),
+        };
+        assert_eq!(
+            verify_knitout_program(&ok_prog, &prof, &nan_speed_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+
+        let neg_takedown_ctx = KnitSafetyContext {
+            wearer_age_class: WearerAgeClass::CalibrationSwatchOnly,
+            blocked_wale_pitch_mm: prof.needle_pitch_mm,
+            source_doc: None,
+            speed_fraction: Some(0.4),
+            takedown_fraction: Some(-0.1),
+        };
+        assert_eq!(
+            verify_knitout_program(&ok_prog, &prof, &neg_takedown_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        let min_rack = minimal_program(
+            &prof,
+            vec![KnitoutOp::Rack {
+                quarter_pitches: i32::MIN,
+            }],
+        );
+        let adult_ctx = KnitSafetyContext {
+            wearer_age_class: WearerAgeClass::Adult,
+            blocked_wale_pitch_mm: prof.needle_pitch_mm,
+            source_doc: None,
+            speed_fraction: None,
+            takedown_fraction: None,
+        };
+        assert_eq!(
+            verify_knitout_program(&min_rack, &prof, &adult_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+
+        let empty_in = minimal_program(&prof, vec![KnitoutOp::In { carriers: vec![] }]);
+        assert_eq!(
+            verify_knitout_program(&empty_in, &prof, &adult_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+
+        let mut wide_hdr = ok_prog;
+        wide_hdr.header.width = prof.needle_count + 1;
+        assert_eq!(
+            verify_knitout_program(&wide_hdr, &prof, &adult_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+    }
+
+    #[test]
+    fn vm_enforces_child_float_cap_across_tuck_and_split() {
+        let prof = MachineProfile::kniterate_7e();
+        let child_ctx = KnitSafetyContext {
+            wearer_age_class: WearerAgeClass::InfantUnder3,
+            blocked_wale_pitch_mm: 4.0,
+            source_doc: None,
+            speed_fraction: None,
+            takedown_fraction: None,
+        };
+        // Knit at f10 then tuck at f16 -> 5 skipped needles * 4 mm = 20 mm > 12 mm cap!
+        let long_tuck_float = minimal_program(
+            &prof,
+            vec![
+                KnitoutOp::In {
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Knit {
+                    dir: CourseDir::Plus,
+                    needle: Needle::new(Bed::Front, 10),
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Tuck {
+                    dir: CourseDir::Plus,
+                    needle: Needle::new(Bed::Front, 16),
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Out {
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+            ],
+        );
+        assert_eq!(
+            verify_knitout_program(&long_tuck_float, &prof, &child_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::MaterialProcessHazard
+        );
+
+        // Same long float into a Split must also trigger child float cap!
+        let long_split_float = minimal_program(
+            &prof,
+            vec![
+                KnitoutOp::In {
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Knit {
+                    dir: CourseDir::Plus,
+                    needle: Needle::new(Bed::Front, 10),
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Split {
+                    dir: CourseDir::Plus,
+                    from: Needle::new(Bed::Front, 16),
+                    to: Needle::new(Bed::Back, 16),
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+                KnitoutOp::Out {
+                    carriers: vec![CarrierId("1".to_string())],
+                },
+            ],
+        );
+        assert_eq!(
+            verify_knitout_program(&long_split_float, &prof, &child_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::MaterialProcessHazard
+        );
+    }
+
+    #[test]
+    fn vm_roller_imbalance_ignores_transferred_empty_hooks_but_refuses_live_short_row_pileup() {
+        let prof = MachineProfile::kniterate_7e();
+        let adult_ctx = KnitSafetyContext {
+            wearer_age_class: WearerAgeClass::Adult,
+            blocked_wale_pitch_mm: prof.needle_pitch_mm,
+            source_doc: None,
+            speed_fraction: None,
+            takedown_fraction: None,
+        };
+        let c1 = vec![CarrierId("1".to_string())];
+
+        // 1. Rib hem on b10 transferred to f10 followed by 20 front-bed courses -> zero live lag!
+        let mut rib_ops = vec![
+            KnitoutOp::In {
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Back, 10),
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Front, 11),
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Xfer {
+                from: Needle::new(Bed::Back, 10),
+                to: Needle::new(Bed::Front, 10),
+            },
+        ];
+        for i in 0usize..20 {
+            let dir = if i.is_multiple_of(2) {
+                CourseDir::Minus
+            } else {
+                CourseDir::Plus
+            };
+            let order = if dir == CourseDir::Plus {
+                [10, 11]
+            } else {
+                [11, 10]
+            };
+            for n in order {
+                rib_ops.push(KnitoutOp::Knit {
+                    dir,
+                    needle: Needle::new(Bed::Front, n),
+                    carriers: c1.clone(),
+                });
+            }
+        }
+        rib_ops.push(KnitoutOp::Out {
+            carriers: c1.clone(),
+        });
+        let rib_report =
+            verify_knitout_program(&minimal_program(&prof, rib_ops), &prof, &adult_ctx).unwrap();
+        assert_eq!(rib_report.max_roller_imbalance, 0);
+
+        // 2. Live loop held on f10 while f11 knits 12 consecutive short-row passes -> exceeds cap 8!
+        let mut pileup_ops = vec![
+            KnitoutOp::In {
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Front, 10),
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Front, 11),
+                carriers: c1.clone(),
+            },
+        ];
+        for i in 0usize..12 {
+            let dir = if i.is_multiple_of(2) {
+                CourseDir::Minus
+            } else {
+                CourseDir::Plus
+            };
+            pileup_ops.push(KnitoutOp::Knit {
+                dir,
+                needle: Needle::new(Bed::Front, 11),
+                carriers: c1.clone(),
+            });
+        }
+        pileup_ops.push(KnitoutOp::Out { carriers: c1 });
+        assert_eq!(
+            verify_knitout_program(&minimal_program(&prof, pileup_ops), &prof, &adult_ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::MaterialProcessHazard
+        );
+    }
 }

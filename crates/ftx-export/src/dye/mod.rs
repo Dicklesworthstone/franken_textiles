@@ -123,6 +123,12 @@ pub fn verify_and_export_dye_program(
         == WearerAgeClass::CalibrationSwatchOnly
     {
         if let Some(q) = qualification {
+            let mat_sha = expected_material_sha256.unwrap_or(&q.material_sha256);
+            q.validate_for_wearer(
+                WearerAgeClass::CalibrationSwatchOnly,
+                mat_sha,
+                &machine_sha256,
+            )?;
             let dry = q.yarn_breaking_force_n;
             let wet = dry * q.wet_tenacity_retention_ratio;
             (Some(q.canonical_sha256()?), dry, wet, q.yarn_tg_c)
@@ -144,6 +150,31 @@ pub fn verify_and_export_dye_program(
         let wet = dry * q.wet_tenacity_retention_ratio;
         (Some(q.canonical_sha256()?), dry, wet, q.yarn_tg_c)
     };
+    if let Some(bound_qual_sha) = &program.qualification_sha256
+        && qual_sha.as_deref() != Some(bound_qual_sha.as_str())
+    {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "dye program qualification_sha256 does not match supplied YarnDyeingQualification",
+        ));
+    }
+    if program.name.contains(['\n', '\r']) || machine.id.contains(['\n', '\r']) {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "dye program name and machine id cannot contain line breaks",
+        ));
+    }
+    for p in &machine.primaries {
+        if p.id.contains(['\n', '\r', ',']) {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "dye primary id '{}' cannot contain commas or line breaks",
+                    p.id
+                ),
+            ));
+        }
+    }
 
     // 1. Sequential Euler-Eytelwein Capstan tension cascade T_{k+1} = T_k * exp(mu_k * theta_k)
     let mut tension = machine.entry_tension_n;
@@ -180,17 +211,17 @@ pub fn verify_and_export_dye_program(
     }
 
     // 2. Thermoplastic T_g creep guard
-    if let Some(tg) = yarn_tg_c {
-        if machine.oven_temp_c > tg - 15.0 {
-            return Err(Refusal::new(
-                RefusalCode::MaterialProcessHazard,
-                format!(
-                    "oven temperature {:.1} C violates thermoplastic creep guard (yarn T_g = {tg:.1} C, max safe {:.1} C)",
-                    machine.oven_temp_c,
-                    tg - 15.0
-                ),
-            ));
-        }
+    if let Some(tg) = yarn_tg_c
+        && machine.oven_temp_c > tg - 15.0
+    {
+        return Err(Refusal::new(
+            RefusalCode::MaterialProcessHazard,
+            format!(
+                "oven temperature {:.1} C violates thermoplastic creep guard (yarn T_g = {tg:.1} C, max safe {:.1} C)",
+                machine.oven_temp_c,
+                tg - 15.0
+            ),
+        ));
     }
 
     // 3. Dual-sided thermal dwell & dose limits across every segment
@@ -304,8 +335,28 @@ pub fn verify_and_export_dye_program(
         let mut min_buf = buf;
         let mut max_buf = buf;
 
+        const MAX_TOTAL_ACCUMULATOR_STEPS: usize = 5_000_000;
+        let mut total_steps: usize = 0;
         for (ev_idx, ev) in tl.events.iter().enumerate() {
-            let steps = (ev.duration_s / tl.dt_verify_s).ceil().max(1.0) as usize;
+            let raw_steps = (ev.duration_s / tl.dt_verify_s).ceil().max(1.0);
+            if !raw_steps.is_finite() || raw_steps > 1_000_000.0 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "Regime III intake event #{ev_idx} requires too many verification substeps ({raw_steps:.0} > 1_000_000)"
+                    ),
+                ));
+            }
+            let steps = raw_steps as usize;
+            total_steps = total_steps.saturating_add(steps);
+            if total_steps > MAX_TOTAL_ACCUMULATOR_STEPS {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "Regime III intake timeline exceeds {MAX_TOTAL_ACCUMULATOR_STEPS} total verification substeps"
+                    ),
+                ));
+            }
             let dt = ev.duration_s / (steps as f64);
             for _ in 0..steps {
                 // Proportional trim controller steering dye line speed inside [v_min, v_max] with accel cap
@@ -581,5 +632,57 @@ mod tests {
         let err = verify_and_export_dye_program(&prog, &machine, Some(&qual), Some("mat-cotton"))
             .unwrap_err();
         assert_eq!(err.code, RefusalCode::MaterialProcessHazard);
+
+        // Tiny dt_verify_s CPU DoS must refuse cleanly with OutOfRange
+        let mut dos_prog = prog.clone();
+        dos_prog.regime3_intake_timeline = Some(Regime3IntakeTimeline {
+            events: vec![IntakeEvent {
+                duration_s: 100.0,
+                yarn_intake_speed_m_s: 0.08,
+                kind: IntakeEventKind::KnitPass,
+            }],
+            dt_verify_s: 1e-9,
+        });
+        assert_eq!(
+            verify_and_export_dye_program(&dos_prog, &machine, Some(&qual), Some("mat-cotton"))
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        // CalibrationSwatchOnly with NaN qualification must NOT bypass Capstan/creep gates!
+        let mut swatch_prog = prog.clone();
+        swatch_prog.wearer_age_class = WearerAgeClass::CalibrationSwatchOnly;
+        swatch_prog.not_for_garment_wear = true;
+        swatch_prog.qualification_sha256 = None;
+        swatch_prog.regime = DyeingRegime::Regime1AStripes;
+        swatch_prog.regime3_intake_timeline = None;
+        let mut nan_qual = qual.clone();
+        nan_qual.yarn_breaking_force_n = f64::NAN;
+        assert_eq!(
+            verify_and_export_dye_program(&swatch_prog, &machine, Some(&nan_qual), None)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+
+        // Bound qualification_sha256 mismatch and G-code newline injection fail closed
+        let mut bad_qsha = swatch_prog.clone();
+        bad_qsha.qualification_sha256 = Some("0".repeat(64));
+        assert_eq!(
+            verify_and_export_dye_program(&bad_qsha, &machine, None, None)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        let mut bad_name = swatch_prog;
+        bad_name.name = "stripe\nG1 E99999".to_string();
+        assert_eq!(
+            verify_and_export_dye_program(&bad_name, &machine, None, None)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
     }
 }

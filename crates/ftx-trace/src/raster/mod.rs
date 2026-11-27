@@ -17,3 +17,6 @@ mod webp_tables;
 pub use color::{bgr_saturation, bgr_to_gray, bgr_to_lab, lab, lab_distance};
 pub use image::{Bgr, Gray, load_image, load_png, load_target_raster_with_limit};
 pub use morph::Kernel;
+
+/// Straight (un-composited) decoded pixels: `(width, height, srgb_u8, alpha_weight)`.
+pub type StraightRgbaPixels = (usize, usize, Vec<[u8; 3]>, Vec<f32>);
