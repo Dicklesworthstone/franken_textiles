@@ -69,7 +69,7 @@ impl Hold {
     }
 }
 
-/// Explicit quasi-static normal boundary; pressure and final clearance cannot both be imposed.
+/// One prescribed quasi-static normal boundary.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Control {
@@ -83,9 +83,14 @@ pub enum Control {
         /// Nonnegative normal pressure, Pa, within every active source branch.
         pressure_pa: f64,
     },
+    /// Total compressive force distributed uniformly over the fixed plate contact area.
+    NormalForce {
+        /// Nonnegative prescribed normal force, newtons.
+        normal_force_n: f64,
+    },
 }
 
-/// A version-3 hold with one explicit pressure or clearance boundary. All thermal inputs retain
+/// A version-3 hold with one explicit pressure, plate load or clearance boundary. All thermal inputs retain
 /// the original hold's meaning; pressure does not imply a film or interface heat-transfer law.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,13 +111,48 @@ pub struct ControlledHold {
     pub outside_resistance_m2_k_w: f64,
 }
 
+#[derive(Clone, Copy)]
+struct AppliedPressure {
+    pressure_pa: f64,
+    normal_force_n: Option<f64>,
+}
+
 impl ControlledHold {
-    fn parameters(&self, initial_gap: f64) -> (Hold, Option<f64>) {
+    fn parameters(
+        &self,
+        initial_gap: f64,
+        area_m2: f64,
+    ) -> Result<(Hold, Option<AppliedPressure>), Refusal> {
         let (gap_m, pressure) = match self.control {
             Control::Gap { gap_m } => (gap_m, None),
-            Control::Pressure { pressure_pa } => (initial_gap, Some(pressure_pa)),
+            Control::Pressure { pressure_pa } => (
+                initial_gap,
+                Some(AppliedPressure {
+                    pressure_pa,
+                    normal_force_n: None,
+                }),
+            ),
+            Control::NormalForce { normal_force_n } => {
+                let pressure_pa = normal_force_n / area_m2;
+                if !normal_force_n.is_finite()
+                    || normal_force_n < 0.0
+                    || !pressure_pa.is_finite()
+                    || (normal_force_n > 0.0 && pressure_pa == 0.0)
+                {
+                    return Err(invalid(
+                        "prescribed plate force needs a finite nonnegative force and representable pressure on the fixed contact area",
+                    ));
+                }
+                (
+                    initial_gap,
+                    Some(AppliedPressure {
+                        pressure_pa,
+                        normal_force_n: Some(normal_force_n),
+                    }),
+                )
+            }
         };
-        (
+        Ok((
             Hold {
                 seconds: self.seconds,
                 gap_m,
@@ -123,7 +163,7 @@ impl ControlledHold {
                 outside_resistance_m2_k_w: self.outside_resistance_m2_k_w,
             },
             pressure,
-        )
+        ))
     }
 }
 
@@ -132,12 +172,15 @@ impl ControlledHold {
 pub struct StepReport {
     /// Time since the caller-supplied initial temperature state, seconds.
     pub elapsed_s: f64,
-    /// Common normal pressure obtained by the existing inverse solver, Pa.
+    /// Common normal pressure at the end of the traverse, Pa.
     pub pressure_pa: f64,
-    /// Explicit pressure boundary, present only on pressure-controlled holds. Otherwise pressure
-    /// was inferred from the prescribed clearance. No measured contact field is implied.
+    /// Supplied pressure in Pa, present only when the caller selected pressure control.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prescribed_pressure_pa: Option<f64>,
+    /// Prescribed total plate load in newtons, present only on a force-controlled hold.
+    /// The equivalent uniform pressure over the stack's fixed contact area is `pressure_pa`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prescribed_normal_force_n: Option<f64>,
     /// Sum of the conditioned layer thicknesses, metres.
     pub thickness_m: f64,
     /// Closure residual relative to this hold's gap, metres.
@@ -336,7 +379,10 @@ impl CompressedStack {
     /// Unqualified sources, domain/direction violations, inconsistent storage, invalid thermal
     /// boundaries or exhausted work. Every failed hold leaves all physical state unchanged.
     pub fn advance_controlled(&mut self, hold: &ControlledHold) -> Result<StepReport, Refusal> {
-        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        let (hold, pressure) = hold.parameters(
+            self.compression.thickness_m,
+            self.setup.stack.reference_area_m2,
+        )?;
         self.advance_inner(&hold, pressure, None)
     }
 
@@ -349,14 +395,17 @@ impl CompressedStack {
         hold: &ControlledHold,
         budget: &mut adaptive::Budget,
     ) -> Result<StepReport, Refusal> {
-        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        let (hold, pressure) = hold.parameters(
+            self.compression.thickness_m,
+            self.setup.stack.reference_area_m2,
+        )?;
         self.advance_inner(&hold, pressure, Some(budget))
     }
 
     fn advance_inner(
         &mut self,
         hold: &Hold,
-        prescribed_pressure: Option<f64>,
+        prescribed_pressure: Option<AppliedPressure>,
         budget: Option<&mut adaptive::Budget>,
     ) -> Result<StepReport, Refusal> {
         if self.committed_steps == MAX_STEPS {
@@ -381,7 +430,7 @@ impl CompressedStack {
             layer.preparation.pressure_pa = self.compression.pressure_pa;
         }
         let next = match prescribed_pressure {
-            Some(pressure) => stack::at_pressure(&request, pressure)?,
+            Some(pressure) => stack::at_pressure(&request, pressure.pressure_pa)?,
             None => stack::close(&request)?,
         };
         let thermal = model(
@@ -472,7 +521,10 @@ impl CompressedStack {
         let report = StepReport {
             elapsed_s: next_time,
             pressure_pa: next.pressure_pa,
-            prescribed_pressure_pa: prescribed_pressure,
+            prescribed_pressure_pa: prescribed_pressure
+                .filter(|p| p.normal_force_n.is_none())
+                .map(|p| p.pressure_pa),
+            prescribed_normal_force_n: prescribed_pressure.and_then(|p| p.normal_force_n),
             thickness_m: next.thickness_m,
             closure_residual_m: next.closure_residual_m,
             normal_force_n: next.normal_force_n,

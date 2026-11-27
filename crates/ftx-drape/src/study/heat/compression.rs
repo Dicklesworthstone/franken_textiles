@@ -258,6 +258,11 @@ impl Request {
                     joined = true;
                 }
                 match binding.control(interval)? {
+                    Control::NormalForce { .. } => {
+                        return Err(invalid(
+                            "a total plate load requires a fixed common contact area; moving sheets require pressure or clearance",
+                        ));
+                    }
                     Control::Pressure { pressure_pa } => {
                         if !pressure_pa.is_finite()
                             || pressure_pa < 0.
@@ -953,6 +958,11 @@ impl Compression {
                 None
             };
             let compressed = match control {
+                Control::NormalForce { .. } => {
+                    return Err(invalid(
+                        "moving sheet compression requires pressure or clearance",
+                    ));
+                }
                 Control::Pressure { pressure_pa } => stack::at_pressure(&input, pressure_pa)?,
                 Control::Gap { gap_m } => {
                     input.gap_m = gap_m;
@@ -1870,6 +1880,13 @@ pub(super) mod tests {
 
     #[test]
     fn control_schedules_are_schema_specific_complete_and_never_null() {
+        assert!(
+            controlled_request(vec![Control::NormalForce {
+                normal_force_n: 62.5
+            }])
+            .validate(1)
+            .is_err()
+        );
         let source = controlled_request(vec![Control::Gap { gap_m: 0.015 }]);
         source.validate(1).unwrap();
         let raw = serde_json::to_value(&source).unwrap();

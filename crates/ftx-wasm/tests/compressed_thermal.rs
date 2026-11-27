@@ -249,6 +249,38 @@ fn prescribed_pressure_paths_replay_identically_through_the_portable_engine() {
 }
 
 #[test]
+fn portable_force_control_preserves_the_supplied_plate_boundary() {
+    let mut input = pressure_input();
+    for (leg, force) in input["legs"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip([125.0, 0.0])
+    {
+        leg["holds"][0]["control"] = json!({"kind":"normal_force", "normal_force_n":force});
+    }
+    let text = input.to_string();
+    let result = ftx_wasm::thermal::compression_history(&text).unwrap();
+    let report: Value = serde_json::from_str(&result).unwrap();
+    for index in 0..2 {
+        assert_eq!(
+            report["input"]["legs"][index]["holds"][0]["control"],
+            input["legs"][index]["holds"][0]["control"]
+        );
+    }
+    assert_eq!(report["steps"][0]["pressure_pa"], 500.0);
+    assert_eq!(report["steps"][1]["pressure_pa"], 0.0);
+    assert_eq!(report["steps"][0]["prescribed_normal_force_n"], 125.0);
+    assert_eq!(report["steps"][1]["prescribed_normal_force_n"], 0.0);
+    assert!(report["steps"][0].get("prescribed_pressure_pa").is_none());
+    assert_eq!(report["steps"][0]["thickness_m"], 0.020);
+    assert_eq!(report["steps"][1]["thickness_m"], 0.040);
+
+    input["legs"][0]["holds"][0]["control"]["pressure_pa"] = json!(500.0);
+    assert!(ftx_wasm::thermal::compression_history(&input.to_string()).is_err());
+}
+
+#[test]
 fn prescribed_pressure_refuses_conflicting_controls_out_of_domain_loads_and_unlinked_reversals() {
     for mutate in [
         |v: &mut Value| v["legs"][0]["holds"][0]["control"]["gap_m"] = json!(0.020),

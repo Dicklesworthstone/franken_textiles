@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::thermal::adaptive;
 
 use super::{
-    CompressedStack, ControlledHold, Hold, MAX_STEPS, Setup, StepReport, adaptive_budget,
-    check_storage, invalid, model,
+    AppliedPressure, CompressedStack, ControlledHold, Hold, MAX_STEPS, Setup, StepReport,
+    adaptive_budget, check_storage, invalid, model,
 };
 
 pub use stack::{BranchChange, TransitionEvidence};
@@ -70,7 +70,10 @@ impl CompressedStack {
         hold: &ControlledHold,
         change: &BranchChange,
     ) -> Result<BranchStep, Refusal> {
-        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        let (hold, pressure) = hold.parameters(
+            self.compression.thickness_m,
+            self.setup.stack.reference_area_m2,
+        )?;
         self.advance_on_inner(&hold, pressure, true, change, None)
     }
 
@@ -85,14 +88,17 @@ impl CompressedStack {
         change: &BranchChange,
         budget: &mut adaptive::Budget,
     ) -> Result<BranchStep, Refusal> {
-        let (hold, pressure) = hold.parameters(self.compression.thickness_m);
+        let (hold, pressure) = hold.parameters(
+            self.compression.thickness_m,
+            self.setup.stack.reference_area_m2,
+        )?;
         self.advance_on_inner(&hold, pressure, true, change, Some(budget))
     }
 
     fn advance_on_inner(
         &mut self,
         hold: &Hold,
-        prescribed_pressure: Option<f64>,
+        prescribed_pressure: Option<AppliedPressure>,
         known_pressure_entry: bool,
         change: &BranchChange,
         budget: Option<&mut adaptive::Budget>,

@@ -147,6 +147,54 @@ fn controlled_input() -> path::ControlledInput {
 }
 
 #[test]
+fn plate_force_drives_the_cycle_over_the_declared_contact_area() {
+    let mut request = controlled_input();
+    let pressure_run = path::evaluate_controlled(&request).unwrap();
+    let forces = [125.0, 62.5, 0.0, 62.5];
+    for (hold, force) in request
+        .legs
+        .iter_mut()
+        .flat_map(|leg| &mut leg.holds)
+        .zip(forces)
+    {
+        hold.control =
+            serde_json::from_value(json!({"kind": "normal_force", "normal_force_n": force}))
+                .unwrap();
+    }
+    let force_run = path::evaluate_controlled(&request).unwrap();
+    assert_ne!(force_run.input_sha256, pressure_run.input_sha256);
+    for ((step, pressure_step), force) in
+        force_run.steps.iter().zip(&pressure_run.steps).zip(forces)
+    {
+        assert_eq!(step.prescribed_normal_force_n, Some(force));
+        assert_eq!(step.prescribed_pressure_pa, None);
+        near(step.normal_force_n, force);
+        near(step.pressure_pa, force / 0.25);
+        near(step.thickness_m, pressure_step.thickness_m);
+        assert_eq!(step.temperature_c, pressure_step.temperature_c);
+        assert_eq!(
+            step.cumulative_external_work_j,
+            pressure_step.cumulative_external_work_j
+        );
+    }
+    near(force_run.steps[0].thickness_m, 0.010);
+    near(force_run.steps[0].external_work_j, 0.625);
+
+    let mut state = CompressedStack::new(&request.setup).unwrap();
+    state.advance_controlled(&request.legs[0].holds[0]).unwrap();
+    let accepted = fingerprint(&state);
+    let change = request.legs[1].branch_change.as_ref().unwrap();
+    let mut hold = request.legs[1].holds[0].clone();
+    for force in [-1.0, 126.0, f64::INFINITY, f64::MAX] {
+        hold.control = Control::NormalForce {
+            normal_force_n: force,
+        };
+        assert!(state.advance_controlled_on(&hold, change).is_err());
+        assert_eq!(fingerprint(&state), accepted);
+    }
+}
+
+#[test]
 fn pressure_driven_source_cycles_keep_temperatures_and_independent_work_ledgers() {
     let legacy = path::evaluate(&input()).unwrap();
     let mut request = controlled_input();

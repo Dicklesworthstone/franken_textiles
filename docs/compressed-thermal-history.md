@@ -111,6 +111,14 @@ Replace each hold's `gap_m` with exactly one `control` object. For example, this
 }
 ```
 
+For a rigid compression plate covering the entire fixed stack area, the control can instead be
+`{"kind":"normal_force","normal_force_n":62.5}`. With a `reference_area_m2` of 0.25, that
+load imposes 250 Pa. The solver uses this uniform pressure for every coextensive layer. The
+step retains the supplied load in `prescribed_normal_force_n`, reports the resulting `pressure_pa`
+and checks the same source domains and branch direction as for a supplied pressure. This control
+requires full-area contact throughout the hold. Moving-garment studies require separate pressure
+or clearance inputs because the fixed-plate contact area does not apply there.
+
 The alternative `"control": { "kind": "gap", "gap_m": 0.010 }` uses the existing inverse
 clearance calculation. Controls may change between holds while the same material temperatures,
 reference masses and external-work ledger continue. Changing the control does not establish a
