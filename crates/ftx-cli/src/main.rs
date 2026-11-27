@@ -25,6 +25,7 @@ mod fold;
 mod import;
 mod inspect_pixel;
 mod knit;
+mod knit_shell;
 mod materials;
 mod measure;
 mod outfit;
@@ -204,11 +205,15 @@ const USAGE: &str = "usage:
   ftx scale-fit PATTERN --target REF=LEN [--target REF=LEN ...] --out PATTERN [--json]
   ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250] [--label-tol 0.03] [--json]
   ftx knit swatch --out DIR [--machine ID] [--yarn ID] [--material-sha256 SHA256] [--needles N] [--courses-per-zone N] [--cams C1,C2,...] [--created YYYY-MM-DDTHH:MM] [--json]
-  ftx knit draft --age-class infant|child|adult --out DIR [--style panel|tube] [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--has-drawstring] [--json]
+  ftx knit draft --age-class infant|child|adult --out DIR [--style panel|tube|pullover] [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--has-drawstring] [--json]
+      panel: [--neck-mm N --neck-depth-mm N --shoulder-short-row-pairs N] [--cables GROUPS.json]
+      pullover: [--sleeve-cuff-mm N --upper-arm-mm N --sleeve-length-mm N --cuff-rib N] [--rib-courses N --collar-rib N]
   ftx knit verify PATTERN.knit.json [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--json]
   ftx knit export PATTERN.knit.json --out DIR [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx knit pullover SPEC.json --gauge GAUGE.json --out DIR [--machine hand-knit|ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipts RECEIPTS.json] [--json]
-  ftx knit poincloux [--mu MU] [--json]
+  ftx knit shell --input SOURCE.json --out NEW_DIR [--json]
+  ftx knit shell --body-fit ACCEPTED.json --model FILE --region REGION --ease EASE.json --out NEW_DIR [--pose drape|rest|arms-up] [--json]
+  ftx knit poincloux [--mu MU] [--dataset published-sliding --fit-min-strain F --fit-max-strain F --check-max-strain F --rmse-limit-n N --max-error-limit-n N] [--json]
   ftx dye swatch --out DIR [--machine piezo-cmyk|dip-3bath] [--yarn ID] [--json]
   ftx dye optimize --out DIR [--machine piezo-cmyk|dip-3bath] [--age-class infant|child|adult|swatch] [--regime stripes|pooling|fiducial|inline|jacquard] [--circular] [--image PNG] [--courses N] [--wales N] [--cells N] [--max-iters N] [--dye-qual Q.json] [--json]
   ftx dye verify PROGRAM.json [--machine piezo-cmyk|dip-3bath] [--dye-qual Q.json] [--out DIR] [--json]

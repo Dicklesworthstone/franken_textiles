@@ -426,3 +426,17 @@ skin with cuffs below the waist, exact analytic oblique-section perimeters, sour
 separation, named-opening loss, actual model/pose data plumbing and rigid axis rotation. No public
 Anny asset qualification, real-person anatomical accuracy or physical garment evidence is inferred
 from those synthetic fixtures.
+
+The shared `AnatomicalShellRequest` consumes explicit `vertices_m`, `triangles`, `spec` and optional
+`expected_body_mesh_sha256`. It recomputes the canonical finite source-mesh hash instead of trusting
+a supplied identity. Native and portable JSON use the same 16 MiB request and 32 MiB output bounds.
+`build_accepted_anatomical_shell` reuses the existing accepted Anny-shape admission and poses that
+shape without tape refitting; callers hash and array-verify the actual model bytes. Named pose,
+skinning and optional thumb choices remain explicit in its request.
+
+`ftx knit shell --input SOURCE.json --out NEW_DIR` writes the uncapped shell JSON/OBJ and the exact
+source. The accepted-body route takes `--body-fit ACCEPTED.json --model FILE --region
+full_upper_body --ease EASE.json`, with optional `--pose`, `--skinning` and `--thumb-pose`.
+Portable `ftx_wasm::knit_shell::{knit_shell_json, knit_anny_shell_json}` exposes those same two paths.
+The native/portable workflow regressions check exact explicit-source output, consumed-geometry
+identity, stale-input refusal, preserved source bytes and refusal to overwrite an earlier result.

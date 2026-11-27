@@ -1,5 +1,99 @@
 # Measured production-knit strip screening
 
+## Original Poincloux cyclic swatches and a reproducible force comparison
+
+The measured-data path also includes the author-released force histories for Poincloux,
+Adda-Bedia and Lechenault, [*Geometry and Elasticity of a Knitted Fabric*](https://doi.org/10.1103/PhysRevX.8.021075)
+(2018). Samuel Poincloux's [versioned dataset, 2025-09-08](https://doi.org/10.5281/zenodo.17075127),
+is distributed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+The bundled text files are unchanged; the parser and the comparisons below are new work.
+
+| Original acquisition | Geometry and fixture | Retained force readings |
+| --- | --- | ---: |
+| `sliding_force_data.txt` | 20 stitch columns × 30 rows; upper/lower rows can slide laterally on bars | 18,141 |
+| `clamped_force_data.txt` | 51 columns × 51 rows; imposed lateral spacing at upper/lower clamps | 60,115 |
+
+Every source row retains its original line number, time in seconds, total specimen
+height in millimetres and signed total force in newtons. Although the source header says
+`extension`, its README explicitly defines this as **total vertical size**. Treating it
+as added displacement would produce the wrong reference strain. Negative force readings
+and all ten repeated recorded timestamps in the clamped file are retained. Original row
+identity remains distinct when those timestamps coincide. There is no smoothing,
+resampling, force-zero adjustment or inferred
+per-row uncertainty. Temperature, humidity, washed/blocked gauge, cam setting and a
+transferable yarn-lot identity remain unavailable.
+
+`ftx_pattern::material_catalog::poincloux::published_force_data` exposes both acquisitions
+offline. `parse_force_data` accepts only the exact pinned original bytes and matching
+fixture; editing a force, changing line endings or passing the other boundary condition
+cannot borrow the source's protocol. Complete source files and the original README are in
+`crates/ftx-pattern/src/material_catalog/poincloux/`. The original-byte SHA-256 pins are:
+
+| File | SHA-256 |
+| --- | --- |
+| Sliding force | `8ff6d6980d5229558f0aea3df78b6c20b28e0828ff5677266960b42fa5f8d4d1` |
+| Clamped force | `7cd7ac0b92a9f22b568c4bf90aa59386862c7cf4eac78e45aed96830592734bf` |
+| README | `75e0b3e0916924c8ce578b347592ced53a8c39a8244232ff0841a51df90a92b9` |
+
+### Run the physical comparison
+
+```sh
+cargo run -p ftx-cli --bin ftx -- knit poincloux --dataset published-sliding --json
+```
+
+The adjacent `ftx_drape::knit::poincloux_measured` module implements the publication's
+homogeneous equation (6). With `k = delta * w* / c*`, positive applied tensile force is
+`Y_tilde * N_c * k * ((1 - k*strain)^(-2) - (1 + strain)^(-2))`; this is the negative
+of the paper's signed restoring force. `Y_tilde` has units J/m = N, not N/m. Transverse
+strain is `-k*strain`. The reported sliding-specimen geometry is `c* = 2.7 mm`,
+`w* = 2.1 mm`, `delta = 0.71`; its absolute reference height is `30 * 2.1 = 63 mm`.
+These rounded reference parameters are not a washed production gauge.
+
+The first three complete cycles supply the FIT rows. Only strains from 2% through 15%
+enter the default one-parameter least-squares fit for each branch. Cycles four and five
+never enter the fit. Their positive-strain observations through 100% form the principal
+CHECK; the remaining higher-strain observations have a separate error report. Monotone
+phase boundaries are derived from the pinned height history and retained as source line
+numbers; the source file itself supplies no branch tags. Dwell/slack and other observations
+outside the FIT window remain in the acquisition, with their counts reported.
+
+The default run deliberately returns exit **2**, with its complete JSON result, because
+the predeclared comparison fails:
+
+| Branch | FIT result | Later-cycle CHECK through 100% strain |
+| --- | --- | --- |
+| Loading | Estimated effective modulus about 0.0406571 N from 492 readings | 2,470 readings; RMSE about 0.157288 N; maximum absolute error about 0.552081 N |
+| Unloading | Unconstrained scale about −0.000895581 N; positive modulus refused | No fitted-model success is reported; the signed source readings remain available |
+
+The default error criteria are RMSE ≤ 0.1 N and maximum absolute error ≤ 0.25 N. They
+are explicit comparison criteria, **not** uncertainty reported by the experiment. The
+loading high-strain tail adds 690 untouched readings with RMSE about 2.51492 N, so it
+cannot disappear behind an agreement claim restricted to the lower range. Worst errors
+identify the original source line and both measured and predicted force.
+
+An investigator can explicitly choose `--fit-min-strain`, `--fit-max-strain`,
+`--check-max-strain`, `--rmse-limit-n` and `--max-error-limit-n`; the report retains every
+choice. No fit window or limit is changed automatically to obtain a passing result.
+The paper's published 0.038 N loading and 0.008 N unloading coefficients are also replayed
+in a separately labeled result. Those authors' coefficients were fitted to this experiment;
+their replay does not count as an independent held-out prediction.
+
+This is independent physical input to the software, with **later cycles of the same
+specimen** held out from its new fits. It is not a new independently sampled coupon,
+measured yarn bending/contact law, local knitting-process qualification or wearer-fit
+observation. The homogeneous comparator refuses the clamped acquisition because its
+deformation is nonuniform. `local_production_qualified` and `wearer_fit_claimed` remain
+false, including when caller-selected numerical error criteria pass. The legacy
+`ftx knit poincloux` mode keeps its previous numerical surrogate, now labeled explicitly
+as unvalidated; its constants and existing oracle fixtures are unchanged.
+
+Focused tests cover source identity and exact rows, total-height interpretation, the
+published force equation, retained failed identification/high-strain residuals, wrong-fixture
+refusal and the actual CLI route. These checks do not close the broader `ftx-ki1`/`ftx-ki4`
+material and garment qualification gates.
+
+## Sperl production-fabric observations
+
 The built-in catalog contains all 33 released knit specimens from Sperl, Sánchez-Banderas,
 Li, Wojtan and Otaduy, *Estimation of Yarn-Level Simulation Models for Production Fabrics*
 (SIGGRAPH 2022). These records let the existing material screener compare measured mass

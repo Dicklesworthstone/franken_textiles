@@ -7,10 +7,16 @@
 //! checks on the requested discrete shell, not physical cloth clearance or garment-fit evidence.
 
 mod anatomical;
+mod input;
 
 pub use anatomical::{
     AnatomicalCut, AnatomicalSection, AnatomicalShellSpec, AnnyAnatomicalShell,
     build_anatomical_ease_shell,
+};
+pub use input::{
+    AcceptedAnatomicalShellRequest, AnatomicalBodyPose, AnatomicalShellRequest,
+    MAX_ANATOMICAL_INPUT_BYTES, anatomical_shell_json, body_mesh_sha256,
+    build_accepted_anatomical_shell, serialize_anatomical_shell,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

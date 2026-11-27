@@ -57,76 +57,6 @@ fn bad(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::VerificationMismatch, message)
 }
 
-#[cfg(test)]
-mod fixture_addresses {
-    use super::*;
-
-    #[test]
-    fn frozen_keep_fixture_preserves_the_independently_authored_needle_addresses() {
-        let decoded = decode(include_str!(
-            "../../../tests/fixtures/kniterate/position-keep.kc"
-        ))
-        .unwrap();
-        let actions: Vec<_> = decoded
-            .entries
-            .iter()
-            .filter_map(|record| match record {
-                Record::Pass(pass) => Some(pass.actions.as_slice()),
-                Record::Pause(_) => None,
-            })
-            .flatten()
-            .collect();
-        // The frozen .k authors front needles 1..7 with Position: Keep; upstream
-        // addresses those physical hooks as zero-based 0..6 in its KCode raster.
-        let tucks: Vec<_> = actions
-            .iter()
-            .filter(|a| a.code == "tuck")
-            .map(|a| (a.needle.index, a.dir.unwrap()))
-            .collect();
-        use CourseDir::{Minus, Plus};
-        assert_eq!(
-            tucks,
-            [
-                (0, Plus),
-                (2, Plus),
-                (4, Plus),
-                (6, Plus),
-                (5, Minus),
-                (3, Minus),
-                (1, Minus)
-            ]
-        );
-        let knits: Vec<_> = actions
-            .iter()
-            .filter(|a| a.code == "knit")
-            .map(|a| (a.needle.index, a.dir.unwrap()))
-            .collect();
-        let expected: Vec<_> = (0..7)
-            .map(|i| (i, Plus))
-            .chain((0..7).rev().map(|i| (i, Minus)))
-            .collect();
-        assert_eq!(knits, expected);
-        let mut drops: Vec<_> = actions
-            .iter()
-            .filter(|a| a.code == "drop")
-            .map(|a| a.needle.index)
-            .collect();
-        drops.sort_unstable();
-        assert_eq!(drops, (0..7).collect::<Vec<_>>());
-        assert!(
-            actions
-                .iter()
-                .all(|a| a.needle.bed == Bed::Front && a.cam == 5 && a.rack == 0)
-        );
-        assert!(
-            actions
-                .iter()
-                .filter(|a| matches!(a.code, "knit" | "tuck"))
-                .all(|a| a.carrier == 6)
-        );
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Action {
     code: &'static str,
@@ -717,4 +647,74 @@ pub(super) fn compare_program(decoded: &Decoded, program: &KnitoutProgram) -> Re
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fixture_addresses {
+    use super::*;
+
+    #[test]
+    fn frozen_keep_fixture_preserves_the_independently_authored_needle_addresses() {
+        let decoded = decode(include_str!(
+            "../../../tests/fixtures/kniterate/position-keep.kc"
+        ))
+        .unwrap();
+        let actions: Vec<_> = decoded
+            .entries
+            .iter()
+            .filter_map(|record| match record {
+                Record::Pass(pass) => Some(pass.actions.as_slice()),
+                Record::Pause(_) => None,
+            })
+            .flatten()
+            .collect();
+        // The frozen .k authors front needles 1..7 with Position: Keep; upstream
+        // addresses those physical hooks as zero-based 0..6 in its KCode raster.
+        let tucks: Vec<_> = actions
+            .iter()
+            .filter(|a| a.code == "tuck")
+            .map(|a| (a.needle.index, a.dir.unwrap()))
+            .collect();
+        use CourseDir::{Minus, Plus};
+        assert_eq!(
+            tucks,
+            [
+                (0, Plus),
+                (2, Plus),
+                (4, Plus),
+                (6, Plus),
+                (5, Minus),
+                (3, Minus),
+                (1, Minus)
+            ]
+        );
+        let knits: Vec<_> = actions
+            .iter()
+            .filter(|a| a.code == "knit")
+            .map(|a| (a.needle.index, a.dir.unwrap()))
+            .collect();
+        let expected: Vec<_> = (0..7)
+            .map(|i| (i, Plus))
+            .chain((0..7).rev().map(|i| (i, Minus)))
+            .collect();
+        assert_eq!(knits, expected);
+        let mut drops: Vec<_> = actions
+            .iter()
+            .filter(|a| a.code == "drop")
+            .map(|a| a.needle.index)
+            .collect();
+        drops.sort_unstable();
+        assert_eq!(drops, (0..7).collect::<Vec<_>>());
+        assert!(
+            actions
+                .iter()
+                .all(|a| a.needle.bed == Bed::Front && a.cam == 5 && a.rack == 0)
+        );
+        assert!(
+            actions
+                .iter()
+                .filter(|a| matches!(a.code, "knit" | "tuck"))
+                .all(|a| a.carrier == 6)
+        );
+    }
 }

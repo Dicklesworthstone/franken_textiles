@@ -174,8 +174,19 @@ function renderSwatch(res) {
   // Retire prior downloads even when an outdated engine's response is refused.
   clearDownloads(dl);
   out.hidden = true;
-  if (res.machine_executable !== false || res.kc_text) {
-    throw new Error("This engine returned an unqualified machine export. Rebuild and reload the current WASM bundle; Kniterate requires conversion of the verified Knitout file.");
+  if (res.machine_executable !== false || res.cert?.hardware_execution_authorized !== false) {
+    throw new Error("This engine returned an unqualified machine export. Rebuild and reload the current WASM bundle.");
+  }
+  if (res.kc_text && (typeof res.kc_text !== "string" || !res.kc_text.startsWith("HOME\nRACK:0\n") ||
+      res.kcode_verification?.schema !== "ftx-kniterate-readback/1" ||
+      res.kcode_verification.hardware_execution_authorized !== false ||
+      res.kcode_verification.program_sha256 !== res.knitout_sha256 ||
+      res.kcode_verification.kc_sha256 !== res.kc_sha256 ||
+      res.kcode_verification.takedown?.kc_sha256 !== res.kc_sha256 ||
+      res.kcode_verification.takedown.physical_takedown_calibrated !== false ||
+      res.kcode_verification.takedown.machine_sha256 !== res.cert.machine_sha256 ||
+      !/^[a-f0-9]{64}$/.test(res.kc_sha256 || ""))) {
+    throw new Error("The KCode file is missing its source-bound read-back verification. Rebuild and reload the current WASM bundle.");
   }
   if (typeof res.pattern_json !== "string") {
     throw new Error("This engine omitted the saved pattern. Rebuild and reload the current WASM bundle.");
@@ -183,6 +194,10 @@ function renderSwatch(res) {
   renderSvg(svgBox, res.chart_svg);
   makeDownload(dl, "swatch.knit.json", res.pattern_json, "application/json");
   makeDownload(dl, "swatch.k", res.knitout_text, "text/plain");
+  if (res.kc_text) {
+    makeDownload(dl, "swatch.kc", res.kc_text, "text/plain");
+    makeDownload(dl, "kcode_verification.json", JSON.stringify(res.kcode_verification, null, 2), "application/json");
+  }
   if (res.backend_export_refusal) {
     makeDownload(dl, "backend_export_refusal.json", JSON.stringify(res.backend_export_refusal, null, 2), "application/json");
   }
@@ -198,7 +213,7 @@ function renderSwatch(res) {
 
   const conversionNotice = res.backend_export_refusal
     ? `Machine conversion required [${res.backend_export_refusal.code}]: ${res.backend_export_refusal.message}\n${(res.backend_export_refusal.repairs || []).join("\n")}\n\n`
-    : "";
+    : res.kc_text ? "KCode pass and needle read-back verified; physical machine qualification remains required.\n\n" : "";
   pre.textContent =
     conversionNotice +
     `=== Certificate (hardware_execution_authorized=${res.cert.hardware_execution_authorized}) ===\n` +
@@ -223,9 +238,11 @@ function renderPanel(res) {
     makeDownload(dl, "panel_instructions.txt", res.instructions_text, "text/plain");
     makeDownload(dl, "panel_metadata.json", JSON.stringify(res.metadata, null, 2), "application/json");
   }
-  const construction = res.metadata?.neckline_construction === "center_loops_held_separate_shoulder_carriers"
-    ? "a panel with held center neckline loops and separate shoulder carriers; manual finishing required"
-    : "a straight-top panel";
+  const construction = res.metadata?.neckline_construction === "held_center_tuck_anchored_shoulders"
+    ? "a panel with tuck-anchored shoulder short rows and held center neckline loops; manual finishing required"
+    : res.metadata?.neckline_construction === "center_loops_held_separate_shoulder_carriers"
+      ? "a panel with held center neckline loops and separate shoulder carriers; manual finishing required"
+      : "a straight-top panel";
   document.getElementById("panelSummary").textContent =
     `Drafted ${res.stitch_count} stitches for ${construction} · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed} · fit_claimed=${res.fit_claimed}`;
   document.getElementById("panelPre").textContent =
@@ -243,13 +260,24 @@ function renderExport(res) {
   if (typeof res.archive_base64 !== "string" || !res.archive_base64 || !Array.isArray(res.files)) {
     throw new Error("The engine returned an incomplete saved-pattern export.");
   }
+  const kcodeFile = res.files.find((file) => file.name === "program.kc");
+  if (kcodeFile && (res.kcode_verification?.schema !== "ftx-kniterate-readback/1" ||
+      res.kcode_verification.hardware_execution_authorized !== false ||
+      res.kcode_verification.program_sha256 !== res.cert?.program_sha256 ||
+      res.kcode_verification.kc_sha256 !== kcodeFile.sha256 ||
+      res.kcode_verification.takedown?.kc_sha256 !== kcodeFile.sha256 ||
+      res.kcode_verification.takedown.physical_takedown_calibrated !== false ||
+      res.kcode_verification.takedown.machine_sha256 !== res.cert?.machine_sha256 ||
+      !res.files.some((file) => file.name === "kcode_verification.json"))) {
+    throw new Error("The KCode archive lacks a matching source-bound read-back verification.");
+  }
   const archive = decodeBase64Bytes(res.archive_base64);
   if (archive.length < 22) throw new Error("The engine returned an incomplete ZIP archive.");
   const conversionNotice = res.backend_export_refusal
     ? `Machine conversion required [${res.backend_export_refusal.code}]: ${res.backend_export_refusal.message}\n${(res.backend_export_refusal.repairs || []).join("\n")}\n\n`
     : "";
   document.getElementById("exportSummary").textContent =
-    `${res.machine} · ${res.files.length} files · pattern SHA-256 ${res.pattern_sha256} · machine executable: false · hardware execution authorized: false · physical knitting validated: false · fit claimed: false`;
+    `${res.machine} · ${res.files.length} files · pattern SHA-256 ${res.pattern_sha256} · KCode read-back verified: ${Boolean(kcodeFile)} · hardware execution authorized: false · physical knitting validated: false · fit claimed: false`;
   document.getElementById("exportPre").textContent = conversionNotice +
     `ZIP SHA-256: ${res.archive_sha256}\n\n=== Files (uncompressed bytes and SHA-256) ===\n` +
     res.files.map((file) => `${file.name}\n  ${file.bytes} bytes · ${file.sha256}`).join("\n") +
@@ -440,6 +468,7 @@ runPanelBtn.addEventListener("click", () => {
   let rib;
   let neckWidth;
   let neckDepth;
+  let shoulderPairs;
   try {
     hem = parseFiniteInput("panelHem", "Hem Width (mm)");
     chest = parseFiniteInput("panelChest", "Chest Width (mm)");
@@ -450,11 +479,15 @@ runPanelBtn.addEventListener("click", () => {
     rib = parseIntRange("panelRib", "Rib Hem Courses", 0, 200);
     neckWidth = parseFiniteInput("panelNeckWidth", "Neck Opening Width (mm)");
     neckDepth = parseFiniteInput("panelNeckDepth", "Neck Drop (mm)");
+    shoulderPairs = parseIntRange("panelShoulderPairs", "Short-Row Pairs per Shoulder", 0, 30);
     if (neckWidth < 0 || neckWidth >= chest || neckDepth < 0 || neckDepth >= length) {
       throw new Error("Neck opening width and drop must be nonnegative and smaller than the panel chest width and length.");
     }
     if ((neckWidth > 0) !== (neckDepth > 0)) {
       throw new Error("Set both neckline dimensions to zero for a straight top, or supply both a positive width and drop.");
+    }
+    if (shoulderPairs > 0 && neckWidth === 0) {
+      throw new Error("Shoulder short rows require a positive neck opening width and drop.");
     }
   } catch (err) {
     statusEl.textContent = "Invalid input.";
@@ -476,6 +509,7 @@ runPanelBtn.addEventListener("click", () => {
     request,
     payload: {
       machine,
+      shoulder_short_row_pairs: shoulderPairs,
       panel: {
         name: "workbench_panel",
         wearer_age_class: document.getElementById("panelAgeClass").value,

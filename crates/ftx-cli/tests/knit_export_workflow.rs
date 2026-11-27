@@ -213,10 +213,12 @@ fn production_export_consumes_the_selected_qualification_and_rejects_stale_gauge
         qual.canonical_sha256().unwrap()
     );
     assert!(dir.join("qualified/qualification.json").exists());
-    assert!(!dir.join("qualified/program.kc").exists());
+    assert!(dir.join("qualified/program.kc").exists());
+    assert!(dir.join("qualified/kcode_verification.json").exists());
+    assert!(cli["result"]["backend_export_refusal"].is_null());
     assert_eq!(
-        cli["result"]["backend_export_refusal"]["code"],
-        "unqualified_process"
+        cli["result"]["kcode_verification"]["hardware_execution_authorized"],
+        false
     );
 
     // Changing the pattern after measurement must not leave a seemingly certified directory.
