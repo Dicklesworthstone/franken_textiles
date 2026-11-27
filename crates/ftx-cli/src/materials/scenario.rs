@@ -1,6 +1,4 @@
 //! Bounded file adapter for the fresh-state material scenario shared by both native binaries.
-use std::{fs::File, io::Read};
-
 use ftx_body::{AnnyData, AnnyModel};
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_drape::drafting::PreparedPatternBody;
@@ -18,30 +16,13 @@ fn invalid(e: impl std::fmt::Display) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, e.to_string())
 }
 fn bytes(path: &str, remaining: &mut u64) -> Result<Vec<u8>, Refusal> {
-    let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
-    let budget = || Refusal::new(RefusalCode::BudgetExceeded, "scenario file budget exceeded");
-    let meta = std::fs::metadata(path).map_err(io)?;
-    if !meta.is_file() {
-        return Err(invalid(format!(
-            "{path}: scenario input must be a regular file"
-        )));
-    }
-    if meta.len() > *remaining {
-        return Err(budget());
-    }
-    let file = File::open(path).map_err(io)?;
-    if !file.metadata().map_err(io)?.is_file() {
-        return Err(invalid(format!(
-            "{path}: scenario input must be a regular file"
-        )));
-    }
-    let mut bytes = Vec::new();
-    file.take(*remaining + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io)?;
-    if bytes.len() as u64 > *remaining {
-        return Err(budget());
-    }
+    let bytes = super::calibration::read_bounded_bytes(
+        path,
+        *remaining,
+        "scenario input",
+        RefusalCode::BudgetExceeded,
+        "scenario file budget exceeded",
+    )?;
     *remaining -= bytes.len() as u64;
     Ok(bytes)
 }
