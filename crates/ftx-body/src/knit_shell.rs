@@ -236,10 +236,20 @@ pub fn build_ease_shell_from_mesh(
         }
     }
 
-    // Extract directed boundary half-edges (edges appearing in only one triangle)
+    // Extract directed boundary half-edges (edges appearing in only one triangle) while rejecting
+    // duplicate same-direction half-edges (inconsistent winding or non-manifold fan).
+    let mut seen_half_edges: BTreeSet<(u32, u32)> = BTreeSet::new();
     let mut directed_edges: BTreeSet<(u32, u32)> = BTreeSet::new();
     for &[a, b, c] in &compact_tris {
         for (u, v) in [(a, b), (b, c), (c, a)] {
+            if !seen_half_edges.insert((u, v)) {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    format!(
+                        "non-manifold or inconsistently wound mesh shares directed half-edge ({u}, {v})"
+                    ),
+                ));
+            }
             if !directed_edges.remove(&(v, u)) {
                 directed_edges.insert((u, v));
             }
@@ -301,8 +311,9 @@ pub fn build_ease_shell_from_mesh(
         ));
     }
 
-    // Sort rings ascending by mean z: highest ring is end (`t = 1`), lower rings are start (`t = 0`)
-    raw_rings.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Sort rings ascending by mean z with deterministic vertex-list tie-breaking:
+    // highest ring is end (`t = 1`), lower rings are start (`t = 0`).
+    raw_rings.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     let n_rings = raw_rings.len();
     let boundary_rings = raw_rings
         .into_iter()
@@ -408,6 +419,21 @@ mod tests {
         let bowtie_tris = vec![[0, 1, 2], [0, 3, 4], [1, 2, 5], [3, 4, 6]];
         assert_eq!(
             build_ease_shell_from_mesh(&bowtie_verts, &bowtie_tris, 0.0, 0.5, 0.0, 0.0, "body-sha")
+                .unwrap_err()
+                .code,
+            RefusalCode::DegenerateGeometry
+        );
+
+        // Inconsistently wound adjacent triangles inside the kept slab [0.10, 0.40] must refuse cleanly.
+        let mut flipped_tris = tris.clone();
+        let mid_tri = 4 * 2 * n_theta;
+        flipped_tris[mid_tri] = [
+            flipped_tris[mid_tri][0],
+            flipped_tris[mid_tri][2],
+            flipped_tris[mid_tri][1],
+        ];
+        assert_eq!(
+            build_ease_shell_from_mesh(&verts, &flipped_tris, 0.10, 0.40, 0.01, 0.002, "body-sha")
                 .unwrap_err()
                 .code,
             RefusalCode::DegenerateGeometry

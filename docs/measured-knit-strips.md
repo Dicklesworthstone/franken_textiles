@@ -269,3 +269,30 @@ and check offline frozen selection and absent-physics refusals. The supplementar
 used for construction labels is 10,226,857 bytes, SHA-256
 `b12a6771a72120111c092273ecfddfa293cd427ec53ea07255ec91bd328edf6d`; its copyright remains
 with the source, and it is not bundled.
+
+## Uniaxial RVE-prior calibration and held-out bias FE strip check (`FTX-K11`)
+
+`crates/ftx-drape/tests/knit_strip_calibration.rs` exercises the coupled knit membrane
+(`CoupledKnitMembrane` + `ClothModel::set_coupled_knit_membranes` + `Solver::static_solve`) on the
+retained MIT-licensed Sperl et al. (2022) `SJ1` loading curves (`knit-strip-measurements.json`,
+100 mm free gauge length × 60 mm reference width). Calibration (`calibrate_knit_prior_to_uniaxial_strips`)
+uses **only** warp (0°) and weft (90°) loading observations in `[5%, 30%]` grip extension converted to
+second Piola–Kirchhoff stress $S = F / (w_0 \lambda)$, with **zero bias-cut leakage** and with the
+resulting `RveHomogenizedKnitCard` kept strictly `Evidence::Estimate` (`MODEL_FIT`; promoting to
+`Evidence::Measured` refuses with `VerificationMismatch`).
+
+Measured FE clamped-strip equilibrium results (`6 × 4` mesh, `tol = 1e-8`, `wale_scale = 0.4403`,
+`course_scale = 0.3755`, uniaxial calibration RMS `0.9611 N/m`):
+
+| Cut direction | Status | 10% FE pred (N) | 10% Sperl `SJ1` obs (N) | 30% FE pred (N) | 30% Sperl `SJ1` obs (N) | 30% residual (N) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Warp (0°) | Fitted | 0.3715 | 0.40 | 2.0998 | 1.94 | +0.1598 (+8.2%) |
+| Weft (90°) | Fitted | 0.1325 | 0.04 | 0.8090 | 0.84 | −0.0310 (−3.7%) |
+| Bias (45°) | **Held out** | 0.2301 | 0.27 | 0.9874 | 1.12 | −0.1326 (−11.8%) |
+
+Residuals remain reported explicitly: the low-strain weft 10% over-prediction (`0.1325 N` vs `0.04 N`)
+reflects `SJ1`'s 21× weft toe nonlinearity relative to the synthetic stockinette prior. Unobserved
+biaxial jamming, transverse width contraction, out-of-plane bending, and skin friction remain
+`Evidence::Estimate` / `UNCERTAIN`; the primary catalog records stay unfitted, and empirical
+production-knit qualification (`ftx-ki1` / `ftx-ki4`) remains open until matched physical coupon and
+transverse-operator qualification is completed.

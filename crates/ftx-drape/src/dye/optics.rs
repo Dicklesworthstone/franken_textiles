@@ -226,6 +226,15 @@ impl DyeOpticsModel {
                 ),
             ));
         }
+        for (p, &cp) in conc.iter().enumerate() {
+            Refusal::finite("primary_concentration", cp)?;
+            if cp < -1e-12 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("dye primary concentration[{p}] = {cp} cannot be negative"),
+                ));
+            }
+        }
         let mut xyz = CieXyz::default();
         let mut jac = vec![[0.0; 3]; n_p];
 
@@ -558,5 +567,21 @@ mod tests {
         let r_inf = kubelka_munk_r_inf(0.5);
         let r_thick = kubelka_munk_finite_slab(0.5, 1.0, 500.0);
         assert!((r_inf - r_thick).abs() < 1e-10);
+
+        // Non-finite and negative dye concentrations refuse fail-closed.
+        assert_eq!(
+            model
+                .concentrations_to_xyz_and_jac(&[f64::NAN, 0.0, 0.0, 0.0])
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        assert_eq!(
+            model
+                .concentrations_to_xyz_and_jac(&[-0.5, 0.0, 0.0, 0.0])
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
     }
 }

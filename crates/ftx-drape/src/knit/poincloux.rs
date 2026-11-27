@@ -299,12 +299,14 @@ pub struct KnitPriorCalibrationResult {
 }
 
 /// Calibrates the wale and course stiffness scales of an offline [`RveHomogenizedKnitCard`] prior
-/// against measured uniaxial strip observations `(strain, stress_n_m)` via closed-form least squares
-/// clamped to `[0.1, 10.0]` (`FTX-K11`). Unobserved biaxial/bending directions stay anchored to the
-/// independent RVE prior and the card stays tagged [`Evidence::Estimate`].
+/// against measured uniaxial strip observations `(strain, stress_n_m)` via closed-form least squares,
+/// refusing fail-closed if the fitted scale falls outside `[0.05, 20.0]` (`FTX-K11`). Unobserved
+/// biaxial/bending directions stay anchored to the independent RVE prior and the card stays tagged
+/// [`Evidence::Estimate`].
 ///
 /// # Errors
-/// [`RefusalCode::InvalidDocument`] or [`RefusalCode::OutOfRange`] on empty/non-finite inputs.
+/// [`RefusalCode::InvalidDocument`] or [`RefusalCode::OutOfRange`] on empty/non-finite inputs or
+/// out-of-range stiffness scale mismatch.
 pub fn calibrate_knit_prior_to_uniaxial_strips(
     prior: &RveHomogenizedKnitCard,
     wale_obs: &[(f64, f64)],
@@ -341,7 +343,16 @@ pub fn calibrate_knit_prior_to_uniaxial_strips(
                 "uniaxial observations have non-positive projection onto prior stiffness",
             ));
         }
-        Ok((num / den).clamp(0.1, 10.0))
+        let scale = num / den;
+        if !scale.is_finite() || !(0.05..=20.0).contains(&scale) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "fitted uniaxial stiffness scale {scale:.4} lies outside admissible prior band [0.05, 20.0]; select a matching yarn/structure RVE prior"
+                ),
+            ));
+        }
+        Ok(scale)
     };
 
     let wale_scale = fit_axis(wale_obs, 0)?;
@@ -487,5 +498,22 @@ mod tests {
         );
         assert!(fit.rms_residual_n_m < 1e-12, "{}", fit.rms_residual_n_m);
         assert!(fit.card.validate().is_ok());
+
+        // Extreme prior scale mismatch refuses fail-closed rather than clamping silently.
+        let extreme_obs: Vec<(f64, f64)> = [0.05, 0.12]
+            .into_iter()
+            .map(|e| {
+                (
+                    e,
+                    100.0 * prior.membrane.evaluate([e, 0.0, 0.0]).unwrap().stress[0],
+                )
+            })
+            .collect();
+        assert_eq!(
+            calibrate_knit_prior_to_uniaxial_strips(&prior, &extreme_obs, &course_obs)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
     }
 }

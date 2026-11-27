@@ -209,10 +209,34 @@ fn sperl_sj1_prior_calibration_predicts_held_out_bias_cut_honestly_on_fe_strip()
     let f_bias_30 =
         solve_clamped_knit_strip_force_n(cal_a.card.membrane, length_m, width_m, 45.0, 0.30, 6, 4);
 
+    let obs_warp_10 = sj1_warp.exact_loading(0.1).unwrap().force_n; // 0.40 N
     let obs_warp_30 = sj1_warp.exact_loading(0.3).unwrap().force_n; // 1.94 N
+    let obs_weft_10 = sj1_weft.exact_loading(0.1).unwrap().force_n; // 0.04 N
     let obs_weft_30 = sj1_weft.exact_loading(0.3).unwrap().force_n; // 0.84 N
     let obs_bias_10 = sj1_bias.exact_loading(0.1).unwrap().force_n; // 0.27 N
     let obs_bias_30 = sj1_bias.exact_loading(0.3).unwrap().force_n; // 1.12 N
+
+    eprintln!(
+        "SJ1_CALIBRATION wale_scale={:.4} course_scale={:.4} uniaxial_rms_n_m={:.4} \
+         FE_warp_10={:.4}(obs {:.2}) FE_warp_30={:.4}(obs {:.2}) \
+         FE_weft_10={:.4}(obs {:.2}) FE_weft_30={:.4}(obs {:.2}) \
+         FE_bias_10={:.4}(obs {:.2}) FE_bias_30={:.4}(obs {:.2})",
+        cal_a.wale_scale,
+        cal_a.course_scale,
+        cal_a.rms_residual_n_m,
+        f_warp_10,
+        obs_warp_10,
+        f_warp_30,
+        obs_warp_30,
+        f_weft_10,
+        obs_weft_10,
+        f_weft_30,
+        obs_weft_30,
+        f_bias_10,
+        obs_bias_10,
+        f_bias_30,
+        obs_bias_30,
+    );
 
     // Monotonic tensile response across all three cuts and anisotropic ordering warp > bias > weft at 30%.
     assert!(f_warp_30 > f_warp_10 && f_warp_10 > 0.0);

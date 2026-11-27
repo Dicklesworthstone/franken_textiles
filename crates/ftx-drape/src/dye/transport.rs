@@ -137,6 +137,15 @@ pub fn forward_capillary_transport(
             ),
         ));
     }
+    for (idx, &u) in doses.iter().enumerate() {
+        Refusal::finite("dose", u)?;
+        if u < 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("dye dose[{idx}] = {u} cannot be negative"),
+            ));
+        }
+    }
     let densify = 1.0 / (1.0 - cfg.shrinkage_axial_frac);
     let mut fixed_conc = vec![0.0; n_cells * n_p];
 
@@ -179,6 +188,9 @@ pub fn vjp_capillary_transport(
             RefusalCode::InvalidDocument,
             "adjoint concentration vector length mismatch",
         ));
+    }
+    for &a in adj_conc {
+        Refusal::finite("adj_conc", a)?;
     }
     let densify = 1.0 / (1.0 - cfg.shrinkage_axial_frac);
     let mut adj_doses = vec![0.0; n_cells * n_p];
@@ -243,6 +255,29 @@ mod tests {
         assert!(
             (lhs - rhs).abs() < 1e-12,
             "adjoint dot test failed: {lhs} vs {rhs}"
+        );
+
+        // Non-finite and negative doses refuse fail-closed.
+        let mut bad_u = u.clone();
+        bad_u[0] = -0.1;
+        assert_eq!(
+            forward_capillary_transport(&bad_u, n, &cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        bad_u[0] = f64::NAN;
+        assert_eq!(
+            forward_capillary_transport(&bad_u, n, &cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+        let mut bad_w = w;
+        bad_w[0] = f64::INFINITY;
+        assert_eq!(
+            vjp_capillary_transport(&bad_w, n, &cfg).unwrap_err().code,
+            RefusalCode::NonFinite
         );
     }
 }
