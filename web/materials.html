@@ -107,8 +107,8 @@ it solves common normal pressure between rigid parallel faces and reports signed
 Enter the exact layer ID to select; every layer's frozen selection is available for download.
 Heat histories (<code>ftx-compressed-thermal-history/1</code>, <code>/2</code> or <code>/3</code>) retain cell temperatures
 across compression changes and thermal holds. Version 2 supports explicit source-qualified
-links for loading/unloading branch changes. Version 3 additionally lets each hold prescribe pressure
-in pascals or gap in metres; the selected material branches determine the resulting thickness or pressure.
+links for loading/unloading branch changes. In version 3, each hold can prescribe pressure in pascals,
+gap in metres, or total plate load in newtons. Plate loads use the declared fixed contact area to determine pressure.
 Review the prescribed boundary alongside chronological heat and external work,
 and keep the full report with its original input; a final selection alone is not saved heat state.
 These local column calculations do not solve 3D garment contact or qualify presser-foot clearance.</p>
@@ -821,7 +821,8 @@ all variables are applied in their displayed order to each fresh copy of the ori
 <div class="study-fields">
 <label>Variable name <input id="guidedDesignKey" type="text" maxlength="128" value="linked_adjustment"></label>
 <label>Linked alteration <select id="guidedDesignKind"><option value="slash">Slash and spread selected pieces</option>
-<option value="move">Move selected source vertices</option></select></label>
+<option value="move">Move selected source vertices</option>
+<option value="move_control">Reshape curves with their endpoints fixed</option></select></label>
 </div>
 <div id="guidedDesignSlash">
 <label>Source pieces to alter together <select id="guidedDesignPieces" multiple size="4" disabled
@@ -834,15 +835,17 @@ aria-label="Source pieces for linked alterations"></select></label>
 </div>
 </div>
 <div id="guidedDesignMove" hidden>
-<label>Original source vertices <select id="guidedDesignVertices" multiple size="6" disabled
+<label id="guidedDesignVertexField">Original source vertices <select id="guidedDesignVertices" multiple size="6" disabled
 aria-label="Source vertices for linked movement"></select></label>
+<label id="guidedDesignControlField" hidden>Curve controls in source edge order <select id="guidedDesignControls" multiple size="6" disabled></select></label>
+<p id="guidedDesignControlStatus" class="note" role="status" hidden></p>
 <p id="guidedDesignVertexStatus" class="note" role="status" hidden></p>
 <div class="study-fields">
 <label>Horizontal movement per listed millimetre <input id="guidedDesignDx" type="number" step="any"></label>
 <label>Vertical movement per listed millimetre <input id="guidedDesignDy" type="number" step="any"></label>
 </div>
-<p class="note">Choose exact piece / vertex pairs. At least one movement component must be nonzero. Relative curves follow their
-endpoints; independent marks stay fixed. Canonical outline, seam and fit checks still decide whether a design is usable.</p>
+<p class="note">Move a vertex to shift the endpoints attached to it, or move a control to reshape a quadratic or cubic edge with its endpoints fixed.
+Movements use the original pattern’s horizontal and vertical axes. Choose at least one nonzero component.</p>
 </div>
 <div id="guidedDesignGridDomain">
 <label>Listed variable values, mm before the site multipliers

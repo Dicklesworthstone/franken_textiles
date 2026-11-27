@@ -1687,17 +1687,24 @@ function linkedValues(values) {
 function linkedSite(value, pieces, values) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Linked alteration site must be an object.");
   const move = own(value, "op");
-  const fields = move ? ["op", "piece", "vertex", "dx_multiplier", "dy_multiplier"] : ["piece", "axis", "at_mm", "multiplier"];
+  const control = move && value.op === "move_control";
+  const fields = move ? ["op", "piece", ...(control ? ["edge", "control"] : ["vertex"]), "dx_multiplier", "dy_multiplier"] :
+    ["piece", "axis", "at_mm", "multiplier"];
   const site = object(value, fields, fields, "Linked alteration site");
   name(site.piece, "Altered source piece");
   if (!pieces.has(site.piece)) throw Error("Alteration names a missing source piece.");
   let multipliers;
   if (move) {
-    if (site.op !== "move") throw Error("A vertex site requires the explicit move operation.");
-    name(site.vertex, "Altered source vertex");
+    if (control) {
+      name(site.edge, "Altered source edge");
+      if (site.control !== 0 && site.control !== 1) throw Error("A curve control index must be 0 or 1.");
+    } else {
+      if (site.op !== "move") throw Error("A vertex site requires the explicit move operation.");
+      name(site.vertex, "Altered source vertex");
+    }
     multipliers = [site.dx_multiplier, site.dy_multiplier];
     if (multipliers.some(n => typeof n !== "number" || !Number.isFinite(n)) || multipliers.every(n => n === 0)) {
-      throw Error("Linked vertex moves need finite x/y multipliers, at least one nonzero.");
+      throw Error("Linked moves need finite x/y multipliers, at least one nonzero.");
     }
   } else {
     if (!["x", "y"].includes(site.axis) || typeof site.at_mm !== "number" || !Number.isFinite(site.at_mm) ||
@@ -1712,7 +1719,7 @@ function linkedSite(value, pieces, values) {
       throw Error("Linked design displacement overflows or underflows; no alteration is silently dropped.");
     }
   }
-  return move ? { op: "move", piece: site.piece, vertex: site.vertex,
+  return move ? { op: site.op, piece: site.piece, ...(control ? {edge: site.edge, control: site.control} : {vertex: site.vertex}),
     dx_multiplier: site.dx_multiplier, dy_multiplier: site.dy_multiplier } :
     { piece: site.piece, axis: site.axis, at_mm: site.at_mm, multiplier: site.multiplier };
 }

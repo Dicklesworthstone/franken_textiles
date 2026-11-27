@@ -5384,3 +5384,18 @@ test('guided scenario options admit opt-in elastic_hold_steps up to drape_steps,
   }
   assert.throws(()=>single({...base,options:{...base.options,sew_steps:6,drape_steps:0,elastic_hold_steps:1}}),/Elastic hold window/);
 });
+
+test('guided curve controls preserve indexed edge sites in listed and adaptive searches', async () => {
+  const { buildMaterialStudyRequest: build } = await modulePromise;
+  for (const [designInput, field] of [[multiDesignInput, 'design_grid'], [adaptiveDesignInput, 'design_adaptive']]) {
+    const design = designInput();
+    const site = {op:'move_control', piece:'front', edge:'armhole', control:1, dx_multiplier:0, dy_multiplier:-0.5};
+    design.variables[0].sites = [site];
+    const request = () => JSON.parse(build({...state(), design}));
+    assert.deepEqual(request()[field].variables[0].sites, [site]);
+    for (const changes of [{control:2}, {control:-1}, {control:'0'}, {edge:''}, {vertex:'a'}, {dy_multiplier:0}]) {
+      design.variables[0].sites = [{...site, ...changes}];
+      assert.throws(request);
+    }
+  }
+});

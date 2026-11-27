@@ -63,6 +63,7 @@ let guidedDesignRestartNames = [];
 let guidedDesignAfterSource = null, guidedDesignAfterProblem = "", guidedDesignAfterRead = 0;
 let guidedDesignCurrent = 0;
 let guidedDesignVertexSource = null, guidedDesignVertexProblem = "";
+let guidedControlSource = null, guidedControlProblem = "";
 let guidedDesignNomination = null;
 const guidedDesignNominations = new Map();
 let guidedScenarioCases = null, guidedScenarioCasesRead = 0;
@@ -519,7 +520,7 @@ function controls() {
   $("studyPieces").disabled = $("studyTarget").disabled || $("studyTarget").value !== "pieces";
   $("guidedDesign").disabled = !source;
   $("guidedDesignControls").hidden = !$("guidedDesign").checked;
-  for (const id of ["guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
+  for (const id of ["guidedDesignPieces", "guidedDesignVertices", "guidedDesignControls", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
     "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations"]) {
     $(id).disabled = !source || !$("guidedDesign").checked;
   }
@@ -551,11 +552,19 @@ function controls() {
   $("guidedDesignCaseField").hidden = !nominatedCase;
   $("guidedDesignCaseStatus").hidden = !nominatedCase;
   $("guidedDesignCase").disabled ||= !nominatedCase || !currentGuidedScenarioCases()?.keys?.length;
-  const movingVertices = $("guidedDesignKind").value === "move";
+  const movingVertices = $("guidedDesignKind").value === "move", movingControls = $("guidedDesignKind").value === "move_control";
+  const moving = movingVertices || movingControls;
+  if (source && $("guidedDesign").checked && movingControls) ensureGuidedControls();
+  $("guidedDesignVertexField").hidden = !movingVertices;
+  $("guidedDesignControlField").hidden = !movingControls;
+  $("guidedDesignControlStatus").hidden = !movingControls || !guidedControlProblem;
+  $("guidedDesignControls").disabled ||= !movingControls || !!guidedControlProblem;
   if (source && $("guidedDesign").checked && movingVertices) ensureGuidedDesignVertices();
-  $("guidedDesignSlash").hidden = movingVertices; $("guidedDesignMove").hidden = !movingVertices;
-  for (const id of ["guidedDesignPieces", "guidedDesignAxis", "guidedDesignAt", "guidedDesignMultiplier"]) $(id).disabled ||= movingVertices;
-  for (const id of ["guidedDesignVertices", "guidedDesignDx", "guidedDesignDy"]) $(id).disabled ||= !movingVertices;
+  $("guidedDesignVertexStatus").hidden = !movingVertices || !guidedDesignVertexProblem;
+  $("guidedDesignSlash").hidden = moving; $("guidedDesignMove").hidden = !moving;
+  for (const id of ["guidedDesignPieces", "guidedDesignAxis", "guidedDesignAt", "guidedDesignMultiplier"]) $(id).disabled ||= moving;
+  for (const id of ["guidedDesignDx", "guidedDesignDy"]) $(id).disabled ||= !moving;
+  $("guidedDesignVertices").disabled ||= !movingVertices;
   $("guidedDesignVertices").disabled ||= !!guidedDesignVertexProblem;
   $("guidedDesignAdd").disabled = !source || !$("guidedDesign").checked || guidedDesignVariables.length >= 3;
   for (const { button, unavailable } of guidedDesignButtons) button.disabled = !source || !$("guidedDesign").checked || unavailable;
@@ -3498,6 +3507,7 @@ function compressionHistoryResult(parent, r) {
   for (const [index, step] of r.steps.entries()) {
     const control = controls[index];
     const boundary = control?.kind === "pressure" ? `Pressure: ${metric(control.pressure_pa)} Pa` :
+      control?.kind === "normal_force" ? `Plate load: ${metric(control.normal_force_n)} N` :
       control?.kind === "gap" ? `Gap: ${metric(control.gap_m)} m` : "Unavailable";
     cells(t, [metric(step.elapsed_s), ...(controlled ? [boundary] : []), metric(step.pressure_pa), metric(step.thickness_m),
       step.temperature_c.map(metric).join(", "), metric(step.cumulative_external_work_j),
@@ -3506,7 +3516,7 @@ function compressionHistoryResult(parent, r) {
   }
   const note = document.createElement("p");
   note.textContent = "External mechanical work is separate from sensible heat; no work-to-heat conversion is inferred. " +
-    (controlled ? "Each hold prescribes either pressure or gap; the other value is computed from the same qualified material branches. " : "") +
+    (controlled ? "Each hold prescribes pressure, plate load or gap. Plate loads use the stack’s fixed contact area. " : "") +
     "Temperatures follow the same material cells across qualified branch changes. A final material selection does not save this temperature state; keep the full history report.";
   parent.append(note);
   if (r.transitions) detail(parent, "Source-qualified branch transitions", r.transitions);
@@ -8542,7 +8552,7 @@ $("clearGuidedInventory").onclick = () => {
 };
 $("clearStockRequest").onclick = () => selectStockRequest(null);
 for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCutting", "guidedCuttingSource", "guidedMass", "guidedInventoryComplete", "guidedInventory",
-  "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
+  "guidedDesign", "guidedDesignPieces", "guidedDesignVertices", "guidedDesignControls", ...Object.values(guidedDesignFields), "guidedDesignMax", "guidedDesignGridBudget",
   "guidedDesignMode", "guidedDesignJoint", "guidedDesignObjective", "guidedDesignRestore", "guidedDesignMaterial", "guidedDesignMultiple", "guidedDesignMaterials", "guidedDesignCase", "guidedDesignEvaluations", "guidedDesignDomainRestarts",
   "guidedSewing", "guidedPurchasing", "guidedCombinedCost", "guidedBasis", "guidedStudyMixed", "guidedLimitBasis", "guidedHeatDirection", "guidedHeatMinimumLimit",
   "guidedCopies", "guidedGap", "guidedEdge", "guidedEnd", "guidedAllowance",
@@ -8572,7 +8582,7 @@ for (const id of ["studyTarget", "studyPieces", "guidedStockMode", "guidedCuttin
         { key, source: cases.original, invalidated: false } : null;
       refreshGuidedDesignCases();
     }
-    if (Object.values(guidedDesignFields).includes(id) || ["guidedDesignPieces", "guidedDesignVertices"].includes(id)) {
+    if (Object.values(guidedDesignFields).includes(id) || ["guidedDesignPieces", "guidedDesignVertices", "guidedDesignControls"].includes(id)) {
       if (guidedDesignVariables.length) guidedDesignVariables[guidedDesignCurrent] = captureGuidedDesignVariable();
       showGuidedDesignVariables();
     }
@@ -8810,7 +8820,7 @@ function saveGuidedDesignRestart(replacing = null) {
 }
 function newGuidedDesignVariable(key = "linked_adjustment") {
   return { key, kind: "slash", axis: "x", at: "", multiplier: "1", values: "", dx: "", dy: "",
-    lower: "", upper: "", initial: "", initialStep: "", minimumStep: "", pieces: [], vertices: [] };
+    lower: "", upper: "", initial: "", initialStep: "", minimumStep: "", pieces: [], vertices: [], controls: [] };
 }
 function ensureGuidedDesignVertices() {
   if (!source || guidedDesignVertexSource === source) return;
@@ -8835,9 +8845,39 @@ function ensureGuidedDesignVertices() {
     option.textContent = `${pair[0]} / ${pair[1]}`; $("guidedDesignVertices").append(option);
   }
 }
+function curveControlCount(edge) {
+  const count = edge?.curve?.type === "quad" ? 1 : edge?.curve?.type === "cubic" ? 2 : 0;
+  return Array.isArray(edge?.curve?.c) && edge.curve.c.length === count ? count : 0;
+}
+function ensureGuidedControls() {
+  if (!source || guidedControlSource === source) return;
+  guidedControlSource = source;
+  const picker = $("guidedDesignControls");
+  picker.replaceChildren();
+  guidedControlProblem = "";
+  let count = 0;
+  outer: for (const piece of source.pieces) {
+    for (const edge of Array.isArray(piece?.edges) ? piece.edges : []) {
+      for (let index = 0; index < curveControlCount(edge); index++) {
+        if (++count > 2048) {
+          picker.replaceChildren();
+          guidedControlProblem = "Use a complete design request for a pattern with more than 2048 curve controls.";
+          break outer;
+        }
+        const option = document.createElement("option");
+        option.value = JSON.stringify([piece.id, edge.id, index]);
+        option.textContent = `${piece.id} / ${edge.id} / control ${index + 1}`;
+        picker.append(option);
+      }
+    }
+  }
+  if (!count) guidedControlProblem = "This pattern has no quadratic or cubic edge controls.";
+  $("guidedDesignControlStatus").textContent = guidedControlProblem;
+}
 function captureGuidedDesignVariable() {
   return { ...Object.fromEntries(Object.entries(guidedDesignFields).map(([field, id]) => [field, $(id).value])),
     pieces: Array.from($("guidedDesignPieces").selectedOptions, option => option.value),
+    controls: Array.from($("guidedDesignControls").selectedOptions, option => option.value),
     vertices: guidedDesignVertexProblem ? [...(guidedDesignVariables[guidedDesignCurrent]?.vertices || [])] :
       Array.from($("guidedDesignVertices").selectedOptions, option => option.value) };
 }
@@ -8845,7 +8885,8 @@ function loadGuidedDesignVariable() {
   const draft = guidedDesignVariables[guidedDesignCurrent];
   for (const [field, id] of Object.entries(guidedDesignFields)) $(id).value = draft[field];
   if (draft.kind === "move") ensureGuidedDesignVertices();
-  for (const [id, selected] of [["guidedDesignPieces", draft.pieces], ["guidedDesignVertices", draft.vertices]]) {
+  if (draft.kind === "move_control") ensureGuidedControls();
+  for (const [id, selected] of [["guidedDesignPieces", draft.pieces], ["guidedDesignVertices", draft.vertices], ["guidedDesignControls", draft.controls]]) {
     const values = new Set(selected);
     for (const option of $(id).children) option.selected = values.has(option.value);
   }
@@ -8861,7 +8902,7 @@ function showGuidedDesignVariables() {
   const parent = $("guidedDesignVariables"); parent.replaceChildren(); guidedDesignButtons.length = 0;
   guidedDesignVariables.forEach((draft, index) => {
     const row = document.createElement("div"), label = document.createElement("span"); row.className = "study-choice";
-    label.textContent = `${index + 1}. ${draft.key || "Unnamed variable"}${index === guidedDesignCurrent ? " (editing)" : ""} — ${draft.kind === "move" ? "vertex movement" : "slash and spread"} `;
+    label.textContent = `${index + 1}. ${draft.key || "Unnamed variable"}${index === guidedDesignCurrent ? " (editing)" : ""} — ${draft.kind === "move_control" ? "curve shaping" : draft.kind === "move" ? "vertex movement" : "slash and spread"} `;
     row.append(label);
     const action = (title, unavailable, change, changesRequest = true) => {
       const button = document.createElement("button"); button.type = "button"; button.textContent = title;
@@ -8920,7 +8961,19 @@ function guidedDesignVariableInputs(mode) {
         }
         return { op: "move", piece: pair[0], vertex: pair[1], dx_multiplier: dx, dy_multiplier: dy };
       });
-    } else throw Error("Choose slash-and-spread or source-vertex movement.");
+    } else if (draft.kind === "move_control") {
+      ensureGuidedControls();
+      if (guidedControlProblem) throw Error(guidedControlProblem);
+      const dx = finite(draft.dx, `horizontal multiplier for ${draft.key}`), dy = finite(draft.dy, `vertical multiplier for ${draft.key}`);
+      sites = draft.controls.map(raw => {
+        const [piece, edge, control] = JSON.parse(raw);
+        const original = source.pieces.find(item => item.id === piece)?.edges?.find(item => item.id === edge);
+        if (!Number.isInteger(control) || control < 0 || control >= curveControlCount(original)) {
+          throw Error("Choose an existing control on an original curved edge.");
+        }
+        return { op: "move_control", piece, edge, control, dx_multiplier: dx, dy_multiplier: dy };
+      });
+    } else throw Error("Choose an alteration type.");
     return { key: draft.key, ...domain, sites };
   });
 }
@@ -8963,7 +9016,9 @@ function resetGuidedDesign() {
   ++guidedDesignAfterRead;
   $("guidedDesign").checked = false;
   $("guidedDesignPieces").replaceChildren();
-  $("guidedDesignVertices").replaceChildren();
+  $("guidedDesignVertices").replaceChildren(); $("guidedDesignControls").replaceChildren();
+  guidedControlSource = null; guidedControlProblem = "";
+  $("guidedDesignControlStatus").textContent = ""; $("guidedDesignControlStatus").hidden = true;
   guidedDesignAfter.length = 0; guidedDesignAfterSource = null; guidedDesignAfterProblem = "";
   for (const id of ["guidedDesignAfterSeam", "guidedDesignAfterPiece", "guidedDesignAfterSeams"]) $(id).replaceChildren();
   $("guidedDesignAfterKind").value = "true_seam"; $("guidedDesignAfterEnd").value = ""; $("guidedDesignAfterRatio").value = "";
