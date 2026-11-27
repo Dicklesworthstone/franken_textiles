@@ -312,7 +312,7 @@ JavaScript rewriting integers, signed zero or integer/float distinctions. Rust s
 ordinary validation, numerical limits and canonical output formatting; this is not arbitrary-precision
 JSON support. Invalid encoding, a BOM, malformed JSON or an oversized file refuses the round.
 
-After a round, **Alter the current pattern** offers the same five operations as `ftx alter`:
+After a round, **Alter the current pattern** offers five guided operations:
 slash and spread, vertex movement, seam truing, sleeve-cap ease and curve-shape transfer. The
 controls list the current pattern's actual pieces, vertices, seams and physical instance edges;
 curve transfer can also use another local pattern file. **Apply alteration and check** starts a
@@ -321,6 +321,18 @@ pattern, or undo the last alteration and check again. A refused operation keeps 
 new source files or changed inputs invalidate pending results and old exports. Direct alterations
 accept patterns up to 4 MiB, 128 drafted pieces and 8192 drafted edges. Flat checks, measurement
 readiness and any subsequent drape retain their separate verdicts.
+
+To reshape a curved seam while keeping its endpoints fixed, move an individual Bézier control in
+millimetres along the drafted piece’s x/y axes. For example, this moves the second cubic control
+on the bolero sleeve’s front cap 2 mm to the right. Quadratic edges have control `0` and cubic edges
+have controls `0` and `1`, in the edge’s authored direction. Edge notches keep their arclength fractions.
+
+```sh
+ftx alter move-control pattern.json --piece sleeve --edge cap_f --control 1 --dx 2 --out sleeve-revision.json
+```
+
+The browser export `alter_pattern` accepts the operation as JSON text, for example
+`{"op":"move-control","piece":"sleeve","edge":"cap_f","control":1,"dx":2,"dy":0}`.
 
 ---
 

@@ -116,6 +116,7 @@ const USAGE: &str = "usage:
   ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--hat P] [--seams] [--res 960x960] [--shading standard|legible] [--json]
   ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
   ftx alter move PATTERN --piece P --vertex V [--dx MM] [--dy MM] --out OUT [--json]
+  ftx alter move-control PATTERN --piece P --edge E --control 0|1 [--dx MM] [--dy MM] --out OUT [--json]
   ftx alter true-seam PATTERN --seam S [--end start|end] --out OUT [--json]
   ftx alter cap-ease PATTERN --piece P --seams S1,S2 --target RATIO --out OUT [--json]
   ftx alter transfer-curve PATTERN --from SRC.json:INSTANCE/EDGE --to PIECE/EDGE --out OUT [--json]
@@ -661,12 +662,13 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let allowed: &[&str] = match op {
         "slash-spread" => &["out", "piece", "axis", "at", "add"],
         "move" => &["out", "piece", "vertex", "dx", "dy"],
+        "move-control" => &["out", "piece", "edge", "control", "dx", "dy"],
         "true-seam" => &["out", "seam", "end"],
         "cap-ease" => &["out", "piece", "seams", "target"],
         "transfer-curve" => &["out", "from", "to"],
         _ => {
             return Err(bad_input(format!("ftx alter: no op {op:?}")).repair(
-                "ftx alter slash-spread|move|true-seam|cap-ease|transfer-curve PATTERN ...",
+                "ftx alter slash-spread|move|move-control|true-seam|cap-ease|transfer-curve PATTERN ...",
             ));
         }
     };
@@ -712,6 +714,16 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
             &doc,
             text("piece")?,
             text("vertex")?,
+            num("dx", Some(0.0))?,
+            num("dy", Some(0.0))?,
+        ),
+        "move-control" => alter::move_control(
+            &doc,
+            text("piece")?,
+            text("edge")?,
+            text("control")?
+                .parse()
+                .map_err(|_| bad_input("--control must be a zero-based Bézier control index"))?,
             num("dx", Some(0.0))?,
             num("dy", Some(0.0))?,
         ),

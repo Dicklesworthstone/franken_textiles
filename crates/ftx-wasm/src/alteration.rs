@@ -101,6 +101,13 @@ enum Operation {
         dx: f64,
         dy: f64,
     },
+    MoveControl {
+        piece: String,
+        edge: String,
+        control: usize,
+        dx: f64,
+        dy: f64,
+    },
     TrueSeam {
         seam: String,
         end: String,
@@ -157,6 +164,18 @@ pub fn apply(input: &str, operation: &str, source: Option<&str>) -> Result<Strin
             "move",
             Some(piece.as_str()),
             Some(vertex.as_str()),
+        ),
+        Operation::MoveControl {
+            piece,
+            edge,
+            control,
+            dx,
+            dy,
+        } => (
+            alter::move_control(&value, piece, edge, *control, *dx, *dy)?,
+            "move-control",
+            Some(piece.as_str()),
+            None,
         ),
         Operation::TrueSeam { seam, end } => (
             alter::true_seam(&value, seam, end)?,

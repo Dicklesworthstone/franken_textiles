@@ -1420,7 +1420,7 @@ class Element {
 async function pageModule({roundToken=null,traceToken=null}={}) {
   const html = read('materials.html');
   const e = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignAfterSeams','guidedDesignMaterials'])
+  for(const id of ['studyPieces','guidedDesignPieces','guidedDesignVertices','guidedDesignControls','guidedDesignAfterSeams','guidedDesignMaterials'])
     Object.defineProperty(e[id],'selectedOptions',{get:()=>e[id].children.filter(option=>option.selected)});
   e.drapeLegs.value='standing';e.drapeLegFraction.value='1';e.drapeSkinning.value='lbs';e.drapeHands.value='wrist';e.drapeNewtonStrategy.value='projected';e.drapeIntegrator.value='implicit_euler';e.drapeRhoInf.value='0';e.maxSettleSteps.value='0';e.elasticHoldSteps.value='0';
   e.bodyArmDeg.value='35'; // Match the actual HTML default; explicit blank inputs still refuse.
@@ -10085,6 +10085,47 @@ async function coupledDesignSetup() {
   guidedDesignField(p,'guidedDesignKey','length');guidedDesignField(p,'guidedDesignValues','0,10');
   p.e.guidedDesignAdd.onclick();guidedMoveVariable(p);return setup;
 }
+
+
+test('guided curve shaping keeps the selected cubic handle across edits and source replacement clears it',async()=>{
+  const pattern=JSON.parse(coupledDesignPattern);
+  pattern.pieces[0].edges=[
+    {id:'side',from:'top',to:'hem:outer',curve:{type:'cubic',c:[[0.1,0.2],[0.75,-0.3]]}},
+    {id:'straight',from:'hem:outer',to:'top'}
+  ];
+  pattern.pieces[1].edges=[{id:'neck',from:'top',to:'a<β>',curve:{type:'quad',c:[[0.5,0.1]]}}];
+  const raw=JSON.stringify(pattern),{p}=await guidedDesignSetup(raw);
+  guidedDesignField(p,'guidedDesignKey','shape');
+  guidedDesignField(p,'guidedDesignKind','move_control','change');
+  guidedDesignField(p,'guidedDesignDx','-0.5');
+  guidedDesignField(p,'guidedDesignDy','1');
+  guidedDesignField(p,'guidedDesignValues','0,4');
+  const selector=p.e.guidedDesignControls;
+  assert.deepEqual(selector.children.map(o=>JSON.parse(o.value)),[
+    ['front','side',0],['front','side',1],['lining','neck',0]
+  ]);
+  selector.children[1].selected=true;
+  selector.handlers.change();
+  p.e.guidedDesignAdd.onclick();
+  guidedDesignAction(p,'Edit shape');
+  assert.equal(selector.selectedOptions.length,1);
+  assert.deepEqual(JSON.parse(selector.selectedOptions[0].value),['front','side',1]);
+  guidedDesignAction(p,'Remove adjustment_2');
+  await p.e.study.onclick();
+  const sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'study',p.e.error.textContent);
+  assert.equal(sent.pattern,raw);
+  assert.deepEqual(JSON.parse(sent.studyRequest).design_grid.variables[0].sites,[
+    {op:'move_control',piece:'front',edge:'side',control:1,dx_multiplier:-0.5,dy_multiplier:1}
+  ]);
+  p.emit(studyReport());
+  p.select('patternFile',coupledDesignPattern); await p.e.patternFile.onchange();
+  assert.equal(selector.children.length,0);
+  p.e.guidedDesign.checked=true; p.e.guidedDesign.handlers.change();
+  guidedDesignField(p,'guidedDesignKind','move_control','change');
+  assert.equal(selector.disabled,true);
+  assert.match(p.e.guidedDesignControlStatus.textContent,/no quadratic or cubic/);
+});
 
 test('guided coupled designs dispatch ordered slash and exact source-vertex sites with bounded grid screening',async()=>{
   const {p,fit,body}=await coupledDesignSetup();

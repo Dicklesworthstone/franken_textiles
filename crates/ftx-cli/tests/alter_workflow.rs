@@ -64,7 +64,7 @@ fn saved(dir: &Path, name: &str) -> Value {
 }
 
 #[test]
-fn all_five_operations_save_history_without_touching_the_source() {
+fn reference_operations_save_history_without_touching_the_source() {
     let (dir, input) = workspace();
     let original = std::fs::read(dir.join("source.json")).unwrap();
     let cases: &[(&str, &[&str])] = &[
@@ -116,6 +116,72 @@ fn all_five_operations_save_history_without_touching_the_source() {
         );
     }
     assert_eq!(std::fs::read(dir.join("source.json")).unwrap(), original);
+}
+
+#[test]
+fn control_moves_save_the_same_curve_and_history_through_native_and_portable_paths() {
+    let (dir, input) = workspace();
+    let original = std::fs::read_to_string(dir.join("source.json")).unwrap();
+    let edit = json!({"op":"move-control","piece":"sleeve","edge":"cap_f","control":1,"dx":2,"dy":0});
+    run(
+        &dir,
+        &[
+            "alter",
+            "move-control",
+            "source.json",
+            "--piece",
+            "sleeve",
+            "--edge",
+            "cap_f",
+            "--control",
+            "1",
+            "--dx",
+            "2",
+            "--out",
+            "revised.json",
+        ],
+        0,
+    );
+    let portable: Value = serde_json::from_str(
+        &ftx_wasm::alteration::apply(&original, &edit.to_string(), None).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("revised.json")).unwrap(),
+        portable["pattern_json"].as_str().unwrap()
+    );
+    let saved = saved(&dir, "revised.json");
+    let expected =
+        ftx_pattern::alter::move_control(&input["pattern"], "sleeve", "cap_f", 1, 2.0, 0.0).unwrap();
+    assert_eq!(saved["meta"]["history"], expected["meta"]["history"]);
+    assert_ne!(saved["pieces"], input["pattern"]["pieces"]);
+    assert_eq!(saved["pieces"], expected["pieces"]);
+    for index in ["-1", "2", "0.5"] {
+        run(
+            &dir,
+            &[
+                "alter",
+                "move-control",
+                "source.json",
+                "--piece",
+                "sleeve",
+                "--edge",
+                "cap_f",
+                "--control",
+                index,
+                "--dx",
+                "2",
+                "--out",
+                "refused.json",
+            ],
+            3,
+        );
+        assert!(!dir.join("refused.json").exists());
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.join("source.json")).unwrap(),
+        original
+    );
 }
 
 #[test]

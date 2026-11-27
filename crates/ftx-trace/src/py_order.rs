@@ -676,6 +676,7 @@ pub fn alter_py(
     let args: &[&str] = match op {
         "slash-spread" => &["piece", "axis", "at", "add"],
         "move" => &["piece", "vertex", "dx", "dy"],
+        "move-control" => &["piece", "edge", "control", "dx", "dy"],
         "true-seam" => &["seam", "end", "moved_mm"],
         "cap-ease" => &["piece", "seams", "target", "height_scale"],
         _ => &["from", "to"],
