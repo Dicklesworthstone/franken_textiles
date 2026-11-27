@@ -3,13 +3,16 @@ const statusEl = document.getElementById("knitStatus");
 const errorEl = document.getElementById("error");
 const runSwatchBtn = document.getElementById("runSwatch");
 const runPanelBtn = document.getElementById("runPanel");
+const runExportBtn = document.getElementById("runExport");
 const runDyeBtn = document.getElementById("runDye");
 
 let worker = null;
+let engineReady = false;
 let reqId = 0;
-const latestRequestByKind = { swatch: 0, panel: 0, dye: 0 };
+const latestRequestByKind = { swatch: 0, panel: 0, export: 0, dye: 0 };
 const targetByRequest = new Map();
 const downloadUrlsByContainer = new WeakMap();
+const MAX_EXPORT_INPUT_BYTES = 4 * 1024 * 1024;
 
 const PANEL_MACHINE_DEFAULTS = {
   "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1", cam_setting: 7.0 },
@@ -55,6 +58,18 @@ function decodeBase64Bytes(b64) {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+function clearExportResult() {
+  clearDownloads(document.getElementById("exportDownloads"));
+  document.getElementById("exportOut").hidden = true;
+  document.getElementById("exportSummary").textContent = "";
+  document.getElementById("exportPre").textContent = "";
+}
+
+function invalidateExport() {
+  latestRequestByKind.export = ++reqId;
+  clearExportResult();
 }
 
 function buildPresetPixels(preset, w, h) {
@@ -162,7 +177,11 @@ function renderSwatch(res) {
   if (res.machine_executable !== false || res.kc_text) {
     throw new Error("This engine returned an unqualified machine export. Rebuild and reload the current WASM bundle; Kniterate requires conversion of the verified Knitout file.");
   }
+  if (typeof res.pattern_json !== "string") {
+    throw new Error("This engine omitted the saved pattern. Rebuild and reload the current WASM bundle.");
+  }
   renderSvg(svgBox, res.chart_svg);
+  makeDownload(dl, "swatch.knit.json", res.pattern_json, "application/json");
   makeDownload(dl, "swatch.k", res.knitout_text, "text/plain");
   if (res.backend_export_refusal) {
     makeDownload(dl, "backend_export_refusal.json", JSON.stringify(res.backend_export_refusal, null, 2), "application/json");
@@ -192,18 +211,52 @@ function renderSwatch(res) {
 function renderPanel(res) {
   const out = document.getElementById("panelOut");
   const dl = document.getElementById("panelDownloads");
+  clearDownloads(dl);
+  out.hidden = true;
+  if (typeof res.pattern_json !== "string") {
+    throw new Error("This engine omitted the saved pattern. Rebuild and reload the current WASM bundle.");
+  }
   renderSvg(document.getElementById("panelSvgBox"), res.chart_svg);
   if (dl) {
-    clearDownloads(dl);
+    makeDownload(dl, "panel.knit.json", res.pattern_json, "application/json");
     makeDownload(dl, "panel_chart.svg", res.chart_svg, "image/svg+xml");
     makeDownload(dl, "panel_instructions.txt", res.instructions_text, "text/plain");
     makeDownload(dl, "panel_metadata.json", JSON.stringify(res.metadata, null, 2), "application/json");
   }
+  const construction = res.metadata?.neckline_construction === "center_loops_held_separate_shoulder_carriers"
+    ? "a panel with held center neckline loops and separate shoulder carriers; manual finishing required"
+    : "a straight-top panel";
   document.getElementById("panelSummary").textContent =
-    `Drafted ${res.stitch_count} stitches for a straight-top panel · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed} · fit_claimed=${res.fit_claimed}`;
+    `Drafted ${res.stitch_count} stitches for ${construction} · doc SHA-256 ${res.doc_sha256.slice(0, 12)}… · SVG checks=${res.svg_checks_passed} · fit_claimed=${res.fit_claimed}`;
   document.getElementById("panelPre").textContent =
     JSON.stringify(res.metadata, null, 2) + "\n\n" + res.instructions_text;
   out.hidden = false;
+}
+
+function renderExport(res) {
+  clearExportResult();
+  for (const flag of ["machine_executable", "hardware_execution_authorized", "physical_knitting_validated", "fit_claimed"]) {
+    if (res[flag] !== false) {
+      throw new Error("This engine returned an unqualified export claim. Rebuild and reload the current WASM bundle.");
+    }
+  }
+  if (typeof res.archive_base64 !== "string" || !res.archive_base64 || !Array.isArray(res.files)) {
+    throw new Error("The engine returned an incomplete saved-pattern export.");
+  }
+  const archive = decodeBase64Bytes(res.archive_base64);
+  if (archive.length < 22) throw new Error("The engine returned an incomplete ZIP archive.");
+  const conversionNotice = res.backend_export_refusal
+    ? `Machine conversion required [${res.backend_export_refusal.code}]: ${res.backend_export_refusal.message}\n${(res.backend_export_refusal.repairs || []).join("\n")}\n\n`
+    : "";
+  document.getElementById("exportSummary").textContent =
+    `${res.machine} · ${res.files.length} files · pattern SHA-256 ${res.pattern_sha256} · machine executable: false · hardware execution authorized: false · physical knitting validated: false · fit claimed: false`;
+  document.getElementById("exportPre").textContent = conversionNotice +
+    `ZIP SHA-256: ${res.archive_sha256}\n\n=== Files (uncompressed bytes and SHA-256) ===\n` +
+    res.files.map((file) => `${file.name}\n  ${file.bytes} bytes · ${file.sha256}`).join("\n") +
+    "\n\n=== Virtual machine report ===\n" + JSON.stringify(res.vm_report, null, 2) +
+    "\n\n=== Certificate ===\n" + JSON.stringify(res.cert, null, 2);
+  makeDownload(document.getElementById("exportDownloads"), "knit-export.zip", archive, "application/zip");
+  document.getElementById("exportOut").hidden = false;
 }
 
 function renderDye(res, targetPixels, targetW, targetH) {
@@ -267,9 +320,12 @@ function renderDye(res, targetPixels, targetW, targetH) {
 }
 
 function failEngine(message) {
+  engineReady = false;
+  invalidateExport();
   statusEl.textContent = "Engine unavailable.";
   runSwatchBtn.disabled = true;
   runPanelBtn.disabled = true;
+  runExportBtn.disabled = true;
   runDyeBtn.disabled = true;
   showError(message);
 }
@@ -293,20 +349,24 @@ function startWorker() {
   };
   worker.onmessage = ({ data: msg }) => {
     if (msg.type === "ready") {
+      engineReady = true;
       statusEl.textContent = "Local WASM knitting & dyeing engine ready.";
       runSwatchBtn.disabled = false;
       runPanelBtn.disabled = false;
+      runExportBtn.disabled = false;
       runDyeBtn.disabled = false;
     } else if (msg.type === "loadError") {
       failEngine(msg.message);
     } else if (msg.type === "refusal") {
       targetByRequest.delete(msg.request);
       if (isStaleReply(msg)) return;
+      if (msg.kind === "export") clearExportResult();
       statusEl.textContent = `Refused (${msg.code}).`;
       showError(`[${msg.code}] ${msg.message}`);
     } else if (msg.type === "error") {
       targetByRequest.delete(msg.request);
       if (isStaleReply(msg)) return;
+      if (msg.kind === "export") clearExportResult();
       statusEl.textContent = "Error.";
       showError(msg.message);
     } else if (msg.type === "result") {
@@ -318,8 +378,10 @@ function startWorker() {
       try {
         if (msg.kind === "swatch") renderSwatch(msg.result);
         else if (msg.kind === "panel") renderPanel(msg.result);
+        else if (msg.kind === "export") renderExport(msg.result);
         else if (msg.kind === "dye" && target) renderDye(msg.result, target.pixels, target.w, target.h);
       } catch (err) {
+        if (msg.kind === "export") clearExportResult();
         statusEl.textContent = "Render refused.";
         showError(String(err?.message || err));
       }
@@ -368,10 +430,16 @@ runSwatchBtn.addEventListener("click", () => {
 
 runPanelBtn.addEventListener("click", () => {
   clearError();
+  const request = ++reqId;
+  latestRequestByKind.panel = request;
+  clearDownloads(document.getElementById("panelDownloads"));
+  document.getElementById("panelOut").hidden = true;
   let hem;
   let chest;
   let length;
   let rib;
+  let neckWidth;
+  let neckDepth;
   try {
     hem = parseFiniteInput("panelHem", "Hem Width (mm)");
     chest = parseFiniteInput("panelChest", "Chest Width (mm)");
@@ -380,6 +448,14 @@ runPanelBtn.addEventListener("click", () => {
       throw new Error("Panel widths and length must be positive numbers.");
     }
     rib = parseIntRange("panelRib", "Rib Hem Courses", 0, 200);
+    neckWidth = parseFiniteInput("panelNeckWidth", "Neck Opening Width (mm)");
+    neckDepth = parseFiniteInput("panelNeckDepth", "Neck Drop (mm)");
+    if (neckWidth < 0 || neckWidth >= chest || neckDepth < 0 || neckDepth >= length) {
+      throw new Error("Neck opening width and drop must be nonnegative and smaller than the panel chest width and length.");
+    }
+    if ((neckWidth > 0) !== (neckDepth > 0)) {
+      throw new Error("Set both neckline dimensions to zero for a straight top, or supply both a positive width and drop.");
+    }
   } catch (err) {
     statusEl.textContent = "Invalid input.";
     showError(String(err?.message || err));
@@ -394,8 +470,6 @@ runPanelBtn.addEventListener("click", () => {
   }
   const armholeDepth = Math.min(95, Math.max(10, Math.round(length * 0.31)));
   const armholeInset = Math.min(36, Math.max(0, Math.round(chest * 0.13)));
-  const request = ++reqId;
-  latestRequestByKind.panel = request;
   statusEl.textContent = "Drafting measured shaped panel…";
   worker.postMessage({
     type: "panel",
@@ -410,8 +484,8 @@ runPanelBtn.addEventListener("click", () => {
         length_mm: length,
         armhole_depth_mm: armholeDepth,
         armhole_inset_total_mm: armholeInset,
-        neck_width_mm: 0,
-        neck_depth_mm: 0,
+        neck_width_mm: neckWidth,
+        neck_depth_mm: neckDepth,
         rib_hem_courses: rib,
         cam_setting: defaults.cam_setting,
         yarn_id: "merino-200tex",
@@ -428,6 +502,68 @@ runPanelBtn.addEventListener("click", () => {
     },
   });
 });
+
+runExportBtn.addEventListener("click", async () => {
+  clearError();
+  invalidateExport();
+  const request = latestRequestByKind.export;
+  try {
+    if (!engineReady) throw new Error("Wait for the local engine to finish loading.");
+    const pattern = document.getElementById("exportPattern").files[0];
+    const qualification = document.getElementById("exportQualification").files[0];
+    const drapeReceipt = document.getElementById("exportDrapeReceipt").files[0];
+    if (!pattern) throw new Error("Choose a saved pattern JSON file.");
+    const files = [pattern, qualification, drapeReceipt].filter(Boolean);
+    if (files.some((file) => !Number.isSafeInteger(file.size) || file.size < 0) ||
+        files.reduce((total, file) => total + file.size, 0) > MAX_EXPORT_INPUT_BYTES) {
+      throw new Error("Saved pattern and evidence files exceed the combined 4 MiB budget.");
+    }
+    const machine = document.getElementById("exportMachine").value;
+    const materialSha256 = document.getElementById("exportMaterialSha256").value.trim();
+    const created = document.getElementById("exportCreated").value;
+    if (materialSha256 && !/^[0-9a-fA-F]{64}$/.test(materialSha256)) {
+      throw new Error("Source Material SHA-256 must contain exactly 64 hexadecimal characters.");
+    }
+    statusEl.textContent = "Reading local pattern and evidence files…";
+    // Never parse and reserialize these documents: doing so can alter sealed float values.
+    const [patternJson, qualificationJson, drapeReceiptJson] = await Promise.all([
+      pattern.text(), qualification?.text(), drapeReceipt?.text(),
+    ]);
+    if (request !== latestRequestByKind.export || !engineReady) return;
+    const payload = {
+      machine,
+      pattern_json: patternJson,
+      ...(qualification ? { qualification_json: qualificationJson } : {}),
+      ...(drapeReceipt ? { drape_receipt_json: drapeReceiptJson } : {}),
+      ...(materialSha256 ? { material_sha256: materialSha256 } : {}),
+      ...(created ? { created } : {}),
+    };
+    // JSON string escaping also counts against the WASM request's UTF-8 byte budget.
+    if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > MAX_EXPORT_INPUT_BYTES) {
+      throw new Error("The encoded pattern and evidence request exceeds the 4 MiB budget.");
+    }
+    statusEl.textContent = "Verifying the saved pattern and building local export artifacts…";
+    worker.postMessage({ type: "export", request, payload });
+  } catch (err) {
+    if (request !== latestRequestByKind.export) return;
+    clearExportResult();
+    statusEl.textContent = "Export refused.";
+    showError(String(err?.message || err));
+  }
+});
+
+for (const id of ["exportMachine", "exportPattern", "exportQualification", "exportDrapeReceipt", "exportMaterialSha256", "exportCreated"]) {
+  const input = document.getElementById(id);
+  const changed = () => {
+    invalidateExport();
+    clearError();
+    statusEl.textContent = engineReady
+      ? "Export inputs changed. Verify again to generate current downloads."
+      : "Waiting for the local engine…";
+  };
+  input.addEventListener("input", changed);
+  input.addEventListener("change", changed);
+}
 
 runDyeBtn.addEventListener("click", () => {
   clearError();
@@ -487,6 +623,9 @@ runDyeBtn.addEventListener("click", () => {
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("pagehide", () => {
+    invalidateExport();
+    for (const kind of ["swatch", "panel", "dye"]) latestRequestByKind[kind] = ++reqId;
+    targetByRequest.clear();
     for (const id of ["swatchDownloads", "panelDownloads", "dyeDownloads"]) {
       const el = document.getElementById(id);
       if (el) clearDownloads(el);

@@ -4,6 +4,7 @@
 //! refusal codes, `hardware_execution_authorized: false`, and zero browser-type leakage into
 //! numerical crates).
 
+use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode, TargetRaster};
 use ftx_drape::dye::{
     CapillaryTransportConfig, DriftParameters, DyeInverseConfig, DyeOpticsModel, KnitStitchMap,
@@ -12,12 +13,13 @@ use ftx_drape::dye::{
 use ftx_export::dye::verify_and_export_dye_program;
 use ftx_export::knit::{
     check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
-    export_hand_knit_document, export_kniterate_kc,
+    export_hand_knit_document, export_knit_document, export_kniterate_kc,
 };
 use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime};
 use ftx_pattern::knit::{
-    CarrierId, GaugeSpec, MachineBackendKind, MachineProfile, ParametricPanelSpec, WearerAgeClass,
-    compile_knit_doc, draft_shaped_panel,
+    CarrierId, DrapeUncertaintyReceipt, GaugeSpec, KnitDoc, KnitSwatchQualification,
+    MachineBackendKind, MachineProfile, ParametricPanelSpec, WearerAgeClass, compile_knit_doc,
+    draft_shaped_panel,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -59,6 +61,28 @@ pub struct KnitPanelPreviewRequest {
     /// Gauge specification.
     pub gauge: GaugeSpec,
     /// Deterministic creation date (`YYYY-MM-DDTHH:MM`).
+    #[serde(default = "default_created")]
+    pub created: String,
+}
+
+/// A saved pattern and optional measured evidence for [`knit_export_json`].
+///
+/// Sealed documents remain raw JSON strings across the JavaScript boundary: parsing and
+/// reserializing their floating-point fields in JavaScript can change the bytes being verified.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnitExportRequest {
+    /// Built-in target machine ID.
+    pub machine: String,
+    /// Complete `ftx-knit/1` document, as read from disk.
+    pub pattern_json: String,
+    /// Complete measured swatch qualification, as read from disk.
+    pub qualification_json: Option<String>,
+    /// Material identity expected by the selected qualification and drape receipt.
+    pub material_sha256: Option<String>,
+    /// Complete sealed drape receipt, as read from disk.
+    pub drape_receipt_json: Option<String>,
+    /// Deterministic artifact creation date (`YYYY-MM-DDTHH:MM`).
     #[serde(default = "default_created")]
     pub created: String,
 }
@@ -130,12 +154,13 @@ pub fn resolve_knit_machine(id: &str) -> Result<MachineProfile, Refusal> {
         "shima-seiki-12e-handoff" | "shima-12e" | "shima" => {
             Ok(MachineProfile::shima_seiki_12e_handoff())
         }
+        "stoll-12e-handoff" | "stoll-12e" | "stoll" => Ok(MachineProfile::stoll_12e_handoff()),
         "hand-knit" | "hand" => Ok(MachineProfile::hand_knit(4.0)),
         _ => Err(Refusal::new(
             RefusalCode::UnknownParameter,
             format!("unknown knitting machine profile '{id}'"),
         )
-        .repair("choose one of: kniterate-7e, brother-kh930-ayab, brother-kh270-ayab, shima-seiki-12e-handoff, hand-knit")),
+        .repair("choose one of: kniterate-7e, brother-kh930-ayab, brother-kh270-ayab, shima-seiki-12e-handoff, stoll-12e-handoff, hand-knit")),
     }
 }
 
@@ -218,6 +243,9 @@ pub fn knit_swatch_json(request_json: &str) -> Result<String, Refusal> {
 
     let payload = json!({
         "machine": profile,
+        "pattern_json": serde_json::to_string_pretty(&kit.doc)
+            .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
+        "pattern_sha256": kit.doc.canonical_sha256()?,
         "knitout_text": kit.knitout.knitout_text,
         "knitout_sha256": kit.knitout.knitout_sha256,
         "kc_text": kc_text,
@@ -255,6 +283,8 @@ pub fn knit_panel_preview_json(request_json: &str) -> Result<String, Refusal> {
     let svg_checks = check_hand_knit_svg(&hand.svg_text, "panel.svg");
     let payload = json!({
         "doc_sha256": doc.canonical_sha256()?,
+        "pattern_json": serde_json::to_string_pretty(&doc)
+            .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
         "stitch_count": doc.stitches.len(),
         "short_row_turns": doc.short_row_turns.len(),
         "metadata": doc.metadata,
@@ -265,6 +295,81 @@ pub fn knit_panel_preview_json(request_json: &str) -> Result<String, Refusal> {
         "hardware_execution_authorized": false,
     });
     encode_bounded_json(&payload)
+}
+
+/// Exports a saved pattern to the same verified artifacts as `ftx knit export`, in a ZIP archive.
+///
+/// Production machine targets require measured qualification. Any supplied drape receipt must
+/// be sealed, match the pattern and material, and contain no unresolved gating flags. These
+/// checks never authorize hardware execution or imply physical fit validation.
+///
+/// # Errors
+/// Input/output budget, document, qualification, machine, or evidence-binding refusals.
+pub fn knit_export_json(request_json: &str) -> Result<String, Refusal> {
+    if request_json.len() > MAX_INPUT_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "knit export request exceeds 4 MiB budget",
+        ));
+    }
+    let req: KnitExportRequest = serde_json::from_str(request_json)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let doc: KnitDoc = serde_json::from_str(&req.pattern_json)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let qualification: Option<KnitSwatchQualification> = req
+        .qualification_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let receipt: Option<DrapeUncertaintyReceipt> = req
+        .drape_receipt_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let profile = resolve_knit_machine(&req.machine)?;
+    let bundle = export_knit_document(
+        &doc,
+        &profile,
+        qualification.as_ref(),
+        req.material_sha256.as_deref(),
+        receipt.as_ref(),
+        &req.created,
+    )?;
+    let files: Vec<(String, Vec<u8>)> = bundle.files.into_iter().collect();
+    let total_bytes: usize = files.iter().map(|(_, bytes)| bytes.len()).sum();
+    if total_bytes > MAX_OUTPUT_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "knit export artifacts exceed 16 MiB uncompressed budget",
+        ));
+    }
+    let manifest: Vec<Value> = files
+        .iter()
+        .map(|(name, bytes)| {
+            json!({
+                "name": name,
+                "bytes": bytes.len(),
+                "sha256": sha256_hex(bytes),
+            })
+        })
+        .collect();
+    let archive = crate::zip::zip(&files, &req.created);
+    encode_bounded_json(&json!({
+        "machine": profile.id,
+        "pattern_sha256": doc.canonical_sha256()?,
+        "files": manifest,
+        "archive_base64": encode_base64(&archive),
+        "archive_sha256": sha256_hex(&archive),
+        "vm_report": bundle.compiled.vm_report,
+        "cert": bundle.compiled.cert,
+        "backend_export_refusal": bundle.backend_export_refusal,
+        "machine_executable": false,
+        "hardware_execution_authorized": false,
+        "physical_knitting_validated": false,
+        "fit_claimed": false,
+    }))
 }
 
 /// Runs the 4-stage radiometric Kubelka–Munk + Sobol-CVaR Bertsekas L-BFGS continuous yarn dyeing
@@ -516,6 +621,24 @@ pub fn web_knit_panel_preview_json(request_json: &str) -> String {
     }
 }
 
+/// Browser export wrapping [`knit_export_json`] with structured refusal JSON errors.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = knit_export_json)]
+pub fn web_knit_export_json(request_json: &str) -> String {
+    match knit_export_json(request_json) {
+        Ok(json_str) => format!(r#"{{"ok":true,"result":{json_str}}}"#),
+        Err(refusal) => serde_json::to_string(&KnitWasmEnvelope {
+            ok: false,
+            result: None,
+            refusal: Some(refusal),
+        })
+        .unwrap_or_else(|_| {
+            r#"{"ok":false,"refusal":{"code":"invalid_document","message":"serialization error"}}"#
+                .to_string()
+        }),
+    }
+}
+
 /// Browser export wrapping [`dye_optimize_json`] with structured refusal JSON errors.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = dye_optimize_json)]
@@ -537,6 +660,113 @@ pub fn web_dye_optimize_json(request_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_export_zip_contains_exact_native_files_and_binds_raw_receipt() {
+        use ftx_pattern::knit::draft_calibration_swatch;
+        use ftx_pattern::materials::Evidence;
+
+        let profile = MachineProfile::kniterate_7e();
+        let doc = draft_calibration_swatch(&profile, "synthetic-yarn", 8, 4, &[7.0]).unwrap();
+        let receipt = DrapeUncertaintyReceipt::seal(
+            doc.canonical_sha256().unwrap(),
+            "synthetic-material".into(),
+            1.0000000000000002,
+            0.1,
+            0.0,
+            0.0,
+            vec![],
+            Evidence::Estimate,
+        )
+        .unwrap();
+        let created = "2026-11-27T08:00";
+        let request = json!({
+            "machine": "kniterate-7e",
+            "pattern_json": serde_json::to_string_pretty(&doc).unwrap(),
+            "drape_receipt_json": serde_json::to_string_pretty(&receipt).unwrap(),
+            "material_sha256": "synthetic-material",
+            "created": created,
+        })
+        .to_string();
+        let raw = knit_export_json(&request).unwrap();
+        assert_eq!(raw, knit_export_json(&request).unwrap());
+        let out: Value = serde_json::from_str(&raw).unwrap();
+        let native = export_knit_document(
+            &doc,
+            &profile,
+            None,
+            Some("synthetic-material"),
+            Some(&receipt),
+            created,
+        )
+        .unwrap();
+        let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut archive = Vec::new();
+        for group in out["archive_base64"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .as_chunks::<4>()
+            .0
+        {
+            let mut n = 0_u32;
+            for &byte in group {
+                let digit = if byte == b'=' {
+                    0
+                } else {
+                    table.iter().position(|&v| v == byte).unwrap()
+                };
+                n = (n << 6) | digit as u32;
+            }
+            archive.push((n >> 16) as u8);
+            if group[2] != b'=' {
+                archive.push((n >> 8) as u8);
+            }
+            if group[3] != b'=' {
+                archive.push(n as u8);
+            }
+        }
+        assert_eq!(out["archive_sha256"], sha256_hex(&archive));
+        let u16_at =
+            |offset| u16::from_le_bytes(archive[offset..offset + 2].try_into().unwrap()) as usize;
+        let u32_at =
+            |offset| u32::from_le_bytes(archive[offset..offset + 4].try_into().unwrap()) as usize;
+        let mut offset = 0;
+        let mut observed = std::collections::BTreeMap::new();
+        while archive[offset..offset + 4] == [0x50, 0x4b, 3, 4] {
+            assert_eq!(u16_at(offset + 8), 8, "ZIP entries must use deflate");
+            let packed = u32_at(offset + 18);
+            let unpacked = u32_at(offset + 22);
+            let name_len = u16_at(offset + 26);
+            let extra_len = u16_at(offset + 28);
+            let name = std::str::from_utf8(&archive[offset + 30..offset + 30 + name_len]).unwrap();
+            let start = offset + 30 + name_len + extra_len;
+            let bytes =
+                miniz_oxide::inflate::decompress_to_vec(&archive[start..start + packed]).unwrap();
+            assert_eq!(bytes.len(), unpacked);
+            assert!(observed.insert(name.to_string(), bytes).is_none());
+            offset = start + packed;
+        }
+        assert_eq!(observed, native.files);
+        assert_eq!(out["cert"]["drape_receipt_sha256"], receipt.payload_sha256);
+        assert_eq!(out["backend_export_refusal"]["code"], "unqualified_process");
+        assert!(!observed.contains_key("program.kc"));
+        assert_eq!(out["machine_executable"], false);
+        assert_eq!(out["fit_claimed"], false);
+
+        let mut stale: Value = serde_json::from_str(&request).unwrap();
+        stale["material_sha256"] = json!("other-material");
+        assert_eq!(
+            knit_export_json(&stale.to_string()).unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+        assert_eq!(
+            knit_export_json(&" ".repeat(MAX_INPUT_BYTES + 1))
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+    }
 
     #[test]
     fn wasm_knit_swatch_and_dye_optimize_round_trip_cleanly() {

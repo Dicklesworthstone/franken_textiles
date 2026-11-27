@@ -101,10 +101,10 @@ pub fn export_knit_document(
     )?;
     let knitout = export_knitout_v2(&compiled)?;
     let hand = export_hand_knit_document(doc, created)?;
-    let checks = check_hand_knit_svg(&hand.svg_text, "chart.svg")
+    let mut checks = check_hand_knit_svg(&hand.svg_text, "chart.svg")
         .into_iter()
         .chain(check_hand_knit_pdf(&hand.pdf_bytes, "chart.pdf"));
-    if checks.into_iter().any(|check| !check.ok) {
+    if checks.any(|check| !check.ok) {
         return Err(Refusal::new(
             RefusalCode::VerificationMismatch,
             "knit chart failed its export acceptance checks",

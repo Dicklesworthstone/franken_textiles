@@ -2,6 +2,7 @@
 //! - `ftx knit swatch` — hard-capped `CalibrationSwatchOnly` kit (`.k`, AYAB, CYC SVG/PDF, cert, template)
 //! - `ftx knit draft` — measured flat panel or shaped torso tube with child-safety gates
 //! - `ftx knit verify` — 7-check V-bed VM & child-safety verifier for any `ftx-knit/1` document
+//! - `ftx knit export` — recompile and export a saved document with its current qualification
 //! - `ftx knit poincloux` — Rung-3 Poincloux et al. (2018) planar elastica analytical KAT curve
 //! - `ftx dye optimize` — 4-stage radiometric KM + Sobol-CVaR Bertsekas L-BFGS + 5-regime Pareto
 //! - `ftx dye verify` — physical dye-rig Capstan/dwell/Tg/accumulator/fastness verifier + `.csv`/`.gcode`/cert
@@ -17,13 +18,13 @@ use ftx_drape::knit::{PoinclouxParams, poincloux_uniaxial_curve};
 use ftx_export::dye::{export_exp4_bleed_swatch_kit, verify_and_export_dye_program};
 use ftx_export::knit::{
     check_hand_knit_pdf, check_hand_knit_svg, export_brother_ayab, export_calibration_swatch_kit,
-    export_hand_knit_document, export_kniterate_kc, export_knitout_v2,
+    export_hand_knit_document, export_knit_document, export_kniterate_kc, export_knitout_v2,
     export_tier_b_vendor_handoff, refuse_proprietary_binary_target,
 };
 use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime, YarnDyeProgram, YarnDyeingQualification};
 use ftx_pattern::knit::{
-    GaugeSpec, KnitDoc, KnitSwatchQualification, MachineBackendKind, MachineProfile,
-    ParametricPanelSpec, RaglanPulloverSpec, WearerAgeClass, compile_knit_doc,
+    DrapeUncertaintyReceipt, GaugeSpec, KnitDoc, KnitSwatchQualification, MachineBackendKind,
+    MachineProfile, ParametricPanelSpec, RaglanPulloverSpec, WearerAgeClass, compile_knit_doc,
     draft_seamless_raglan_tube, draft_shaped_panel,
 };
 use ftx_trace::raster::load_target_raster_with_limit;
@@ -152,15 +153,16 @@ fn no_extra_positional(args: &Args, expected: usize, usage: &str) -> Result<(), 
     Ok(())
 }
 
-/// Dispatches `ftx knit <swatch|draft|verify|poincloux> ...`.
+/// Dispatches `ftx knit <swatch|draft|verify|export|poincloux> ...`.
 pub(super) fn cmd_knit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     match args.positional.get(1).map(String::as_str) {
         Some("swatch") => cmd_knit_swatch(args),
         Some("draft") => cmd_knit_draft(args),
         Some("verify") => cmd_knit_verify(args),
+        Some("export") => cmd_knit_export(args),
         Some("poincloux") => cmd_knit_poincloux(args),
         _ => Err(bad_input(
-            "expected `ftx knit swatch|draft|verify|poincloux`",
+            "expected `ftx knit swatch|draft|verify|export|poincloux`",
         )),
     }
 }
@@ -392,6 +394,7 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "collar-rib",
             "qual",
             "material-sha256",
+            "drape-receipt",
             "created",
             "out",
         ],
@@ -532,6 +535,8 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     };
 
+    let receipt: Option<DrapeUncertaintyReceipt> =
+        read_optional_knit_json(args, "drape-receipt", "knit drape receipt")?;
     if let Some(material_sha256) = expected_material_sha256 {
         doc.metadata
             .insert("material_sha256".to_string(), material_sha256.to_string());
@@ -540,107 +545,31 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         doc.metadata
             .insert("yarn_lot_id".to_string(), q.yarn_lot_id.clone());
     }
-    let compiled = compile_knit_doc(
-        &doc,
-        &profile,
-        qual.as_ref(),
-        expected_material_sha256,
-        None,
-    )?;
-    let knitout = export_knitout_v2(&compiled)?;
     let created = match args.options.get("created") {
         Some(c) => c.clone(),
         None => export::utc_minute()?,
     };
-    let hand = export_hand_knit_document(&doc, &created)?;
-    let svg_checks = check_hand_knit_svg(&hand.svg_text, "chart.svg");
-    let pdf_checks = check_hand_knit_pdf(&hand.pdf_bytes, "chart.pdf");
-    if !svg_checks.iter().all(|c| c.ok) || !pdf_checks.iter().all(|c| c.ok) {
-        return Err(Refusal::new(
-            RefusalCode::VerificationMismatch,
-            "hand-knit chart acceptance check failed",
-        ));
-    }
+    let bundle = export_knit_document(
+        &doc,
+        &profile,
+        qual.as_ref(),
+        expected_material_sha256,
+        receipt.as_ref(),
+        &created,
+    )?;
 
     let out_dir = PathBuf::from(
         args.options
             .get("out")
             .ok_or_else(|| bad_input("`ftx knit draft` requires --out NEW_DIR"))?,
     );
-    let doc_json = serde_json::to_string_pretty(&doc)
-        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
-    let mut backend_export_refusal = None;
-    let kc = if profile.backend_kind == MachineBackendKind::KniterateKc {
-        match export_kniterate_kc(&compiled, &profile) {
-            Ok(bundle) => Some(bundle),
-            Err(refusal) if refusal.code == RefusalCode::UnqualifiedProcess => {
-                backend_export_refusal = Some(refusal);
-                None
-            }
-            Err(refusal) => return Err(refusal),
-        }
-    } else {
-        None
-    };
-    let ayab = if profile.backend_kind == MachineBackendKind::BrotherAyab {
-        Some(export_brother_ayab(&doc, &profile, &compiled.cert)?)
-    } else {
-        None
-    };
-    let handoff = if profile.backend_kind.is_opaque_proprietary() {
-        let fmt = match profile.backend_kind {
-            MachineBackendKind::ShimaSeikiHandoff => ".dat",
-            MachineBackendKind::StollHandoff => "SINTRAL",
-            _ => "proprietary",
-        };
-        Some(export_tier_b_vendor_handoff(&compiled, &profile, fmt)?)
-    } else {
-        None
-    };
-
     reserve_output(&out_dir, "knit draft")?;
-
-    let mut files = vec![
-        "pattern.knit.json".to_string(),
-        "program.k".to_string(),
-        "cert.json".to_string(),
-        "chart.svg".to_string(),
-        "chart.pdf".to_string(),
-        "instructions.txt".to_string(),
-    ];
-    write_file(&out_dir, "pattern.knit.json", doc_json.as_bytes())?;
-    write_file(&out_dir, "program.k", knitout.knitout_text.as_bytes())?;
-    write_file(&out_dir, "cert.json", knitout.cert_json.as_bytes())?;
-    write_file(&out_dir, "chart.svg", hand.svg_text.as_bytes())?;
-    write_file(&out_dir, "chart.pdf", &hand.pdf_bytes)?;
-    write_file(
-        &out_dir,
-        "instructions.txt",
-        hand.instructions_text.as_bytes(),
-    )?;
-
-    if let Some(kc) = kc {
-        write_file(&out_dir, "program.kc", kc.kc_text.as_bytes())?;
-        files.push("program.kc".to_string());
-    } else if let Some(ayab) = ayab {
-        write_file(&out_dir, "pattern_ayab.png", &ayab.png_bytes)?;
-        write_file(
-            &out_dir,
-            "ayab_session_checklist.json",
-            ayab.checklist_json.as_bytes(),
-        )?;
-        files.push("pattern_ayab.png".to_string());
-        files.push("ayab_session_checklist.json".to_string());
-    } else if let Some(handoff) = handoff {
-        write_file(
-            &out_dir,
-            "vendor_handoff_manifest.json",
-            handoff.manifest_json.as_bytes(),
-        )?;
-        files.push("vendor_handoff_manifest.json".to_string());
+    for (name, bytes) in &bundle.files {
+        write_file(&out_dir, name, bytes)?;
     }
 
-    let conversion_notice = backend_export_refusal
+    let conversion_notice = bundle
+        .backend_export_refusal
         .as_ref()
         .map_or_else(String::new, |refusal| {
             format!("\nMachine conversion required: {}", refusal.message)
@@ -650,13 +579,13 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "machine": profile.id,
         "wearer_age_class": doc.wearer_age_class,
         "stitches": doc.stitches.len(),
-        "transfers": compiled.vm_report.total_transfers,
-        "max_float_mm": compiled.vm_report.max_float_mm,
-        "files": files,
+        "transfers": bundle.compiled.vm_report.total_transfers,
+        "max_float_mm": bundle.compiled.vm_report.max_float_mm,
+        "files": bundle.files.keys().collect::<Vec<_>>(),
         "metadata": doc.metadata,
-        "backend_export_refusal": backend_export_refusal,
+        "cert": bundle.compiled.cert,
+        "backend_export_refusal": bundle.backend_export_refusal,
         "machine_executable": false,
-        "cert": compiled.cert,
         "out_dir": out_dir.display().to_string(),
         "hardware_execution_authorized": false,
         "physical_knitting_validated": false,
@@ -665,11 +594,111 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let text = format!(
         "Drafted & verified {style} knit ({} stitches, {} transfers) for {} -> {}{conversion_notice}",
         doc.stitches.len(),
-        compiled.vm_report.total_transfers,
+        bundle.compiled.vm_report.total_transfers,
         profile.id,
         out_dir.display()
     );
     Ok((result, 0, text))
+}
+
+fn cmd_knit_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(
+        args,
+        "knit export",
+        &[
+            "machine",
+            "qual",
+            "material-sha256",
+            "drape-receipt",
+            "created",
+            "out",
+        ],
+    )?;
+    no_extra_positional(
+        args,
+        3,
+        "ftx knit export PATTERN.knit.json --out NEW_DIR [--machine ID] [--qual SWATCH.json] [--material-sha256 SHA] [--drape-receipt RECEIPT.json] [--created YYYY-MM-DDTHH:MM]",
+    )?;
+    let out_dir = PathBuf::from(
+        args.options
+            .get("out")
+            .ok_or_else(|| bad_input("`ftx knit export` requires --out NEW_DIR"))?,
+    );
+    let doc: KnitDoc = serde_json::from_str(&read_utf8(
+        &PathBuf::from(&args.positional[2]),
+        "knit pattern document",
+    )?)
+    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let profile = parse_machine(
+        args.options
+            .get("machine")
+            .map(String::as_str)
+            .unwrap_or("kniterate-7e"),
+    )?;
+    let qualification: Option<KnitSwatchQualification> =
+        read_optional_knit_json(args, "qual", "knit swatch qualification")?;
+    let expected_material_sha256 = expected_knit_material(args)?;
+    let receipt: Option<DrapeUncertaintyReceipt> =
+        read_optional_knit_json(args, "drape-receipt", "knit drape receipt")?;
+    let created = match args.options.get("created") {
+        Some(created) => created.clone(),
+        None => export::utc_minute()?,
+    };
+    let bundle = export_knit_document(
+        &doc,
+        &profile,
+        qualification.as_ref(),
+        expected_material_sha256,
+        receipt.as_ref(),
+        &created,
+    )?;
+    // Validation, all target exporters and read-back checks finish before creating a directory.
+    reserve_output(&out_dir, "knit export")?;
+    for (name, bytes) in &bundle.files {
+        write_file(&out_dir, name, bytes)?;
+    }
+    let result = json!({
+        "machine": profile.id,
+        "pattern_sha256": doc.canonical_sha256()?,
+        "stitches": doc.stitches.len(),
+        "vm_report": bundle.compiled.vm_report,
+        "cert": bundle.compiled.cert,
+        "backend_export_refusal": bundle.backend_export_refusal,
+        "machine_executable": false,
+        "files": bundle.files.keys().collect::<Vec<_>>(),
+        "out_dir": out_dir.display().to_string(),
+        "hardware_execution_authorized": false,
+        "physical_knitting_validated": false,
+        "fit_claimed": false,
+    });
+    let conversion_notice = bundle
+        .backend_export_refusal
+        .as_ref()
+        .map_or_else(String::new, |refusal| {
+            format!("\nMachine conversion required: {}", refusal.message)
+        });
+    let text = format!(
+        "Exported '{}' for {} into {} ({} verified artifacts){conversion_notice}",
+        doc.name,
+        profile.id,
+        out_dir.display(),
+        bundle.files.len(),
+    );
+    Ok((result, 0, text))
+}
+
+fn read_optional_knit_json<T: serde::de::DeserializeOwned>(
+    args: &Args,
+    option: &str,
+    label: &str,
+) -> Result<Option<T>, Refusal> {
+    args.options
+        .get(option)
+        .map(|path| {
+            serde_json::from_str(&read_utf8(&PathBuf::from(path), label)?)
+                .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+        })
+        .transpose()
 }
 
 fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {

@@ -79,10 +79,11 @@ assert(!page.includes("tr.innerHTML"), "knit-page.js must build table rows with 
 assert(html.includes('id="panelLength" type="number" min="120"'), "panelLength min must stay >= 120 mm");
 
 // 5. Worker enforces WASM interface stamp, cache-busting revision, & local-only execution (no fetch/XMLHttpRequest)
-assert(worker.includes('EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.1"'), "worker missing updated stamp check");
-assert(worker.includes('ftx_wasm.js?v=2026-11-27.1') && worker.includes('ftx_wasm_bg.wasm?v=2026-11-27.1'), "worker missing matching ?v=2026-11-27.1 cache buster");
+assert(worker.includes('EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.2"'), "worker missing updated stamp check");
+assert(worker.includes('ftx_wasm.js?v=2026-11-27.2') && worker.includes('ftx_wasm_bg.wasm?v=2026-11-27.2'), "worker missing matching ?v=2026-11-27.2 cache buster");
 assert(worker.includes("ftx.knit_swatch_json"), "worker missing knit_swatch_json call");
 assert(worker.includes("ftx.knit_panel_preview_json"), "worker missing knit_panel_preview_json call");
+assert(worker.includes("ftx.knit_export_json"), "worker missing knit_export_json call");
 assert(worker.includes("ftx.dye_optimize_json"), "worker missing dye_optimize_json call");
 assert(!/\bfetch\s*\(/.test(worker), "worker must not perform network fetch calls");
 assert(!/\bfetch\s*\(/.test(page), "page must not perform network fetch calls");
@@ -94,6 +95,7 @@ class MockEl {
   constructor(tag = "div") {
     this.tag = tag;
     this.value = "";
+    this.files = [];
     this._textContent = "";
     this.hidden = false;
     this.disabled = false;
@@ -124,6 +126,9 @@ elMap.panelHem.value = "250";
 elMap.panelChest.value = "280";
 elMap.panelLength.value = "310";
 elMap.panelRib.value = "6";
+elMap.panelNeckWidth.value = "0";
+elMap.panelNeckDepth.value = "0";
+elMap.exportMachine.value = "kniterate-7e";
 elMap.dyeMachine.value = "piezo-cmyk";
 elMap.dyeAgeClass.value = "calibration_swatch_only";
 elMap.dyePreset.value = "horizon";
@@ -138,13 +143,14 @@ const paretoTbody = new MockEl("tbody");
 
 const posted = [];
 const activeUrls = new Set();
+const blobByUrl = new Map();
 let nextUrl = 0;
 let workerInstance = null;
 const windowHandlers = {};
 
 const ctx = vm.createContext({
-  JSON, Number, String, Boolean, Error, Map, WeakMap, Set, Math, Array, Object, Uint8Array,
-  atob: (s) => Buffer.from(s, "base64").toString("binary"),
+  JSON, Number, String, Boolean, Error, Map, WeakMap, Set, Math, Array, Object, Uint8Array, TextEncoder,
+  atob,
   Blob,
   DOMParser: class {
     parseFromString(src) {
@@ -174,8 +180,8 @@ const ctx = vm.createContext({
     }
   },
   URL: {
-    createObjectURL: () => { const u = `blob:knit-${++nextUrl}`; activeUrls.add(u); return u; },
-    revokeObjectURL: (u) => { activeUrls.delete(u); },
+    createObjectURL: (blob) => { const u = `blob:knit-${++nextUrl}`; activeUrls.add(u); blobByUrl.set(u, blob); return u; },
+    revokeObjectURL: (u) => { activeUrls.delete(u); blobByUrl.delete(u); },
   },
   Worker: class {
     constructor(url) { this.url = url; workerInstance = this; }
@@ -192,10 +198,12 @@ const ctx = vm.createContext({
   },
 });
 
+async function checkBehavior() {
 vm.runInContext(page, ctx);
 assert(workerInstance, "knit-page.js must construct a Worker");
 workerInstance.onmessage({ data: { type: "ready" } });
 assert.equal(elMap.runSwatch.disabled, false);
+assert.equal(elMap.runExport.disabled, false);
 
 // Reject invalid cam tokens rather than silently dropping them.
 elMap.swatchCams.value = "5.0, oops, 7.0";
@@ -259,6 +267,7 @@ workerInstance.onmessage({
     request: panelReqSafe.request,
     result: {
       chart_svg: '<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
+      pattern_json: '{"name":"safe panel"}\n',
       instructions_text: "# ok",
       stitch_count: 10,
       short_row_turns: 0,
@@ -287,6 +296,7 @@ for (const unsafeSvg of [
       request: reqBad.request,
       result: {
         chart_svg: unsafeSvg,
+        pattern_json: '{"name":"unsafe chart"}\n',
         instructions_text: "# bad",
         stitch_count: 10,
         short_row_turns: 0,
@@ -323,6 +333,7 @@ workerInstance.onmessage({
     request: kniterateReq.request,
     result: {
       knitout_text: ";!knitout-2\n",
+      pattern_json: '{ "gauge": 0.1234567890123456789 }\r\n',
       kc_text: null,
       machine_executable: false,
       backend_export_refusal: {
@@ -340,6 +351,9 @@ assert(elMap.swatchDownloads.children.some((a) => a.download === "swatch.k"));
 assert(!elMap.swatchDownloads.children.some((a) => a.download === "swatch.kc"));
 assert(elMap.swatchDownloads.children.some((a) => a.download === "backend_export_refusal.json"));
 assert.match(elMap.swatchPre.textContent, /Machine conversion required/);
+const swatchPatternLink = elMap.swatchDownloads.children.find((a) => a.download === "swatch.knit.json");
+assert(swatchPatternLink, "swatch must supply its reusable pattern JSON");
+assert.equal(await blobByUrl.get(swatchPatternLink.href).text(), '{ "gauge": 0.1234567890123456789 }\r\n', "saved swatch JSON must remain byte-for-byte identical");
 
 // An old bundle's invented .kc result must withdraw all prior swatch downloads.
 elMap.runSwatch.handlers.click();
@@ -367,6 +381,7 @@ workerInstance.onmessage({
     result: {
       knitout_text: ";!knitout-2\n",
       machine_executable: false,
+      pattern_json: '{"name":"AYAB swatch"}\n',
       ayab_png_base64: Buffer.from("\x89PNG\r\n\x1a\n", "binary").toString("base64"),
       ayab_checklist: { schema: "ftx-ayab-checklist/1" },
       chart_svg: "<svg></svg>",
@@ -387,6 +402,61 @@ assert.equal(defaultPanel.armhole_depth_mm, 95);
 assert.equal(defaultPanel.armhole_inset_total_mm, 36);
 assert.equal(defaultPanel.neck_width_mm, 0);
 assert.equal(defaultPanel.neck_depth_mm, 0);
+
+// Measured neckline requests retain the user's exact values and explain the actual construction.
+elMap.panelNeckWidth.value = "93.25";
+elMap.panelNeckDepth.value = "26.5";
+elMap.runPanel.handlers.click();
+const neckPanelRequest = posted.at(-1);
+assert.equal(neckPanelRequest.payload.panel.neck_width_mm, 93.25);
+assert.equal(neckPanelRequest.payload.panel.neck_depth_mm, 26.5);
+workerInstance.onmessage({ data: {
+  type: "result", kind: "panel", request: neckPanelRequest.request,
+  result: {
+    stitch_count: 120,
+    pattern_json: '{"neck_width_mm":93.25,"neck_depth_mm":26.5}\n',
+    doc_sha256: "0123456789abcdef", svg_checks_passed: true, fit_claimed: false,
+    chart_svg: "<svg></svg>", instructions_text: "Finish held center loops manually.",
+    metadata: {
+      neckline_construction: "center_loops_held_separate_shoulder_carriers",
+      manual_finishing: "Finish held center loops manually.",
+    },
+  },
+} });
+assert.match(elMap.panelSummary.textContent, /held center neckline loops and separate shoulder carriers; manual finishing required/);
+assert.match(elMap.panelPre.textContent, /Finish held center loops manually/);
+
+for (const [width, depth, reason] of [
+  ["NaN", "26.5", /finite number/],
+  ["93.25", "Infinity", /finite number/],
+  ["-1", "26.5", /nonnegative/],
+  ["280", "26.5", /smaller than/],
+  ["93.25", "310", /smaller than/],
+  ["93.25", "0", /both a positive width and drop/],
+]) {
+  const beforeInvalidNeck = posted.length;
+  elMap.panelNeckWidth.value = width;
+  elMap.panelNeckDepth.value = depth;
+  elMap.runPanel.handlers.click();
+  assert.equal(posted.length, beforeInvalidNeck, "invalid neckline input must refuse before posting");
+  assert.match(elMap.error.textContent, reason);
+  assert.equal(elMap.panelDownloads.children.length, 0, "a refused neckline must withdraw the old panel downloads");
+}
+
+// Rust still decides the quantized shoulder span and carrier feasibility; display its refusal.
+elMap.panelNeckWidth.value = "260";
+elMap.panelNeckDepth.value = "26.5";
+elMap.runPanel.handlers.click();
+const unsupportedNeck = posted.at(-1);
+assert.equal(unsupportedNeck.payload.panel.neck_width_mm, 260, "the browser must not silently shrink a requested opening");
+workerInstance.onmessage({ data: {
+  type: "refusal", kind: "panel", request: unsupportedNeck.request, code: "out_of_range",
+  message: "neck opening must fit strictly inside the remaining shoulder span",
+} });
+assert.match(elMap.error.textContent, /remaining shoulder span/);
+assert.equal(elMap.panelDownloads.children.length, 0);
+elMap.panelNeckWidth.value = "0";
+elMap.panelNeckDepth.value = "0";
 
 // Single-bed rib requests remain visible and refuse, rather than silently turning into jersey.
 const beforeUnsupportedRib = posted.length;
@@ -414,6 +484,7 @@ workerInstance.onmessage({
     request: smallPanelReq.request,
     result: {
       stitch_count: 120,
+      pattern_json: '{ "stitches": 120, "measure": 1.0000000000000001 }\n',
       short_row_turns: 0,
       doc_sha256: "abcdef0123456789",
       svg_checks_passed: true,
@@ -424,18 +495,250 @@ workerInstance.onmessage({
     },
   },
 });
-assert.equal(elMap.panelDownloads.children.length, 3, "panel preview must create 3 download links");
+assert.equal(elMap.panelDownloads.children.length, 4, "panel preview must include its reusable pattern document");
+const panelPatternLink = elMap.panelDownloads.children.find((a) => a.download === "panel.knit.json");
+assert.equal(await blobByUrl.get(panelPatternLink.href).text(), '{ "stitches": 120, "measure": 1.0000000000000001 }\n', "saved panel JSON must retain exact numeric text");
 
-// pagehide revokes ALL Blob URLs cleanly across swatch, panel, and dye containers.
+// Saved documents and their sealed evidence cross the browser boundary as original text.
+const rawPattern = ' \r\n{"measure":1.0000000000000001,"id":18446744073709551615,"name":"écharpe"}\r\n';
+const rawQualification = '{\n  "sample": 0.123456789012345678901, "sealed": true\n}\n';
+const rawReceipt = '{"residual":1.234567890123456789e-12,"sealed_sha256":"abc"}\r\n';
+const localFile = (text) => new Blob([text], { type: "application/json" });
+const beforeMissingFile = posted.length;
+await elMap.runExport.handlers.click();
+assert.equal(posted.length, beforeMissingFile);
+assert.match(elMap.error.textContent, /Choose a saved pattern JSON/);
+
+let oversizedReadCount = 0;
+const oversizedFile = (size) => ({ size, text: async () => { oversizedReadCount++; return "{}"; } });
+elMap.exportPattern.files = [oversizedFile(2 * 1024 * 1024)];
+elMap.exportQualification.files = [oversizedFile(2 * 1024 * 1024)];
+elMap.exportDrapeReceipt.files = [oversizedFile(1)];
+await elMap.runExport.handlers.click();
+assert.equal(oversizedReadCount, 0, "combined file-size budget must be enforced before reading any file");
+assert.equal(posted.length, beforeMissingFile);
+assert.match(elMap.error.textContent, /combined 4 MiB budget/);
+
+// Escaping raw text may grow the request beyond the file-size budget; count encoded UTF-8 too.
+elMap.exportPattern.files = [localFile("\n".repeat(3 * 1024 * 1024))];
+elMap.exportQualification.files = [];
+elMap.exportDrapeReceipt.files = [];
+await elMap.runExport.handlers.click();
+assert.equal(posted.length, beforeMissingFile);
+assert.match(elMap.error.textContent, /encoded pattern and evidence request exceeds the 4 MiB budget/);
+
+elMap.exportPattern.files = [localFile(rawPattern)];
+elMap.exportQualification.files = [localFile(rawQualification)];
+elMap.exportDrapeReceipt.files = [localFile(rawReceipt)];
+elMap.exportMaterialSha256.value = "a".repeat(64);
+elMap.exportCreated.value = "2026-11-27T14:30";
+await elMap.runExport.handlers.click();
+const firstExport = posted.at(-1);
+assert.equal(firstExport.type, "export");
+assert.equal(firstExport.payload.pattern_json, rawPattern);
+assert.equal(firstExport.payload.qualification_json, rawQualification);
+assert.equal(firstExport.payload.drape_receipt_json, rawReceipt);
+assert.equal(firstExport.payload.material_sha256, "a".repeat(64));
+assert.equal(firstExport.payload.created, "2026-11-27T14:30");
+
+// A valid empty ZIP with a binary comment detects accidental UTF-8/text conversion of bytes.
+const zipBytes = Buffer.alloc(25);
+zipBytes.writeUInt32LE(0x06054b50, 0);
+zipBytes.writeUInt16LE(3, 20);
+zipBytes.set([0, 128, 255], 22);
+const exportResult = {
+  machine: "kniterate-7e",
+  pattern_sha256: "b".repeat(64),
+  files: [],
+  archive_base64: zipBytes.toString("base64"),
+  archive_sha256: "c".repeat(64),
+  vm_report: { accepted: true },
+  cert: { hardware_execution_authorized: false },
+  backend_export_refusal: {
+    code: "unqualified_process",
+    message: "Kniterate conversion requires an independent backend",
+    repairs: ["Convert the verified Knitout file with the official backend."],
+  },
+  machine_executable: false,
+  hardware_execution_authorized: false,
+  physical_knitting_validated: false,
+  fit_claimed: false,
+};
+const replyExport = (request, result = exportResult) => workerInstance.onmessage({
+  data: { type: "result", kind: "export", request, result },
+});
+replyExport(firstExport.request);
+assert.equal(elMap.exportOut.hidden, false);
+assert.match(elMap.exportPre.textContent, /Machine conversion required \[unqualified_process\]/);
+assert.match(elMap.exportPre.textContent, /Convert the verified Knitout file with the official backend/);
+const archiveLink = elMap.exportDownloads.children[0];
+assert.equal(archiveLink.download, "knit-export.zip");
+assert.equal(blobByUrl.get(archiveLink.href).type, "application/zip");
+assert.deepEqual(Buffer.from(await blobByUrl.get(archiveLink.href).arrayBuffer()), zipBytes, "downloaded ZIP must retain all binary bytes");
+
+// Editing inputs immediately withdraws the previous artifact and invalidates every old reply.
+elMap.exportMachine.handlers.change();
+assert.equal(elMap.exportOut.hidden, true);
+assert.equal(elMap.exportDownloads.children.length, 0);
+assert(!activeUrls.has(archiveLink.href), "changing an export input must revoke its old ZIP URL");
+const changedStatus = elMap.knitStatus.textContent;
+replyExport(firstExport.request);
+for (const type of ["refusal", "error"]) {
+  workerInstance.onmessage({ data: { type, kind: "export", request: firstExport.request, code: "stale", message: "stale failure" } });
+}
+assert.equal(elMap.exportDownloads.children.length, 0, "stale success must not recreate downloads");
+assert.equal(elMap.knitStatus.textContent, changedStatus);
+assert.equal(elMap.error.hidden, true);
+
+for (const id of ["exportPattern", "exportQualification", "exportDrapeReceipt", "exportMaterialSha256", "exportCreated"]) {
+  await elMap.runExport.handlers.click();
+  replyExport(posted.at(-1).request);
+  const url = elMap.exportDownloads.children[0].href;
+  elMap[id].handlers.input();
+  assert.equal(elMap.exportDownloads.children.length, 0, `${id} edits must withdraw the previous ZIP`);
+  assert(!activeUrls.has(url), `${id} edits must revoke the previous ZIP URL`);
+}
+
+// File reads are asynchronous: an edited selection must not submit the old in-flight file.
+let resolveRead;
+elMap.exportPattern.files = [{ size: 10, text: () => new Promise((resolve) => { resolveRead = resolve; }) }];
+const beforePendingRead = posted.length;
+const pendingRead = elMap.runExport.handlers.click();
+elMap.exportPattern.files = [localFile(rawPattern)];
+elMap.exportPattern.handlers.change();
+resolveRead('{"old":true}');
+await pendingRead;
+assert.equal(posted.length, beforePendingRead, "a stale file read must never reach the worker");
+
+// Starting another export also supersedes a read already in progress, even without input edits.
+let resolveSupersededRead;
+elMap.exportPattern.files = [{ size: 10, text: () => new Promise((resolve) => { resolveSupersededRead = resolve; }) }];
+const supersededRead = elMap.runExport.handlers.click();
+elMap.exportPattern.files = [localFile(rawPattern)];
+elMap.exportQualification.files = [];
+elMap.exportDrapeReceipt.files = [];
+elMap.exportMaterialSha256.value = "";
+elMap.exportCreated.value = "";
+await elMap.runExport.handlers.click();
+const newestExport = posted.at(-1);
+assert.equal(newestExport.payload.pattern_json, rawPattern);
+for (const field of ["qualification_json", "drape_receipt_json", "material_sha256", "created"]) {
+  assert.equal(Object.hasOwn(newestExport.payload, field), false, `absent optional ${field} must be omitted`);
+}
+resolveSupersededRead('{"superseded":true}');
+await supersededRead;
+assert.equal(posted.at(-1).request, newestExport.request);
+replyExport(newestExport.request);
+const priorExportUrl = elMap.exportDownloads.children[0].href;
+await elMap.runExport.handlers.click();
+const failingExport = posted.at(-1);
+assert(!activeUrls.has(priorExportUrl), "a rerun must withdraw the prior artifact before verification");
+replyExport(newestExport.request);
+assert.equal(elMap.exportDownloads.children.length, 0, "an old success must not replace a pending export");
+workerInstance.onmessage({ data: {
+  type: "refusal", kind: "export", request: failingExport.request,
+  code: "unqualified_process", message: "Measured qualification does not bind this material.",
+} });
+assert.match(elMap.error.textContent, /Measured qualification does not bind this material/);
+assert.equal(elMap.exportDownloads.children.length, 0);
+
+// Even a successful worker envelope cannot advertise physical or machine execution claims.
+await elMap.runExport.handlers.click();
+replyExport(posted.at(-1).request, { ...exportResult, machine_executable: true });
+assert.match(elMap.error.textContent, /unqualified export claim/);
+assert.equal(elMap.exportDownloads.children.length, 0);
+await elMap.runExport.handlers.click();
+replyExport(posted.at(-1).request, { ...exportResult, archive_base64: "not base64!!!" });
+assert.equal(elMap.error.hidden, false);
+assert.equal(elMap.exportDownloads.children.length, 0, "invalid ZIP encoding must leave no partial download");
+
+elMap.exportPattern.files = [{ size: 2, text: async () => { throw new Error("Local file could not be read"); } }];
+const beforeReadFailure = posted.length;
+await elMap.runExport.handlers.click();
+assert.equal(posted.length, beforeReadFailure);
+assert.match(elMap.error.textContent, /Local file could not be read/);
+assert.equal(elMap.exportDownloads.children.length, 0);
+elMap.exportPattern.files = [localFile(rawPattern)];
+await elMap.runExport.handlers.click();
+const exportBeforePagehide = posted.at(-1);
+replyExport(exportBeforePagehide.request);
+
+// pagehide revokes ALL Blob URLs cleanly; delayed responses cannot recreate those URLs.
 assert(activeUrls.size >= 9);
 windowHandlers.pagehide();
 assert.equal(activeUrls.size, 0, "pagehide must revoke download URLs");
+replyExport(exportBeforePagehide.request);
+assert.equal(activeUrls.size, 0, "a stale response after pagehide must not recreate a download");
+
+// Worker failure withdraws an otherwise accepted export and blocks delayed results.
+await elMap.runExport.handlers.click();
+const exportBeforeFailure = posted.at(-1);
+replyExport(exportBeforeFailure.request);
+assert.equal(elMap.exportDownloads.children.length, 1);
 
 // worker.onerror disables buttons and surfaces error fail-closed.
 workerInstance.onerror({ message: "WASM trap" });
 assert.equal(elMap.runSwatch.disabled, true);
 assert.equal(elMap.runPanel.disabled, true);
+assert.equal(elMap.runExport.disabled, true);
 assert.equal(elMap.runDye.disabled, true);
 assert.match(elMap.error.textContent, /WASM trap/);
+assert.equal(elMap.exportDownloads.children.length, 0);
+assert.equal(activeUrls.size, 0);
+replyExport(exportBeforeFailure.request);
+assert.equal(activeUrls.size, 0, "failed engine's late result must remain unavailable");
 
-console.log(`check_knit_web.cjs: OK (${new Set(idMatches).size} DOM bindings, schema fields, VM behavioral checks, zero network calls, honesty badges verified)`);
+// Execute the worker dispatcher too: only the outer envelope is serialized, preserving raw files.
+const workerSource = worker
+  .replace('import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.2";', "")
+  .replace("import.meta.url", '"https://local.invalid/knit-worker.js"');
+let forwardedRequest;
+const workerApi = {
+  wasm_interface_stamp: () => "ftx-wasm-interface/2026-11-27.2",
+  knit_swatch_json: () => '{"ok":true,"result":{}}',
+  knit_panel_preview_json: () => '{"ok":true,"result":{}}',
+  dye_optimize_json: () => '{"ok":true,"result":{}}',
+  knit_export_json: (raw) => {
+    forwardedRequest = JSON.parse(raw);
+    return JSON.stringify({ ok: true, result: exportResult });
+  },
+};
+async function loadWorker(api) {
+  const messages = [];
+  const scope = vm.createContext({
+    init: async () => {}, ftx: api, URL, JSON, String, Error,
+    self: {}, postMessage: (message) => messages.push(message),
+  });
+  vm.runInContext(workerSource, scope);
+  await vm.runInContext("ready", scope);
+  return { scope, messages };
+}
+const loadedWorker = await loadWorker(workerApi);
+assert.equal(loadedWorker.messages[0].type, "ready");
+await loadedWorker.scope.self.onmessage({ data: firstExport });
+assert.deepEqual(forwardedRequest, JSON.parse(JSON.stringify(firstExport.payload)));
+assert.equal(forwardedRequest.pattern_json, rawPattern);
+assert.equal(forwardedRequest.qualification_json, rawQualification);
+assert.equal(forwardedRequest.drape_receipt_json, rawReceipt);
+assert.equal(loadedWorker.messages.at(-1).kind, "export");
+assert.equal(loadedWorker.messages.at(-1).result.archive_base64, exportResult.archive_base64);
+workerApi.knit_export_json = () => JSON.stringify({ ok: false, refusal: {
+  code: "unqualified_process", message: "Evidence mismatch", repairs: ["Select matching measured evidence"],
+} });
+await loadedWorker.scope.self.onmessage({ data: firstExport });
+assert.equal(loadedWorker.messages.at(-1).type, "refusal");
+assert.equal(loadedWorker.messages.at(-1).code, "unqualified_process");
+assert.equal(loadedWorker.messages.at(-1).request, firstExport.request);
+const missingExportWorker = await loadWorker({ ...workerApi, knit_export_json: undefined });
+assert.equal(missingExportWorker.messages[0].type, "loadError", "old bundle without saved-document export must refuse readiness");
+await missingExportWorker.scope.self.onmessage({ data: firstExport });
+assert.equal(missingExportWorker.messages.at(-1).type, "error");
+
+}
+
+checkBehavior().then(() => {
+  console.log(`check_knit_web.cjs: OK (${new Set(idMatches).size} DOM bindings, schema fields, async VM behavioral checks, zero network calls, honesty badges verified)`);
+}).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
