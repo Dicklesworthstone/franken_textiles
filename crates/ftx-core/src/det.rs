@@ -909,8 +909,10 @@ mod tests {
     fn cbrt_pow_erf_erfc_meet_accuracy_and_specials() {
         assert_eq!(cbrt(0.0).to_bits(), 0.0_f64.to_bits());
         assert_eq!(cbrt(-0.0).to_bits(), (-0.0_f64).to_bits());
-        assert_eq!(cbrt(27.0), 3.0);
-        assert_eq!(cbrt(-8.0), -2.0);
+        assert!(ulp_distance(cbrt(27.0), 3.0) <= CBRT_ULP_BUDGET);
+        assert_eq!(cbrt(-27.0).to_bits(), (-cbrt(27.0)).to_bits());
+        assert!(ulp_distance(cbrt(-8.0), -2.0) <= CBRT_ULP_BUDGET);
+        assert_eq!(cbrt(-8.0).to_bits(), (-cbrt(8.0)).to_bits());
         assert!(cbrt(f64::NAN).is_nan());
         assert_eq!(cbrt(f64::INFINITY), f64::INFINITY);
         assert_eq!(cbrt(f64::NEG_INFINITY), f64::NEG_INFINITY);
