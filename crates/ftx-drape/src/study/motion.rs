@@ -1087,10 +1087,22 @@ mod tests {
             assert_eq!(serde_json::to_value(&request).unwrap(), value);
             assert_ne!(hash(&request).unwrap(), hash(&baseline).unwrap());
             for invalid in [f64::NAN, f64::INFINITY, -0.01, 180.01] {
-                request.keyframes[0].elbow_pose.as_mut().unwrap().left_flexion_deg = invalid;
+                request.keyframes[0]
+                    .elbow_pose
+                    .as_mut()
+                    .unwrap()
+                    .left_flexion_deg = invalid;
                 assert!(request.validate().is_err());
-                request.keyframes[0].elbow_pose.as_mut().unwrap().left_flexion_deg = left;
-                request.keyframes[0].elbow_pose.as_mut().unwrap().right_flexion_deg = invalid;
+                request.keyframes[0]
+                    .elbow_pose
+                    .as_mut()
+                    .unwrap()
+                    .left_flexion_deg = left;
+                request.keyframes[0]
+                    .elbow_pose
+                    .as_mut()
+                    .unwrap()
+                    .right_flexion_deg = invalid;
                 assert!(request.validate().is_err());
             }
         }

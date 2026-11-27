@@ -118,7 +118,10 @@ pub fn export_brother_ayab(
                 .first()
                 .is_some_and(|c| c.as_str() != profile.carrier_ids[0].as_str());
         grid.insert((st.course, st.wale), bit);
-        if matches!(st.kind, LoopKind::Decrease | LoopKind::Increase | LoopKind::Cable) {
+        if matches!(
+            st.kind,
+            LoopKind::Decrease | LoopKind::Increase | LoopKind::Cable
+        ) {
             operator_steps.push(AyabOperatorStep {
                 row_number: st.course + 1,
                 action: format!("manual_{:?}", st.kind).to_lowercase(),

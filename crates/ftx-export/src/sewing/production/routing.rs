@@ -513,7 +513,10 @@ impl Policy {
             ));
         }
         let has_due_times = self.copy_windows.as_ref().is_some_and(|windows| {
-            windows.copies.iter().any(|row| row.due_at_milliseconds.is_some())
+            windows
+                .copies
+                .iter()
+                .any(|row| row.due_at_milliseconds.is_some())
         });
         if self.tardiness_directed() != has_due_times {
             return Err(bad(
@@ -1591,7 +1594,10 @@ impl Search<'_, '_> {
             feed.lower_attained()
         } else {
             self.cost.is_none()
-                && self.best.as_ref().is_some_and(|(finish, _)| *finish == self.lower)
+                && self
+                    .best
+                    .as_ref()
+                    .is_some_and(|(finish, _)| *finish == self.lower)
         }
     }
 
@@ -1619,7 +1625,10 @@ impl Search<'_, '_> {
                 self.complete = false;
             }
         } else if self.tardiness_lower.is_some() {
-            let worst = self.prepared.copy_windows.as_ref()
+            let worst = self
+                .prepared
+                .copy_windows
+                .as_ref()
                 .expect("admitted due times")
                 .maximum_tardiness(&state.copy_ready);
             if self.best_tardiness.is_none_or(|old| worst < old) {
@@ -1679,7 +1688,10 @@ impl Search<'_, '_> {
             let Some(priorities) = windows.priorities(self.prepared, state) else {
                 return Ok(());
             };
-            if self.best_tardiness.is_some_and(|best| priorities.worst_delay >= best) {
+            if self
+                .best_tardiness
+                .is_some_and(|best| priorities.worst_delay >= best)
+            {
                 return Ok(());
             }
             Some(priorities.order)
@@ -2155,12 +2167,14 @@ pub(in crate::sewing) fn build(
             .is_none_or(|deadline| seed.makespan <= deadline);
     let tardiness_lower = if policy.tardiness_directed() {
         let windows = prepared.copy_windows.as_ref().expect("admitted due times");
-        let priority = windows.priorities(&prepared, &prepared.initial()).ok_or_else(|| {
-            Refusal::new(
-                RefusalCode::NotConverged,
-                "a mandatory route cannot meet a hard garment deadline",
-            )
-        })?;
+        let priority = windows
+            .priorities(&prepared, &prepared.initial())
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::NotConverged,
+                    "a mandatory route cannot meet a hard garment deadline",
+                )
+            })?;
         Some(priority.worst_delay)
     } else {
         None

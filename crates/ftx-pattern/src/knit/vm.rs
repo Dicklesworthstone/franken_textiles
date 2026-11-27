@@ -110,19 +110,19 @@ pub fn verify_knitout_program(
             )
             .repair("remove hood/neck drawstrings and replace with ribbed shaping or concealed snaps"));
         }
-        if let Some(tex) = doc.gauge.yarn_tex {
-            if tex < profile.recommended_tex_range[0] || tex > profile.recommended_tex_range[1] {
-                return Err(Refusal::new(
-                    RefusalCode::MaterialProcessHazard,
-                    format!(
-                        "yarn linear density {tex:.1} tex lies outside machine '{}' recommended range [{:.1}, {:.1}] tex",
-                        profile.id,
-                        profile.recommended_tex_range[0],
-                        profile.recommended_tex_range[1]
-                    ),
-                )
-                .repair("select a finer/heavier gauge machine profile or compatible yarn tex"));
-            }
+        if let Some(tex) = doc.gauge.yarn_tex
+            && (tex < profile.recommended_tex_range[0] || tex > profile.recommended_tex_range[1])
+        {
+            return Err(Refusal::new(
+                RefusalCode::MaterialProcessHazard,
+                format!(
+                    "yarn linear density {tex:.1} tex lies outside machine '{}' recommended range [{:.1}, {:.1}] tex",
+                    profile.id,
+                    profile.recommended_tex_range[0],
+                    profile.recommended_tex_range[1]
+                ),
+            )
+            .repair("select a finer/heavier gauge machine profile or compatible yarn tex"));
         }
         for st in &doc.stitches {
             let s = st.cam_stitch_setting.setting;
@@ -138,17 +138,17 @@ pub fn verify_knitout_program(
         }
         if ctx.wearer_age_class.is_infant() {
             for run in &doc.yarn_runs {
-                if let Some(tail_mm) = run.cut_tail_mm {
-                    if tail_mm > profile.infant_tail_cap_mm {
-                        return Err(Refusal::new(
-                            RefusalCode::MaterialProcessHazard,
-                            format!(
-                                "infant-safety refusal: yarn run {} cut tail {tail_mm:.1} mm exceeds {:.1} mm cap (finger entanglement hazard)",
-                                run.run_id, profile.infant_tail_cap_mm
-                            ),
-                        )
-                        .repair("weave in or trim interior cut tails to <= 20 mm"));
-                    }
+                if let Some(tail_mm) = run.cut_tail_mm
+                    && tail_mm > profile.infant_tail_cap_mm
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::MaterialProcessHazard,
+                        format!(
+                            "infant-safety refusal: yarn run {} cut tail {tail_mm:.1} mm exceeds {:.1} mm cap (finger entanglement hazard)",
+                            run.run_id, profile.infant_tail_cap_mm
+                        ),
+                    )
+                    .repair("weave in or trim interior cut tails to <= 20 mm"));
                 }
             }
             for sr in &doc.short_row_turns {
@@ -179,27 +179,27 @@ pub fn verify_knitout_program(
     }
 
     if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
-        if let Some(sf) = ctx.speed_fraction {
-            if sf > CalibrationSwatchCaps::MAX_SPEED_FRACTION {
-                return Err(Refusal::new(
-                    RefusalCode::MaterialProcessHazard,
-                    format!(
-                        "calibration swatch speed fraction {sf:.2} exceeds hard cap {:.2}",
-                        CalibrationSwatchCaps::MAX_SPEED_FRACTION
-                    ),
-                ));
-            }
+        if let Some(sf) = ctx.speed_fraction
+            && sf > CalibrationSwatchCaps::MAX_SPEED_FRACTION
+        {
+            return Err(Refusal::new(
+                RefusalCode::MaterialProcessHazard,
+                format!(
+                    "calibration swatch speed fraction {sf:.2} exceeds hard cap {:.2}",
+                    CalibrationSwatchCaps::MAX_SPEED_FRACTION
+                ),
+            ));
         }
-        if let Some(tf) = ctx.takedown_fraction {
-            if tf > CalibrationSwatchCaps::MAX_TAKEDOWN_FRACTION {
-                return Err(Refusal::new(
-                    RefusalCode::MaterialProcessHazard,
-                    format!(
-                        "calibration swatch takedown fraction {tf:.2} exceeds hard cap {:.2}",
-                        CalibrationSwatchCaps::MAX_TAKEDOWN_FRACTION
-                    ),
-                ));
-            }
+        if let Some(tf) = ctx.takedown_fraction
+            && tf > CalibrationSwatchCaps::MAX_TAKEDOWN_FRACTION
+        {
+            return Err(Refusal::new(
+                RefusalCode::MaterialProcessHazard,
+                format!(
+                    "calibration swatch takedown fraction {tf:.2} exceeds hard cap {:.2}",
+                    CalibrationSwatchCaps::MAX_TAKEDOWN_FRACTION
+                ),
+            ));
         }
     }
 
@@ -242,39 +242,51 @@ pub fn verify_knitout_program(
     let mut prev_pass_dir: Option<CourseDir> = None;
     let mut estimated_courses: u32 = 0;
 
-    let check_bed_and_bounds = |needle: Needle, allow_slider: bool, step: usize| -> Result<(), Refusal> {
-        if needle.bed.is_slider() {
-            if !profile.has_sliders {
+    let check_bed_and_bounds =
+        |needle: Needle, allow_slider: bool, step: usize| -> Result<(), Refusal> {
+            if needle.bed.is_slider() {
+                if !profile.has_sliders {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: slider needle {} used on sliderless machine '{}'",
+                            needle.knitout_token(),
+                            profile.id
+                        ),
+                    ));
+                }
+                if !allow_slider {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: loop formation forbidden on slider bed {}",
+                            needle.knitout_token()
+                        ),
+                    ));
+                }
+            }
+            if matches!(needle.bed, Bed::Back | Bed::BackSlider) && !profile.has_back_bed {
                 return Err(Refusal::new(
                     RefusalCode::MachineStateInfeasible,
-                    format!("op #{step}: slider needle {} used on sliderless machine '{}'", needle.knitout_token(), profile.id),
+                    format!(
+                        "op #{step}: back-bed needle {} used on single-bed machine '{}'",
+                        needle.knitout_token(),
+                        profile.id
+                    ),
                 ));
             }
-            if !allow_slider {
+            if needle.index < 0 || needle.index >= profile.needle_count as i32 {
                 return Err(Refusal::new(
                     RefusalCode::MachineStateInfeasible,
-                    format!("op #{step}: loop formation forbidden on slider bed {}", needle.knitout_token()),
+                    format!(
+                        "op #{step}: needle {} outside bed range 0..{}",
+                        needle.knitout_token(),
+                        profile.needle_count
+                    ),
                 ));
             }
-        }
-        if matches!(needle.bed, Bed::Back | Bed::BackSlider) && !profile.has_back_bed {
-            return Err(Refusal::new(
-                RefusalCode::MachineStateInfeasible,
-                format!("op #{step}: back-bed needle {} used on single-bed machine '{}'", needle.knitout_token(), profile.id),
-            ));
-        }
-        if needle.index < 0 || needle.index >= profile.needle_count as i32 {
-            return Err(Refusal::new(
-                RefusalCode::MachineStateInfeasible,
-                format!(
-                    "op #{step}: needle {} outside bed range 0..{}",
-                    needle.knitout_token(),
-                    profile.needle_count
-                ),
-            ));
-        }
-        Ok(())
-    };
+            Ok(())
+        };
 
     let record_needle_span = |idx: i32, lo: &mut Option<i32>, hi: &mut Option<i32>| {
         *lo = Some(lo.map_or(idx, |m| m.min(idx)));
@@ -311,7 +323,10 @@ pub fn verify_knitout_program(
                     if !st.active || st.hook_holding {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
-                            format!("op #{step}: carrier '{}' cannot execute `out` in current state", c.0),
+                            format!(
+                                "op #{step}: carrier '{}' cannot execute `out` in current state",
+                                c.0
+                            ),
                         ));
                     }
                     st.active = false;
@@ -350,7 +365,10 @@ pub fn verify_knitout_program(
                 if !profile.has_yarn_inserting_hooks {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `releasehook` forbidden on machine '{}'", profile.id),
+                        format!(
+                            "op #{step}: `releasehook` forbidden on machine '{}'",
+                            profile.id
+                        ),
                     ));
                 }
                 for c in cs {
@@ -363,7 +381,10 @@ pub fn verify_knitout_program(
                     if !st.hook_holding {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
-                            format!("op #{step}: `releasehook` without active `inhook` on '{}'", c.0),
+                            format!(
+                                "op #{step}: `releasehook` without active `inhook` on '{}'",
+                                c.0
+                            ),
                         ));
                     }
                     st.hook_holding = false;
@@ -373,7 +394,10 @@ pub fn verify_knitout_program(
                 if !profile.has_yarn_inserting_hooks {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `outhook` forbidden on machine '{}'", profile.id),
+                        format!(
+                            "op #{step}: `outhook` forbidden on machine '{}'",
+                            profile.id
+                        ),
                     ));
                 }
                 for c in cs {
@@ -446,12 +470,12 @@ pub fn verify_knitout_program(
                             format!("op #{step}: carrier '{}' knitted before `in`/`inhook`", c.0),
                         ));
                     }
-                    if let Some(prev_k) = st.last_knit_needle {
-                        if st.last_dir == Some(*dir) {
-                            let span = (needle.index - prev_k).abs().saturating_sub(1);
-                            let float_mm = f64::from(span) * effective_wale_pitch_mm;
-                            max_float_mm = max_float_mm.max(float_mm);
-                        }
+                    if let Some(prev_k) = st.last_knit_needle
+                        && st.last_dir == Some(*dir)
+                    {
+                        let span = (needle.index - prev_k).abs().saturating_sub(1);
+                        let float_mm = f64::from(span) * effective_wale_pitch_mm;
+                        max_float_mm = max_float_mm.max(float_mm);
                     }
                     st.last_needle = Some(needle.index);
                     st.last_knit_needle = Some(needle.index);
@@ -722,7 +746,7 @@ pub fn verify_knitout_program(
             max_c = max_c.max(h.courses_knitted);
         }
     }
-    let max_roller_imbalance = if max_c >= min_c { max_c - min_c } else { 0 };
+    let max_roller_imbalance = max_c.saturating_sub(min_c);
     if max_roller_imbalance > profile.max_roller_imbalance_courses {
         return Err(Refusal::new(
             RefusalCode::MaterialProcessHazard,

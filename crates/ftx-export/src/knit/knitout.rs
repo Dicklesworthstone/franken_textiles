@@ -134,8 +134,8 @@ pub fn export_calibration_swatch_kit(
         conditioning,
         allow_estimates: false,
     };
-    let qualification_template_json =
-        serde_json::to_string_pretty(&qualification_template).map_err(|e| {
+    let qualification_template_json = serde_json::to_string_pretty(&qualification_template)
+        .map_err(|e| {
             Refusal::new(
                 RefusalCode::InvalidDocument,
                 format!("cannot serialize swatch template: {e}"),

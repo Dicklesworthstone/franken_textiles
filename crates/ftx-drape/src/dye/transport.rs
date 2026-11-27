@@ -44,12 +44,12 @@ impl CapillaryTransportConfig {
                 "invalid capillary transport spacing, shrinkage, or primary retardation config",
             ));
         }
-        for (&rf, &eff) in self
-            .rf_retardations
-            .iter()
-            .zip(&self.fixation_efficiency)
-        {
-            if !rf.is_finite() || !eff.is_finite() || !(0.0 < rf && rf <= 1.0) || !(0.0 < eff && eff <= 1.0) {
+        for (&rf, &eff) in self.rf_retardations.iter().zip(&self.fixation_efficiency) {
+            if !rf.is_finite()
+                || !eff.is_finite()
+                || !(0.0 < rf && rf <= 1.0)
+                || !(0.0 < eff && eff <= 1.0)
+            {
                 return Err(Refusal::new(
                     RefusalCode::OutOfRange,
                     "primary rf_retardation and fixation_efficiency must lie in (0, 1]",
@@ -130,7 +130,11 @@ pub fn forward_capillary_transport(
     if n_cells == 0 || doses.len() != n_cells * n_p {
         return Err(Refusal::new(
             RefusalCode::InvalidDocument,
-            format!("expected {} dose entries, got {}", n_cells * n_p, doses.len()),
+            format!(
+                "expected {} dose entries, got {}",
+                n_cells * n_p,
+                doses.len()
+            ),
         ));
     }
     let densify = 1.0 / (1.0 - cfg.shrinkage_axial_frac);
@@ -218,15 +222,27 @@ mod tests {
         let out = forward_capillary_transport(&u, n, &cfg).unwrap();
         // Exact mass conservation: sum(c_dry) * ds_dry == sum(u * eta_fix) * ds_wet
         for p in 0..2 {
-            let m_in: f64 = (0..n).map(|i| u[i * 2 + p] * cfg.fixation_efficiency[p] * cfg.ds_m).sum();
-            let m_out: f64 = (0..n).map(|i| out.fixed_conc[i * 2 + p] * out.ds_dry_m).sum();
-            assert!((m_in - m_out).abs() < 1e-12, "mass conservation p={p}: {m_in} vs {m_out}");
+            let m_in: f64 = (0..n)
+                .map(|i| u[i * 2 + p] * cfg.fixation_efficiency[p] * cfg.ds_m)
+                .sum();
+            let m_out: f64 = (0..n)
+                .map(|i| out.fixed_conc[i * 2 + p] * out.ds_dry_m)
+                .sum();
+            assert!(
+                (m_in - m_out).abs() < 1e-12,
+                "mass conservation p={p}: {m_in} vs {m_out}"
+            );
         }
         // VJP inner-product identity <A u, w> == <u, A^T w>
-        let w: Vec<f64> = (0..n * 2).map(|k| ((k * 17 + 3) % 19) as f64 * 0.1 - 0.5).collect();
+        let w: Vec<f64> = (0..n * 2)
+            .map(|k| ((k * 17 + 3) % 19) as f64 * 0.1 - 0.5)
+            .collect();
         let lhs: f64 = out.fixed_conc.iter().zip(&w).map(|(a, b)| a * b).sum();
         let adj = vjp_capillary_transport(&w, n, &cfg).unwrap();
         let rhs: f64 = u.iter().zip(&adj).map(|(a, b)| a * b).sum();
-        assert!((lhs - rhs).abs() < 1e-12, "adjoint dot test failed: {lhs} vs {rhs}");
+        assert!(
+            (lhs - rhs).abs() < 1e-12,
+            "adjoint dot test failed: {lhs} vs {rhs}"
+        );
     }
 }

@@ -98,7 +98,9 @@ pub fn validate_ease_profile(ease: &EaseProfile) -> Result<(), Refusal> {
             RefusalCode::OutOfRange,
             "negative wearing ease requires explicit allow_negative_ease = true",
         )
-        .repair("set allow_negative_ease = true for intentionally stretched ribbed/fitted knitwear"));
+        .repair(
+            "set allow_negative_ease = true for intentionally stretched ribbed/fitted knitwear",
+        ));
     }
     Ok(())
 }
@@ -170,9 +172,9 @@ pub fn build_ease_shell_from_mesh(
         let vb = compact_verts[b];
         let vc = compact_verts[c];
         let n_tri = (vb - va).cross(vc - va);
-        normals[a] = normals[a] + n_tri;
-        normals[b] = normals[b] + n_tri;
-        normals[c] = normals[c] + n_tri;
+        normals[a] += n_tri;
+        normals[b] += n_tri;
+        normals[c] += n_tri;
         let lab = (vb - va).norm();
         let lbc = (vc - vb).norm();
         let lca = (va - vc).norm();
@@ -207,7 +209,8 @@ pub fn build_ease_shell_from_mesh(
     // Verify no triangle flipped or collapsed after offset
     for &[ia, ib, ic] in &compact_tris {
         let (a, b, c) = (ia as usize, ib as usize, ic as usize);
-        let n_old = (compact_verts[b] - compact_verts[a]).cross(compact_verts[c] - compact_verts[a]);
+        let n_old =
+            (compact_verts[b] - compact_verts[a]).cross(compact_verts[c] - compact_verts[a]);
         let n_new = (offset_verts[b] - offset_verts[a]).cross(offset_verts[c] - offset_verts[a]);
         if n_new.norm2() <= 1e-16 || n_old.dot(n_new) <= 0.0 {
             return Err(Refusal::new(

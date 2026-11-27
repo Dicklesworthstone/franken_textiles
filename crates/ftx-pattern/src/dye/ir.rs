@@ -222,16 +222,16 @@ impl YarnDyeProgram {
                     ),
                 ));
             }
-            if let Some(pe) = prev_end {
-                if (seg.s_start_m - pe).abs() > 1e-9 {
-                    return Err(Refusal::new(
-                        RefusalCode::InvalidDocument,
-                        format!(
-                            "segment {idx} start {} is not contiguous with previous end {pe}",
-                            seg.s_start_m
-                        ),
-                    ));
-                }
+            if let Some(pe) = prev_end
+                && (seg.s_start_m - pe).abs() > 1e-9
+            {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!(
+                        "segment {idx} start {} is not contiguous with previous end {pe}",
+                        seg.s_start_m
+                    ),
+                ));
             }
             prev_end = Some(seg.s_end_m);
             if seg.target_speed_m_s <= 0.0 {

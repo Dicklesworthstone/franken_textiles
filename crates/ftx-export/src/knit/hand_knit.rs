@@ -187,15 +187,34 @@ pub fn export_hand_knit_document(
 
     // 2. Build vector PDF using ftx-export's native PdfDoc/Canvas engine
     let mut pdf = PdfDoc::new(
-        vec!["Hand-Knit Chart".to_string(), "Calibration Grid".to_string()],
+        vec![
+            "Hand-Knit Chart".to_string(),
+            "Calibration Grid".to_string(),
+        ],
         &[],
         title.clone(),
     );
     let mut cv = pdf.canvas();
     cv.fill_gray(0.0);
     cv.stroke_gray(0.15);
-    cv.text(margin, margin + 5.0, &title, 5.0, TextAnchor::Start, true, None);
-    cv.text(margin, margin + 12.0, &gauge_line, 3.0, TextAnchor::Start, false, None);
+    cv.text(
+        margin,
+        margin + 5.0,
+        &title,
+        5.0,
+        TextAnchor::Start,
+        true,
+        None,
+    );
+    cv.text(
+        margin,
+        margin + 12.0,
+        &gauge_line,
+        3.0,
+        TextAnchor::Start,
+        false,
+        None,
+    );
 
     cv.width(0.22);
     for r in 0..rows {
@@ -558,9 +577,13 @@ mod tests {
         assert!(!kit.knitout.cert.hardware_execution_authorized);
         assert!(!kit.qualification_template.was_washed_and_blocked);
 
-        let compiled = compile_knit_doc(&kit.doc, &kniterate, None, Some("mat-sha-test"), None).unwrap();
+        let compiled =
+            compile_knit_doc(&kit.doc, &kniterate, None, Some("mat-sha-test"), None).unwrap();
         let kc = export_kniterate_kc(&compiled, &kniterate).unwrap();
-        assert!(kc.kc_text.contains("HEADER MACHINE=KNITERATE_7E NEEDLES=252"));
+        assert!(
+            kc.kc_text
+                .contains("HEADER MACHINE=KNITERATE_7E NEEDLES=252")
+        );
         assert!(kc.kc_text.contains("GRIPPER_IN 1"));
         assert!(!kc.kc_text.contains("inhook"));
 
@@ -577,9 +600,15 @@ mod tests {
         // 3. Human hand-knit pure-vector CYC SVG & PDF + dedicated acceptance checks
         let hand = export_hand_knit_document(&kit.doc, "2026-11-27T08:00").unwrap();
         let svg_checks = check_hand_knit_svg(&hand.svg_text, "swatch.svg");
-        assert!(svg_checks.iter().all(|c| c.ok), "SVG checks: {svg_checks:?}");
+        assert!(
+            svg_checks.iter().all(|c| c.ok),
+            "SVG checks: {svg_checks:?}"
+        );
         let pdf_checks = check_hand_knit_pdf(&hand.pdf_bytes, "swatch.pdf");
-        assert!(pdf_checks.iter().all(|c| c.ok), "PDF checks: {pdf_checks:?}");
+        assert!(
+            pdf_checks.iter().all(|c| c.ok),
+            "PDF checks: {pdf_checks:?}"
+        );
 
         // 4. Tier-B Shima Seiki direct proprietary binary refused fail-closed
         let shima = MachineProfile::shima_seiki_12e_handoff();

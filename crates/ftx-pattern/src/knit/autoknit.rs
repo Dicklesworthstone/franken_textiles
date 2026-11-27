@@ -139,22 +139,23 @@ pub fn draft_autoknit_from_shell(
         let cot_i = safe_cotangent(vj - vi, vk - vi);
         let cot_j = safe_cotangent(vk - vj, vi - vj);
         let cot_k = safe_cotangent(vi - vk, vj - vk);
-        for ((a, b), w) in [((j, k), 0.5 * cot_i), ((k, i), 0.5 * cot_j), ((i, j), 0.5 * cot_k)] {
+        for ((a, b), w) in [
+            ((j, k), 0.5 * cot_i),
+            ((k, i), 0.5 * cot_j),
+            ((i, j), 0.5 * cot_k),
+        ] {
             let key = if a < b { (a, b) } else { (b, a) };
             *edge_weights.entry(key).or_insert(0.0) += w;
         }
     }
-    let min_cotangent_weight = edge_weights
-        .values()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
+    let min_cotangent_weight = edge_weights.values().copied().fold(f64::INFINITY, f64::min);
 
     // Solve reduced SPD system on interior (non-Dirichlet) vertices
     let mut var_of: Vec<Option<usize>> = vec![None; n_verts];
     let mut free_verts = Vec::new();
-    for v in 0..n_verts {
+    for (v, slot) in var_of.iter_mut().enumerate() {
         if !start_verts.contains(&v) && !end_verts.contains(&v) {
-            var_of[v] = Some(free_verts.len());
+            *slot = Some(free_verts.len());
             free_verts.push(v);
         }
     }
@@ -197,7 +198,7 @@ pub fn draft_autoknit_from_shell(
     // Estimate shell geodesic arc-height (mm) via average gradient along edges crossing t
     let mut total_dz = 0.0_f64;
     let mut weight_sum = 0.0_f64;
-    for (&(a, b), _) in &edge_weights {
+    for &(a, b) in edge_weights.keys() {
         let dt = (time_field[b] - time_field[a]).abs();
         if dt > 1e-4 {
             let len = (verts[b] - verts[a]).norm();
@@ -274,17 +275,16 @@ pub fn draft_autoknit_from_shell(
             };
             for w in left..=right {
                 let mut parents = Vec::new();
-                if c > 0 {
-                    if let Some(&pid) = prev_bed
+                if c > 0
+                    && let Some(&pid) = prev_bed
                         .get(&w)
                         .or_else(|| prev_bed.get(&(w - 1)))
                         .or_else(|| prev_bed.get(&(w + 1)))
-                    {
-                        parents.push(ParentRef {
-                            stitch_id: pid,
-                            stack_pos: 0,
-                        });
-                    }
+                {
+                    parents.push(ParentRef {
+                        stitch_id: pid,
+                        stack_pos: 0,
+                    });
                 }
                 let kind = if c == 0 {
                     LoopKind::CastOn
@@ -320,10 +320,22 @@ pub fn draft_autoknit_from_shell(
 
     let total_yarn_m = stitches.len() as f64 * est_loop_mm / 1000.0;
     let mut metadata = BTreeMap::new();
-    metadata.insert("pathway".to_string(), "autoknit_idt_harmonic_3d".to_string());
-    metadata.insert("source_body_sha256".to_string(), shell.source_body_sha256.clone());
-    metadata.insert("idt_flips_applied".to_string(), idt_flips_applied.to_string());
-    metadata.insert("shell_height_mm".to_string(), format!("{shell_height_mm:.2}"));
+    metadata.insert(
+        "pathway".to_string(),
+        "autoknit_idt_harmonic_3d".to_string(),
+    );
+    metadata.insert(
+        "source_body_sha256".to_string(),
+        shell.source_body_sha256.clone(),
+    );
+    metadata.insert(
+        "idt_flips_applied".to_string(),
+        idt_flips_applied.to_string(),
+    );
+    metadata.insert(
+        "shell_height_mm".to_string(),
+        format!("{shell_height_mm:.2}"),
+    );
     metadata.insert(
         "max_abs_girth_residual_mm".to_string(),
         format!("{max_abs_girth_residual_mm:.2}"),
@@ -423,12 +435,7 @@ fn intrinsic_delaunay_flip(verts: &[Vec3], tris: &mut [[usize; 3]], max_flips: u
 }
 
 /// Measures the exact 3D perimeter of the piecewise-linear iso-contour `{ x : t(x) = t_iso }`.
-fn iso_contour_perimeter_m(
-    verts: &[Vec3],
-    tris: &[[usize; 3]],
-    t: &[f64],
-    t_iso: f64,
-) -> f64 {
+fn iso_contour_perimeter_m(verts: &[Vec3], tris: &[[usize; 3]], t: &[f64], t_iso: f64) -> f64 {
     let iso = t_iso.clamp(1e-5, 1.0 - 1e-5);
     let mut perimeter = 0.0_f64;
     for &[a, b, c] in tris {

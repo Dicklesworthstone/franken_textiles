@@ -23,8 +23,8 @@ pub use vm::{KnitSafetyContext, VBedVmReport, verify_knitout_program};
 
 pub use ir::{
     Bed, CableGroup, CamStitchSetting, CarrierId, CourseDir, GaugeSpec, KNIT_SCHEMA,
-    KNITOUT_SCHEMA, KnitDoc, KnitoutHeader, KnitoutOp, KnitoutProgram, LoopKind, Needle,
-    ParentRef, ShortRowTurn, StitchNode, YarnRun, format_quarter_pitches,
+    KNITOUT_SCHEMA, KnitDoc, KnitoutHeader, KnitoutOp, KnitoutProgram, LoopKind, Needle, ParentRef,
+    ShortRowTurn, StitchNode, YarnRun, format_quarter_pitches,
 };
 pub use profile::{CalibrationSwatchCaps, MachineBackendKind, MachineProfile, WearerAgeClass};
 pub use receipts::{

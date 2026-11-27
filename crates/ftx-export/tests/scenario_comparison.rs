@@ -689,8 +689,7 @@ fn elbow_flexion_must_match_every_requested_endpoint_before_comparison() {
                 let mut result = synthetic_motion(pattern, 5.0);
                 let frames = &mut result["motion"]["result"]["keyframes"];
                 // JSON integer and floating-point spellings name the same physical angles.
-                frames[0]["elbow_pose"] =
-                    json!({"left_flexion_deg":30.0,"right_flexion_deg":90.0});
+                frames[0]["elbow_pose"] = json!({"left_flexion_deg":30.0,"right_flexion_deg":90.0});
                 if key == "a" {
                     match fault {
                         "missing" => {

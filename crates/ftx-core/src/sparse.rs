@@ -335,7 +335,7 @@ mod tests {
         for n in [16usize, 300usize] {
             let mut coo = SparseCoo::new(n, n);
             let mut b = vec![0.0; n];
-            for i in 0..n {
+            for (i, bi) in b.iter_mut().enumerate() {
                 coo.push(i, i, 2.0);
                 if i > 0 {
                     coo.push(i, i - 1, -1.0);
@@ -343,7 +343,7 @@ mod tests {
                 if i + 1 < n {
                     coo.push(i, i + 1, -1.0);
                 }
-                b[i] = 1.0 / ((n + 1) as f64);
+                *bi = 1.0 / ((n + 1) as f64);
             }
             let csr = coo.assemble();
             let x = csr.solve_spd(&b, 1e-11, 4000).unwrap();

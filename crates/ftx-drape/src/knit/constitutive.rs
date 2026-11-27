@@ -173,7 +173,11 @@ impl CoupledKnitMembrane {
         }
 
         // Quadratic + quartic coupled energy (zero at E = 0)
-        let w_quad = 0.5 * (self.q11 * e1 * e1 + 2.0 * self.q12 * e1 * e2 + self.q22 * e2 * e2 + self.q66 * g * g);
+        let w_quad = 0.5
+            * (self.q11 * e1 * e1
+                + 2.0 * self.q12 * e1 * e2
+                + self.q22 * e2 * e2
+                + self.q66 * g * g);
         let w_quart = 0.25 * self.c1111 * e1 * e1 * e1 * e1
             + 0.25 * self.c2222 * e2 * e2 * e2 * e2
             + 0.5 * self.c1122 * e1 * e1 * e2 * e2;
@@ -193,8 +197,16 @@ impl CoupledKnitMembrane {
         let phi1 = self.kappa_jam * (r2 / margin);
         let phi2 = self.kappa_jam / (margin * margin);
 
-        let s0 = self.q11 * e1 + self.q12 * e2 + self.c1111 * e1 * e1 * e1 + self.c1122 * e1 * e2 * e2 + phi1 * dr2[0];
-        let s1 = self.q12 * e1 + self.q22 * e2 + self.c2222 * e2 * e2 * e2 + self.c1122 * e1 * e1 * e2 + phi1 * dr2[1];
+        let s0 = self.q11 * e1
+            + self.q12 * e2
+            + self.c1111 * e1 * e1 * e1
+            + self.c1122 * e1 * e2 * e2
+            + phi1 * dr2[0];
+        let s1 = self.q12 * e1
+            + self.q22 * e2
+            + self.c2222 * e2 * e2 * e2
+            + self.c1122 * e1 * e1 * e2
+            + phi1 * dr2[1];
         let s2 = self.q66 * g + phi1 * dr2[2];
 
         let mut c = [
@@ -323,7 +335,7 @@ impl AsymmetricKnitBending {
     /// [`RefusalCode::OutOfRange`] if `C` is not SPD.
     pub fn evaluate_from_metric(
         &self,
-        metric_c: [f64; 3], // [c00, c01, c11]
+        metric_c: [f64; 3],    // [c00, c01, c11]
         covariant_b: [f64; 3], // [b_uu, b_vv, b_uv]
     ) -> Result<KnitBendingEval, Refusal> {
         let [m00, m01, m11] = cayley_hamilton_inv_sqrt_2x2(metric_c[0], metric_c[1], metric_c[2])?;
@@ -349,8 +361,10 @@ impl AsymmetricKnitBending {
         let x1 = kappa_phys[1] - self.kappa0[1];
         let x2 = kappa_phys[2] - self.kappa0[2];
 
-        let (g2_0, g1_0, d_0) = twice_integrated_hermite(x0, self.delta_kappa, self.d_plus[0], self.d_minus[0]);
-        let (g2_1, g1_1, d_1) = twice_integrated_hermite(x1, self.delta_kappa, self.d_plus[1], self.d_minus[1]);
+        let (g2_0, g1_0, d_0) =
+            twice_integrated_hermite(x0, self.delta_kappa, self.d_plus[0], self.d_minus[0]);
+        let (g2_1, g1_1, d_1) =
+            twice_integrated_hermite(x1, self.delta_kappa, self.d_plus[1], self.d_minus[1]);
 
         let energy_density = g2_0 + g2_1 + self.d12 * x0 * x1 + 0.5 * self.d66 * x2 * x2;
         let moment = [g1_0 + self.d12 * x1, g1_1 + self.d12 * x0, self.d66 * x2];
@@ -402,7 +416,11 @@ fn twice_integrated_hermite(x: f64, delta: f64, d_plus: f64, d_minus: f64) -> (f
         let u3 = u2 * u;
         let u4 = u2 * u2;
         let u5 = u4 * u;
-        (1.5 * u - 0.5 * u3, 0.75 * u2 - 0.125 * u4, 0.25 * u3 - 0.025 * u5)
+        (
+            1.5 * u - 0.5 * u3,
+            0.75 * u2 - 0.125 * u4,
+            0.25 * u3 - 0.025 * u5,
+        )
     };
     let g0 = d_avg + d_diff * h0;
     let g1 = d_avg * x + d_diff * delta * h1;
@@ -654,14 +672,12 @@ mod tests {
         let b = AsymmetricKnitBending::reference_stockinette_estimate();
         b.validate().unwrap();
         // Test inside transition band, positive outside band, and negative outside band
-        for k in [
-            [12.5, -17.3, 4.0],
-            [20.0, -5.0, -3.0],
-            [0.0, -30.0, 1.5],
-        ] {
+        for k in [[12.5, -17.3, 4.0], [20.0, -5.0, -3.0], [0.0, -30.0, 1.5]] {
             let eval = b.evaluate_from_kappa(k);
             // Verify strict SPD tangent (d0*d1 > d12^2)
-            assert!(eval.tangent[0][0] * eval.tangent[1][1] > eval.tangent[0][1] * eval.tangent[1][0]);
+            assert!(
+                eval.tangent[0][0] * eval.tangent[1][1] > eval.tangent[0][1] * eval.tangent[1][0]
+            );
             let h = 1e-6;
             for i in 0..3 {
                 let mut kp = k;

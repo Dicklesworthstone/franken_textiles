@@ -49,7 +49,10 @@ impl TargetRaster {
         let expected = (width as usize)
             .checked_mul(height as usize)
             .ok_or_else(|| {
-                Refusal::new(RefusalCode::BudgetExceeded, "target raster pixel count overflow")
+                Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "target raster pixel count overflow",
+                )
             })?;
         if srgb_u8.len() != expected || alpha_weight.len() != expected {
             return Err(Refusal::new(

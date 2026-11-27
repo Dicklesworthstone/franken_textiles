@@ -112,7 +112,9 @@ impl Policy {
             if window.copy >= copies
                 || !seen.insert(window.copy)
                 || window.available_at_milliseconds > MAX_EXACT_MILLISECONDS
-                || window.due_at_milliseconds.is_some_and(|due| due > MAX_EXACT_MILLISECONDS)
+                || window
+                    .due_at_milliseconds
+                    .is_some_and(|due| due > MAX_EXACT_MILLISECONDS)
                 || window.complete_by_milliseconds.is_some_and(|finish| {
                     finish < window.available_at_milliseconds || finish > MAX_EXACT_MILLISECONDS
                 })
@@ -200,9 +202,9 @@ impl Compiled {
                 task_remaining[index] = task.load + task.feed + task.unload + continuation;
             }
         }
-        let has_targets = windows
-            .iter()
-            .any(|window| window.complete_by_milliseconds.is_some() || window.due_at_milliseconds.is_some());
+        let has_targets = windows.iter().any(|window| {
+            window.complete_by_milliseconds.is_some() || window.due_at_milliseconds.is_some()
+        });
         Ok(Self {
             policy: policy.clone(),
             windows,
@@ -229,12 +231,15 @@ impl Compiled {
         let mut worst_delay = 0;
         for window in &self.windows {
             let copy = window.copy;
-            let target = window.complete_by_milliseconds.into_iter()
+            let target = window
+                .complete_by_milliseconds
+                .into_iter()
                 .chain(window.due_at_milliseconds)
                 .min();
             let next = prepared.choices.get(state.next[copy]);
             let finish = if let (Some(_), Some(choices)) = (target, next) {
-                choices.iter()
+                choices
+                    .iter()
                     .map(|&index| {
                         let cell = prepared.tasks[index].cell;
                         let handoff = state.copy_cell[copy]
@@ -248,7 +253,10 @@ impl Compiled {
             } else {
                 state.copy_ready[copy]
             };
-            if window.complete_by_milliseconds.is_some_and(|deadline| finish > deadline) {
+            if window
+                .complete_by_milliseconds
+                .is_some_and(|deadline| finish > deadline)
+            {
                 return None;
             }
             if let Some(due) = window.due_at_milliseconds {
@@ -264,9 +272,12 @@ impl Compiled {
     }
 
     pub(super) fn maximum_tardiness(&self, finishes: &[u64]) -> u64 {
-        self.windows.iter()
+        self.windows
+            .iter()
             .filter_map(|window| {
-                window.due_at_milliseconds.map(|due| finishes[window.copy].saturating_sub(due))
+                window
+                    .due_at_milliseconds
+                    .map(|due| finishes[window.copy].saturating_sub(due))
             })
             .max()
             .expect("admitted due time")
@@ -346,7 +357,8 @@ impl Compiled {
                     finish_milliseconds: last.finish_milliseconds,
                     complete_by_milliseconds: window.complete_by_milliseconds,
                     due_at_milliseconds: window.due_at_milliseconds,
-                    tardiness_milliseconds: window.due_at_milliseconds
+                    tardiness_milliseconds: window
+                        .due_at_milliseconds
                         .map(|due| last.finish_milliseconds.saturating_sub(due)),
                     deadline_slack_milliseconds: window
                         .complete_by_milliseconds
@@ -362,7 +374,11 @@ impl Compiled {
         selected: &Timeline,
     ) -> Result<Report, Refusal> {
         Ok(Report {
-            schema: if self.windows.iter().any(|window| window.due_at_milliseconds.is_some()) {
+            schema: if self
+                .windows
+                .iter()
+                .any(|window| window.due_at_milliseconds.is_some())
+            {
                 "ftx-sewing-copy-windows/2"
             } else {
                 "ftx-sewing-copy-windows/1"

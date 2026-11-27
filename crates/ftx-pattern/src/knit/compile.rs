@@ -47,7 +47,9 @@ pub fn compile_knit_doc(
     let qual_sha = if doc.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
         || !profile.requires_calibration_swatch
     {
-        qualification.map(KnitSwatchQualification::canonical_sha256).transpose()?
+        qualification
+            .map(KnitSwatchQualification::canonical_sha256)
+            .transpose()?
     } else {
         let Some(q) = qualification else {
             return Err(Refusal::new(
@@ -146,8 +148,8 @@ pub fn compile_knit_doc(
         }
 
         // Plan transfers between previous course and current course when allowed
-        let can_transfer = doc.wearer_age_class != WearerAgeClass::CalibrationSwatchOnly
-            && profile.has_back_bed;
+        let can_transfer =
+            doc.wearer_age_class != WearerAgeClass::CalibrationSwatchOnly && profile.has_back_bed;
         if can_transfer && course_idx > 0 {
             let target_wales: BTreeMap<i32, Bed> = sorted.iter().map(|s| (s.wale, s.bed)).collect();
             let mut xfer_ops: Vec<KnitoutOp> = Vec::new();
@@ -195,15 +197,15 @@ pub fn compile_knit_doc(
 
             // 2. Bed-to-bed rib/jersey flip transfers at same wale (`f_i <-> b_i` at rack 0)
             for (&tw, &tbed) in &target_wales {
-                if let Some(&pbed) = next_occupied.get(&tw) {
-                    if pbed != tbed {
-                        xfer_ops.push(KnitoutOp::Rack { quarter_pitches: 0 });
-                        xfer_ops.push(KnitoutOp::Xfer {
-                            from: map_needle(pbed, tw),
-                            to: map_needle(tbed, tw),
-                        });
-                        next_occupied.insert(tw, tbed);
-                    }
+                if let Some(&pbed) = next_occupied.get(&tw)
+                    && pbed != tbed
+                {
+                    xfer_ops.push(KnitoutOp::Rack { quarter_pitches: 0 });
+                    xfer_ops.push(KnitoutOp::Xfer {
+                        from: map_needle(pbed, tw),
+                        to: map_needle(tbed, tw),
+                    });
+                    next_occupied.insert(tw, tbed);
                 }
             }
             ops.extend(xfer_ops);
@@ -383,9 +385,7 @@ pub fn compile_knit_doc(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::knit::draft::{
-        ParametricPanelSpec, draft_calibration_swatch, draft_shaped_panel,
-    };
+    use crate::knit::draft::{ParametricPanelSpec, draft_calibration_swatch, draft_shaped_panel};
     use crate::knit::ir::GaugeSpec;
     use crate::materials::{Evidence, Source};
 
@@ -466,7 +466,8 @@ mod tests {
         // Drawstring on child garment MUST fail closed!
         spec.has_hood_or_neck_drawstring = true;
         let bad_doc = draft_shaped_panel(&spec, &gauge, &prof).unwrap();
-        let err = compile_knit_doc(&bad_doc, &prof, Some(&qual), Some("mat-123"), None).unwrap_err();
+        let err =
+            compile_knit_doc(&bad_doc, &prof, Some(&qual), Some("mat-123"), None).unwrap_err();
         assert_eq!(err.code, RefusalCode::MaterialProcessHazard);
     }
 

@@ -474,16 +474,29 @@ fn routed_deadline_search_recovers_an_urgent_last_garment_with_one_alternative_p
 #[test]
 fn soft_delivery_targets_recover_a_late_order_and_preserve_the_capped_incumbent() {
     let (pattern, raw) = fixture(2);
-    let mut options = copy_windows(raw, json!([
-        {"copy":1,"available_at_milliseconds":0,"due_at_milliseconds":8000},
-        {"copy":0,"available_at_milliseconds":0}
-    ]));
+    let mut options = copy_windows(
+        raw,
+        json!([
+            {"copy":1,"available_at_milliseconds":0,"due_at_milliseconds":8000},
+            {"copy":0,"available_at_milliseconds":0}
+        ]),
+    );
     options["production"]["routing"]["objective"] = json!("minimize_maximum_tardiness");
     let typed: SewOptions = serde_json::from_value(options.clone()).unwrap();
     let program = SewProgram::build(&pattern, &typed).unwrap();
-    let route = program.plan.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let route = program
+        .plan
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
     let score = route.maximum_tardiness.as_ref().unwrap();
-    assert_eq!((score.baseline_milliseconds, score.selected_milliseconds), (4600, 800));
+    assert_eq!(
+        (score.baseline_milliseconds, score.selected_milliseconds),
+        (4600, 800)
+    );
     assert!(score.optimality_proven && !score.lower_bound_attained);
     let rows = &route.copy_windows.as_ref().unwrap().selected;
     assert_eq!(rows[0].tardiness_milliseconds, None);
@@ -492,30 +505,67 @@ fn soft_delivery_targets_recover_a_late_order_and_preserve_the_capped_incumbent(
     assert_eq!(route.selected.operations[0].copy, 1);
     assert_eq!(program.stitches.len(), 120);
     let replay = SewProgram::build(&pattern, &program.plan.options).unwrap();
-    assert_eq!(serde_json::to_value(&program).unwrap(), serde_json::to_value(replay).unwrap());
+    assert_eq!(
+        serde_json::to_value(&program).unwrap(),
+        serde_json::to_value(replay).unwrap()
+    );
 
     options["production"]["routing"]["max_search_nodes"] = json!(4);
     let capped = build(&pattern, options.clone()).unwrap();
-    let route = capped.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let route = capped
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
     assert!(route.budget_exhausted);
     let score = route.maximum_tardiness.as_ref().unwrap();
     assert_eq!(score.selected_milliseconds, 4600);
     assert!(!score.optimality_proven);
 
     options["production"]["routing"]["max_search_nodes"] = json!(10000);
-    options["production"]["routing"]["copy_windows"]["copies"][1]["complete_by_milliseconds"] = json!(8800);
+    options["production"]["routing"]["copy_windows"]["copies"][1]["complete_by_milliseconds"] =
+        json!(8800);
     let constrained = build(&pattern, options.clone()).unwrap();
-    let route = constrained.production.as_ref().unwrap().routing.as_ref().unwrap();
-    assert_eq!(route.maximum_tardiness.as_ref().unwrap().selected_milliseconds, 4600);
-    assert_eq!(route.copy_windows.as_ref().unwrap().selected[0].deadline_slack_milliseconds, Some(0));
+    let route = constrained
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        route
+            .maximum_tardiness
+            .as_ref()
+            .unwrap()
+            .selected_milliseconds,
+        4600
+    );
+    assert_eq!(
+        route.copy_windows.as_ref().unwrap().selected[0].deadline_slack_milliseconds,
+        Some(0)
+    );
     options["production"]["routing"]["objective"] = json!("minimize_makespan");
-    assert!(build(&pattern, options.clone()).unwrap_err().message.contains("due times"));
+    assert!(
+        build(&pattern, options.clone())
+            .unwrap_err()
+            .message
+            .contains("due times")
+    );
     options["production"]["routing"]["objective"] = json!("minimize_maximum_tardiness");
     let target = &mut options["production"]["routing"]["copy_windows"]["copies"][0];
     target["available_at_milliseconds"] = json!(500);
     target["due_at_milliseconds"] = json!(0);
     let past_due = build(&pattern, options.clone()).unwrap();
-    let route = past_due.production.as_ref().unwrap().routing.as_ref().unwrap();
+    let route = past_due
+        .production
+        .as_ref()
+        .unwrap()
+        .routing
+        .as_ref()
+        .unwrap();
     let late = &route.copy_windows.as_ref().unwrap().selected[1];
     assert_eq!(late.tardiness_milliseconds, Some(late.finish_milliseconds));
     assert!(late.loading_start_milliseconds >= 500);
@@ -523,8 +573,14 @@ fn soft_delivery_targets_recover_a_late_order_and_preserve_the_capped_incumbent(
     options["production"]["routing"]["copy_windows"]["copies"][0]["due_at_milliseconds"] =
         json!(9_007_199_254_740_992_u64);
     assert!(build(&pattern, options.clone()).is_err());
-    options["production"]["routing"]["copy_windows"]["copies"][0]["due_at_milliseconds"] = Value::Null;
-    assert!(build(&pattern, options).unwrap_err().message.contains("due times"));
+    options["production"]["routing"]["copy_windows"]["copies"][0]["due_at_milliseconds"] =
+        Value::Null;
+    assert!(
+        build(&pattern, options)
+            .unwrap_err()
+            .message
+            .contains("due times")
+    );
 }
 
 #[test]
@@ -537,23 +593,36 @@ fn eligible_delivery_tardiness_agrees_with_independent_deadline_enumeration() {
         let mut hi = 20000;
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if independently_enumerated_window_finish([0, 0], due.map(|t| Some(t + mid))).is_some() {
+            if independently_enumerated_window_finish([0, 0], due.map(|t| Some(t + mid))).is_some()
+            {
                 hi = mid;
             } else {
                 lo = mid + 1;
             }
         }
-        let mut input = copy_windows(raw.clone(), json!([
-            {"copy":0,"available_at_milliseconds":0,"due_at_milliseconds":due[0]},
-            {"copy":1,"available_at_milliseconds":0,"due_at_milliseconds":due[1]}
-        ]));
+        let mut input = copy_windows(
+            raw.clone(),
+            json!([
+                {"copy":0,"available_at_milliseconds":0,"due_at_milliseconds":due[0]},
+                {"copy":1,"available_at_milliseconds":0,"due_at_milliseconds":due[1]}
+            ]),
+        );
         input["production"]["routing"]["objective"] = json!("minimize_maximum_tardiness");
         let result = build(&pattern, input).unwrap();
-        let route = result.production.as_ref().unwrap().routing.as_ref().unwrap();
+        let route = result
+            .production
+            .as_ref()
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap();
         let result = route.maximum_tardiness.as_ref().unwrap();
         assert_eq!(result.selected_milliseconds, lo);
         assert!(result.lower_bound_milliseconds <= lo && result.optimality_proven);
-        assert_eq!(result.lower_bound_attained, result.lower_bound_milliseconds == lo);
+        assert_eq!(
+            result.lower_bound_attained,
+            result.lower_bound_milliseconds == lo
+        );
         assert!(route.search_complete);
     }
 }

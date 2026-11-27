@@ -144,10 +144,10 @@ impl DyeOpticsModel {
             let x_bar = 1.056 * gauss(lam, 599.8, 37.9, 31.0)
                 + 0.362 * gauss(lam, 442.0, 16.0, 26.7)
                 - 0.065 * gauss(lam, 501.1, 20.4, 26.2);
-            let y_bar = 0.821 * gauss(lam, 568.8, 46.9, 40.5)
-                + 0.286 * gauss(lam, 530.9, 16.3, 31.1);
-            let z_bar = 1.217 * gauss(lam, 437.0, 11.8, 36.0)
-                + 0.681 * gauss(lam, 459.0, 26.0, 13.8);
+            let y_bar =
+                0.821 * gauss(lam, 568.8, 46.9, 40.5) + 0.286 * gauss(lam, 530.9, 16.3, 31.1);
+            let z_bar =
+                1.217 * gauss(lam, 437.0, 11.8, 36.0) + 0.681 * gauss(lam, 459.0, 26.0, 13.8);
             w[0] = (d65 * x_bar).max(0.0);
             w[1] = (d65 * y_bar).max(0.0);
             w[2] = (d65 * z_bar).max(0.0);
@@ -220,7 +220,10 @@ impl DyeOpticsModel {
         if conc.len() != n_p {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
-                format!("expected {n_p} dye primary concentrations, got {}", conc.len()),
+                format!(
+                    "expected {n_p} dye primary concentrations, got {}",
+                    conc.len()
+                ),
             ));
         }
         let mut xyz = CieXyz::default();
@@ -246,7 +249,8 @@ impl DyeOpticsModel {
                 * kubelka_munk_r_inf_dx(x_ks);
             let inv_s = 1.0 / s;
             for p in 0..n_p {
-                let dx_dc = (self.primaries[p].k_unit[i] - x_ks * self.primaries[p].s_unit[i]) * inv_s;
+                let dx_dc =
+                    (self.primaries[p].k_unit[i] - x_ks * self.primaries[p].s_unit[i]) * inv_s;
                 let dr_dc = dr_dx * dx_dc;
                 jac[p][0] += w[0] * dr_dc;
                 jac[p][1] += w[1] * dr_dc;

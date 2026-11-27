@@ -2042,14 +2042,18 @@ impl<'a> PhaseAudit<'a> {
             });
             return Err(refusal);
         }
-        if let Some(hit) = self.display.vertex_piercing(
-            &self.previous, positions, faces, &mut self.remaining,
-        )? {
+        if let Some(hit) =
+            self.display
+                .vertex_piercing(&self.previous, positions, faces, &mut self.remaining)?
+        {
             let at = self.previous_s + (end_s - self.previous_s) * hit.fraction;
             self.rejected = Some(RejectedEndpoint {
                 positions: hit.positions,
                 steps: k,
-                substep: Some(RefusedSubstep { end_s: at, duration_s }),
+                substep: Some(RefusedSubstep {
+                    end_s: at,
+                    duration_s,
+                }),
             });
             return Err(Refusal::new(
                 RefusalCode::IntersectingTrajectory,
@@ -2403,22 +2407,36 @@ mod grain_tests {
         let mut scene = subdivision_scene();
         let initial = scene.positions();
         let mut solver = Solver::new(
-            scene.solver.model.clone(), initial.clone(), &[[true, true, false]; 3], Vec3::ZERO,
+            scene.solver.model.clone(),
+            initial.clone(),
+            &[[true, true, false]; 3],
+            Vec3::ZERO,
         );
         solver.v.fill(Vec3::new(0., 0., 1.));
         let h = 0.03125;
         let z = h / 4.;
-        let finger = [Vec3::new(-0.01, -0.01, z), Vec3::new(0.02, -0.01, z), Vec3::new(-0.01, 0.02, z)];
+        let finger = [
+            Vec3::new(-0.01, -0.01, z),
+            Vec3::new(0.02, -0.01, z),
+            Vec3::new(-0.01, 0.02, z),
+        ];
         let mut display = crate::animation::ReplayContact::new(&finger, &[[0, 1, 2]]).unwrap();
         let mut control = solver.clone();
         assert!(control.step(h).unwrap().converged);
         display.check(&initial, &scene.mesh.faces, 0).unwrap();
         display.check(&control.x, &scene.mesh.faces, 1).unwrap();
         // Enter the second substep with an accepted, still-clear first eighth of the interval.
-        let between: Vec<_> = initial.iter().map(|&p| p + Vec3::new(0., 0., h / 8.)).collect();
+        let between: Vec<_> = initial
+            .iter()
+            .map(|&p| p + Vec3::new(0., 0., h / 8.))
+            .collect();
         let mut audit = PhaseAudit::new(&mut display, 1, initial.clone());
-        audit.check(0, h / 8., h, &between, &scene.mesh.faces).unwrap();
-        let err = audit.check(0, h, h, &control.x, &scene.mesh.faces).unwrap_err();
+        audit
+            .check(0, h / 8., h, &between, &scene.mesh.faces)
+            .unwrap();
+        let err = audit
+            .check(0, h, h, &control.x, &scene.mesh.faces)
+            .unwrap_err();
         assert_eq!(err.code, RefusalCode::IntersectingTrajectory);
         let refused = audit.rejected.unwrap();
         assert_eq!(refused.steps, 0);
@@ -2428,10 +2446,23 @@ mod grain_tests {
         for policy in [None, Some(SubdivisionOptions::default())] {
             scene.solver = solver.clone();
             let mut audit = PhaseAudit::new(&mut display, 1, initial.clone());
-            let err = run_phase_audited(&mut scene, 1, h, 0., policy, &mut 0, Some(&mut audit),
-                |_, _| panic!("piercing emitted a nominal frame")).unwrap_err();
+            let err = run_phase_audited(
+                &mut scene,
+                1,
+                h,
+                0.,
+                policy,
+                &mut 0,
+                Some(&mut audit),
+                |_, _| panic!("piercing emitted a nominal frame"),
+            )
+            .unwrap_err();
             assert_eq!(err.code, RefusalCode::IntersectingTrajectory);
-            assert!(err.message.contains("swept vertex 0 of cloth triangle 0 crosses displayed body triangle 0"));
+            assert!(
+                err.message.contains(
+                    "swept vertex 0 of cloth triangle 0 crosses displayed body triangle 0"
+                )
+            );
             let rejected = audit.rejected.unwrap();
             assert_eq!(rejected.steps, 0);
             assert!((rejected.positions[0].z - z).abs() < 1e-12);

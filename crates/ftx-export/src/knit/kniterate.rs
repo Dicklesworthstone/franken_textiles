@@ -77,10 +77,14 @@ pub fn export_kniterate_kc(
 
     for (idx, op) in bundle.program.ops.iter().enumerate() {
         match op {
-            KnitoutOp::InHook { .. } | KnitoutOp::ReleaseHook { .. } | KnitoutOp::OutHook { .. } => {
+            KnitoutOp::InHook { .. }
+            | KnitoutOp::ReleaseHook { .. }
+            | KnitoutOp::OutHook { .. } => {
                 return Err(Refusal::new(
                     RefusalCode::MachineStateInfeasible,
-                    format!("op #{idx}: Kniterate does not support motorized yarn-inserting hooks (`inhook`/`releasehook`/`outhook`)"),
+                    format!(
+                        "op #{idx}: Kniterate does not support motorized yarn-inserting hooks (`inhook`/`releasehook`/`outhook`)"
+                    ),
                 ));
             }
             KnitoutOp::In { carriers } => {
@@ -194,7 +198,11 @@ pub fn export_kniterate_kc(
                 let _ = writeln!(out, "DROP {}", needle.knitout_token());
             }
             KnitoutOp::Pause { note } => {
-                let _ = writeln!(out, "PAUSE ; {}", note.as_deref().unwrap_or("operator check"));
+                let _ = writeln!(
+                    out,
+                    "PAUSE ; {}",
+                    note.as_deref().unwrap_or("operator check")
+                );
             }
             KnitoutOp::Comment { text } => {
                 let _ = writeln!(out, "; {text}");
@@ -203,12 +211,12 @@ pub fn export_kniterate_kc(
                 let _ = writeln!(out, "ROLLER_ADD {units}");
             }
             KnitoutOp::SpeedNumber { speed } => {
-                let capped = if bundle.cert.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
-                {
-                    (*speed).min(150)
-                } else {
-                    *speed
-                };
+                let capped =
+                    if bundle.cert.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
+                        (*speed).min(150)
+                    } else {
+                        *speed
+                    };
                 let _ = writeln!(out, "SPEED {capped}");
             }
             KnitoutOp::PresserMode { mode } => {

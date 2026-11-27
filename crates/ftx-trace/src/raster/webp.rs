@@ -2154,7 +2154,7 @@ mod tests {
         anmf.extend_from_slice(b"VP8L");
         anmf.extend_from_slice(&(vp8l.len() as u32).to_le_bytes());
         anmf.extend_from_slice(&vp8l);
-        if anmf.len() % 2 == 1 {
+        if !anmf.len().is_multiple_of(2) {
             anmf.push(0);
         }
 

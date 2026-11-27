@@ -14,9 +14,7 @@ use std::fmt::Write as _;
 
 use ftx_core::receipt::{canonical_json_sha256, sha256_hex};
 use ftx_core::{Refusal, RefusalCode, det};
-use ftx_pattern::dye::{
-    DyeMachineProfile, DyeingRegime, YarnDyeProgram, YarnDyeingQualification,
-};
+use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime, YarnDyeProgram, YarnDyeingQualification};
 use ftx_pattern::knit::{FourClaimsVerdict, WearerAgeClass};
 use serde::{Deserialize, Serialize};
 
@@ -121,30 +119,31 @@ pub fn verify_and_export_dye_program(
     }
 
     // Qualification & wearer child/infant fastness gate
-    let (qual_sha, dry_break_n, wet_break_n, yarn_tg_c) =
-        if program.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
-            if let Some(q) = qualification {
-                let dry = q.yarn_breaking_force_n;
-                let wet = dry * q.wet_tenacity_retention_ratio;
-                (Some(q.canonical_sha256()?), dry, wet, q.yarn_tg_c)
-            } else {
-                // Conservative fail-closed swatch baseline (explicitly stamped unvalidated)
-                (None, 6.0, 4.0, None)
-            }
-        } else {
-            let Some(q) = qualification else {
-                return Err(Refusal::new(
-                    RefusalCode::UnqualifiedProcess,
-                    "wearable dyed garment requires a qualified YarnDyeingQualification (Exp-4)",
-                )
-                .repair("run an Exp-4 bleed/shrinkage/fastness coupon test and pass `--dye-qual`"));
-            };
-            let mat_sha = expected_material_sha256.unwrap_or(&q.material_sha256);
-            q.validate_for_wearer(program.wearer_age_class, mat_sha, &machine_sha256)?;
+    let (qual_sha, dry_break_n, wet_break_n, yarn_tg_c) = if program.wearer_age_class
+        == WearerAgeClass::CalibrationSwatchOnly
+    {
+        if let Some(q) = qualification {
             let dry = q.yarn_breaking_force_n;
             let wet = dry * q.wet_tenacity_retention_ratio;
             (Some(q.canonical_sha256()?), dry, wet, q.yarn_tg_c)
+        } else {
+            // Conservative fail-closed swatch baseline (explicitly stamped unvalidated)
+            (None, 6.0, 4.0, None)
+        }
+    } else {
+        let Some(q) = qualification else {
+            return Err(Refusal::new(
+                RefusalCode::UnqualifiedProcess,
+                "wearable dyed garment requires a qualified YarnDyeingQualification (Exp-4)",
+            )
+            .repair("run an Exp-4 bleed/shrinkage/fastness coupon test and pass `--dye-qual`"));
         };
+        let mat_sha = expected_material_sha256.unwrap_or(&q.material_sha256);
+        q.validate_for_wearer(program.wearer_age_class, mat_sha, &machine_sha256)?;
+        let dry = q.yarn_breaking_force_n;
+        let wet = dry * q.wet_tenacity_retention_ratio;
+        (Some(q.canonical_sha256()?), dry, wet, q.yarn_tg_c)
+    };
 
     // 1. Sequential Euler-Eytelwein Capstan tension cascade T_{k+1} = T_k * exp(mu_k * theta_k)
     let mut tension = machine.entry_tension_n;
@@ -222,13 +221,18 @@ pub fn verify_and_export_dye_program(
         if dwell < req_fix_dwell {
             return Err(Refusal::new(
                 RefusalCode::MaterialProcessHazard,
-                format!("segment {idx} oven dwell {dwell:.2}s < required fixation {req_fix_dwell:.2}s"),
+                format!(
+                    "segment {idx} oven dwell {dwell:.2}s < required fixation {req_fix_dwell:.2}s"
+                ),
             ));
         }
         if dwell > machine.scorch_max_dwell_s {
             return Err(Refusal::new(
                 RefusalCode::MaterialProcessHazard,
-                format!("segment {idx} oven dwell {dwell:.2}s > scorch cap {:.2}s", machine.scorch_max_dwell_s),
+                format!(
+                    "segment {idx} oven dwell {dwell:.2}s > scorch cap {:.2}s",
+                    machine.scorch_max_dwell_s
+                ),
             ));
         }
         if seg.doses.len() != machine.primaries.len() {
@@ -273,7 +277,8 @@ pub fn verify_and_export_dye_program(
     }
 
     // 5. Regime II hardware sensor gate & Regime III P-trimmed dancer-arm accumulator ODE verification
-    if program.regime == DyeingRegime::Regime2FiducialSynced && !machine.has_optical_fiducial_sensor {
+    if program.regime == DyeingRegime::Regime2FiducialSynced && !machine.has_optical_fiducial_sensor
+    {
         return Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
             "Regime II fiducial-synced dyeing refused: machine lacks optical fiducial sensor",
@@ -304,7 +309,8 @@ pub fn verify_and_export_dye_program(
             let dt = ev.duration_s / (steps as f64);
             for _ in 0..steps {
                 // Proportional trim controller steering dye line speed inside [v_min, v_max] with accel cap
-                let v_cmd = (ev.yarn_intake_speed_m_s + acc.dancer_kp_s_inv * (acc.target_buffer_m - buf))
+                let v_cmd = (ev.yarn_intake_speed_m_s
+                    + acc.dancer_kp_s_inv * (acc.target_buffer_m - buf))
                     .clamp(machine.min_line_speed_m_s, machine.max_line_speed_m_s);
                 let max_dv = machine.max_line_accel_m_s2 * dt;
                 v_dye += (v_cmd - v_dye).clamp(-max_dv, max_dv);
@@ -374,8 +380,16 @@ pub fn verify_and_export_dye_program(
 
     // Emit deterministic motion/dosing G-code
     let mut gcode = String::new();
-    let _ = writeln!(gcode, "; FrankenTextiles ftx-dye-program/1 ({})", program.name);
-    let _ = writeln!(gcode, "; machine: {} | regime: {:?}", machine.id, program.regime);
+    let _ = writeln!(
+        gcode,
+        "; FrankenTextiles ftx-dye-program/1 ({})",
+        program.name
+    );
+    let _ = writeln!(
+        gcode,
+        "; machine: {} | regime: {:?}",
+        machine.id, program.regime
+    );
     gcode.push_str("; hardware_execution_authorized: false\n");
     gcode.push_str("G21 ; millimetres\nG90 ; absolute yarn arc-length E\n");
     let _ = writeln!(gcode, "M104 S{:.1} ; oven setpoint C", machine.oven_temp_c);
@@ -460,12 +474,12 @@ pub fn verify_and_export_dye_program(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use ftx_pattern::dye::{
         DYE_PROGRAM_SCHEMA, DyeSegment, IntakeEvent, IntakeEventKind, OpticalMeasurementBasis,
         Regime3IntakeTimeline,
     };
     use ftx_pattern::materials::{Evidence, Source};
+    use std::collections::BTreeMap;
 
     #[test]
     fn dye_verifier_catches_accumulator_overflow_and_emits_verified_bundle() {
@@ -548,7 +562,8 @@ mod tests {
         };
 
         let bundle =
-            verify_and_export_dye_program(&prog, &machine, Some(&qual), Some("mat-cotton")).unwrap();
+            verify_and_export_dye_program(&prog, &machine, Some(&qual), Some("mat-cotton"))
+                .unwrap();
         assert!(!bundle.cert.hardware_execution_authorized);
         assert!(!bundle.cert.physical_dyeing_validated);
         assert!(bundle.controller_gcode.contains("G1 E"));
@@ -563,9 +578,8 @@ mod tests {
             }],
             dt_verify_s: 0.1,
         });
-        let err =
-            verify_and_export_dye_program(&prog, &machine, Some(&qual), Some("mat-cotton"))
-                .unwrap_err();
+        let err = verify_and_export_dye_program(&prog, &machine, Some(&qual), Some("mat-cotton"))
+            .unwrap_err();
         assert_eq!(err.code, RefusalCode::MaterialProcessHazard);
     }
 }

@@ -4610,8 +4610,7 @@ fn same_opt_elbow_pose(a: &Value, b: &Value) -> bool {
         let obj = value.as_object().filter(|o| o.len() == 2)?;
         let left = finite(obj.get("left_flexion_deg")?)?;
         let right = finite(obj.get("right_flexion_deg")?)?;
-        ((0.0..=180.0).contains(&left) && (0.0..=180.0).contains(&right))
-            .then_some([left, right])
+        ((0.0..=180.0).contains(&left) && (0.0..=180.0).contains(&right)).then_some([left, right])
     };
     matches!((parse(a), parse(b)), (Some(pa), Some(pb)) if pa == pb)
 }

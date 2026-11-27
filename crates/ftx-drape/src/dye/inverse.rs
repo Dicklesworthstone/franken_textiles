@@ -406,7 +406,8 @@ pub fn optimize_yarn_dye_program(
         let mut cell_xyz = Vec::with_capacity(n_cells);
         let mut cell_jac = Vec::with_capacity(n_cells);
         for c in 0..n_cells {
-            let (xyz, jac) = optics.concentrations_to_xyz_and_jac(&tr.fixed_conc[c * n_p..(c + 1) * n_p])?;
+            let (xyz, jac) =
+                optics.concentrations_to_xyz_and_jac(&tr.fixed_conc[c * n_p..(c + 1) * n_p])?;
             cell_xyz.push(xyz);
             cell_jac.push(jac);
         }
@@ -663,9 +664,7 @@ pub fn optimize_yarn_dye_program(
                 x_next[i] = x[i] + step * dir[i];
             }
             project(&mut x_next);
-            let actual_dec: f64 = (0..n_vars)
-                .map(|i| grad[i] * (x_next[i] - x[i]))
-                .sum();
+            let actual_dec: f64 = (0..n_vars).map(|i| grad[i] * (x_next[i] - x[i])).sum();
             let (ft, gt, _, _) = eval_obj_grad(&x_next)?;
             if ft <= f_val + 1e-4 * actual_dec {
                 f_next = ft;
@@ -797,7 +796,10 @@ pub fn optimize_yarn_dye_program(
     let leader = ramp_dist.max(machine.applicator_to_feeder_path_m) + 0.1;
 
     let mut metadata = BTreeMap::new();
-    metadata.insert("optimizer".to_string(), "bertsekas_two_metric_lbfgs_cvar".to_string());
+    metadata.insert(
+        "optimizer".to_string(),
+        "bertsekas_two_metric_lbfgs_cvar".to_string(),
+    );
     metadata.insert("sobol_scenarios".to_string(), n_scen.to_string());
 
     let program = YarnDyeProgram {
@@ -846,7 +848,11 @@ pub fn rank_five_regime_pareto(
 ) -> Vec<DyeRegimeScore> {
     let n_st = stitch_map.stitches.len();
     let (h_circ, h_flat) = coherent_open_loop_horizons(drift);
-    let active_horizon = if stitch_map.is_circular { h_circ } else { h_flat };
+    let active_horizon = if stitch_map.is_circular {
+        h_circ
+    } else {
+        h_flat
+    };
 
     // Compute horizontal vs vertical Lab contrast + deterministic k-medoids error for Regime IV
     let mut labs = Vec::with_capacity(n_st);
@@ -998,7 +1004,11 @@ mod tests {
         };
         let res = optimize_yarn_dye_program(&target, &stitch_map, &machine, &optics, &tr_cfg, &cfg)
             .unwrap();
-        assert!(res.delta_e00_p50 < 15.0, "expected strong color convergence, got p50={}", res.delta_e00_p50);
+        assert!(
+            res.delta_e00_p50 < 15.0,
+            "expected strong color convergence, got p50={}",
+            res.delta_e00_p50
+        );
         assert!(res.coherent_horizons.0 > res.coherent_horizons.1);
         res.program.validate().unwrap();
 

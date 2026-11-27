@@ -692,10 +692,10 @@ fn decode_png_rgba_with_limit(
         if decoded.plte.is_empty() || !decoded.plte.len().is_multiple_of(3) {
             return Err("PNG indexed image has missing or malformed PLTE chunk".into());
         }
-        if let Some(t) = decoded.trns.as_deref() {
-            if t.len() > decoded.plte.len() / 3 {
-                return Err("PNG tRNS chunk has more entries than PLTE".into());
-            }
+        if let Some(t) = decoded.trns.as_deref()
+            && t.len() > decoded.plte.len() / 3
+        {
+            return Err("PNG tRNS chunk has more entries than PLTE".into());
         }
     } else if matches!(decoded.color, 4 | 6) && decoded.trns.is_some() {
         return Err("PNG tRNS chunk is not allowed for colour types with an alpha channel".into());

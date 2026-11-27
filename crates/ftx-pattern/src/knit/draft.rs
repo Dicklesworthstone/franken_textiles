@@ -1,8 +1,9 @@
 //! Pathway 1 measured knitting drafters (`FTX-K05`):
 //! - Hard-capped stepped calibration swatch generator (`CalibrationSwatchOnly`),
 //! - Measured fully-fashioned flat panel drafter (ribbed hem, waist/armhole decreases, short-row neck),
-//! - Seamless top-down raglan pullover tube drafter,
-//! reporting exact per-section mm quantization residuals honestly.
+//! - Seamless top-down raglan pullover tube drafter.
+//!
+//! All drafters report exact per-section mm quantization residuals honestly.
 
 use std::collections::BTreeMap;
 
@@ -104,7 +105,8 @@ pub fn draft_calibration_swatch(
         .checked_mul(u32::try_from(cam_settings.len()).unwrap_or(u32::MAX))
         .and_then(|c| c.checked_add(2)) // cast-on + bind-off
         .ok_or_else(|| Refusal::new(RefusalCode::OutOfRange, "swatch course count overflow"))?;
-    if needles < 4 || needles > CalibrationSwatchCaps::MAX_NEEDLES || needles > profile.needle_count
+    if !(4..=CalibrationSwatchCaps::MAX_NEEDLES).contains(&needles)
+        || needles > profile.needle_count
     {
         return Err(Refusal::new(
             RefusalCode::MaterialProcessHazard,
@@ -446,20 +448,20 @@ pub fn draft_shaped_panel(
                     });
                 }
                 // Merge outer edge stitch cleanly on symmetrical decrease courses
-                if w == left {
-                    if let Some(&outer) = prev_map.get(&(w - 1)) {
-                        parents.push(ParentRef {
-                            stitch_id: outer,
-                            stack_pos: 1,
-                        });
-                    }
-                } else if w == right {
-                    if let Some(&outer) = prev_map.get(&(w + 1)) {
-                        parents.push(ParentRef {
-                            stitch_id: outer,
-                            stack_pos: 1,
-                        });
-                    }
+                if w == left
+                    && let Some(&outer) = prev_map.get(&(w - 1))
+                {
+                    parents.push(ParentRef {
+                        stitch_id: outer,
+                        stack_pos: 1,
+                    });
+                } else if w == right
+                    && let Some(&outer) = prev_map.get(&(w + 1))
+                {
+                    parents.push(ParentRef {
+                        stitch_id: outer,
+                        stack_pos: 1,
+                    });
                 }
             }
             let kind = if c == 0 {
@@ -650,17 +652,16 @@ pub fn draft_seamless_raglan_tube(
         ] {
             for w in left..=right {
                 let mut parents = Vec::new();
-                if c > 0 {
-                    if let Some(&pid) = prev_bed
+                if c > 0
+                    && let Some(&pid) = prev_bed
                         .get(&w)
                         .or_else(|| prev_bed.get(&(w - 1)))
                         .or_else(|| prev_bed.get(&(w + 1)))
-                    {
-                        parents.push(ParentRef {
-                            stitch_id: pid,
-                            stack_pos: 0,
-                        });
-                    }
+                {
+                    parents.push(ParentRef {
+                        stitch_id: pid,
+                        stack_pos: 0,
+                    });
                 }
                 let kind = if c == 0 {
                     LoopKind::CastOn
