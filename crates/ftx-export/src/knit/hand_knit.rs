@@ -5,12 +5,12 @@
 //! polylines, filled circles) with ZERO Unicode symbol glyphs so output renders crisply in
 //! WinAnsi `/Helvetica` PDF viewers and standard SVG renderers without `transform` attributes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode, Vec2};
-use ftx_pattern::knit::{KnitDoc, LoopKind};
+use ftx_pattern::knit::{Bed, KnitDoc, LoopKind};
 
 use crate::checks::{CheckItem, pdf_objects};
 use crate::pdf::{PdfDoc, TextAnchor};
@@ -62,24 +62,41 @@ pub fn export_hand_knit_document(
     let mut min_w = i32::MAX;
     let mut max_w = i32::MIN;
     let mut max_c = 0u32;
-    let mut grid: BTreeMap<(u32, i32), LoopKind> = BTreeMap::new();
+    // A course on a tubular garment contains separate front and back stitches at the same wale.
+    // Bed identity is therefore part of the chart address, never a display-only annotation.
+    let mut beds = BTreeSet::new();
+    let mut grid = BTreeMap::new();
     for st in &doc.stitches {
         min_w = min_w.min(st.wale);
         max_w = max_w.max(st.wale);
         max_c = max_c.max(st.course);
-        grid.insert((st.course, st.wale), st.kind);
+        beds.insert(st.bed);
+        if grid.insert((st.bed, st.course, st.wale), st).is_some() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!(
+                    "hand-knit chart has multiple stitches on {} at course {}, wale {}; no stitch may be overwritten",
+                    bed_label(st.bed), st.course, st.wale
+                ),
+            )
+            .repair("give distinct stitch operations distinct courses or needle-bed addresses"));
+        }
     }
     let cols_i64 = i64::from(max_w) - i64::from(min_w) + 1;
     let rows_u64 = u64::from(max_c) + 1;
     if cols_i64 <= 0
         || cols_i64 > 2_000
         || rows_u64 > 5_000
-        || (cols_i64 as u64).saturating_mul(rows_u64) > 500_000
+        || (cols_i64 as u64)
+            .saturating_mul(rows_u64)
+            .saturating_mul(beds.len() as u64)
+            > 500_000
     {
         return Err(Refusal::new(
             RefusalCode::BudgetExceeded,
             format!(
-                "hand-knit chart grid {cols_i64} x {rows_u64} exceeds vector export budget (max 2000 cols, 5000 rows, 500000 cells)"
+                "hand-knit chart grid {cols_i64} x {rows_u64} on {} beds exceeds vector export budget (max 2000 cols, 5000 rows, 500000 total cells)",
+                beds.len()
             ),
         ));
     }
@@ -92,9 +109,12 @@ pub fn export_hand_knit_document(
     let cell = (160.0 / (cols.max(1) as f64)).clamp(3.0, 6.0);
     let chart_w = cols as f64 * cell;
     let chart_h = rows as f64 * cell;
+    let panel_gap = 14.0;
+    let all_charts_h = chart_h * beds.len() as f64 + panel_gap * (beds.len() - 1) as f64;
     let cal_block_w = 112.0; // holds 100 mm calibration square + legend
     let page_w = (margin * 2.0 + chart_w.max(cal_block_w) + 18.0).max(210.0);
     let page_h = (margin * 2.0 + header_h + chart_h + 125.0).max(297.0);
+    let svg_h = (margin * 2.0 + header_h + all_charts_h + 125.0).max(297.0);
     let chart_x = margin + 10.0;
     let chart_y = margin + header_h;
 
@@ -105,17 +125,17 @@ pub fn export_hand_knit_document(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="{SVG_NAMESPACE}" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">"#,
         w = fnum(page_w, 2),
-        h = fnum(page_h, 2)
+        h = fnum(svg_h, 2)
     );
     let _ = writeln!(
         svg,
         r#"<rect x="0" y="0" width="{w}" height="{h}" fill="white"/>"#,
         w = fnum(page_w, 2),
-        h = fnum(page_h, 2)
+        h = fnum(svg_h, 2)
     );
     let title = ascii_text(&format!("FrankenTextiles Hand-Knit Chart: {}", doc.name));
     let gauge_line = ascii_text(&format!(
-        "Gauge: {:.1} wales x {:.1} courses per 100mm | Stitches: {} x {} | Wearer: {:?}",
+        "Gauge: {:.1} wales x {:.1} courses per 100mm | Grid per bed: {} x {} | Wearer: {:?}",
         doc.gauge.wales_per_100mm, doc.gauge.courses_per_100mm, cols, rows, doc.wearer_age_class
     ));
     let _ = writeln!(
@@ -130,48 +150,63 @@ pub fn export_hand_knit_document(
 
     // Chart grid & CYC pure vector symbols
     svg.push_str(r#"<g id="hand-knit-chart">"#);
-    for r in 0..rows {
-        let course = (rows - 1 - r) as u32;
-        let y0 = chart_y + r as f64 * cell;
-        for c in 0..cols {
-            let wale = min_w + c as i32;
-            let x0 = chart_x + c as f64 * cell;
-            if let Some(&kind) = grid.get(&(course, wale)) {
+    for (panel, &bed) in beds.iter().enumerate() {
+        let panel_y = chart_y + panel as f64 * (chart_h + panel_gap);
+        let _ = write!(
+            svg,
+            r#"<g id="hand-knit-chart-{bed_id}"><text x="{x}" y="{y}" font-family="Helvetica, sans-serif" font-size="3.5" font-weight="bold">{label} - wales {min_w} to {max_w}</text>"#,
+            bed_id = bed.knitout_prefix(),
+            x = fnum(chart_x, 2),
+            y = fnum(panel_y - 4.0, 2),
+            label = bed_label(bed),
+        );
+        for r in 0..rows {
+            let course = (rows - 1 - r) as u32;
+            let y0 = panel_y + r as f64 * cell;
+            for c in 0..cols {
+                let wale = min_w + c as i32;
+                let x0 = chart_x + c as f64 * cell;
+                if let Some(stitch) = grid.get(&(bed, course, wale)) {
+                    let _ = write!(
+                        svg,
+                        r##"<g id="hand-knit-stitch-{id}" data-bed="{bed}" data-course="{course}" data-wale="{wale}"><rect x="{x}" y="{y}" width="{s}" height="{s}" fill="none" stroke="#444444" stroke-width="0.22"/>"##,
+                        id = stitch.id,
+                        bed = bed.knitout_prefix(),
+                        x = fnum(x0, 2),
+                        y = fnum(y0, 2),
+                        s = fnum(cell, 2)
+                    );
+                    emit_cyc_symbol_svg(&mut svg, stitch.kind, x0, y0, cell);
+                    svg.push_str("</g>");
+                } else {
+                    // No-stitch placeholder (shaded gray cell per CYC standard)
+                    let _ = write!(
+                        svg,
+                        r##"<rect x="{x}" y="{y}" width="{s}" height="{s}" fill="#d9d9d9" stroke="#888888" stroke-width="0.18"/>"##,
+                        x = fnum(x0, 2),
+                        y = fnum(y0, 2),
+                        s = fnum(cell, 2)
+                    );
+                }
+            }
+            // Row index every 5 rows + row 1
+            let row_num = course + 1;
+            if row_num == 1 || row_num.is_multiple_of(5) {
                 let _ = write!(
                     svg,
-                    r##"<rect x="{x}" y="{y}" width="{s}" height="{s}" fill="none" stroke="#444444" stroke-width="0.22"/>"##,
-                    x = fnum(x0, 2),
-                    y = fnum(y0, 2),
-                    s = fnum(cell, 2)
-                );
-                emit_cyc_symbol_svg(&mut svg, kind, x0, y0, cell);
-            } else {
-                // No-stitch placeholder (shaded gray cell per CYC standard)
-                let _ = write!(
-                    svg,
-                    r##"<rect x="{x}" y="{y}" width="{s}" height="{s}" fill="#d9d9d9" stroke="#888888" stroke-width="0.18"/>"##,
-                    x = fnum(x0, 2),
-                    y = fnum(y0, 2),
-                    s = fnum(cell, 2)
+                    r#"<text x="{x}" y="{y}" font-family="Helvetica, sans-serif" font-size="2.5">{row_num}</text>"#,
+                    x = fnum(chart_x + chart_w + 2.0, 2),
+                    y = fnum(y0 + cell * 0.72, 2)
                 );
             }
         }
-        // Row index every 5 rows + row 1
-        let row_num = course + 1;
-        if row_num == 1 || row_num.is_multiple_of(5) {
-            let _ = write!(
-                svg,
-                r#"<text x="{x}" y="{y}" font-family="Helvetica, sans-serif" font-size="2.5">{row_num}</text>"#,
-                x = fnum(chart_x + chart_w + 2.0, 2),
-                y = fnum(y0 + cell * 0.72, 2)
-            );
-        }
+        svg.push_str("</g>\n");
     }
     svg.push_str("</g>\n");
 
     // 100 mm x 100 mm physical print calibration square + CYC vector legend
     let cal_x = margin;
-    let cal_y = chart_y + chart_h + 12.0;
+    let cal_y = chart_y + all_charts_h + 12.0;
     let _ = writeln!(
         svg,
         r##"<g id="calibration-square-100mm"><rect x="{x}" y="{y}" width="100" height="100" fill="none" stroke="#111111" stroke-width="0.4"/><text x="{tx}" y="{ty}" font-family="Helvetica, sans-serif" font-size="3.5">100 mm x 100 mm Print Scale Verification Square</text></g>"##,
@@ -222,115 +257,147 @@ pub fn export_hand_knit_document(
         &[],
         title.clone(),
     );
-    let mut cv = pdf.canvas();
-    cv.fill_gray(0.0);
-    cv.stroke_gray(0.15);
-    cv.text(
-        margin,
-        margin + 5.0,
-        &title,
-        5.0,
-        TextAnchor::Start,
-        true,
-        None,
-    );
-    cv.text(
-        margin,
-        margin + 12.0,
-        &gauge_line,
-        3.0,
-        TextAnchor::Start,
-        false,
-        None,
-    );
+    for &bed in &beds {
+        let mut cv = pdf.canvas();
+        cv.fill_gray(0.0);
+        cv.stroke_gray(0.15);
+        cv.text(
+            margin,
+            margin + 5.0,
+            &title,
+            5.0,
+            TextAnchor::Start,
+            true,
+            None,
+        );
 
-    cv.width(0.22);
-    for r in 0..rows {
-        let course = (rows - 1 - r) as u32;
-        let y0 = chart_y + r as f64 * cell;
-        for c in 0..cols {
-            let wale = min_w + c as i32;
-            let x0 = chart_x + c as f64 * cell;
-            let box_pts = [
-                Vec2::new(x0, y0),
-                Vec2::new(x0 + cell, y0),
-                Vec2::new(x0 + cell, y0 + cell),
-                Vec2::new(x0, y0 + cell),
-            ];
-            if let Some(&kind) = grid.get(&(course, wale)) {
-                cv.stroke_gray(0.25);
-                cv.path(&box_pts, true);
-                cv.raw("S");
-                emit_cyc_symbol_pdf(&mut cv, kind, x0, y0, cell);
-            } else {
-                cv.fill_gray(0.85);
-                cv.path(&box_pts, true);
-                cv.raw("f");
+        cv.text(
+            chart_x,
+            chart_y - 4.0,
+            &format!("{} - wales {min_w} to {max_w}", bed_label(bed)),
+            3.5,
+            TextAnchor::Start,
+            true,
+            None,
+        );
+        cv.text(
+            margin,
+            margin + 12.0,
+            &gauge_line,
+            3.0,
+            TextAnchor::Start,
+            false,
+            None,
+        );
+
+        cv.width(0.22);
+        for r in 0..rows {
+            let course = (rows - 1 - r) as u32;
+            let y0 = chart_y + r as f64 * cell;
+            for c in 0..cols {
+                let wale = min_w + c as i32;
+                let x0 = chart_x + c as f64 * cell;
+                let box_pts = [
+                    Vec2::new(x0, y0),
+                    Vec2::new(x0 + cell, y0),
+                    Vec2::new(x0 + cell, y0 + cell),
+                    Vec2::new(x0, y0 + cell),
+                ];
+                if let Some(stitch) = grid.get(&(bed, course, wale)) {
+                    cv.stroke_gray(0.25);
+                    cv.path(&box_pts, true);
+                    cv.raw("S");
+                    emit_cyc_symbol_pdf(&mut cv, stitch.kind, x0, y0, cell);
+                } else {
+                    cv.fill_gray(0.85);
+                    cv.path(&box_pts, true);
+                    cv.raw("f");
+                }
+            }
+            let row_num = course + 1;
+            if row_num == 1 || row_num.is_multiple_of(5) {
+                cv.fill_gray(0.0);
+                cv.text(
+                    chart_x + chart_w + 2.0,
+                    y0 + cell * 0.72,
+                    &row_num.to_string(),
+                    2.4,
+                    TextAnchor::Start,
+                    false,
+                    None,
+                );
             }
         }
-        let row_num = course + 1;
-        if row_num == 1 || row_num.is_multiple_of(5) {
-            cv.fill_gray(0.0);
-            cv.text(
-                chart_x + chart_w + 2.0,
-                y0 + cell * 0.72,
-                &row_num.to_string(),
-                2.4,
-                TextAnchor::Start,
-                false,
-                None,
-            );
-        }
+        // 100 mm calibration square in PDF
+        let cal_y = chart_y + chart_h + 12.0;
+        cv.width(0.4);
+        cv.stroke_gray(0.0);
+        cv.path(
+            &[
+                Vec2::new(cal_x, cal_y),
+                Vec2::new(cal_x + 100.0, cal_y),
+                Vec2::new(cal_x + 100.0, cal_y + 100.0),
+                Vec2::new(cal_x, cal_y + 100.0),
+            ],
+            true,
+        );
+        cv.raw("S");
+        cv.fill_gray(0.0);
+        cv.text(
+            cal_x + 4.0,
+            cal_y + 8.0,
+            "100 mm x 100 mm Print Scale Verification Square",
+            3.2,
+            TextAnchor::Start,
+            true,
+            None,
+        );
+        pdf.add_page(page_w, page_h, cv, String::new());
     }
-    // 100 mm calibration square in PDF
-    cv.width(0.4);
-    cv.stroke_gray(0.0);
-    cv.path(
-        &[
-            Vec2::new(cal_x, cal_y),
-            Vec2::new(cal_x + 100.0, cal_y),
-            Vec2::new(cal_x + 100.0, cal_y + 100.0),
-            Vec2::new(cal_x, cal_y + 100.0),
-        ],
-        true,
-    );
-    cv.raw("S");
-    cv.fill_gray(0.0);
-    cv.text(
-        cal_x + 4.0,
-        cal_y + 8.0,
-        "100 mm x 100 mm Print Scale Verification Square",
-        3.2,
-        TextAnchor::Start,
-        true,
-        None,
-    );
-    pdf.add_page(page_w, page_h, cv, String::new());
     let pdf_bytes = pdf.write(created);
 
     // 3. Build deterministic ASCII written row instructions
     let mut instr = String::new();
     let _ = writeln!(instr, "# {title}");
     let _ = writeln!(instr, "{gauge_line}\n");
+    let _ = writeln!(
+        instr,
+        "Each bed has a separate chart panel and PDF page. The same course number on different beds belongs to the same source course, not successive rows."
+    );
+    let _ = writeln!(
+        instr,
+        "The guide below lists source stitch operations in increasing wale order. Bed names do not imply right/wrong sides or a working direction; follow the pattern's flat or circular construction and chart legend. Gaps are no-stitch cells.\n"
+    );
     for course in 0..=max_c {
-        let side = if course.is_multiple_of(2) { "RS" } else { "WS" };
-        let mut counts: Vec<(LoopKind, usize)> = Vec::new();
-        for wale in min_w..=max_w {
-            if let Some(&kind) = grid.get(&(course, wale)) {
-                if let Some(last) = counts.last_mut()
-                    && last.0 == kind
-                {
-                    last.1 += 1;
-                    continue;
+        for &bed in &beds {
+            let mut counts: Vec<(LoopKind, usize)> = Vec::new();
+            for wale in min_w..=max_w {
+                if let Some(stitch) = grid.get(&(bed, course, wale)) {
+                    let kind = stitch.kind;
+                    if let Some(last) = counts.last_mut()
+                        && last.0 == kind
+                    {
+                        last.1 += 1;
+                        continue;
+                    }
+                    counts.push((kind, 1));
                 }
-                counts.push((kind, 1));
             }
+            if counts.is_empty() {
+                continue;
+            }
+            let tokens: Vec<String> = counts
+                .into_iter()
+                .map(|(k, n)| format!("{}{n}", cyc_abbrev(k)))
+                .collect();
+            let _ = writeln!(
+                instr,
+                "Course {} - {}: {}",
+                course + 1,
+                bed_label(bed),
+                tokens.join(", ")
+            );
         }
-        let tokens: Vec<String> = counts
-            .into_iter()
-            .map(|(k, n)| format!("{}{n}", cyc_abbrev(k)))
-            .collect();
-        let _ = writeln!(instr, "Row {} ({side}): {}", course + 1, tokens.join(", "));
     }
 
     let svg_sha256 = sha256_hex(svg.as_bytes());
@@ -342,6 +409,15 @@ pub fn export_hand_knit_document(
         svg_sha256,
         pdf_sha256,
     })
+}
+
+const fn bed_label(bed: Bed) -> &'static str {
+    match bed {
+        Bed::Front => "Front bed",
+        Bed::Back => "Back bed",
+        Bed::FrontSlider => "Front slider",
+        Bed::BackSlider => "Back slider",
+    }
 }
 
 /// Dedicated acceptance check for human hand-knit CYC vector SVG outputs (`FTX-K07`).
@@ -615,6 +691,143 @@ mod tests {
     };
     use ftx_core::RefusalCode;
     use ftx_pattern::knit::{MachineProfile, compile_knit_doc, draft_calibration_swatch};
+
+    #[test]
+    fn front_and_back_stitches_survive_each_chart_and_written_course() {
+        let profile = MachineProfile::kniterate_7e();
+        let mut doc = draft_calibration_swatch(&profile, "test-yarn", 4, 2, &[6.0]).unwrap();
+        let id_offset = doc.stitches.len() as u32;
+        let back: Vec<_> = doc
+            .stitches
+            .iter()
+            .cloned()
+            .map(|mut stitch| {
+                stitch.id += id_offset;
+                stitch.bed = Bed::Back;
+                for parent in &mut stitch.parents {
+                    parent.stitch_id += id_offset;
+                }
+                if stitch.kind == LoopKind::Knit {
+                    stitch.kind = LoopKind::Purl;
+                }
+                stitch
+            })
+            .collect();
+        doc.stitches.extend(back);
+        let exported = export_hand_knit_document(&doc, "2026-11-27T08:00").unwrap();
+
+        let root = parse(&exported.svg_text).unwrap();
+        let descendants = root.descendants();
+        let cells: Vec<_> = descendants
+            .iter()
+            .filter(|element| element.get("data-bed").is_some())
+            .collect();
+        assert_eq!(cells.len(), doc.stitches.len());
+        for stitch in &doc.stitches {
+            let id = format!("hand-knit-stitch-{}", stitch.id);
+            let cell = cells
+                .iter()
+                .find(|element| element.get("id") == Some(id.as_str()))
+                .expect("every source stitch has its own vector cell");
+            assert_eq!(cell.get("data-bed"), Some(stitch.bed.knitout_prefix()));
+            assert_eq!(
+                cell.get("data-course").unwrap().parse::<u32>().unwrap(),
+                stitch.course
+            );
+            assert_eq!(
+                cell.get("data-wale").unwrap().parse::<i32>().unwrap(),
+                stitch.wale
+            );
+            if matches!(stitch.kind, LoopKind::Knit | LoopKind::Purl) {
+                assert_eq!(
+                    cell.children.iter().any(|element| element.name == "circle"),
+                    stitch.kind == LoopKind::Purl,
+                    "opposite-bed symbol must not replace this stitch"
+                );
+            }
+        }
+        assert!(exported.svg_text.contains("Front bed - wales 0 to 3"));
+        assert!(exported.svg_text.contains("Back bed - wales 0 to 3"));
+        assert!(
+            exported
+                .instructions_text
+                .contains("Course 2 - Front bed: k4")
+        );
+        assert!(
+            exported
+                .instructions_text
+                .contains("Course 2 - Back bed: p4")
+        );
+        assert!(!exported.instructions_text.contains("(WS)"));
+
+        let objects = pdf_objects(&exported.pdf_bytes);
+        let page_count = objects
+            .values()
+            .filter(|(dict, _)| {
+                let text = String::from_utf8_lossy(dict);
+                text.contains("/Type /Page") && !text.contains("/Type /Pages")
+            })
+            .count();
+        assert_eq!(page_count, 2);
+        let streams: Vec<_> = objects
+            .values()
+            .filter_map(|(_, stream)| stream.as_ref())
+            .map(|stream| String::from_utf8_lossy(stream))
+            .collect();
+        for bed in ["Front bed", "Back bed"] {
+            assert_eq!(
+                streams.iter().filter(|stream| stream.contains(bed)).count(),
+                1
+            );
+        }
+        assert!(
+            check_hand_knit_svg(&exported.svg_text, "two-beds.svg")
+                .iter()
+                .all(|check| check.ok)
+        );
+        assert!(
+            check_hand_knit_pdf(&exported.pdf_bytes, "two-beds.pdf")
+                .iter()
+                .all(|check| check.ok)
+        );
+
+        // Source storage order is not chart order; neither bed wins by appearing last.
+        doc.stitches.reverse();
+        let reordered = export_hand_knit_document(&doc, "2026-11-27T08:00").unwrap();
+        assert_eq!(exported.svg_text, reordered.svg_text);
+        assert_eq!(exported.pdf_bytes, reordered.pdf_bytes);
+        assert_eq!(exported.instructions_text, reordered.instructions_text);
+    }
+
+    #[test]
+    fn chart_refuses_same_bed_collisions_and_bounds_all_rendered_panels() {
+        let profile = MachineProfile::kniterate_7e();
+        let doc = draft_calibration_swatch(&profile, "test-yarn", 4, 2, &[6.0]).unwrap();
+        let mut duplicate = doc.clone();
+        let mut other = duplicate.stitches[0].clone();
+        other.id = duplicate.stitches.len() as u32;
+        duplicate.stitches.push(other);
+        duplicate.validate().unwrap();
+        assert_eq!(
+            export_hand_knit_document(&duplicate, "2026-11-27T08:00")
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        let mut large = doc;
+        large.stitches.truncate(2);
+        large.stitches[1].course = 1000;
+        large.stitches[1].wale = 299;
+        large.stitches[1].bed = Bed::Back;
+        large.validate().unwrap();
+        assert_eq!(
+            export_hand_knit_document(&large, "2026-11-27T08:00")
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+    }
 
     #[test]
     fn full_tier_a_and_tier_b_knitting_export_suite_passes() {
