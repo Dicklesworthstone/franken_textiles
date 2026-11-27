@@ -10,12 +10,17 @@
 //! 6. Child/infant wash-off, ISO 105-C06, ISO 105-X12, and saliva fastness gates;
 //! 7. Deterministic `.csv`, `.gcode`, and sealed `ftx-dye-cert/1` (`hardware_execution_authorized: false`).
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use ftx_core::receipt::{canonical_json_sha256, sha256_hex};
 use ftx_core::{Refusal, RefusalCode, det};
-use ftx_pattern::dye::{DyeMachineProfile, DyeingRegime, YarnDyeProgram, YarnDyeingQualification};
-use ftx_pattern::knit::{FourClaimsVerdict, WearerAgeClass};
+use ftx_pattern::dye::{
+    DYE_PROGRAM_SCHEMA, DyeMachineProfile, DyeSegment, DyeingRegime, OpticalMeasurementBasis,
+    YarnDyeProgram, YarnDyeingQualification,
+};
+use ftx_pattern::knit::{CalibrationSwatchCaps, FourClaimsVerdict, WearerAgeClass};
+use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
 /// Schema tag for sealed yarn-dyeing machine certificates.
@@ -81,6 +86,50 @@ pub struct DyeMachineCert {
     pub cert_sha256: String,
 }
 
+impl DyeMachineCert {
+    /// Verifies seal integrity and constitutional no-claim booleans on `ftx-dye-cert/1`.
+    ///
+    /// # Errors
+    /// [`RefusalCode::InvalidDocument`] on wrong schema or [`RefusalCode::VerificationMismatch`]
+    /// if tampered or if safety booleans were flipped to `true`.
+    pub fn verify_integrity(&self) -> Result<(), Refusal> {
+        if self.schema != DYE_CERT_SCHEMA {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("unexpected dye cert schema '{}'", self.schema),
+            ));
+        }
+        if self.hardware_execution_authorized
+            || self.physical_dyeing_validated
+            || self.four_claims.fit_claimed
+        {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "dye machine certificate violates constitutional no-claim invariants (hardware_execution_authorized, physical_dyeing_validated, and fit_claimed must be false)",
+            ));
+        }
+        let view = DyeCertSealView {
+            schema: &self.schema,
+            program_sha256: &self.program_sha256,
+            machine_sha256: &self.machine_sha256,
+            qualification_sha256: &self.qualification_sha256,
+            wearer_age_class: self.wearer_age_class,
+            hardware_execution_authorized: self.hardware_execution_authorized,
+            physical_dyeing_validated: self.physical_dyeing_validated,
+            hazard_report: &self.hazard_report,
+            four_claims: &self.four_claims,
+        };
+        let expected = canonical_json_sha256(&view)?;
+        if expected != self.cert_sha256 {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "dye machine certificate cert_sha256 mismatch (tampered)",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Complete exported yarn-dyeing controller bundle.
 #[derive(Clone, Debug)]
 pub struct DyeExportBundle {
@@ -94,6 +143,19 @@ pub struct DyeExportBundle {
     pub cert_json: String,
     /// SHA-256 of `controller_gcode`.
     pub gcode_sha256: String,
+}
+
+/// Complete `Exp-4` stepped bleed, shrinkage, tenacity, and colorfastness calibration swatch kit (`FTX-K16`).
+#[derive(Clone, Debug)]
+pub struct DyeBleedSwatchBundle {
+    /// Hard-capped `CalibrationSwatchOnly` (`not_for_garment_wear: true`, `<= 40 m`) stepped dye program.
+    pub program: YarnDyeProgram,
+    /// Verified CSV, G-code, and sealed `ftx-dye-cert/1` bundle.
+    pub export: DyeExportBundle,
+    /// Blank `YarnDyeingQualification` template bound to exact `material_sha256` and `dye_machine_sha256`.
+    pub qualification_template: YarnDyeingQualification,
+    /// Deterministic JSON of `qualification_template`.
+    pub qualification_template_json: String,
 }
 
 /// Verifies every physical hazard invariant of a [`YarnDyeProgram`] against [`DyeMachineProfile`]
@@ -171,6 +233,20 @@ pub fn verify_and_export_dye_program(
                 format!(
                     "dye primary id '{}' cannot contain commas or line breaks",
                     p.id
+                ),
+            ));
+        }
+    }
+
+    if program.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
+        let last_end_m = program.segments.last().map_or(0.0, |s| s.s_end_m);
+        let total_yarn_m = program.startup_leader_m + last_end_m + program.shutdown_trailer_m;
+        if total_yarn_m > CalibrationSwatchCaps::MAX_YARN_M + 1e-9 {
+            return Err(Refusal::new(
+                RefusalCode::MaterialProcessHazard,
+                format!(
+                    "calibration dye swatch total yarn length {total_yarn_m:.2} m exceeds hard cap {:.1} m",
+                    CalibrationSwatchCaps::MAX_YARN_M
                 ),
             ));
         }
@@ -445,11 +521,20 @@ pub fn verify_and_export_dye_program(
     gcode.push_str("G21 ; millimetres\nG90 ; absolute yarn arc-length E\n");
     let _ = writeln!(gcode, "M104 S{:.1} ; oven setpoint C", machine.oven_temp_c);
     let leader_mm = program.startup_leader_m * 1000.0;
-    let init_feed_mm_min = program.segments[0].target_speed_m_s * 60_000.0;
+    let first_seg = &program.segments[0];
+    let init_feed_mm_min = first_seg.target_speed_m_s * 60_000.0;
     let _ = writeln!(
         gcode,
         "G1 E{leader_mm:.3} F{init_feed_mm_min:.1} ; sacrificial startup leader"
     );
+    if first_seg.s_start_m > 1e-12 {
+        let pre_offset_mm = leader_mm + first_seg.s_start_m * 1000.0;
+        gcode.push_str("M400 ALL=0 ; undyed pre-offset before first dyed segment\n");
+        let _ = writeln!(
+            gcode,
+            "G1 E{pre_offset_mm:.3} F{init_feed_mm_min:.1} ; advance to s_start_m"
+        );
+    }
     for seg in &program.segments {
         let e_mm = leader_mm + seg.s_end_m * 1000.0;
         let feed = seg.target_speed_m_s * 60_000.0;
@@ -465,14 +550,16 @@ pub fn verify_and_export_dye_program(
         let _ = writeln!(gcode, "M400 {} ; set primary doses", dose_tokens.join(" "));
         let _ = writeln!(gcode, "G1 E{e_mm:.3} F{feed:.1}");
     }
-    let total_e_mm =
-        leader_mm + program.active_yarn_length_m() * 1000.0 + program.shutdown_trailer_m * 1000.0;
+    let last_end_m = program.segments.last().map_or(0.0, |s| s.s_end_m);
+    let total_e_mm = leader_mm + last_end_m * 1000.0 + program.shutdown_trailer_m * 1000.0;
     gcode.push_str("M400 ALL=0 ; valves off\n");
     let _ = writeln!(
         gcode,
         "G1 E{total_e_mm:.3} F{init_feed_mm_min:.1} ; sacrificial shutdown trailer"
     );
     gcode.push_str("M104 S0 ; oven off\nM2 ; program end\n");
+
+    verify_dye_export_readback(&csv, &gcode, program, machine)?;
 
     let program_sha256 = program.canonical_sha256()?;
     let gcode_sha256 = sha256_hex(gcode.as_bytes());
@@ -506,6 +593,7 @@ pub fn verify_and_export_dye_program(
         four_claims,
         cert_sha256,
     };
+    cert.verify_integrity()?;
     let cert_json = serde_json::to_string_pretty(&cert).map_err(|e| {
         Refusal::new(
             RefusalCode::InvalidDocument,
@@ -522,15 +610,382 @@ pub fn verify_and_export_dye_program(
     })
 }
 
+/// Independent read-back verifier for emitted dye schedule CSV and controller G-code (`FTX-K16`).
+///
+/// Re-parses every CSV row and G-code command to guarantee:
+/// - exact segment count, monotonic non-overlapping arc ranges, speed envelope, and dose bounds;
+/// - monotonic non-decreasing `G1 E` yarn advance (never reversing wet yarn through the oven/capstan);
+/// - matching oven setpoint (`M104`), explicit safety disclaimer comment, and clean `M2` termination.
+///
+/// # Errors
+/// [`RefusalCode::VerificationMismatch`] if either file fails read-back checks.
+pub fn verify_dye_export_readback(
+    schedule_csv: &str,
+    controller_gcode: &str,
+    program: &YarnDyeProgram,
+    machine: &DyeMachineProfile,
+) -> Result<(), Refusal> {
+    // 1. Parse and verify CSV schedule
+    let mut csv_lines = schedule_csv.lines();
+    let Some(header) = csv_lines.next() else {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "dye CSV read-back failed: empty schedule",
+        ));
+    };
+    let mut expected_header = "s_start_m,s_end_m,target_speed_m_s,fiducial_mark".to_string();
+    for p in &machine.primaries {
+        let _ = write!(expected_header, ",dose_{}", p.id);
+    }
+    if header != expected_header {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "dye CSV read-back failed: header disagrees with machine primaries",
+        ));
+    }
+    let expected_cols = 4 + machine.primaries.len();
+    let mut parsed_rows = 0usize;
+    let mut prev_end: Option<f64> = None;
+    for (row_idx, line) in csv_lines.enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split(',').collect();
+        if cols.len() != expected_cols {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!(
+                    "dye CSV row {row_idx} column count {} != expected {expected_cols}",
+                    cols.len()
+                ),
+            ));
+        }
+        let s_start: f64 = cols[0].parse().map_err(|_| {
+            Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye CSV row {row_idx} invalid s_start_m"),
+            )
+        })?;
+        let s_end: f64 = cols[1].parse().map_err(|_| {
+            Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye CSV row {row_idx} invalid s_end_m"),
+            )
+        })?;
+        let speed: f64 = cols[2].parse().map_err(|_| {
+            Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye CSV row {row_idx} invalid target_speed_m_s"),
+            )
+        })?;
+        if !s_start.is_finite() || !s_end.is_finite() || s_end <= s_start {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye CSV row {row_idx} has invalid arc range"),
+            ));
+        }
+        if let Some(pe) = prev_end
+            && (s_start - pe).abs() > 1e-5
+        {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!(
+                    "dye CSV row {row_idx} start {s_start} disconnected from previous end {pe}"
+                ),
+            ));
+        }
+        prev_end = Some(s_end);
+        if !speed.is_finite()
+            || speed + 1e-5 < machine.min_line_speed_m_s
+            || speed - 1e-5 > machine.max_line_speed_m_s
+        {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye CSV row {row_idx} speed {speed} outside machine envelope"),
+            ));
+        }
+        if !matches!(cols[3], "0" | "1") {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye CSV row {row_idx} invalid fiducial flag '{}'", cols[3]),
+            ));
+        }
+        for (p_idx, tok) in cols[4..].iter().enumerate() {
+            let dose: f64 = tok.parse().map_err(|_| {
+                Refusal::new(
+                    RefusalCode::VerificationMismatch,
+                    format!("dye CSV row {row_idx} invalid dose token '{tok}'"),
+                )
+            })?;
+            if !dose.is_finite()
+                || dose < -1e-6
+                || dose > machine.primaries[p_idx].max_dose_per_m + 1e-4
+            {
+                return Err(Refusal::new(
+                    RefusalCode::VerificationMismatch,
+                    format!("dye CSV row {row_idx} primary {p_idx} dose {dose} out of range"),
+                ));
+            }
+        }
+        parsed_rows += 1;
+    }
+    if parsed_rows != program.segments.len() {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            format!(
+                "dye CSV row count {parsed_rows} != program segment count {}",
+                program.segments.len()
+            ),
+        ));
+    }
+
+    // 2. Parse and verify G-code monotonicity and safety envelope
+    let mut seen_no_hw = false;
+    let mut seen_g21 = false;
+    let mut seen_g90 = false;
+    let mut seen_oven_set = false;
+    let mut seen_oven_off = false;
+    let mut seen_m2 = false;
+    let mut prev_e_mm = -1.0_f64;
+    let mut g1_count = 0usize;
+    let expected_oven_set = format!("M104 S{:.1}", machine.oven_temp_c);
+
+    for (line_idx, raw_line) in controller_gcode.lines().enumerate() {
+        let line_no = line_idx + 1;
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen_m2 {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye G-code line {line_no}: unexpected command after M2"),
+            ));
+        }
+        if trimmed == "; hardware_execution_authorized: false" {
+            seen_no_hw = true;
+            continue;
+        }
+        if trimmed.starts_with(';') {
+            continue;
+        }
+        let code = trimmed.split(';').next().unwrap_or("").trim();
+        if code == "G21" {
+            seen_g21 = true;
+        } else if code == "G90" {
+            seen_g90 = true;
+        } else if code == expected_oven_set {
+            seen_oven_set = true;
+        } else if code == "M104 S0" {
+            seen_oven_off = true;
+        } else if code == "M2" {
+            seen_m2 = true;
+        } else if code.starts_with("G1 ") {
+            let mut e_val: Option<f64> = None;
+            let mut f_val: Option<f64> = None;
+            for tok in code.split_whitespace().skip(1) {
+                if let Some(rest) = tok.strip_prefix('E') {
+                    e_val = rest.parse().ok();
+                } else if let Some(rest) = tok.strip_prefix('F') {
+                    f_val = rest.parse().ok();
+                }
+            }
+            let (Some(e_mm), Some(feed)) = (e_val, f_val) else {
+                return Err(Refusal::new(
+                    RefusalCode::VerificationMismatch,
+                    format!("dye G-code line {line_no}: malformed G1 move '{code}'"),
+                ));
+            };
+            if !e_mm.is_finite() || !feed.is_finite() || feed <= 0.0 || e_mm + 1e-6 < prev_e_mm {
+                return Err(Refusal::new(
+                    RefusalCode::VerificationMismatch,
+                    format!(
+                        "dye G-code line {line_no}: non-monotonic or invalid move E={e_mm} (prev {prev_e_mm}) F={feed}"
+                    ),
+                ));
+            }
+            prev_e_mm = e_mm;
+            g1_count += 1;
+        } else if code.starts_with("M400 ") || code == "M401" {
+            // Valve dosing / optical fiducial command
+        } else {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("dye G-code line {line_no}: unsupported command '{code}'"),
+            ));
+        }
+    }
+    let expected_g1 =
+        2 + program.segments.len() + usize::from(program.segments[0].s_start_m > 1e-12);
+    if !seen_no_hw
+        || !seen_g21
+        || !seen_g90
+        || !seen_oven_set
+        || !seen_oven_off
+        || !seen_m2
+        || g1_count != expected_g1
+    {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "dye G-code read-back failed: missing mandatory setup/oven/M2 commands or G1 count mismatch",
+        ));
+    }
+    Ok(())
+}
+
+/// Generates a hard-capped `Exp-4` stepped bleed, shrinkage, wet-tenacity, and fastness calibration
+/// swatch kit (`CalibrationSwatchOnly`, `not_for_garment_wear: true`, total yarn `<= 40.0 m`)
+/// alongside a blank [`YarnDyeingQualification`] template (`FTX-K16`).
+///
+/// # Errors
+/// If `machine` is invalid or cannot admit a safe calibration speed inside its dual dwell window.
+pub fn export_exp4_bleed_swatch_kit(
+    machine: &DyeMachineProfile,
+    yarn_id: &str,
+    material_sha256: &str,
+) -> Result<DyeBleedSwatchBundle, Refusal> {
+    machine.validate()?;
+    if yarn_id.trim().is_empty() || material_sha256.trim().is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "Exp-4 bleed swatch kit requires non-empty yarn_id and material_sha256",
+        ));
+    }
+    let machine_sha256 = machine.canonical_sha256()?;
+    // Choose the geometric-safe midpoint line speed inside BOTH machine speed bounds and oven dwell window.
+    let req_fix = machine
+        .primaries
+        .iter()
+        .map(|p| p.min_fixation_dwell_s)
+        .fold(0.0_f64, f64::max);
+    let v_lo = machine
+        .min_line_speed_m_s
+        .max(machine.oven_length_m / machine.scorch_max_dwell_s);
+    let v_hi = if req_fix > 0.0 {
+        machine
+            .max_line_speed_m_s
+            .min(machine.oven_length_m / req_fix)
+    } else {
+        machine.max_line_speed_m_s
+    };
+    if v_lo > v_hi + 1e-12 {
+        return Err(Refusal::new(
+            RefusalCode::MaterialProcessHazard,
+            format!(
+                "dye machine '{}' has no feasible line speed satisfying both fixation and scorch dwell bounds ([{v_lo:.4}, {v_hi:.4}] m/s)",
+                machine.id
+            ),
+        ));
+    }
+    let v_nom = 0.5 * (v_lo + v_hi);
+    let ramp_len = (v_nom * v_nom) / (2.0 * machine.max_line_accel_m_s2);
+    let startup_leader_m = ramp_len.max(machine.applicator_to_feeder_path_m) + 0.05;
+    let shutdown_trailer_m = ramp_len + 0.10;
+
+    // Emit sharp 0.5 m stepped pulses per primary (25%, 50%, 100% of max_dose) separated by 0.25 m undyed gaps
+    // so the operator can directly measure capillary bleed sigma_wick, shrinkage, and K/S curves.
+    let mut segments = Vec::new();
+    let mut cursor = 0.0_f64;
+    let n_p = machine.primaries.len();
+    let levels = [0.25_f64, 0.50_f64, 1.0_f64];
+    for p_idx in 0..n_p {
+        for &lvl in &levels {
+            let mut doses = vec![0.0; n_p];
+            doses[p_idx] = machine.primaries[p_idx].max_dose_per_m * lvl;
+            segments.push(DyeSegment {
+                s_start_m: cursor,
+                s_end_m: cursor + 0.40,
+                target_speed_m_s: v_nom,
+                doses,
+                fiducial_mark: false,
+            });
+            cursor += 0.40;
+            segments.push(DyeSegment {
+                s_start_m: cursor,
+                s_end_m: cursor + 0.20,
+                target_speed_m_s: v_nom,
+                doses: vec![0.0; n_p],
+                fiducial_mark: false,
+            });
+            cursor += 0.20;
+        }
+    }
+
+    let mut metadata = BTreeMap::new();
+    metadata.insert("experiment".to_string(), "Exp-4".to_string());
+    metadata.insert("wearable_certified".to_string(), "false".to_string());
+    let program = YarnDyeProgram {
+        schema: DYE_PROGRAM_SCHEMA.to_string(),
+        name: format!("exp4-bleed-swatch-{yarn_id}"),
+        run_id: 0,
+        yarn_id: yarn_id.to_string(),
+        wearer_age_class: WearerAgeClass::CalibrationSwatchOnly,
+        regime: DyeingRegime::Regime1AStripes,
+        machine_sha256: machine_sha256.clone(),
+        qualification_sha256: None,
+        startup_leader_m,
+        shutdown_trailer_m,
+        segments,
+        regime3_intake_timeline: None,
+        expected_delta_e00_p50: None,
+        expected_delta_e00_p95: None,
+        gamut_floor_delta_e00: None,
+        unreproducible_energy_fraction: None,
+        not_for_garment_wear: true,
+        metadata,
+    };
+    let export = verify_and_export_dye_program(&program, machine, None, Some(material_sha256))?;
+
+    let mut conditioning = BTreeMap::new();
+    conditioning.insert(
+        "protocol".to_string(),
+        "dye Exp-4 stepped pulse strip -> fix -> soap wash-off -> dry flat 24h -> measure sigma_wick_mm, axial shrinkage %, wet tenacity, spectrophotometer K/S, and ISO 105 fastness".to_string(),
+    );
+    let qualification_template = YarnDyeingQualification {
+        id: format!("exp4-{}-{yarn_id}", machine.id),
+        material_sha256: material_sha256.to_string(),
+        dye_machine_sha256: machine_sha256,
+        yarn_lot_id: "FILL_IN_YARN_LOT_ID".to_string(),
+        dye_lot_id: "FILL_IN_DYE_LOT_ID".to_string(),
+        wick_dispersion_mm: 1.5,
+        shrinkage_axial_pct: 2.0,
+        wet_tenacity_retention_ratio: 0.90,
+        yarn_breaking_force_n: 8.0,
+        yarn_tg_c: None,
+        optical_measurement_basis: OpticalMeasurementBasis::EstimateOnly,
+        washing_off_validated: false,
+        iso_105_c06_grade: None,
+        iso_105_x12_wet_rub_grade: None,
+        saliva_fastness_validated: false,
+        evidence: Evidence::Estimate,
+        source: Source {
+            reference: "local:unmeasured_exp4_template".to_string(),
+            accessed_on: "YYYY-MM-DD".to_string(),
+            note: "Replace with physically measured Exp-4 coupon values before dyeing wearable garments".to_string(),
+        },
+        method: "Exp-4 stepped bleed/shrinkage/fastness swatch".to_string(),
+        conditioning,
+        allow_estimates: false,
+    };
+    let qualification_template_json = serde_json::to_string_pretty(&qualification_template)
+        .map_err(|e| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("cannot serialize Exp-4 dye qualification template: {e}"),
+            )
+        })?;
+    Ok(DyeBleedSwatchBundle {
+        program,
+        export,
+        qualification_template,
+        qualification_template_json,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftx_pattern::dye::{
-        DYE_PROGRAM_SCHEMA, DyeSegment, IntakeEvent, IntakeEventKind, OpticalMeasurementBasis,
-        Regime3IntakeTimeline,
-    };
-    use ftx_pattern::materials::{Evidence, Source};
-    use std::collections::BTreeMap;
+    use ftx_pattern::dye::{IntakeEvent, IntakeEventKind, Regime3IntakeTimeline};
 
     #[test]
     fn dye_verifier_catches_accumulator_overflow_and_emits_verified_bundle() {
@@ -619,6 +1074,44 @@ mod tests {
         assert!(!bundle.cert.physical_dyeing_validated);
         assert!(bundle.controller_gcode.contains("G1 E"));
         assert!(bundle.schedule_csv.contains("dose_cyan"));
+        bundle.cert.verify_integrity().unwrap();
+
+        // Tampering with cert fails verify_integrity
+        let mut tampered_cert = bundle.cert.clone();
+        tampered_cert.hardware_execution_authorized = true;
+        assert_eq!(
+            tampered_cert.verify_integrity().unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Tampering G-code to retract yarn backwards fails read-back
+        let backward_gcode = bundle
+            .controller_gcode
+            .replacen("G1 E3700.000", "G1 E100.000", 1);
+        assert_eq!(
+            verify_dye_export_readback(&bundle.schedule_csv, &backward_gcode, &prog, &machine)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Non-zero s_start_m emits an explicit undyed pre-offset and stays strictly monotonic!
+        let mut offset_prog = prog.clone();
+        offset_prog.regime = DyeingRegime::Regime1AStripes;
+        offset_prog.regime3_intake_timeline = None;
+        offset_prog.segments = vec![DyeSegment {
+            s_start_m: 0.5,
+            s_end_m: 2.0,
+            target_speed_m_s: 0.08,
+            doses: vec![0.4, 0.1, 0.0, 0.0],
+            fiducial_mark: false,
+        }];
+        offset_prog.qualification_sha256 = Some(qual.canonical_sha256().unwrap());
+        let offset_bundle =
+            verify_and_export_dye_program(&offset_prog, &machine, Some(&qual), Some("mat-cotton"))
+                .unwrap();
+        assert!(offset_bundle.controller_gcode.contains("G1 E1900.000"));
+        assert!(offset_bundle.controller_gcode.contains("G1 E3700.000"));
 
         // A 40-second zero-feed pause overflows the 1.5m dancer accumulator (min line speed 0.04 m/s -> +1.6m!)
         prog.regime3_intake_timeline = Some(Regime3IntakeTimeline {
@@ -666,6 +1159,22 @@ mod tests {
             RefusalCode::NonFinite
         );
 
+        // CalibrationSwatchOnly exceeding 40m yarn cap refuses fail-closed
+        let mut huge_swatch = swatch_prog.clone();
+        huge_swatch.segments = vec![DyeSegment {
+            s_start_m: 0.0,
+            s_end_m: 45.0,
+            target_speed_m_s: 0.08,
+            doses: vec![0.2, 0.0, 0.0, 0.0],
+            fiducial_mark: false,
+        }];
+        assert_eq!(
+            verify_and_export_dye_program(&huge_swatch, &machine, None, None)
+                .unwrap_err()
+                .code,
+            RefusalCode::MaterialProcessHazard
+        );
+
         // Bound qualification_sha256 mismatch and G-code newline injection fail closed
         let mut bad_qsha = swatch_prog.clone();
         bad_qsha.qualification_sha256 = Some("0".repeat(64));
@@ -684,5 +1193,16 @@ mod tests {
                 .code,
             RefusalCode::InvalidDocument
         );
+
+        // Exp-4 bleed swatch kit exports cleanly with not_for_garment_wear = true and <= 40m yarn
+        let kit = export_exp4_bleed_swatch_kit(&machine, "cotton-120tex", "mat-cotton").unwrap();
+        assert!(kit.program.not_for_garment_wear);
+        assert_eq!(
+            kit.program.wearer_age_class,
+            WearerAgeClass::CalibrationSwatchOnly
+        );
+        assert!(!kit.qualification_template.washing_off_validated);
+        assert_eq!(kit.qualification_template.evidence, Evidence::Estimate);
+        kit.export.cert.verify_integrity().unwrap();
     }
 }
