@@ -16,6 +16,7 @@ pub mod dxf;
 pub mod gc;
 pub mod geom;
 pub mod hpgl;
+pub mod knit;
 pub mod layout;
 pub mod material_study;
 pub mod outline;

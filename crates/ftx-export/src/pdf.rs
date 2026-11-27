@@ -47,29 +47,29 @@ pub struct Canvas {
 }
 
 impl Canvas {
-    fn raw(&mut self, s: impl Into<String>) {
+    pub(crate) fn raw(&mut self, s: impl Into<String>) {
         self.ops.push(s.into());
     }
-    fn save(&mut self) {
+    pub(crate) fn save(&mut self) {
         self.raw("q");
     }
-    fn restore(&mut self) {
+    pub(crate) fn restore(&mut self) {
         self.raw("Q");
     }
-    fn width(&mut self, w: f64) {
+    pub(crate) fn width(&mut self, w: f64) {
         self.raw(format!("{} w", fnum(w, 4)));
     }
-    fn dash(&mut self, arr: &[f64]) {
+    pub(crate) fn dash(&mut self, arr: &[f64]) {
         let a: Vec<String> = arr.iter().map(|&v| fnum(v, 3)).collect();
         self.raw(format!("[{}] 0 d", a.join(" ")));
     }
-    fn stroke_gray(&mut self, g: f64) {
+    pub(crate) fn stroke_gray(&mut self, g: f64) {
         self.raw(format!("{} G", fnum(g, 3)));
     }
-    fn fill_gray(&mut self, g: f64) {
+    pub(crate) fn fill_gray(&mut self, g: f64) {
         self.raw(format!("{} g", fnum(g, 3)));
     }
-    fn stroke_rgb(&mut self, c: [f64; 3]) {
+    pub(crate) fn stroke_rgb(&mut self, c: [f64; 3]) {
         self.raw(format!(
             "{} {} {} RG",
             fnum(c[0], 3),
@@ -77,7 +77,7 @@ impl Canvas {
             fnum(c[2], 3)
         ));
     }
-    fn fill_rgb(&mut self, c: [f64; 3]) {
+    pub(crate) fn fill_rgb(&mut self, c: [f64; 3]) {
         self.raw(format!(
             "{} {} {} rg",
             fnum(c[0], 3),
@@ -85,7 +85,7 @@ impl Canvas {
             fnum(c[2], 3)
         ));
     }
-    fn path(&mut self, pts: &[Vec2], closed: bool) {
+    pub(crate) fn path(&mut self, pts: &[Vec2], closed: bool) {
         if pts.is_empty() {
             return;
         }
@@ -153,7 +153,7 @@ impl Canvas {
         ));
     }
     #[allow(clippy::too_many_arguments)]
-    fn text(
+    pub(crate) fn text(
         &mut self,
         x: f64,
         y: f64,
@@ -214,7 +214,7 @@ pub struct PdfDoc {
 }
 
 impl PdfDoc {
-    fn new(ocgs: Vec<String>, off: &[&str], title: String) -> Self {
+    pub(crate) fn new(ocgs: Vec<String>, off: &[&str], title: String) -> Self {
         Self {
             ocgs,
             off: off.iter().map(|s| (*s).to_string()).collect(),
@@ -223,14 +223,14 @@ impl PdfDoc {
         }
     }
 
-    fn canvas(&self) -> Canvas {
+    pub(crate) fn canvas(&self) -> Canvas {
         Canvas {
             ops: Vec::new(),
             ocgs: self.ocgs.clone(),
         }
     }
 
-    fn add_page(&mut self, w: f64, h: f64, cv: Canvas, extra: String) {
+    pub(crate) fn add_page(&mut self, w: f64, h: f64, cv: Canvas, extra: String) {
         self.pages.push((w, h, cv, extra));
     }
 
