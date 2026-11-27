@@ -20,6 +20,7 @@ pub mod data;
 pub mod drape;
 pub mod fit;
 pub mod kinematics;
+pub mod knit_shell;
 pub mod landmarks;
 pub mod model;
 mod selected;
