@@ -8,6 +8,7 @@
 pub mod alteration;
 pub mod body_fit;
 pub mod fold;
+pub mod knit;
 pub mod manufacturing;
 pub mod materials;
 pub mod page;
