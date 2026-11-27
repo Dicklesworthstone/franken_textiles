@@ -659,38 +659,91 @@ fn decode_png_rgba_with_limit(
             }
         }
     };
+    let alpha_from_sample = |v: u16| -> f32 {
+        if decoded.depth == 16 {
+            f32::from(v) / 65535.0_f32
+        } else {
+            f32::from(to8(v)) / 255.0_f32
+        }
+    };
+    let gray_trns = if decoded.color == 0 {
+        match decoded.trns.as_deref() {
+            None => None,
+            Some(t) if t.len() == 2 => Some(u16::from_be_bytes([t[0], t[1]])),
+            Some(_) => return Err("malformed PNG tRNS chunk for grayscale image".into()),
+        }
+    } else {
+        None
+    };
+    let rgb_trns = if decoded.color == 2 {
+        match decoded.trns.as_deref() {
+            None => None,
+            Some(t) if t.len() == 6 => Some([
+                u16::from_be_bytes([t[0], t[1]]),
+                u16::from_be_bytes([t[2], t[3]]),
+                u16::from_be_bytes([t[4], t[5]]),
+            ]),
+            Some(_) => return Err("malformed PNG tRNS chunk for truecolor image".into()),
+        }
+    } else {
+        None
+    };
+    if decoded.color == 3 {
+        if decoded.plte.is_empty() || !decoded.plte.len().is_multiple_of(3) {
+            return Err("PNG indexed image has missing or malformed PLTE chunk".into());
+        }
+        if let Some(t) = decoded.trns.as_deref() {
+            if t.len() > decoded.plte.len() / 3 {
+                return Err("PNG tRNS chunk has more entries than PLTE".into());
+            }
+        }
+    } else if matches!(decoded.color, 4 | 6) && decoded.trns.is_some() {
+        return Err("PNG tRNS chunk is not allowed for colour types with an alpha channel".into());
+    }
     let n = decoded.w * decoded.h;
     let mut srgb = Vec::with_capacity(n);
     let mut alpha = Vec::with_capacity(n);
     for i in 0..n {
         let s = &decoded.px[i * decoded.ch..(i + 1) * decoded.ch];
-        let (rgb, a_u8) = match decoded.color {
+        let (rgb, a_f32) = match decoded.color {
             0 => {
                 let v = to8(s[0]);
-                ([v, v, v], 255)
+                let a = if gray_trns == Some(s[0]) {
+                    0.0_f32
+                } else {
+                    1.0_f32
+                };
+                ([v, v, v], a)
             }
-            2 => ([to8(s[0]), to8(s[1]), to8(s[2])], 255),
+            2 => {
+                let a = if rgb_trns == Some([s[0], s[1], s[2]]) {
+                    0.0_f32
+                } else {
+                    1.0_f32
+                };
+                ([to8(s[0]), to8(s[1]), to8(s[2])], a)
+            }
             3 => {
                 let k = usize::from(s[0]);
-                let rgb = decoded
+                let p = decoded
                     .plte
                     .get(3 * k..3 * k + 3)
-                    .map_or([0, 0, 0], |p| [p[0], p[1], p[2]]);
+                    .ok_or_else(|| "PNG palette index out of range".to_string())?;
                 let a = decoded
                     .trns
                     .as_ref()
                     .and_then(|t| t.get(k).copied())
                     .unwrap_or(255);
-                (rgb, a)
+                ([p[0], p[1], p[2]], f32::from(a) / 255.0_f32)
             }
             4 => {
                 let v = to8(s[0]);
-                ([v, v, v], to8(s[1]))
+                ([v, v, v], alpha_from_sample(s[1]))
             }
-            _ => ([to8(s[0]), to8(s[1]), to8(s[2])], to8(s[3])),
+            _ => ([to8(s[0]), to8(s[1]), to8(s[2])], alpha_from_sample(s[3])),
         };
         srgb.push(rgb);
-        alpha.push(f32::from(a_u8) / 255.0_f32);
+        alpha.push(a_f32);
     }
     Ok((decoded.w, decoded.h, srgb, alpha))
 }
@@ -1243,5 +1296,69 @@ mod decode_budget_tests {
         // Meanwhile legacy load_png_with_limit keeps Pillow over_white parity unchanged.
         let legacy = load_png_with_limit(&bytes, 16).unwrap();
         assert_eq!(&legacy.data[0..3], &[255, 255, 255]);
+    }
+
+    #[test]
+    fn target_raster_honors_png_trns_color_keys_16bit_alpha_and_strict_palette() {
+        // Color type 2 (RGB) with 6-byte tRNS key matching pixel 0 (255, 0, 255).
+        let rgb_trns = mask_png(
+            8,
+            2,
+            None,
+            &[(b"tRNS", &[0, 255, 0, 0, 0, 255])],
+            &[0, 255, 0, 255, 10, 20, 30, 0, 10, 20, 30, 255, 0, 255],
+        );
+        let rgb_raster = load_target_raster_with_limit(&rgb_trns, 16).unwrap();
+        assert_eq!(rgb_raster.srgb_u8[0], [255, 0, 255]);
+        assert_eq!(rgb_raster.alpha_weight[0], 0.0);
+        assert_eq!(rgb_raster.srgb_u8[1], [10, 20, 30]);
+        assert_eq!(rgb_raster.alpha_weight[1], 1.0);
+        assert_eq!(rgb_raster.alpha_weight[3], 0.0);
+
+        // Color type 0 (grayscale) with 2-byte tRNS key matching sample 42.
+        let gray_trns = mask_png(
+            8,
+            0,
+            None,
+            &[(b"tRNS", &[0, 42])],
+            &[0, 42, 200, 0, 200, 42],
+        );
+        let gray_raster = load_target_raster_with_limit(&gray_trns, 16).unwrap();
+        assert_eq!(gray_raster.srgb_u8[0], [42, 42, 42]);
+        assert_eq!(gray_raster.alpha_weight[0], 0.0);
+        assert_eq!(gray_raster.srgb_u8[1], [200, 200, 200]);
+        assert_eq!(gray_raster.alpha_weight[1], 1.0);
+
+        // Color type 6 (16-bit RGBA): low non-zero alpha 0x00FF must stay non-zero (not crush to 0.0).
+        let rgba16_raw = [
+            0u8, 0x80, 0x00, 0x40, 0x00, 0x20, 0x00, 0x00, 0xff, // (0,0) alpha = 255/65535
+            0x80, 0x00, 0x40, 0x00, 0x20, 0x00, 0xff, 0xff, // (1,0) alpha = 1.0
+            0u8, 0x80, 0x00, 0x40, 0x00, 0x20, 0x00, 0x00, 0x00, // (0,1) alpha = 0.0
+            0x80, 0x00, 0x40, 0x00, 0x20, 0x00, 0x80, 0x00, // (1,1) alpha = 32768/65535
+        ];
+        let rgba16 = mask_png(16, 6, None, &[], &rgba16_raw);
+        let r16 = load_target_raster_with_limit(&rgba16, 16).unwrap();
+        assert!((r16.alpha_weight[0] - 255.0 / 65535.0).abs() < 1e-6);
+        assert_eq!(r16.alpha_weight[1], 1.0);
+        assert_eq!(r16.alpha_weight[2], 0.0);
+        assert!((r16.alpha_weight[3] - 32768.0 / 65535.0).abs() < 1e-6);
+
+        // Color type 3 with out-of-range palette index refuses instead of inventing black.
+        let bad_pal = mask_png(8, 3, Some(&[255, 0, 0]), &[], &[0, 0, 1, 0, 0, 0]);
+        assert_eq!(
+            load_target_raster_with_limit(&bad_pal, 16)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
+
+        // Prohibited tRNS chunk on color type 6 refuses fail-closed.
+        let bad_trns = mask_png(16, 6, None, &[(b"tRNS", &[0, 0])], &rgba16_raw);
+        assert_eq!(
+            load_target_raster_with_limit(&bad_trns, 16)
+                .unwrap_err()
+                .code,
+            RefusalCode::InvalidDocument
+        );
     }
 }

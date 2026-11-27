@@ -73,7 +73,7 @@ pub fn decode_rgba(
         return Err(format!("WebP {w}×{h}: more than {max_pixels} pixels"));
     }
     let (fw, fh) = (frame.w, frame.h);
-    let decoded: Vec<u8> = if frame.lossless {
+    let mut decoded: Vec<u8> = if frame.lossless {
         let argb = webp_lossless::decode_image(frame.payload, fw, fh)?;
         argb.iter()
             .flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8])
@@ -82,6 +82,11 @@ pub fn decode_rgba(
         let alpha = frame.alpha.map(|a| decode_alpha(a, fw, fh)).transpose()?;
         decode_vp8(frame.payload, fw, fh, alpha.as_deref())?
     };
+    if !has_alpha {
+        for px in decoded.as_chunks_mut::<4>().0 {
+            px[3] = 255;
+        }
+    }
     let rgba = if (fw, fh) == (w, h) {
         decoded
     } else {
@@ -96,11 +101,7 @@ pub fn decode_rgba(
     let mut alpha_weight = Vec::with_capacity(w * h);
     for &[r, g, b, a] in rgba.as_chunks::<4>().0 {
         srgb.push([r, g, b]);
-        alpha_weight.push(if has_alpha {
-            f32::from(a) / 255.0_f32
-        } else {
-            1.0_f32
-        });
+        alpha_weight.push(f32::from(a) / 255.0_f32);
     }
     Ok((w, h, srgb, alpha_weight))
 }
@@ -2102,5 +2103,81 @@ mod tests {
         simple_max.extend_from_slice(b"VP8 ");
         simple_max.extend_from_slice(&u32::MAX.to_le_bytes());
         assert!(decode(&simple_max, 1024).is_err());
+    }
+
+    #[test]
+    fn decode_rgba_preserves_transparent_margins_around_opaque_subframe() {
+        // Minimal 1x1 lossless VP8L bitstream with RGB=(200, 100, 50) and alpha symbol 0 (ignored
+        // inside the opaque frame because VP8X omits ALPHA_FLAG).
+        let mut acc = 0u64;
+        let mut bits = 0u32;
+        let mut vp8l = Vec::new();
+        let mut put = |val: u32, n: u32| {
+            acc |= u64::from(val & ((1u32 << n) - 1)) << bits;
+            bits += n;
+            while bits >= 8 {
+                vp8l.push(acc as u8);
+                acc >>= 8;
+                bits -= 8;
+            }
+        };
+        put(0x2f, 8); // VP8L signature
+        put(0, 14); // width - 1 = 0 (1 px)
+        put(0, 14); // height - 1 = 0 (1 px)
+        put(0, 1); // alpha_is_used = 0
+        put(0, 3); // version = 0
+        put(0, 1); // no transforms
+        put(0, 1); // no color cache
+        put(0, 1); // no meta huffman
+        for sym in [100u32, 200, 50, 0, 0] {
+            // Simple 1-symbol Huffman codes for G, R, B, A, distance
+            put(1, 1);
+            put(0, 1);
+            if sym < 2 {
+                put(0, 1);
+                put(sym, 1);
+            } else {
+                put(1, 1);
+                put(sym, 8);
+            }
+        }
+        if bits > 0 {
+            vp8l.push(acc as u8);
+        }
+
+        let mut anmf = Vec::new();
+        anmf.extend_from_slice(&[1, 0, 0]); // xo = 2 * 1 = 2
+        anmf.extend_from_slice(&[0, 0, 0]); // yo = 0
+        anmf.extend_from_slice(&[0, 0, 0]); // fw = 1
+        anmf.extend_from_slice(&[0, 0, 0]); // fh = 1
+        anmf.extend_from_slice(&[0, 0, 0, 0]); // duration + flags
+        anmf.extend_from_slice(b"VP8L");
+        anmf.extend_from_slice(&(vp8l.len() as u32).to_le_bytes());
+        anmf.extend_from_slice(&vp8l);
+        if anmf.len() % 2 == 1 {
+            anmf.push(0);
+        }
+
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WEBP");
+        body.extend_from_slice(b"VP8X");
+        body.extend_from_slice(&10u32.to_le_bytes());
+        body.extend_from_slice(&[ANIMATION_FLAG, 0, 0, 0, 2, 0, 0, 0, 0, 0]); // 3x1 canvas, no ALPHA_FLAG
+        body.extend_from_slice(b"ANIM");
+        body.extend_from_slice(&6u32.to_le_bytes());
+        body.extend_from_slice(&[0u8; 6]);
+        body.extend_from_slice(b"ANMF");
+        body.extend_from_slice(&(anmf.len() as u32).to_le_bytes());
+        body.extend_from_slice(&anmf);
+
+        let mut webp = Vec::new();
+        webp.extend_from_slice(b"RIFF");
+        webp.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        webp.extend_from_slice(&body);
+
+        let (w, h, srgb, alpha) = decode_rgba(&webp, 16).unwrap();
+        assert_eq!((w, h), (3, 1));
+        assert_eq!(alpha, vec![0.0, 0.0, 1.0]);
+        assert_eq!(srgb[2], [200, 100, 50]);
     }
 }
