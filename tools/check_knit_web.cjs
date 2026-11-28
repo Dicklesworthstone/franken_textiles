@@ -42,7 +42,7 @@ for (const id of new Set(idMatches)) {
 
 // 4. HTML select values and JS request/response fields match ftx-wasm Rust serde schemas
 const validAgeClasses = new Set(["infant_under3", "child3_to14", "adult", "calibration_swatch_only"]);
-for (const selectId of ["panelAgeClass", "dyeAgeClass"]) {
+for (const selectId of ["panelAgeClass", "pulloverAgeClass", "dyeAgeClass"]) {
   const m = html.match(new RegExp(`<select id="${selectId}">([\\s\\S]*?)</select>`));
   assert(m, `web/knit.html missing <select id="${selectId}">`);
   const values = [...m[1].matchAll(/<option value="([^"]+)"/g)].map((o) => o[1]);
@@ -84,6 +84,7 @@ assert(worker.includes('ftx_wasm.js?v=2026-11-27.3') && worker.includes('ftx_was
 assert(worker.includes("ftx.knit_swatch_json"), "worker missing knit_swatch_json call");
 assert(worker.includes("ftx.knit_panel_preview_json"), "worker missing knit_panel_preview_json call");
 assert(worker.includes("ftx.knit_export_json"), "worker missing knit_export_json call");
+assert(worker.includes("ftx.knit_pullover_json"), "worker missing knit_pullover_json call");
 assert(worker.includes("ftx.dye_optimize_json"), "worker missing dye_optimize_json call");
 assert(!/\bfetch\s*\(/.test(worker), "worker must not perform network fetch calls");
 assert(!/\bfetch\s*\(/.test(page), "page must not perform network fetch calls");
@@ -129,6 +130,18 @@ elMap.panelRib.value = "6";
 elMap.panelNeckWidth.value = "0";
 elMap.panelNeckDepth.value = "0";
 elMap.panelShoulderPairs.value = "0";
+elMap.pulloverMachine.value = "hand-knit";
+elMap.pulloverAgeClass.value = "child3_to14";
+elMap.pulloverChest.value = "560";
+elMap.pulloverHem.value = "520";
+elMap.pulloverBodyLength.value = "320";
+elMap.pulloverArmhole.value = "120";
+elMap.pulloverSleeveLength.value = "240";
+elMap.pulloverCuff.value = "150";
+elMap.pulloverNeckWidth.value = "120";
+elMap.pulloverBodyRib.value = "0";
+elMap.pulloverCuffRib.value = "0";
+elMap.pulloverSeamTolerance.value = "6";
 elMap.exportMachine.value = "kniterate-7e";
 elMap.dyeMachine.value = "piezo-cmyk";
 elMap.dyeAgeClass.value = "calibration_swatch_only";
@@ -204,6 +217,7 @@ vm.runInContext(page, ctx);
 assert(workerInstance, "knit-page.js must construct a Worker");
 workerInstance.onmessage({ data: { type: "ready" } });
 assert.equal(elMap.runSwatch.disabled, false);
+assert.equal(elMap.runPullover.disabled, false);
 assert.equal(elMap.runExport.disabled, false);
 
 // Reject invalid cam tokens rather than silently dropping them.
@@ -764,6 +778,7 @@ assert.equal(elMap.exportDownloads.children.length, 1);
 workerInstance.onerror({ message: "WASM trap" });
 assert.equal(elMap.runSwatch.disabled, true);
 assert.equal(elMap.runPanel.disabled, true);
+assert.equal(elMap.runPullover.disabled, true);
 assert.equal(elMap.runExport.disabled, true);
 assert.equal(elMap.runDye.disabled, true);
 assert.match(elMap.error.textContent, /WASM trap/);
@@ -772,15 +787,67 @@ assert.equal(activeUrls.size, 0);
 replyExport(exportBeforeFailure.request);
 assert.equal(activeUrls.size, 0, "failed engine's late result must remain unavailable");
 
+// Re-enable engine to exercise the 4-piece seamed pullover builder end-to-end.
+workerInstance.onmessage({ data: { type: "ready" } });
+assert.equal(elMap.runPullover.disabled, false);
+const beforeBadPullover = posted.length;
+elMap.pulloverSeamTolerance.value = "-1";
+await elMap.runPullover.handlers.click();
+assert.equal(posted.length, beforeBadPullover, "negative seam tolerance must refuse before postMessage");
+assert.match(elMap.error.textContent, /cannot be negative/);
+elMap.pulloverSeamTolerance.value = "6";
+elMap.pulloverQualification.files = [localFile(rawQualification)];
+elMap.pulloverMaterialSha256.value = "a".repeat(64);
+await elMap.runPullover.handlers.click();
+const pulloverReq = posted.at(-1);
+assert.equal(pulloverReq.type, "pullover");
+assert.equal(pulloverReq.payload.machine, "hand-knit");
+assert.equal(pulloverReq.payload.spec.chest_girth_mm, 560);
+assert.equal(pulloverReq.payload.qualification_json, rawQualification);
+assert.equal(pulloverReq.payload.material_sha256, "a".repeat(64));
+const pulloverResult = {
+  machine: "hand-knit-4.0mm",
+  pieces: { front: {}, back: {}, left_sleeve: {}, right_sleeve: {} },
+  files: [{ name: "front/pattern.knit.json", bytes: 120, sha256: "d".repeat(64) }],
+  archive_base64: zipBytes.toString("base64"),
+  archive_sha256: "e".repeat(64),
+  seam_count: 10,
+  openings: [],
+  residuals_mm: {},
+  backend_export_refusals: {},
+  assembly: "four separate pieces joined manually",
+  machine_executable: false,
+  hardware_execution_authorized: false,
+  physical_knitting_validated: false,
+  fit_claimed: false,
+};
+workerInstance.onmessage({ data: { type: "result", kind: "pullover", request: pulloverReq.request, result: pulloverResult } });
+assert.equal(elMap.pulloverOut.hidden, false);
+assert.match(elMap.pulloverSummary.textContent, /4 pieces · 10 checked seams/);
+assert.equal(elMap.pulloverDownloads.children[0].download, "knit-pullover.zip");
+const pulloverUrl = elMap.pulloverDownloads.children[0].href;
+assert(activeUrls.has(pulloverUrl));
+// Unqualified physical claim must be rejected even on pullover replies.
+await elMap.runPullover.handlers.click();
+workerInstance.onmessage({ data: { type: "result", kind: "pullover", request: posted.at(-1).request, result: { ...pulloverResult, fit_claimed: true } } });
+assert.match(elMap.error.textContent, /unqualified pullover claim/);
+assert.equal(elMap.pulloverDownloads.children.length, 0);
+assert(!activeUrls.has(pulloverUrl));
+
 // Execute the worker dispatcher too: only the outer envelope is serialized, preserving raw files.
 const workerSource = worker
   .replace('import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.3";', "")
   .replace("import.meta.url", '"https://local.invalid/knit-worker.js"');
 let forwardedRequest;
+let forwardedPullover;
 const workerApi = {
   wasm_interface_stamp: () => "ftx-wasm-interface/2026-11-27.3",
   knit_swatch_json: () => '{"ok":true,"result":{}}',
   knit_panel_preview_json: () => '{"ok":true,"result":{}}',
+  knit_pullover_json: (raw) => {
+    forwardedPullover = JSON.parse(raw);
+    return JSON.stringify({ ok: true, result: pulloverResult });
+  },
   dye_optimize_json: () => '{"ok":true,"result":{}}',
   knit_export_json: (raw) => {
     forwardedRequest = JSON.parse(raw);
@@ -799,6 +866,10 @@ async function loadWorker(api) {
 }
 const loadedWorker = await loadWorker(workerApi);
 assert.equal(loadedWorker.messages[0].type, "ready");
+await loadedWorker.scope.self.onmessage({ data: pulloverReq });
+assert.equal(forwardedPullover.qualification_json, rawQualification);
+assert.equal(loadedWorker.messages.at(-1).kind, "pullover");
+assert.equal(loadedWorker.messages.at(-1).result.seam_count, 10);
 await loadedWorker.scope.self.onmessage({ data: firstExport });
 assert.deepEqual(forwardedRequest, JSON.parse(JSON.stringify(firstExport.payload)));
 assert.equal(forwardedRequest.pattern_json, rawPattern);

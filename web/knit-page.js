@@ -3,13 +3,14 @@ const statusEl = document.getElementById("knitStatus");
 const errorEl = document.getElementById("error");
 const runSwatchBtn = document.getElementById("runSwatch");
 const runPanelBtn = document.getElementById("runPanel");
+const runPulloverBtn = document.getElementById("runPullover");
 const runExportBtn = document.getElementById("runExport");
 const runDyeBtn = document.getElementById("runDye");
 
 let worker = null;
 let engineReady = false;
 let reqId = 0;
-const latestRequestByKind = { swatch: 0, panel: 0, export: 0, dye: 0 };
+const latestRequestByKind = { swatch: 0, panel: 0, pullover: 0, export: 0, dye: 0 };
 const targetByRequest = new Map();
 const downloadUrlsByContainer = new WeakMap();
 const MAX_EXPORT_INPUT_BYTES = 4 * 1024 * 1024;
@@ -18,6 +19,8 @@ const PANEL_MACHINE_DEFAULTS = {
   "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1", cam_setting: 7.0 },
   "brother-kh930-ayab": { needle_pitch_mm: 4.5, carrier_id: "A", cam_setting: 7.0 },
   "brother-kh270-ayab": { needle_pitch_mm: 9.0, carrier_id: "A", cam_setting: 6.0 },
+  "generic-vbed-12e": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
+  "generic-slider-12e": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
   "hand-knit": { needle_pitch_mm: 4.0, carrier_id: "1", cam_setting: 7.0 },
   "shima-seiki-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
   "stoll-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 11.0 },
@@ -59,6 +62,18 @@ function decodeBase64Bytes(b64) {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+function clearPulloverResult() {
+  clearDownloads(document.getElementById("pulloverDownloads"));
+  document.getElementById("pulloverOut").hidden = true;
+  document.getElementById("pulloverSummary").textContent = "";
+  document.getElementById("pulloverPre").textContent = "";
+}
+
+function invalidatePullover() {
+  latestRequestByKind.pullover = ++reqId;
+  clearPulloverResult();
 }
 
 function clearExportResult() {
@@ -254,6 +269,36 @@ function renderPanel(res) {
   out.hidden = false;
 }
 
+function renderPullover(res) {
+  clearPulloverResult();
+  for (const flag of ["machine_executable", "hardware_execution_authorized", "physical_knitting_validated", "fit_claimed"]) {
+    if (res[flag] !== false) {
+      throw new Error("This engine returned an unqualified pullover claim. Rebuild and reload the current WASM bundle.");
+    }
+  }
+  if (typeof res.archive_base64 !== "string" || !res.archive_base64 || !Array.isArray(res.files)) {
+    throw new Error("The engine returned an incomplete four-piece pullover archive.");
+  }
+  const archive = decodeBase64Bytes(res.archive_base64);
+  if (archive.length < 22) throw new Error("The engine returned an incomplete pullover ZIP archive.");
+  const pieceCount = res.pieces && typeof res.pieces === "object" ? Object.keys(res.pieces).length : 0;
+  document.getElementById("pulloverSummary").textContent =
+    `${res.machine} · ${pieceCount} pieces · ${res.seam_count ?? 0} checked seams · ${res.files.length} files · ${res.assembly || "four separate pieces joined manually"} · hardware execution authorized: false · physical knitting validated: false · fit claimed: false`;
+  const refusals = res.backend_export_refusals && Object.keys(res.backend_export_refusals).length > 0
+    ? `=== Backend Conversion Notices ===\n${JSON.stringify(res.backend_export_refusals, null, 2)}\n\n`
+    : "";
+  document.getElementById("pulloverPre").textContent =
+    refusals +
+    `ZIP SHA-256: ${res.archive_sha256}\n\n=== Openings & Residuals (mm) ===\n` +
+    JSON.stringify({ openings: res.openings, residuals_mm: res.residuals_mm }, null, 2) +
+    "\n\n=== Files (uncompressed bytes and SHA-256) ===\n" +
+    res.files.map((file) => `${file.name}\n  ${file.bytes} bytes · ${file.sha256}`).join("\n") +
+    "\n\n=== Piece Certificates ===\n" +
+    JSON.stringify(res.pieces, null, 2);
+  makeDownload(document.getElementById("pulloverDownloads"), "knit-pullover.zip", archive, "application/zip");
+  document.getElementById("pulloverOut").hidden = false;
+}
+
 function renderExport(res) {
   clearExportResult();
   for (const flag of ["machine_executable", "hardware_execution_authorized", "physical_knitting_validated", "fit_claimed"]) {
@@ -363,10 +408,12 @@ function renderDye(res, targetPixels, targetW, targetH) {
 
 function failEngine(message) {
   engineReady = false;
+  invalidatePullover();
   invalidateExport();
   statusEl.textContent = "Engine unavailable.";
   runSwatchBtn.disabled = true;
   runPanelBtn.disabled = true;
+  runPulloverBtn.disabled = true;
   runExportBtn.disabled = true;
   runDyeBtn.disabled = true;
   showError(message);
@@ -395,6 +442,7 @@ function startWorker() {
       statusEl.textContent = "Local WASM knitting & dyeing engine ready.";
       runSwatchBtn.disabled = false;
       runPanelBtn.disabled = false;
+      runPulloverBtn.disabled = false;
       runExportBtn.disabled = false;
       runDyeBtn.disabled = false;
     } else if (msg.type === "loadError") {
@@ -403,12 +451,14 @@ function startWorker() {
       targetByRequest.delete(msg.request);
       if (isStaleReply(msg)) return;
       if (msg.kind === "export") clearExportResult();
+      if (msg.kind === "pullover") clearPulloverResult();
       statusEl.textContent = `Refused (${msg.code}).`;
       showError(`[${msg.code}] ${msg.message}`);
     } else if (msg.type === "error") {
       targetByRequest.delete(msg.request);
       if (isStaleReply(msg)) return;
       if (msg.kind === "export") clearExportResult();
+      if (msg.kind === "pullover") clearPulloverResult();
       statusEl.textContent = "Error.";
       showError(msg.message);
     } else if (msg.type === "result") {
@@ -420,10 +470,12 @@ function startWorker() {
       try {
         if (msg.kind === "swatch") renderSwatch(msg.result);
         else if (msg.kind === "panel") renderPanel(msg.result);
+        else if (msg.kind === "pullover") renderPullover(msg.result);
         else if (msg.kind === "export") renderExport(msg.result);
         else if (msg.kind === "dye" && target) renderDye(msg.result, target.pixels, target.w, target.h);
       } catch (err) {
         if (msg.kind === "export") clearExportResult();
+        if (msg.kind === "pullover") clearPulloverResult();
         statusEl.textContent = "Render refused.";
         showError(String(err?.message || err));
       }
@@ -551,6 +603,117 @@ runPanelBtn.addEventListener("click", () => {
   });
 });
 
+runPulloverBtn.addEventListener("click", async () => {
+  clearError();
+  invalidatePullover();
+  const request = latestRequestByKind.pullover;
+  try {
+    if (!engineReady) throw new Error("Wait for the local engine to finish loading.");
+    const machine = document.getElementById("pulloverMachine").value;
+    const defaults = PANEL_MACHINE_DEFAULTS[machine] || PANEL_MACHINE_DEFAULTS["hand-knit"];
+    const chest = parseFiniteInput("pulloverChest", "Chest Girth (mm)");
+    const hem = parseFiniteInput("pulloverHem", "Hem Girth (mm)");
+    const bodyLength = parseFiniteInput("pulloverBodyLength", "Body Length (mm)");
+    const armhole = parseFiniteInput("pulloverArmhole", "Armhole Depth (mm)");
+    const sleeveLength = parseFiniteInput("pulloverSleeveLength", "Sleeve Length (mm)");
+    const cuff = parseFiniteInput("pulloverCuff", "Cuff Girth (mm)");
+    const neckWidth = parseFiniteInput("pulloverNeckWidth", "Neck Width (mm)");
+    const seamTol = parseFiniteInput("pulloverSeamTolerance", "Max Seam Mismatch (mm)");
+    if (chest <= 0 || hem <= 0 || bodyLength <= 0 || armhole <= 0 || sleeveLength <= 0 || cuff <= 0 || neckWidth <= 0) {
+      throw new Error("Pullover dimensions must be positive numbers.");
+    }
+    if (seamTol < 0) {
+      throw new Error("Max Seam Mismatch (mm) cannot be negative.");
+    }
+    const bodyRib = parseIntRange("pulloverBodyRib", "Body Rib Courses", 0, 40);
+    const cuffRib = parseIntRange("pulloverCuffRib", "Cuff Rib Courses", 0, 40);
+    const qualFile = document.getElementById("pulloverQualification").files[0];
+    if (qualFile && (!Number.isSafeInteger(qualFile.size) || qualFile.size < 0 || qualFile.size > MAX_EXPORT_INPUT_BYTES)) {
+      throw new Error("Qualification file exceeds the 4 MiB budget.");
+    }
+    const materialSha256 = document.getElementById("pulloverMaterialSha256").value.trim();
+    const created = document.getElementById("pulloverCreated").value;
+    if (materialSha256 && !/^[0-9a-fA-F]{64}$/.test(materialSha256)) {
+      throw new Error("Source Material SHA-256 must contain exactly 64 hexadecimal characters.");
+    }
+    const qualificationJson = qualFile ? await qualFile.text() : undefined;
+    if (request !== latestRequestByKind.pullover || !engineReady) return;
+    const payload = {
+      machine,
+      spec: {
+        name: "workbench_seamed_pullover",
+        wearer_age_class: document.getElementById("pulloverAgeClass").value,
+        chest_girth_mm: chest,
+        hem_girth_mm: hem,
+        body_length_mm: bodyLength,
+        armhole_depth_mm: armhole,
+        sleeve_length_mm: sleeveLength,
+        cuff_girth_mm: cuff,
+        neck_width_mm: neckWidth,
+        front_neck_depth_mm: 0.0,
+        back_neck_depth_mm: 0.0,
+        body_rib_courses: bodyRib,
+        cuff_rib_courses: cuffRib,
+        cam_setting: defaults.cam_setting,
+        yarn_id: "merino-200tex",
+        carrier_id: defaults.carrier_id,
+        max_seam_length_mismatch_mm: seamTol,
+        has_hood_or_neck_drawstring: false,
+      },
+      gauge: {
+        wales_per_100mm: 20.0,
+        courses_per_100mm: 25.0,
+        needle_pitch_mm: defaults.needle_pitch_mm,
+        yarn_tex: 180.0,
+        thickness_mm: 2.0,
+        relaxed_after_wash: Boolean(qualFile) || machine === "hand-knit",
+      },
+      ...(qualFile ? { qualification_json: qualificationJson } : {}),
+      ...(materialSha256 ? { material_sha256: materialSha256 } : {}),
+      ...(created ? { created } : {}),
+    };
+    if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > MAX_EXPORT_INPUT_BYTES) {
+      throw new Error("The encoded pullover request exceeds the 4 MiB budget.");
+    }
+    statusEl.textContent = "Drafting, seam-checking, and packaging four-piece pullover ZIP…";
+    worker.postMessage({ type: "pullover", request, payload });
+  } catch (err) {
+    if (request !== latestRequestByKind.pullover) return;
+    clearPulloverResult();
+    statusEl.textContent = "Pullover refused.";
+    showError(String(err?.message || err));
+  }
+});
+
+for (const id of [
+  "pulloverMachine",
+  "pulloverAgeClass",
+  "pulloverChest",
+  "pulloverHem",
+  "pulloverBodyLength",
+  "pulloverArmhole",
+  "pulloverSleeveLength",
+  "pulloverCuff",
+  "pulloverNeckWidth",
+  "pulloverBodyRib",
+  "pulloverCuffRib",
+  "pulloverSeamTolerance",
+  "pulloverQualification",
+  "pulloverMaterialSha256",
+  "pulloverCreated",
+]) {
+  const input = document.getElementById(id);
+  const changed = () => {
+    invalidatePullover();
+    clearError();
+    statusEl.textContent = engineReady
+      ? "Pullover inputs changed. Run again to package current downloads."
+      : "Waiting for the local engine…";
+  };
+  input.addEventListener("input", changed);
+  input.addEventListener("change", changed);
+}
+
 runExportBtn.addEventListener("click", async () => {
   clearError();
   invalidateExport();
@@ -669,6 +832,7 @@ runDyeBtn.addEventListener("click", () => {
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("pagehide", () => {
+    invalidatePullover();
     invalidateExport();
     for (const kind of ["swatch", "panel", "dye"]) latestRequestByKind[kind] = ++reqId;
     targetByRequest.clear();

@@ -13,6 +13,7 @@ const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-2
   if (typeof ftx.knit_swatch_json !== "function" ||
       typeof ftx.knit_panel_preview_json !== "function" ||
       typeof ftx.knit_export_json !== "function" ||
+      typeof ftx.knit_pullover_json !== "function" ||
       typeof ftx.dye_optimize_json !== "function") {
     throw new Error("Knitting & dyeing WASM exports missing from web/pkg: rebuild via ./tools/build_web.sh");
   }
@@ -33,6 +34,8 @@ self.onmessage = async ({ data: msg }) => {
       raw = ftx.knit_panel_preview_json(JSON.stringify(msg.payload));
     } else if (msg.type === "export") {
       raw = ftx.knit_export_json(JSON.stringify(msg.payload));
+    } else if (msg.type === "pullover") {
+      raw = ftx.knit_pullover_json(JSON.stringify(msg.payload));
     } else if (msg.type === "dye") {
       raw = ftx.dye_optimize_json(JSON.stringify(msg.payload));
     } else {

@@ -60,9 +60,11 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
   <div class="row">
     <label>Machine Profile
       <select id="swatchMachine">
-        <option value="kniterate-7e">Kniterate 7E (Knitout v2 for external conversion)</option>
+        <option value="kniterate-7e">Kniterate 7E (Knitout v2 + verified KCode .kc)</option>
         <option value="brother-kh930-ayab">Brother KH-930 / AYAB (1-bit PNG + checklist)</option>
         <option value="brother-kh270-ayab">Brother KH-270 / AYAB</option>
+        <option value="generic-vbed-12e">Generic 12E V-Bed (Knitout v2, hooks)</option>
+        <option value="generic-slider-12e">Generic 12E Slider V-Bed (Knitout v2, hooks &amp; sliders)</option>
         <option value="hand-knit">Hand Knit (CYC Vector SVG + written guide)</option>
         <option value="shima-seiki-12e-handoff">Shima Seiki 12E (verified Knitout handoff only)</option>
         <option value="stoll-12e-handoff">Stoll 12E (verified Knitout handoff only)</option>
@@ -107,6 +109,8 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
         <option value="kniterate-7e">Kniterate 7E</option>
         <option value="brother-kh930-ayab">Brother KH-930 / AYAB</option>
         <option value="brother-kh270-ayab">Brother KH-270 / AYAB</option>
+        <option value="generic-vbed-12e">Generic 12E V-Bed</option>
+        <option value="generic-slider-12e">Generic 12E Slider V-Bed</option>
         <option value="hand-knit">Hand Knit</option>
         <option value="shima-seiki-12e-handoff">Shima Seiki 12E (handoff)</option>
         <option value="stoll-12e-handoff">Stoll 12E (handoff)</option>
@@ -155,16 +159,90 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
   </div>
 </section>
 
+<section id="pulloverSection">
+  <h2>3. Four-Piece Seamed Pullover Builder</h2>
+  <p>Draft and package a complete four-piece seamed pullover (front, back, left sleeve, right sleeve) with checked side, shoulder, sleeve-cap, and underarm seam-length tolerances. Every piece is verified independently and assembled manually; machine targets require a matching washed swatch qualification and source material SHA-256.</p>
+  <div class="row">
+    <label>Target Machine
+      <select id="pulloverMachine">
+        <option value="hand-knit">Hand Knit (chart + PDF, no swatch gate)</option>
+        <option value="kniterate-7e">Kniterate 7E (requires washed swatch qual)</option>
+        <option value="brother-kh930-ayab">Brother KH-930 / AYAB (requires washed swatch qual)</option>
+        <option value="brother-kh270-ayab">Brother KH-270 / AYAB (requires washed swatch qual)</option>
+        <option value="generic-vbed-12e">Generic 12E V-Bed (requires washed swatch qual)</option>
+        <option value="generic-slider-12e">Generic 12E Slider V-Bed (requires washed swatch qual)</option>
+        <option value="shima-seiki-12e-handoff">Shima Seiki 12E (verified Knitout handoff only)</option>
+        <option value="stoll-12e-handoff">Stoll 12E (verified Knitout handoff only)</option>
+      </select>
+    </label>
+    <label>Wearer Age Class (required)
+      <select id="pulloverAgeClass">
+        <option value="infant_under3">Infant / Toddler (&lt; 3 yr)</option>
+        <option value="child3_to14" selected>Child (3–14 yr)</option>
+        <option value="adult">Adult</option>
+      </select>
+    </label>
+    <label>Chest Girth (mm)
+      <input id="pulloverChest" type="number" min="100" max="1600" value="560">
+    </label>
+    <label>Hem Girth (mm)
+      <input id="pulloverHem" type="number" min="100" max="1600" value="520">
+    </label>
+    <label>Body Length (mm)
+      <input id="pulloverBodyLength" type="number" min="80" max="1000" value="320">
+    </label>
+    <label>Armhole Depth (mm)
+      <input id="pulloverArmhole" type="number" min="20" max="400" value="120">
+    </label>
+    <label>Sleeve Length (mm)
+      <input id="pulloverSleeveLength" type="number" min="40" max="900" value="240">
+    </label>
+    <label>Cuff Girth (mm)
+      <input id="pulloverCuff" type="number" min="20" max="500" value="150">
+    </label>
+    <label>Neck Width (mm)
+      <input id="pulloverNeckWidth" type="number" min="20" max="400" value="120">
+    </label>
+    <label>Body Rib Courses
+      <input id="pulloverBodyRib" type="number" min="0" max="40" value="0">
+    </label>
+    <label>Cuff Rib Courses
+      <input id="pulloverCuffRib" type="number" min="0" max="40" value="0">
+    </label>
+    <label>Max Seam Mismatch (mm)
+      <input id="pulloverSeamTolerance" type="number" min="0" max="40" step="0.5" value="6">
+    </label>
+    <label>Measured Swatch Qualification JSON (optional)
+      <input id="pulloverQualification" type="file" accept=".json,application/json">
+    </label>
+    <label>Source Material SHA-256 (optional)
+      <input id="pulloverMaterialSha256" type="text" placeholder="Digest of the selected material record" maxlength="64">
+    </label>
+    <label>Archive Timestamp (optional)
+      <input id="pulloverCreated" type="datetime-local">
+    </label>
+    <button id="runPullover" class="primary" type="button" disabled>Draft &amp; Package 4-Piece Pullover ZIP</button>
+  </div>
+  <div id="pulloverOut" hidden>
+    <h3>Four-Piece Pullover Archive</h3>
+    <p id="pulloverSummary"></p>
+    <div id="pulloverDownloads" class="downloads"></div>
+    <pre id="pulloverPre"></pre>
+  </div>
+</section>
+
 <section id="exportSection">
-  <h2>3. Export a Saved Knit Pattern</h2>
+  <h2>4. Export a Saved Knit Pattern</h2>
   <p>Open a pattern JSON saved from the swatch or panel tools, or from the CLI, and verify it for the selected machine. Add measured swatch qualification and a sealed drape receipt when required. All files stay in this browser; their original JSON text goes directly to the local engine.</p>
-  <p>Files and the encoded request must fit within a combined 4 MiB budget. Download the accepted software artifacts and certificate as a ZIP, with file hashes shown below. Kniterate still requires external Knitout conversion. Export does not authorize hardware execution or establish physical knitting or fit validation.</p>
+  <p>Files and the encoded request must fit within a combined 4 MiB budget. Download the accepted software artifacts and certificate as a ZIP, with file hashes shown below. Kniterate emits read-back-verified pass KCode (<code>program.kc</code>) for supported whole-number dials and operations, and retains verified Knitout v2 with an explicit refusal otherwise. Export does not authorize hardware execution or establish physical knitting or fit validation.</p>
   <div class="row">
     <label>Export Machine
       <select id="exportMachine">
-        <option value="kniterate-7e">Kniterate 7E (Knitout v2 for external conversion)</option>
+        <option value="kniterate-7e">Kniterate 7E (Knitout v2 + verified KCode .kc)</option>
         <option value="brother-kh930-ayab">Brother KH-930 / AYAB</option>
         <option value="brother-kh270-ayab">Brother KH-270 / AYAB</option>
+        <option value="generic-vbed-12e">Generic 12E V-Bed (Knitout v2, hooks)</option>
+        <option value="generic-slider-12e">Generic 12E Slider V-Bed (Knitout v2, hooks &amp; sliders)</option>
         <option value="hand-knit">Hand Knit (chart and written guide)</option>
         <option value="shima-seiki-12e-handoff">Shima Seiki 12E (verified Knitout handoff only)</option>
         <option value="stoll-12e-handoff">Stoll 12E (verified Knitout handoff only)</option>
@@ -197,7 +275,7 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
 </section>
 
 <section id="dyeSection">
-  <h2>4. Programmed Continuous Yarn Dyeing Optimizer</h2>
+  <h2>5. Programmed Continuous Yarn Dyeing Optimizer</h2>
   <p>Inverse-solve a 1D yarn dye profile so that after knitting (flatbed boustrophedon or circular tube), capillary wicking, Kubelka–Munk optical absorption, and Brownian stitch-length drift, the knitted surface reproduces a target motif. Compares all 5 dyeing regimes on the Pareto frontier.</p>
   <div class="row">
     <label>Dye Rig Profile
