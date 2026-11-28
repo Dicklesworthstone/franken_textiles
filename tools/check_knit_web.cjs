@@ -796,14 +796,28 @@ await elMap.runPullover.handlers.click();
 assert.equal(posted.length, beforeBadPullover, "negative seam tolerance must refuse before postMessage");
 assert.match(elMap.error.textContent, /cannot be negative/);
 elMap.pulloverSeamTolerance.value = "6";
-elMap.pulloverQualification.files = [localFile(rawQualification)];
+const rawPulloverQual = JSON.stringify({
+  wales_per_100mm: 22.5,
+  courses_per_100mm: 31.0,
+  thickness_mm: 1.8,
+  cam_stitch_setting: 6.0,
+  yarn_lot_id: "lot-7e-01",
+  was_washed_and_blocked: true,
+}, null, 2) + "\n";
+elMap.pulloverQualification.files = [localFile(rawPulloverQual)];
 elMap.pulloverMaterialSha256.value = "a".repeat(64);
 await elMap.runPullover.handlers.click();
 const pulloverReq = posted.at(-1);
 assert.equal(pulloverReq.type, "pullover");
 assert.equal(pulloverReq.payload.machine, "hand-knit");
 assert.equal(pulloverReq.payload.spec.chest_girth_mm, 560);
-assert.equal(pulloverReq.payload.qualification_json, rawQualification);
+assert.equal(pulloverReq.payload.spec.cam_setting, 6.0);
+assert.equal(pulloverReq.payload.spec.yarn_id, "lot-7e-01");
+assert.equal(pulloverReq.payload.gauge.wales_per_100mm, 22.5);
+assert.equal(pulloverReq.payload.gauge.courses_per_100mm, 31.0);
+assert.equal(pulloverReq.payload.gauge.thickness_mm, 1.8);
+assert.equal(pulloverReq.payload.gauge.relaxed_after_wash, true);
+assert.equal(pulloverReq.payload.qualification_json, rawPulloverQual);
 assert.equal(pulloverReq.payload.material_sha256, "a".repeat(64));
 const pulloverResult = {
   machine: "hand-knit-4.0mm",
@@ -867,7 +881,7 @@ async function loadWorker(api) {
 const loadedWorker = await loadWorker(workerApi);
 assert.equal(loadedWorker.messages[0].type, "ready");
 await loadedWorker.scope.self.onmessage({ data: pulloverReq });
-assert.equal(forwardedPullover.qualification_json, rawQualification);
+assert.equal(forwardedPullover.qualification_json, rawPulloverQual);
 assert.equal(loadedWorker.messages.at(-1).kind, "pullover");
 assert.equal(loadedWorker.messages.at(-1).result.seam_count, 10);
 await loadedWorker.scope.self.onmessage({ data: firstExport });

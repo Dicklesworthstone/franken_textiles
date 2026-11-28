@@ -16,14 +16,14 @@ const downloadUrlsByContainer = new WeakMap();
 const MAX_EXPORT_INPUT_BYTES = 4 * 1024 * 1024;
 
 const PANEL_MACHINE_DEFAULTS = {
-  "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1", cam_setting: 7.0 },
-  "brother-kh930-ayab": { needle_pitch_mm: 4.5, carrier_id: "A", cam_setting: 7.0 },
-  "brother-kh270-ayab": { needle_pitch_mm: 9.0, carrier_id: "A", cam_setting: 6.0 },
-  "generic-vbed-12e": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
-  "generic-slider-12e": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
-  "hand-knit": { needle_pitch_mm: 4.0, carrier_id: "1", cam_setting: 7.0 },
-  "shima-seiki-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0 },
-  "stoll-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 11.0 },
+  "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1", cam_setting: 7.0, yarn_tex: 200.0 },
+  "brother-kh930-ayab": { needle_pitch_mm: 4.5, carrier_id: "A", cam_setting: 7.0, yarn_tex: 150.0 },
+  "brother-kh270-ayab": { needle_pitch_mm: 9.0, carrier_id: "A", cam_setting: 6.0, yarn_tex: 400.0 },
+  "generic-vbed-12e": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0, yarn_tex: 80.0 },
+  "generic-slider-12e": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0, yarn_tex: 80.0 },
+  "hand-knit": { needle_pitch_mm: 4.0, carrier_id: "1", cam_setting: 7.0, yarn_tex: 180.0 },
+  "shima-seiki-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 45.0, yarn_tex: 80.0 },
+  "stoll-12e-handoff": { needle_pitch_mm: 25.4 / 12.0, carrier_id: "1", cam_setting: 11.0, yarn_tex: 80.0 },
 };
 
 function showError(msg) {
@@ -596,7 +596,7 @@ runPanelBtn.addEventListener("click", () => {
         wales_per_100mm: 22.0,
         courses_per_100mm: 30.0,
         needle_pitch_mm: defaults.needle_pitch_mm,
-        yarn_tex: 200.0,
+        yarn_tex: defaults.yarn_tex,
         relaxed_after_wash: false,
       },
     },
@@ -638,6 +638,35 @@ runPulloverBtn.addEventListener("click", async () => {
     }
     const qualificationJson = qualFile ? await qualFile.text() : undefined;
     if (request !== latestRequestByKind.pullover || !engineReady) return;
+    // Read-only inspection aligns drafted gauge/cam/lot to the supplied qualification while
+    // forwarding the exact raw `qualificationJson` text untouched across the WASM boundary.
+    let parsedQual = null;
+    if (qualificationJson) {
+      try {
+        const candidate = JSON.parse(qualificationJson);
+        if (candidate && typeof candidate === "object") parsedQual = candidate;
+      } catch {
+        parsedQual = null;
+      }
+    }
+    const qualWales = Number.isFinite(parsedQual?.wales_per_100mm) && parsedQual.wales_per_100mm > 0
+      ? parsedQual.wales_per_100mm
+      : 20.0;
+    const qualCourses = Number.isFinite(parsedQual?.courses_per_100mm) && parsedQual.courses_per_100mm > 0
+      ? parsedQual.courses_per_100mm
+      : 25.0;
+    const qualThickness = Number.isFinite(parsedQual?.thickness_mm) && parsedQual.thickness_mm > 0
+      ? parsedQual.thickness_mm
+      : 2.0;
+    const qualCam = Number.isFinite(parsedQual?.cam_stitch_setting)
+      ? parsedQual.cam_stitch_setting
+      : defaults.cam_setting;
+    const qualYarnId = typeof parsedQual?.yarn_lot_id === "string" && parsedQual.yarn_lot_id.trim()
+      ? parsedQual.yarn_lot_id.trim()
+      : "merino-200tex";
+    const relaxedAfterWash = qualFile
+      ? parsedQual?.was_washed_and_blocked === true
+      : machine === "hand-knit";
     const payload = {
       machine,
       spec: {
@@ -654,19 +683,19 @@ runPulloverBtn.addEventListener("click", async () => {
         back_neck_depth_mm: 0.0,
         body_rib_courses: bodyRib,
         cuff_rib_courses: cuffRib,
-        cam_setting: defaults.cam_setting,
-        yarn_id: "merino-200tex",
+        cam_setting: qualCam,
+        yarn_id: qualYarnId,
         carrier_id: defaults.carrier_id,
         max_seam_length_mismatch_mm: seamTol,
         has_hood_or_neck_drawstring: false,
       },
       gauge: {
-        wales_per_100mm: 20.0,
-        courses_per_100mm: 25.0,
+        wales_per_100mm: qualWales,
+        courses_per_100mm: qualCourses,
         needle_pitch_mm: defaults.needle_pitch_mm,
-        yarn_tex: 180.0,
-        thickness_mm: 2.0,
-        relaxed_after_wash: Boolean(qualFile) || machine === "hand-knit",
+        yarn_tex: defaults.yarn_tex,
+        thickness_mm: qualThickness,
+        relaxed_after_wash: relaxedAfterWash,
       },
       ...(qualFile ? { qualification_json: qualificationJson } : {}),
       ...(materialSha256 ? { material_sha256: materialSha256 } : {}),
