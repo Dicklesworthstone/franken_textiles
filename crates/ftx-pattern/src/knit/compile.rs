@@ -797,7 +797,9 @@ pub fn compile_knit_doc(
         });
     }
     if doc.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
-        ops.push(KnitoutOp::SpeedNumber { speed: 150 });
+        if profile.automated_carriage_control {
+            ops.push(KnitoutOp::SpeedNumber { speed: 150 });
+        }
         ops.push(KnitoutOp::Comment {
             text: format!(
                 "CalibrationSwatchOnly safety caps: speed <= {:.0}%, takedown <= {:.0}%",
@@ -3003,6 +3005,43 @@ mod tests {
                 2
             );
             bundle.cert.verify_integrity().unwrap();
+        }
+    }
+
+    #[test]
+    fn calibration_swatch_emits_speed_number_only_for_motorized_carriages() {
+        for manual in [
+            MachineProfile::brother_kh930_ayab(),
+            MachineProfile::brother_kh270_ayab(),
+            MachineProfile::hand_knit(4.0),
+        ] {
+            let doc = draft_calibration_swatch(&manual, "synthetic-yarn", 8, 4, &[5.0]).unwrap();
+            let bundle = compile_knit_doc(&doc, &manual, None, None, None).unwrap();
+            assert!(
+                !bundle
+                    .program
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, KnitoutOp::SpeedNumber { .. })),
+                "{} must not emit motorized x-speed-number",
+                manual.id
+            );
+        }
+        for motorized in [
+            MachineProfile::kniterate_7e(),
+            MachineProfile::generic_vbed_12e(),
+        ] {
+            let doc = draft_calibration_swatch(&motorized, "synthetic-yarn", 8, 4, &[5.0]).unwrap();
+            let bundle = compile_knit_doc(&doc, &motorized, None, None, None).unwrap();
+            assert!(
+                bundle
+                    .program
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, KnitoutOp::SpeedNumber { speed: 150 })),
+                "{} should emit motorized calibration x-speed-number",
+                motorized.id
+            );
         }
     }
 }
