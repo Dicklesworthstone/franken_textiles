@@ -136,30 +136,49 @@ pub fn drape_knit_doc(
     }
     let pattern_sha256 = doc.canonical_sha256()?;
 
+    const MAX_DRAPE_GRID_SPAN: i64 = 100_000;
     let mut c_min = u32::MAX;
     let mut c_max = u32::MIN;
     let mut w_min = i32::MAX;
     let mut w_max = i32::MIN;
-    let mut has_front = false;
-    let mut has_back = false;
+    let mut front_cells: BTreeSet<(u32, i32)> = BTreeSet::new();
+    let mut has_tubular_overlap = false;
     for st in &doc.stitches {
         c_min = c_min.min(st.course);
         c_max = c_max.max(st.course);
         w_min = w_min.min(st.wale);
         w_max = w_max.max(st.wale);
-        match st.bed {
-            Bed::Front | Bed::FrontSlider => has_front = true,
-            Bed::Back | Bed::BackSlider => has_back = true,
+        if matches!(st.bed, Bed::Front | Bed::FrontSlider) {
+            front_cells.insert((st.course, st.wale));
         }
     }
-    let n_courses = c_max.saturating_sub(c_min).saturating_add(1).max(2);
-    let n_wales = (i64::from(w_max) - i64::from(w_min) + 1).max(2) as u32;
-    let has_both_beds = has_front && has_back;
+    for st in &doc.stitches {
+        if matches!(st.bed, Bed::Back | Bed::BackSlider)
+            && front_cells.contains(&(st.course, st.wale))
+        {
+            has_tubular_overlap = true;
+            break;
+        }
+    }
+    let course_span_u64 = u64::from(c_max).saturating_sub(u64::from(c_min)) + 1;
+    let wale_span_i64 = i64::from(w_max) - i64::from(w_min) + 1;
+    if course_span_u64 > MAX_DRAPE_GRID_SPAN as u64 || wale_span_i64 > MAX_DRAPE_GRID_SPAN {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "knit drape stitch span ({course_span_u64} courses x {wale_span_i64} wales) exceeds {MAX_DRAPE_GRID_SPAN}-cell drape bound"
+            ),
+        ));
+    }
+    let n_courses = (course_span_u64 as u32).max(2);
+    let n_wales = (wale_span_i64 as u32).max(2);
 
     let wale_pitch_m = doc.gauge.blocked_wale_pitch_mm() * 0.001;
     let course_height_m = doc.gauge.blocked_course_height_mm() * 0.001;
+    // Double circumferential rest width ONLY for genuine double-layer tubes where both beds are
+    // occupied at the same `(course, wale)` — never for a flat panel with a 1x1 rib hem!
     let rest_width_m =
-        (f64::from(n_wales) * wale_pitch_m * if has_both_beds { 2.0 } else { 1.0 }).max(0.04);
+        (f64::from(n_wales) * wale_pitch_m * if has_tubular_overlap { 2.0 } else { 1.0 }).max(0.04);
     let rest_height_m = (f64::from(n_courses) * course_height_m).max(0.04);
 
     let (body_verts, body_tris) = body.collision;
@@ -196,9 +215,9 @@ pub fn drape_knit_doc(
         })
         .filter(|z| z.is_finite() && *z > body_z_min + 0.04 && *z <= body_z_max + 0.05)
         .unwrap_or((body_z_max - 0.05).max(body_z_min + 0.05));
-    let z_top = torso_top_z.min(body_z_max - 0.01);
-    let z_bot = (z_top - rest_height_m).max(body_z_min + 0.01);
-    let placed_height_m = (z_top - z_bot).max(0.04);
+    let z_top = torso_top_z.min(body_z_max - 0.01).max(body_z_min + 0.01);
+    let z_bot = z_top - rest_height_m;
+    let placed_height_m = rest_height_m;
 
     let mut r_body_max = 0.0_f64;
     let mut y_front_min = f64::INFINITY;
@@ -206,7 +225,7 @@ pub fn drape_knit_doc(
         if v.z >= z_bot - 0.03 && v.z <= z_top + 0.03 {
             let dx = v.x - cx;
             let dy = v.y - cy;
-            let r = (dx * dx + dy * dy).sqrt();
+            let r = det::sqrt(dx * dx + dy * dy);
             r_body_max = r_body_max.max(r);
             y_front_min = y_front_min.min(v.y);
         }
@@ -215,7 +234,7 @@ pub fn drape_knit_doc(
         for v in body_verts {
             let dx = v.x - cx;
             let dy = v.y - cy;
-            r_body_max = r_body_max.max((dx * dx + dy * dy).sqrt());
+            r_body_max = r_body_max.max(det::sqrt(dx * dx + dy * dy));
             y_front_min = y_front_min.min(v.y);
         }
     }
@@ -223,9 +242,9 @@ pub fn drape_knit_doc(
     let clearance_m = opts.drape_opts.contact.thickness + opts.drape_opts.contact.dhat + 0.008;
     let r_clear = r_body_max + clearance_m;
     let r_rest = rest_width_m / std::f64::consts::TAU;
-    // Wrap as a closed tubular shell only when the garment's rest circumference can fit around
-    // the body within unjammed elastic stretch (<= 12% circumferential pre-stretch).
-    let is_tubular = has_both_beds
+    // Wrap as a closed tubular shell only when both beds actually overlap into a double-layer tube
+    // AND the garment's rest circumference fits around the body within unjammed stretch (<= 12%).
+    let is_tubular = has_tubular_overlap
         && doc.wearer_age_class != WearerAgeClass::CalibrationSwatchOnly
         && r_clear <= 1.12 * r_rest;
 
@@ -282,7 +301,8 @@ pub fn drape_knit_doc(
         let mut x0 = vec![Vec3::ZERO; (nx + 1) * (ny + 1)];
         let mut fixed = vec![[false; 3]; (nx + 1) * (ny + 1)];
         let y_place = y_front_min - clearance_m - 0.005;
-        let span_x = rest_width_m.min(0.6);
+        // Place flat panels at their true rest width so wide panels never start artificially compressed.
+        let span_x = rest_width_m;
         for iy in 0..=ny {
             let v_frac = (iy as f64) / (ny as f64);
             let z = z_bot + v_frac * placed_height_m;
@@ -366,15 +386,32 @@ pub fn drape_knit_doc(
         if !rep.converged {
             unconverged_steps += 1;
         }
-        max_speed_m_s = solver.v.iter().map(|v| v.norm()).fold(0.0_f64, f64::max);
+        let mut step_max_speed = 0.0_f64;
+        for v in &solver.v {
+            let speed = v.norm();
+            Refusal::finite("solver.v.norm", speed)?;
+            if speed > step_max_speed {
+                step_max_speed = speed;
+            }
+        }
+        max_speed_m_s = step_max_speed;
         frames.push(solver.x.clone());
     }
 
+    // Never stamp Evidence::Measured when draping with an RVE/reference-stockinette estimate card
+    // or the unmeasured reference hysteresis bank (`C011` honesty boundary).
+    let effective_evidence = if matches!(opts.evidence, Evidence::Uncertain)
+        || matches!(card.evidence, Evidence::Uncertain)
+    {
+        Evidence::Uncertain
+    } else {
+        Evidence::Estimate
+    };
     let assessment = solver.assess_knit_shell(
         pattern_sha256,
         opts.material_sha256.clone(),
         Some(&card),
-        opts.evidence,
+        effective_evidence,
     )?;
 
     Ok(KnitDrapeResult {
@@ -422,6 +459,24 @@ pub fn audit_solver_knit_patch(
             "cannot audit patch on empty cloth model",
         ));
     }
+    if solver.x.len() != solver.model.rest.len()
+        || solver
+            .model
+            .membranes
+            .iter()
+            .any(|e| e.v.iter().any(|&v| v >= solver.x.len()))
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "patch audit requires cloth positions matching triangle topology",
+        ));
+    }
+    if solver.x.iter().any(|p| !p.is_finite()) {
+        return Err(Refusal::new(
+            RefusalCode::NonFinite,
+            "patch audit requires finite cloth vertex positions",
+        ));
+    }
     let has_any_knit =
         (0..solver.model.membranes.len()).any(|i| solver.model.coupled_knit_membrane(i).is_some());
     if !has_any_knit && card.is_none() {
@@ -447,6 +502,9 @@ pub fn audit_solver_knit_patch(
     let mut z_min = f64::INFINITY;
     let mut z_max = f64::NEG_INFINITY;
     for p in &solver.x {
+        Refusal::finite("solver.x.x", p.x)?;
+        Refusal::finite("solver.x.y", p.y)?;
+        Refusal::finite("solver.x.z", p.z)?;
         z_min = z_min.min(p.z);
         z_max = z_max.max(p.z);
     }
@@ -534,7 +592,7 @@ pub fn audit_solver_knit_patch(
     let dx = bb_max[0] - bb_min[0];
     let dy = bb_max[1] - bb_min[1];
     let dz = bb_max[2] - bb_min[2];
-    let patch_span_m = (dx * dx + dy * dy + dz * dz).sqrt().max(0.01);
+    let patch_span_m = det::sqrt(dx * dx + dy * dy + dz * dz).max(0.01);
 
     let input = LocalAuditPatchInput {
         macro_strain: mean_strain,
@@ -559,4 +617,265 @@ pub fn audit_solver_knit_patch(
         physical_knitting_validated: false,
         fit_claimed: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::PartFrames;
+    use crate::start::PartFrame;
+    use ftx_pattern::knit::{
+        CarrierId, GaugeSpec, MachineProfile, ParametricPanelSpec, RaglanPulloverSpec,
+        draft_seamless_raglan_tube, draft_shaped_panel,
+    };
+
+    struct EmptyFrames;
+
+    impl PartFrames for EmptyFrames {
+        fn frame(&self, _part: &str) -> Option<PartFrame> {
+            None
+        }
+
+        fn landmark_h(&self, _part: &str, _name: &str) -> Option<f64> {
+            None
+        }
+
+        fn section_radius(&self, _part: &str, _h: f64) -> f64 {
+            0.0
+        }
+    }
+
+    fn cylinder_body(radius_m: f64, height_m: f64) -> (Vec<Vec3>, Vec<[usize; 3]>) {
+        let rings = 6usize;
+        let segs = 12usize;
+        let mut verts = Vec::new();
+        let mut tris = Vec::new();
+        for r in 0..=rings {
+            let z = (r as f64 / rings as f64) * height_m;
+            for s in 0..segs {
+                let theta = std::f64::consts::TAU * (s as f64) / (segs as f64);
+                let (st, ct) = det::sin_cos(theta);
+                verts.push(Vec3::new(radius_m * ct, radius_m * st, z));
+            }
+        }
+        for r in 0..rings {
+            for s in 0..segs {
+                let s1 = (s + 1) % segs;
+                let a = r * segs + s;
+                let b = r * segs + s1;
+                let c = (r + 1) * segs + s1;
+                let d = (r + 1) * segs + s;
+                tris.push([a, b, c]);
+                tris.push([a, c, d]);
+            }
+        }
+        (verts, tris)
+    }
+
+    #[test]
+    fn flat_panel_with_rib_hem_stays_flat_and_patch_audit_rejects_nan() {
+        let profile = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 22.0,
+            courses_per_100mm: 30.0,
+            needle_pitch_mm: profile.needle_pitch_mm,
+            yarn_tex: Some(200.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        // Flat front panel WITH 1x1 rib hem occupies both Bed::Front and Bed::Back at alternating
+        // wales, NEVER both beds at the same (course, wale) -> must NOT be doubled into a tube!
+        let panel = draft_shaped_panel(
+            &ParametricPanelSpec {
+                name: "ribbed_flat_panel".to_string(),
+                wearer_age_class: WearerAgeClass::Child3To14,
+                hem_width_mm: 240.0,
+                chest_width_mm: 260.0,
+                length_mm: 260.0,
+                armhole_depth_mm: 80.0,
+                armhole_inset_total_mm: 30.0,
+                neck_width_mm: 0.0,
+                neck_depth_mm: 0.0,
+                rib_hem_courses: 6,
+                cam_setting: 7.0,
+                yarn_id: "merino-200tex".to_string(),
+                carrier_id: CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &profile,
+        )
+        .unwrap();
+
+        let (verts, tris) = cylinder_body(0.08, 0.55);
+        let frames = EmptyFrames;
+        let body = DrapeBody {
+            frames: &frames,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg: ftx_body::Pose::A_POSE_DEG,
+            arm_pose: None,
+        };
+        let mut drape_opts = DrapeOptions::default();
+        drape_opts.drape_steps = 4;
+        let opts = KnitDrapeOptions {
+            drape_opts,
+            material_sha256: "synthetic-material-sha".to_string(),
+            evidence: Evidence::Estimate,
+            rve_card: None,
+        };
+        let mut res = drape_knit_doc(&panel, &body, &opts).unwrap();
+        assert!(
+            !res.is_tubular,
+            "flat panel with 1x1 rib hem must NOT be falsely wrapped as a closed tube"
+        );
+        let audit = audit_solver_knit_patch(
+            &res.solver,
+            "selvedge",
+            None,
+            gauge.blocked_wale_pitch_mm() * 0.001,
+        )
+        .unwrap();
+        assert!(!audit.hardware_execution_authorized);
+        assert!(!audit.fit_claimed);
+        assert!(audit.selected_triangles > 0);
+
+        // Corrupting a vertex to NaN must fail closed with NonFinite rather than being swallowed.
+        res.solver.x[0].z = f64::NAN;
+        assert_eq!(
+            audit_solver_knit_patch(
+                &res.solver,
+                "selvedge",
+                None,
+                gauge.blocked_wale_pitch_mm() * 0.001,
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::NonFinite
+        );
+
+        // Contrast: a true circular raglan tube (both beds occupied at the same (course, wale))
+        // wraps around the cylinder as a closed tubular shell.
+        let tube = draft_seamless_raglan_tube(
+            &RaglanPulloverSpec {
+                name: "circular_raglan_tube".to_string(),
+                wearer_age_class: WearerAgeClass::Child3To14,
+                neck_girth_mm: 320.0,
+                chest_girth_mm: 560.0,
+                yoke_depth_mm: 100.0,
+                body_length_below_arm_mm: 160.0,
+                collar_rib_courses: 0,
+                hem_rib_courses: 0,
+                cam_setting: 7.0,
+                yarn_id: "merino-200tex".to_string(),
+                carrier_id: CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &profile,
+        )
+        .unwrap();
+        let tube_res = drape_knit_doc(&tube, &body, &opts).unwrap();
+        assert!(
+            tube_res.is_tubular,
+            "true circular double-bed tube must drape as a closed tubular shell"
+        );
+    }
+
+    #[test]
+    fn drape_knit_doc_keeps_estimate_evidence_and_preserves_tall_panel_rest_height() {
+        let profile = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 20.0,
+            courses_per_100mm: 25.0,
+            needle_pitch_mm: profile.needle_pitch_mm,
+            yarn_tex: Some(200.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        // Tall 600 mm flat panel on a 550 mm body must keep its full 0.60 m initial height
+        // rather than silently squashing vertically into the collider height.
+        let panel = draft_shaped_panel(
+            &ParametricPanelSpec {
+                name: "tall_tunic_panel".to_string(),
+                wearer_age_class: WearerAgeClass::Adult,
+                hem_width_mm: 300.0,
+                chest_width_mm: 300.0,
+                length_mm: 600.0,
+                armhole_depth_mm: 0.0,
+                armhole_inset_total_mm: 0.0,
+                neck_width_mm: 0.0,
+                neck_depth_mm: 0.0,
+                rib_hem_courses: 0,
+                cam_setting: 7.0,
+                yarn_id: "merino-200tex".to_string(),
+                carrier_id: CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &profile,
+        )
+        .unwrap();
+
+        let (verts, tris) = cylinder_body(0.08, 0.55);
+        let frames = EmptyFrames;
+        let body = DrapeBody {
+            frames: &frames,
+            collision: (&verts, &tris),
+            display: (&verts, &tris),
+            arm_deg: ftx_body::Pose::A_POSE_DEG,
+            arm_pose: None,
+        };
+        let mut drape_opts = DrapeOptions::default();
+        drape_opts.drape_steps = 4;
+        // Even if caller passes Evidence::Measured without a measured RVE card, receipt MUST remain Estimate!
+        let opts = KnitDrapeOptions {
+            drape_opts,
+            material_sha256: "synthetic-material-sha".to_string(),
+            evidence: Evidence::Measured,
+            rve_card: None,
+        };
+        let mut res = drape_knit_doc(&panel, &body, &opts).unwrap();
+        assert_eq!(
+            res.assessment.receipt.evidence,
+            Evidence::Estimate,
+            "unmeasured reference stockinette RVE drape must never stamp Evidence::Measured"
+        );
+        let z0_min = res.frames[0]
+            .iter()
+            .map(|p| p.z)
+            .fold(f64::INFINITY, f64::min);
+        let z0_max = res.frames[0]
+            .iter()
+            .map(|p| p.z)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let expected_courses = panel
+            .stitches
+            .iter()
+            .map(|s| s.course)
+            .max()
+            .unwrap()
+            .saturating_add(1);
+        let expected_h = f64::from(expected_courses) * gauge.blocked_course_height_mm() * 0.001;
+        assert!(
+            ((z0_max - z0_min) - expected_h).abs() < 1e-9,
+            "initial panel height {} must match rest height {}",
+            z0_max - z0_min,
+            expected_h
+        );
+
+        // Truncated vertex buffer must fail closed with OutOfRange instead of panicking.
+        res.solver.x.pop();
+        assert_eq!(
+            audit_solver_knit_patch(
+                &res.solver,
+                "selvedge",
+                None,
+                gauge.blocked_wale_pitch_mm() * 0.001,
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::OutOfRange
+        );
+    }
 }
