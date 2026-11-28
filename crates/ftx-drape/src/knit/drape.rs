@@ -400,13 +400,7 @@ pub fn drape_knit_doc(
 
     // Never stamp Evidence::Measured when draping with an RVE/reference-stockinette estimate card
     // or the unmeasured reference hysteresis bank (`C011` honesty boundary).
-    let effective_evidence = if matches!(opts.evidence, Evidence::Uncertain)
-        || matches!(card.evidence, Evidence::Uncertain)
-    {
-        Evidence::Uncertain
-    } else {
-        Evidence::Estimate
-    };
+    let effective_evidence = Evidence::Estimate;
     let assessment = solver.assess_knit_shell(
         pattern_sha256,
         opts.material_sha256.clone(),
