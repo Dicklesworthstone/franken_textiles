@@ -1460,11 +1460,7 @@ mod tests {
                 DyeingRegime::Regime1AStripes,
                 Some("0".repeat(64)),
             ),
-            // Unqualified receipt (qualification_sha256 = None, color_fidelity_claimed = false)
-            // must still refuse when paired with a supplied YarnDyeingQualification.
-            make_receipt(phash, mhash, DyeingRegime::Regime1AStripes, None),
         ] {
-            assert!(!bad_receipt.four_claims.color_fidelity_claimed);
             assert_eq!(
                 verify_and_export_dye_program_with_receipt(
                     &prog,
@@ -1478,5 +1474,22 @@ mod tests {
                 RefusalCode::VerificationMismatch
             );
         }
+
+        // Unqualified receipt (qualification_sha256 = None, color_fidelity_claimed = false)
+        // must still refuse when paired with a supplied YarnDyeingQualification.
+        let unqualified_receipt = make_receipt(phash, mhash, DyeingRegime::Regime1AStripes, None);
+        assert!(!unqualified_receipt.four_claims.color_fidelity_claimed);
+        assert_eq!(
+            verify_and_export_dye_program_with_receipt(
+                &prog,
+                &machine,
+                Some(&qual),
+                Some("mat-cotton"),
+                Some(&unqualified_receipt),
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::VerificationMismatch
+        );
     }
 }
