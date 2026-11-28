@@ -1,4 +1,4 @@
-# Coupled knit materials in ordinary garment draping
+# Coupled knit materials in garment draping and coupon experiments
 
 A material can now select the existing coupled knit shell through its normal
 source-bearing material record. This works for a uniform garment or individual
@@ -54,6 +54,49 @@ refuses DiscreteShells and Rayleigh bending damping; knit hysteresis refuses
 unsupported integrators and static solves. Retained-liquid mechanical binding is
 not admitted for these selected knit records.
 
+## Run a finite-grip coupon
+
+The existing coupon requests now accept the same canonical material selection,
+source records, estimate policy and coupled membrane used by garment draping.
+Both full-width grips constrain transverse displacement; the interior contracts
+freely in plane. Local Green strain comes from the solved triangles, not from
+converting grip extension into a homogeneous strain.
+
+| Consumer | Coupled equilibrium membrane | Selected yarn-slip bank | Independent inputs and limits |
+| --- | --- | --- | --- |
+| `strip::simulate`, `ftx materials strip-experiment` | Supported, including quartic coupling and jamming | Refused; use the timed path | Declared geometry and wale axis; no mass, bending or contact properties required |
+| `ftx materials strip-history` | Supported through the same production solver | Retained across accepted loading, holds and unloading | Qualified reference areal mass and an explicit clock required; planar backward-Euler dynamics |
+| Existing finite-grip coefficient identification | Coupled parameter identification remains unimplemented | Unimplemented | Forward simulation does not establish measured FIT/CHECK acceptance |
+
+Use the existing request schemas and commands:
+
+```sh
+ftx materials strip-experiment strip-request.json
+ftx materials strip-history history-request.json
+```
+
+A `ftx-strip-experiment/1` request contains `material`, `fixture`, `extensions`
+and optional `controls`. A `ftx-strip-history/1` request contains `material`,
+`fixture`, `loading` and optional `controls`; loading starts at
+`{"time_s": 0, "extension_fraction": 0}` and increases in time.
+The shared fixture declares `gauge_length_m`, `width_m`, `warp_axis` and even
+`cells: [across_width, along_length]`. Its wale axis `[0, 1]` aligns with the
+loading direction; `[1, 0]` loads the course direction. The native
+`ftx-materials` binary and portable `material_strip_experiment` /
+`material_strip_history` entry points use these same consumers.
+
+The frozen report retains the complete selected law and source identity. Timed
+reports include every accepted triangle's `knit_hysteresis` backstrain and
+`knit_hysteresis_dissipation_j`, separately from recoverable play-spring storage.
+Grip reactions use the return map active during that accepted step; reading the
+report does not apply another slip update. Missing mass, refused evidence,
+jamming-domain escape, nonconvergence or a complete-path work-budget failure
+refuses the request without a successful partial report.
+
+These are planar membrane experiments. Optional knit bending is outside their
+scope; they do not measure curl, buckling, grip slip, thermal conversion, or
+garment fit. Numerical dissipation is not counted as physical yarn-slip work.
+
 ## Read the result
 
 The material report retains the model, source record, law digest and evidence.
@@ -70,6 +113,7 @@ Seam-4 receipt or establish physical garment fit.
 
 The focused software regressions are
 `ftx-pattern/tests/material_knit.rs`,
-`ftx-drape/tests/coupled_knit_materials.rs`, and the knit-report tests in
+`ftx-drape/tests/coupled_knit_materials.rs`,
+`ftx-drape/tests/coupled_knit_strips.rs`, and the knit-report tests in
 `ftx-drape/src/run.rs`. Empirical calibration and the complete K09 benchmark
 remain separate work.

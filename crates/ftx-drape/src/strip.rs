@@ -11,6 +11,43 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ClothModel, Membrane, SolveReport, Solver, grid};
 
+// Coupon and garment consumers must compile the same source-selected kernel. The reference
+// tensor supplies the shared strain transform; it never substitutes for the nonlinear energy.
+fn coupled_knit(
+    material: &ResolvedMaterial,
+) -> Result<Option<crate::material::KnitMaterial>, Refusal> {
+    material
+        .coupled_knit()?
+        .as_ref()
+        .map(crate::material::KnitMaterial::from_compiled)
+        .transpose()
+}
+
+fn knit_reference(law: &crate::material::KnitMaterial) -> Membrane {
+    let law = law.membrane;
+    Membrane {
+        q: [
+            [law.q11, law.q12, 0.0],
+            [law.q12, law.q22, 0.0],
+            [0.0, 0.0, law.q66],
+        ],
+        compression: [1.0; 2],
+        transition: 1e-3,
+    }
+}
+
+fn require_memoryless_knit(law: Option<&crate::material::KnitMaterial>) -> Result<(), Refusal> {
+    if law.is_some_and(|law| law.hysteresis.is_some()) {
+        return Err(invalid(
+            "static strip experiments cannot discard selected knit yarn-slip history",
+        )
+        .repair(
+            "Use the timed strip-history experiment with an explicit loading/unloading clock.",
+        ));
+    }
+    Ok(())
+}
+
 mod experiment;
 /// Bounded identification from independent source-bearing clamped-strip experiments.
 pub mod fit;
@@ -192,8 +229,16 @@ pub fn simulate(
             "planar static strip requires a memoryless sheet membrane; it cannot discard a declared history law",
         ));
     }
-    let response = material.membrane_response()?;
-    let membrane = if let Some(law) = &response {
+    let knit = coupled_knit(material)?;
+    require_memoryless_knit(knit.as_ref())?;
+    let response = if knit.is_some() {
+        None
+    } else {
+        material.membrane_response()?
+    };
+    let membrane = if let Some(law) = &knit {
+        knit_reference(law)
+    } else if let Some(law) = &response {
         let [a, b, c, shear] = law.origin_stiffness();
         Membrane {
             q: [[a, c, 0.0], [c, b, 0.0], [0.0, 0.0, shear]],
@@ -226,6 +271,9 @@ pub fn simulate(
     let mut model = ClothModel::new(rest, &triangles, membrane, 0.0, 1.0)?;
     if let Some(law) = response {
         model.set_membrane_responses(&vec![Some(law); triangles.len()])?;
+    }
+    if let Some(law) = &knit {
+        model.set_coupled_knit_membranes(&vec![Some(law.membrane); triangles.len()])?;
     }
     if let Some(domain) = ftx_pattern::material_calibration::fitted_domain(m)? {
         model.set_membrane_domains(&vec![Some(domain); triangles.len()])?;
