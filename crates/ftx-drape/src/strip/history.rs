@@ -1,8 +1,8 @@
 //! Timed, planar clamped coupons through the ordinary material and implicit dynamic solver.
 //!
-//! A grip path is prescribed geometry, not homogeneous strain. The same accepted Maxwell or
-//! permanent-strain memory survives loading, holds and unloading. Only reference sheet mass and
-//! membrane observations are consumed; bending/contact/thermal constants are not fabricated.
+//! A grip path is prescribed geometry, not homogeneous strain. The same accepted Maxwell,
+//! permanent-strain or knit yarn-slip memory survives loading, holds and unloading. Only reference
+//! sheet mass and membrane observations are consumed; bending/contact/thermal constants are not fabricated.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, receipt::sha256_hex};
 use ftx_pattern::{
@@ -103,6 +103,9 @@ pub struct State {
     /// `isotropic_accumulated_damage/1` is opted in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damage_dissipation_j: Option<f64>,
+    /// Cumulative accepted yarn-slip work; present only for a selected knit play bank.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knit_hysteresis_dissipation_j: Option<f64>,
     /// Actual elementwise raw [E11,E22,2E12] bounds, not grip-extension conversions.
     pub green_strain_range: [[f64; 2]; 3],
     /// Current planar positions in fixture coordinates, m.
@@ -113,6 +116,9 @@ pub struct State {
     pub relaxation: Option<Value>,
     /// Ordinary production permanent-strain history, including accepted dissipation.
     pub plasticity: Option<Value>,
+    /// Ordinary accepted knit history in retained triangle order, with no trial updates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knit_hysteresis: Option<Value>,
     /// Production Newton diagnostics; absent only at pristine time zero.
     pub solve: Option<SolveReport>,
 }
@@ -150,6 +156,7 @@ const EXACT_EXP_SCOPE: &str = "Planar membrane dynamics with sourced reference m
 const PARALLEL_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation. The explicitly qualified parallel network drives plastic flow with only equilibrium-branch stress; every Maxwell branch sees total physical Green strain and retains its own viscous strain. Stored energies and plastic/viscous dissipation remain separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, same-branch viscoplasticity, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 const EXACT_EXP_PARALLEL_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation. The explicitly qualified parallel network drives plastic flow with only equilibrium-branch stress; every Maxwell branch sees total physical Green strain and advances with exact piecewise-linear exponential Prony integration. Stored energies and plastic/viscous dissipation remain separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, thermal feedback, same-branch viscoplasticity, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 const DAMAGE_SCOPE: &str = "Planar membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; backward-Euler integration preserves permanent-strain history and explicit accepted-step isotropic scalar stiffness degradation (strain-equivalence, d in [0, limit] < 1), keeping plastic and damage dissipation separate. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending, out-of-plane buckling, grip slip/compliance, rupture, monolithic softening/localization, thermal feedback, joint Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
+const KNIT_SCOPE: &str = "Planar coupled-knit membrane dynamics with sourced reference mass, ideal full-width no-slip grips and prescribed piecewise-linear separation; the source-selected nonlinear Green-strain energy and jamming domain use the same kernel as garment draping. Backward-Euler steps retain an optional source-selected Prandtl-Ishlinskii yarn-slip bank only after convergence. Reported storage includes accepted play-spring energy, separately from cumulative yarn-slip dissipation; reported reactions use the same pre-step history as the accepted solve. Compression during unloading is constrained planar behavior, not wrinkling. Excludes gravity, bending and edge curl, out-of-plane buckling, grip slip/compliance, thermal feedback, additional Maxwell/plastic laws, parameter identification, experimental qualification and garment fit. Material dissipation excludes backward-Euler numerical loss; no external-work or total-energy balance is inferred from endpoint reactions. Refine time step and mesh independently.";
 
 fn vector(v: Vec3) -> [f64; 3] {
     [v.x, v.y, v.z]
@@ -307,6 +314,12 @@ impl Recorder<'_> {
         } else {
             None
         };
+        let knit_hysteresis_dissipation_j = solver
+            .knit_hysteresis_dissipation_j()?
+            .map(|work| work.iter().sum::<f64>());
+        if knit_hysteresis_dissipation_j.is_some_and(|work| !work.is_finite() || work < 0.0) {
+            return Err(invalid("strip yarn-slip work is not representable"));
+        }
         let stored = solver.membrane_energy()?;
         if [kinetic, maxwell, plastic, stored]
             .iter()
@@ -334,11 +347,13 @@ impl Recorder<'_> {
             maxwell_dissipation_j: maxwell,
             plastic_dissipation_j: plastic,
             damage_dissipation_j,
+            knit_hysteresis_dissipation_j,
             green_strain_range: ranges,
             positions_m: solver.x.iter().copied().map(vector).collect(),
             velocities_m_s: solver.v.iter().copied().map(vector).collect(),
             relaxation: solver.relaxation_report()?,
             plasticity,
+            knit_hysteresis: solver.knit_hysteresis_report()?,
             solve,
         })
     }
@@ -360,19 +375,30 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         ));
     }
     let mass = material.mechanical_areal_density(resolved.allows_estimates())?;
-    let response = resolved.membrane_response()?;
-    let [warp, weft, poisson, shear] = if let Some(law) = &response {
-        law.reference_moduli()?
+    let knit = super::coupled_knit(&resolved)?;
+    let response = if knit.is_some() {
+        None
     } else {
-        [
-            material.require("warp_stiffness", "N/m", resolved.allows_estimates())?,
-            material.require("weft_stiffness", "N/m", resolved.allows_estimates())?,
-            material.require("poisson_warp_weft", "1", resolved.allows_estimates())?,
-            material.require("shear_stiffness", "N/m", resolved.allows_estimates())?,
-        ]
+        resolved.membrane_response()?
     };
-    let membrane = Membrane::orthotropic(warp, weft, poisson, shear, 1.0);
+    let membrane = if let Some(law) = &knit {
+        super::knit_reference(law)
+    } else {
+        let [warp, weft, poisson, shear] = if let Some(law) = &response {
+            law.reference_moduli()?
+        } else {
+            [
+                material.require("warp_stiffness", "N/m", resolved.allows_estimates())?,
+                material.require("weft_stiffness", "N/m", resolved.allows_estimates())?,
+                material.require("poisson_warp_weft", "1", resolved.allows_estimates())?,
+                material.require("shear_stiffness", "N/m", resolved.allows_estimates())?,
+            ]
+        };
+        Membrane::orthotropic(warp, weft, poisson, shear, 1.0)
+    };
     membrane.validate()?;
+    let hysteresis = knit.as_ref().and_then(|law| law.hysteresis.clone());
+    let has_knit_hysteresis = hysteresis.is_some();
     let relaxation = resolved.membrane_relaxation()?;
     let plasticity = resolved.membrane_plasticity()?;
     let has_damage = plasticity
@@ -385,15 +411,19 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         .as_ref()
         .is_some_and(|law| law.parallel_material_sha256().is_some());
     let [nx, ny] = input.fixture.cells;
-    let history_scalars = material.membrane_relaxation.as_ref().map_or(0, |law| {
-        4 + 3 * (law.branches.len() + law.orthotropic_branches.len())
-    }) + if has_damage {
-        21
-    } else if plasticity.is_some() {
-        18
-    } else {
-        0
-    };
+    let history_scalars = hysteresis
+        .as_ref()
+        .map_or(0, |bank| 4 + 3 * bank.thresholds.len())
+        + material.membrane_relaxation.as_ref().map_or(0, |law| {
+            4 + 3 * (law.branches.len() + law.orthotropic_branches.len())
+        })
+        + if has_damage {
+            21
+        } else if plasticity.is_some() {
+            18
+        } else {
+            0
+        };
     let states = counts.iter().sum::<usize>() + 1;
     let retained_scalars = states * (6 * (nx + 1) * (ny + 1) + 2 * nx * ny * history_scalars);
     if retained_scalars > 2_097_152 {
@@ -422,6 +452,9 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
     if let Some(law) = response {
         model.set_membrane_responses(&vec![Some(law); triangles.len()])?;
     }
+    if let Some(law) = &knit {
+        model.set_coupled_knit_membranes(&vec![Some(law.membrane); triangles.len()])?;
+    }
     if let Some(domain) = fitted_domain(material)? {
         model.set_membrane_domains(&vec![Some(domain); triangles.len()])?;
     }
@@ -436,7 +469,8 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         .with_membrane_histories(
             &vec![relaxation; triangles.len()],
             &vec![plasticity; triangles.len()],
-        )?;
+        )?
+        .with_knit_hysteresis(&vec![hysteresis; triangles.len()])?;
     solver.tol = input.controls.velocity_tolerance_m_s;
     solver.max_newton = input.controls.max_newton;
     let recorder = Recorder {
@@ -476,7 +510,7 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             for position in &mut solver.x[ny * (nx + 1)..] {
                 position.y = input.fixture.gauge_length_m * (1.0 + node.extension_fraction);
             }
-            let before_step = has_damage.then(|| solver.clone());
+            let before_step = (has_damage || has_knit_hysteresis).then(|| solver.clone());
             let numerical = solver.step(h)?;
             // Fixed-coordinate velocities do not enter the solve. Retain the actual imposed
             // velocity for inspection, rather than the solver's fixed-coordinate zero increment.
@@ -510,12 +544,16 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
         retained_liquid: material.retained_liquid_mass(resolved.allows_estimates())?,
         states,
         newton_iterations: iterations,
-        model_scope: match (parallel, exact_exp, has_damage) {
-            (true, true, _) => EXACT_EXP_PARALLEL_SCOPE,
-            (true, false, _) => PARALLEL_SCOPE,
-            (false, _, true) => DAMAGE_SCOPE,
-            (false, true, false) => EXACT_EXP_SCOPE,
-            (false, false, false) => SCOPE,
+        model_scope: if knit.is_some() {
+            KNIT_SCOPE
+        } else {
+            match (parallel, exact_exp, has_damage) {
+                (true, true, _) => EXACT_EXP_PARALLEL_SCOPE,
+                (true, false, _) => PARALLEL_SCOPE,
+                (false, _, true) => DAMAGE_SCOPE,
+                (false, true, false) => EXACT_EXP_SCOPE,
+                (false, false, false) => SCOPE,
+            }
         }
         .into(),
     })

@@ -99,6 +99,27 @@ impl Field {
         Ok(energy)
     }
 
+    /// Recoverable spring storage at the accepted back-strain. A new trial potential would
+    /// include another return-map/dissipation increment, so it is not the stored-energy ledger.
+    pub(super) fn stored_energy(&self, x: &[Vec3]) -> Result<f64, Refusal> {
+        let mut energy = 0.0;
+        for b in self.entries.iter().flatten() {
+            let strain = b.effective_strain(x)?;
+            for (&weight, backstrain) in b.bank.weights.iter().zip(&b.state.play_backstrain) {
+                let distance2: f64 = strain
+                    .iter()
+                    .zip(backstrain)
+                    .map(|(strain, backstrain)| (strain - backstrain).powi(2))
+                    .sum();
+                energy += 0.5 * b.element.area * weight * distance2;
+            }
+        }
+        if !energy.is_finite() || energy < 0.0 {
+            return Err(bad("knit hysteresis spring storage overflow"));
+        }
+        Ok(energy)
+    }
+
     pub(super) fn local(&self, i: usize, x: &[Vec3]) -> Option<Local<9, 81>> {
         self.entries[i].as_ref().map(|b| {
             let mut l = b.element.local_with_response_model(

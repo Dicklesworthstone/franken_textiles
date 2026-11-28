@@ -200,7 +200,9 @@ pub(crate) struct KnitMaterial {
 }
 
 impl KnitMaterial {
-    fn from_compiled(law: &ftx_pattern::material_knit::CompiledKnit) -> Result<Self, Refusal> {
+    pub(crate) fn from_compiled(
+        law: &ftx_pattern::material_knit::CompiledKnit,
+    ) -> Result<Self, Refusal> {
         let m = &law.membrane;
         let membrane = CoupledKnitMembrane {
             q11: m.q11,

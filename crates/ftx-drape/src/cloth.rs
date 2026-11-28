@@ -4043,8 +4043,10 @@ impl Solver {
     /// Internal elastic forces at `self.x` evaluated with the incremental constitutive state
     /// active during the step from `before_step` over duration `h` (s).
     ///
-    /// For undamaged laws, this agrees with [`Self::checked_elastic_forces`] after step
-    /// acceptance. For explicit accepted-step stiffness degradation
+    /// Memoryless laws agree with [`Self::checked_elastic_forces`] after step acceptance.
+    /// Knit yarn-slip banks must retain the pre-step back-strain so this query reconstructs
+    /// the same return map as Newton, without advancing the accepted bank a second time.
+    /// For explicit accepted-step stiffness degradation
     /// (`isotropic_accumulated_damage/1`), Newton balances `m * a` against the step-active
     /// stiffness factor `(1 - d_n)` before `d_n -> d_{n+1}` updates on acceptance; this method
     /// reconstructs that exact step-time internal force vector without mutating either solver.

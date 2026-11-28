@@ -1482,8 +1482,12 @@ finite missing wedges and empty microscopic stencils still refuse.
 **Clamped-strip experiments and inverse identification** (`strip`, `strip::fit`).
 The production membrane and static Newton solver model declared full-width ideal grips, prescribed
 axial separation, free in-plane interior displacement and a planar constraint. Reactions are total
-newtons; grip extension is never substituted for an element strain. Scalar and tabulated forward
-laws retain source/estimate admission, material form and characterized domains. No mass, bending,
+newtons; grip extension is never substituted for an element strain. Scalar, tabulated and explicitly
+selected `coupled_knit_shell/1` forward laws retain source/estimate admission, material form and
+characterized domains. Coupled knit coupons use the same nonlinear Green-strain polynomial and
+jamming barrier as ordinary garment draping, in the authored wale/course basis; the origin tangent
+does not replace the selected energy. Both static coupon APIs refuse a selected yarn-slip bank and
+direct it to the timed history path rather than erase its state. No mass, bending,
 friction, slip, rate or out-of-plane behavior is identified by this experiment.
 
 `ftx-strip-calibration/1` fits the four scalar orthotropic coefficients through three deterministic
@@ -1543,13 +1547,26 @@ Numerical recovery does not qualify a measured coupon or supply missing material
 unloads a planar, fully gripped sheet through the existing implicit dynamic solver. Canonical membrane
 observations and real reference areal mass are required; unrelated bending/contact/thermal evidence
 is not fabricated. The pristine stationary initialization, explicit increasing clock, piecewise-linear
-grip motion and globally bounded subdivisions preserve accepted Maxwell, permanent-strain or explicitly
-qualified parallel-network histories throughout. Every accepted step reports membrane reactions, interior momentum residuals,
+grip motion and globally bounded subdivisions preserve accepted Maxwell, permanent-strain, explicitly
+qualified parallel-network or coupled-knit Prandtl-Ishlinskii yarn-slip histories throughout. A knit
+bank advances only on accepted steps; report reactions use the same pre-step return map as Newton.
+Its recoverable play-spring storage and cumulative yarn-slip work are separate, and every retained
+triangle's accepted back-strains and dissipation remain available in `knit_hysteresis`. PI state counts
+toward the complete-path history budget. Same-triangle Maxwell/permanent-set combinations remain
+refused by the canonical knit admission policy. Every accepted step reports membrane reactions, interior momentum residuals,
 stored/kinetic energy and separate existing physical viscous/plastic work. A failed complete request
 publishes no partial success. Frozen inputs replay offline. Synthetic analytical Green-strain bar
 reactions/work, continuous Maxwell ramp/hold refinement, mass-dependent dynamics and refusal tests
 are in `tests/strip_history.rs`. This is constrained planar dynamics, not buckling, parameter fitting,
 measured coupon qualification, inferred heat or actual garment fit.
+
+`tests/coupled_knit_strips.rs` checks both static coupon routes against independent nonlinear
+force/energy answers in wale and course directions, finite-grip nonuniform contraction and virtual
+work, accepted timed yarn-slip reactions/storage/work, ordinary finite-mass bias loading, exact frozen
+replay and source/history/mass/jamming/budget refusals. Optional knit bending is outside this planar
+experiment; no curl or out-of-plane conclusion is inferred. These forward paths make the coupled
+kernel available to real coupon consumers, but do not implement finite-grip coupled parameter
+identification or establish measured FIT/CHECK acceptance (`FTX-K11`, `ftx-ki1`).
 
 **Cylindrical-holder forward experiment** (`cylinder`, `ftx-tm2.1` software core). `ftx-cylinder-experiment/1`
 evaluates a characterized 3D sheet wrapped on an isometric chord-radius welded cylinder (`R_mesh` such that

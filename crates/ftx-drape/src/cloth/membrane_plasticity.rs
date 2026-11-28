@@ -293,8 +293,8 @@ impl Solver {
     }
 
     /// Actual stored membrane energy, including accepted permanent-set hardening and Maxwell
-    /// branch storage, including qualified parallel networks. Excludes bending, contact, inertia
-    /// and dissipated work.
+    /// branch and accepted knit play-spring storage, including qualified parallel networks.
+    /// Excludes bending, contact, inertia and dissipated work.
     /// This is not the incremental potential minimized during a trial step.
     ///
     /// # Errors
@@ -315,7 +315,7 @@ impl Solver {
         }
         if let Some(field) = &self.knit_hysteresis {
             field.check(&self.model, &self.x)?;
-            energy += field.energy(&self.x)?;
+            energy += field.stored_energy(&self.x)?;
         }
         if !energy.is_finite() {
             return Err(bad("stored membrane energy overflows"));

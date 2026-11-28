@@ -198,6 +198,20 @@ pub(super) fn solve_law_with_solver(
     extension: f64,
     controls: &Controls,
 ) -> Result<(State, Solver), Refusal> {
+    solve_selected_law_with_solver(
+        fixture, membrane, response, domain, None, extension, controls,
+    )
+}
+
+fn solve_selected_law_with_solver(
+    fixture: &Fixture,
+    membrane: Membrane,
+    response: Option<&CompiledMembrane>,
+    domain: Option<StrainDomain>,
+    knit: Option<&crate::knit::CoupledKnitMembrane>,
+    extension: f64,
+    controls: &Controls,
+) -> Result<(State, Solver), Refusal> {
     fixture.validate()?;
     controls.validate()?;
     membrane.validate()?;
@@ -218,6 +232,9 @@ pub(super) fn solve_law_with_solver(
     let mut model = ClothModel::new(rest, &tris, membrane, 0.0, 1.0)?;
     if let Some(response) = response {
         model.set_membrane_responses(&vec![Some(response.clone()); tris.len()])?;
+    }
+    if let Some(knit) = knit {
+        model.set_coupled_knit_membranes(&vec![Some(*knit); tris.len()])?;
     }
     if let Some(domain) = domain {
         model.set_membrane_domains(&vec![Some(domain); tris.len()])?;
@@ -335,37 +352,49 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             "quasistatic elastic strip experiments cannot choose a duration or erase irreversible material history",
         ));
     }
-    let response = resolved.membrane_response()?;
-    let parameters = if let Some(law) = &response {
-        law.reference_moduli()?
+    let knit = super::coupled_knit(&resolved)?;
+    super::require_memoryless_knit(knit.as_ref())?;
+    let response = if knit.is_some() {
+        None
     } else {
-        [
-            material.require("warp_stiffness", "N/m", resolved.allows_estimates())?,
-            material.require("weft_stiffness", "N/m", resolved.allows_estimates())?,
-            material.require("poisson_warp_weft", "1", resolved.allows_estimates())?,
-            material.require("shear_stiffness", "N/m", resolved.allows_estimates())?,
-        ]
+        resolved.membrane_response()?
     };
-    let membrane = Membrane::orthotropic(
-        parameters[0],
-        parameters[1],
-        parameters[2],
-        parameters[3],
-        1.0,
-    );
+    let membrane = if let Some(law) = &knit {
+        super::knit_reference(law)
+    } else {
+        let parameters = if let Some(law) = &response {
+            law.reference_moduli()?
+        } else {
+            [
+                material.require("warp_stiffness", "N/m", resolved.allows_estimates())?,
+                material.require("weft_stiffness", "N/m", resolved.allows_estimates())?,
+                material.require("poisson_warp_weft", "1", resolved.allows_estimates())?,
+                material.require("shear_stiffness", "N/m", resolved.allows_estimates())?,
+            ]
+        };
+        Membrane::orthotropic(
+            parameters[0],
+            parameters[1],
+            parameters[2],
+            parameters[3],
+            1.0,
+        )
+    };
     let domain = fitted_domain(material)?;
     let states = input
         .extensions
         .iter()
         .map(|&extension| {
-            solve_law(
+            solve_selected_law_with_solver(
                 &input.fixture,
                 membrane,
                 response.as_ref(),
                 domain,
+                knit.as_ref().map(|law| &law.membrane),
                 extension,
                 &input.controls,
             )
+            .map(|(state, _)| state)
         })
         .collect::<Result<_, _>>()?;
     let mut frozen = input.clone();
