@@ -829,7 +829,7 @@ pub fn compile_knit_doc(
     let mut flat_dir = CourseDir::Plus;
     let mut last_cam_int: Option<i32> = None;
     let mut active_carriers = BTreeSet::new();
-    let mut hooked_since = BTreeMap::new();
+    let mut hooked_since: BTreeMap<CarrierId, _> = BTreeMap::new();
     let mut next_carrier_direction = BTreeMap::new();
     let mut last_pass_dir = None;
     let mut previous_layout: Option<bool> = None;
