@@ -328,7 +328,7 @@ pub fn export_hand_knit_document(
                 );
             }
         }
-        // 100 mm calibration square in PDF
+        // 100 mm calibration square + pure-vector CYC legend in PDF
         let cal_y = chart_y + chart_h + 12.0;
         cv.width(0.4);
         cv.stroke_gray(0.0);
@@ -352,6 +352,43 @@ pub fn export_hand_knit_document(
             true,
             None,
         );
+        for (idx, (kind, label)) in [
+            (LoopKind::Knit, "Knit (RS) / Purl (WS)"),
+            (LoopKind::Purl, "Purl (RS) / Knit (WS)"),
+            (LoopKind::Decrease, "K2tog / Decrease"),
+            (LoopKind::Increase, "M1 / Increase"),
+            (LoopKind::Tuck, "Tuck / Yarn Over"),
+            (LoopKind::Slip, "Slip stitch"),
+            (LoopKind::Cable, "Cable crossing"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let ly = cal_y + idx as f64 * 8.0;
+            cv.width(0.25);
+            cv.stroke_gray(0.2);
+            cv.path(
+                &[
+                    Vec2::new(leg_x, ly),
+                    Vec2::new(leg_x + 5.0, ly),
+                    Vec2::new(leg_x + 5.0, ly + 5.0),
+                    Vec2::new(leg_x, ly + 5.0),
+                ],
+                true,
+            );
+            cv.raw("S");
+            emit_cyc_symbol_pdf(&mut cv, *kind, leg_x, ly, 5.0);
+            cv.fill_gray(0.0);
+            cv.text(
+                leg_x + 7.0,
+                ly + 3.8,
+                label,
+                3.0,
+                TextAnchor::Start,
+                false,
+                None,
+            );
+        }
         pdf.add_page(page_w, page_h, cv, String::new());
     }
     let pdf_bytes = pdf.write(created);
@@ -411,27 +448,48 @@ pub fn export_hand_knit_document(
             );
         }
     }
+    if !doc.short_row_turns.is_empty() {
+        let mut turns = doc.short_row_turns.clone();
+        turns.sort_by_key(|t| (t.course, t.turn_wale));
+        let _ = writeln!(instr, "## Short-row turns\n");
+        for turn in &turns {
+            let _ = writeln!(
+                instr,
+                "- Chart course {}: turn at wale {} (continue {:?}, anchored={})",
+                turn.course + 1,
+                turn.turn_wale,
+                turn.dir_after,
+                turn.anchored
+            );
+        }
+        instr.push('\n');
+    }
     for course in 0..=max_c {
         for &bed in &beds {
-            let mut counts: Vec<(LoopKind, usize)> = Vec::new();
-            for wale in min_w..=max_w {
-                if let Some(stitch) = grid.get(&(bed, course, wale)) {
-                    let kind = stitch.kind;
-                    if let Some(last) = counts.last_mut()
-                        && last.0 == kind
-                    {
-                        last.1 += 1;
-                        continue;
-                    }
-                    counts.push((kind, 1));
-                }
-            }
-            if counts.is_empty() {
+            let present_wales: Vec<i32> = (min_w..=max_w)
+                .filter(|&w| grid.contains_key(&(bed, course, w)))
+                .collect();
+            let (Some(&first_w), Some(&last_w)) = (present_wales.first(), present_wales.last())
+            else {
                 continue;
+            };
+            let mut runs: Vec<(Option<LoopKind>, usize)> = Vec::new();
+            for wale in first_w..=last_w {
+                let entry = grid.get(&(bed, course, wale)).map(|s| s.kind);
+                if let Some(last) = runs.last_mut()
+                    && last.0 == entry
+                {
+                    last.1 += 1;
+                    continue;
+                }
+                runs.push((entry, 1));
             }
-            let tokens: Vec<String> = counts
+            let tokens: Vec<String> = runs
                 .into_iter()
-                .map(|(k, n)| format!("{}{n}", cyc_abbrev(k)))
+                .map(|(k, n)| match k {
+                    Some(kind) => format!("{}{n}", cyc_abbrev(kind)),
+                    None => format!("gap {n}"),
+                })
                 .collect();
             let _ = writeln!(
                 instr,
@@ -494,6 +552,13 @@ pub fn check_hand_knit_svg(text: &str, file: &str) -> Vec<CheckItem> {
             .into_iter()
             .any(|el| el.get("transform").is_some())
     });
+    let has_element_id = |target: &str| {
+        root.is_some_and(|r| {
+            r.descendants()
+                .into_iter()
+                .any(|el| el.get("id") == Some(target))
+        })
+    };
     vec![
         CheckItem {
             check: "hand_knit_svg.no_transform".to_string(),
@@ -510,9 +575,9 @@ pub fn check_hand_knit_svg(text: &str, file: &str) -> Vec<CheckItem> {
         CheckItem {
             check: "hand_knit_svg.chart_and_calibration".to_string(),
             file: file.to_string(),
-            ok: text.contains(r#"id="hand-knit-chart""#)
-                && text.contains(r#"id="calibration-square-100mm""#)
-                && text.contains(r#"id="cyc-legend""#),
+            ok: has_element_id("hand-knit-chart")
+                && has_element_id("calibration-square-100mm")
+                && has_element_id("cyc-legend"),
             detail: String::new(),
         },
         CheckItem {
@@ -788,6 +853,19 @@ mod tests {
         )));
         let held_ids = &doc.metadata["held_neck_stitch_ids"];
         assert!(guide.contains(&format!("Held neckline source stitch IDs: {held_ids}.")));
+        // Split neckline courses must preserve the open center gap rather than merging shoulders!
+        assert!(
+            guide.contains(", gap "),
+            "split shoulder courses must preserve interior neckline gaps in written guide:\n{guide}"
+        );
+        // PDF stream must include the pure-vector CYC legend alongside the 100 mm square.
+        let pdf_streams: String = pdf_objects(&exported.pdf_bytes)
+            .values()
+            .filter_map(|(_, s)| s.as_ref())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .collect();
+        assert!(pdf_streams.contains("Knit (RS) / Purl (WS)"));
+        assert!(pdf_streams.contains("Cable crossing"));
         for id in held_ids.split(',').map(|id| id.parse::<u32>().unwrap()) {
             let source = doc.stitches.iter().find(|stitch| stitch.id == id).unwrap();
             assert_eq!(source.course, start - 1);
@@ -1067,6 +1145,33 @@ mod tests {
                 .unwrap_err()
                 .code,
             RefusalCode::VerificationMismatch
+        );
+
+        // Short-row turns appear explicitly in written hand-knit instructions, and comment-only
+        // SVG ids cannot spoof check_hand_knit_svg.
+        let mut sr_doc = doc.clone();
+        sr_doc
+            .short_row_turns
+            .push(ftx_pattern::knit::ShortRowTurn {
+                course: 2,
+                turn_wale: 5,
+                dir_after: ftx_pattern::knit::CourseDir::Minus,
+                anchored: true,
+            });
+        let sr_hand = export_hand_knit_document(&sr_doc, "2026-11-27T08:00").unwrap();
+        assert!(sr_hand.instructions_text.contains("## Short-row turns"));
+        assert!(
+            sr_hand
+                .instructions_text
+                .contains("Chart course 3: turn at wale 5")
+        );
+        let spoofed_svg = sr_hand
+            .svg_text
+            .replace(r#"<g id="cyc-legend">"#, r#"<!-- id="cyc-legend" --><g>"#);
+        assert!(
+            !check_hand_knit_svg(&spoofed_svg, "spoofed.svg")
+                .iter()
+                .all(|c| c.ok)
         );
     }
 }
