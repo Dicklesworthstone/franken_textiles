@@ -567,6 +567,152 @@ pub(crate) fn build_local_isometric(
     Ok(patches)
 }
 
+// Unfold a neighboring intrinsic triangle without supplying an artificial 3D rest embedding.
+fn unfold_intrinsic_triangle(
+    current: [usize; 3],
+    next: [usize; 3],
+    rest: [Vec2; 3],
+    chart: &mut BTreeMap<usize, Vec2>,
+) -> bool {
+    let shared: Vec<_> = current
+        .iter()
+        .copied()
+        .filter(|v| next.contains(v))
+        .collect();
+    let Some(opposite) = next.iter().position(|v| !current.contains(v)) else {
+        return false;
+    };
+    let Some(&previous) = current.iter().find(|v| !next.contains(v)) else {
+        return false;
+    };
+    let [a, b] = shared.as_slice() else {
+        return false;
+    };
+    if chart.contains_key(&next[opposite]) {
+        return true;
+    }
+    let (Some(&pa), Some(&pb), Some(&pc)) = (chart.get(a), chart.get(b), chart.get(&previous))
+    else {
+        return false;
+    };
+    let ia = next.iter().position(|v| v == a).unwrap();
+    let ib = next.iter().position(|v| v == b).unwrap();
+    let edge = rest[ib] - rest[ia];
+    let length = edge.norm();
+    let placed = pb - pa;
+    let placed_length = placed.norm();
+    if !length.is_finite()
+        || length <= 0.0
+        || !placed_length.is_finite()
+        || (placed_length - length).abs() > 1e-8 * length
+    {
+        return false;
+    }
+    let direction = edge / length;
+    let delta = rest[opposite] - rest[ia];
+    let along = delta.dot(direction);
+    let height = direction.cross(delta).abs();
+    let tangent = placed / placed_length;
+    let mut normal = Vec2::new(-tangent.y, tangent.x);
+    if (pc - pa).dot(normal) > 0.0 {
+        normal = normal * -1.0;
+    }
+    let point = pa + tangent * along + normal * height;
+    if !point.is_finite() || height <= 0.0 {
+        return false;
+    }
+    chart.insert(next[opposite], point);
+    true
+}
+
+/// Build local bending charts from the exact membrane rest triangles. Shared edge lengths must
+/// agree; each patch unfolds a bounded neighborhood in its central triangle's material frame.
+/// Intrinsic Gaussian curvature does not require a fabricated globally flat or 3D rest surface.
+pub(crate) fn build_intrinsic(
+    tris: &[[usize; 3]],
+    rest: &[[Vec2; 3]],
+    weld: &[usize],
+    laws: &[Option<BendingTensor>],
+) -> Result<Vec<BendingPatch>, Refusal> {
+    if tris.len() != rest.len()
+        || tris.len() != laws.len()
+        || tris.iter().flatten().any(|&v| v >= weld.len())
+        || rest.iter().flatten().any(|p| !p.is_finite())
+    {
+        return Err(bad("invalid intrinsic panel-bending source geometry"));
+    }
+    let mut edges = BTreeMap::<(usize, usize), Vec<(usize, f64)>>::new();
+    for (i, t) in tris.iter().enumerate() {
+        if MembraneElement::new(*t, rest[i]).is_none() {
+            return Err(bad("degenerate intrinsic panel-bending rest triangle"));
+        }
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            let length = (rest[i][k] - rest[i][(k + 1) % 3]).norm();
+            edges
+                .entry((a.min(b), a.max(b)))
+                .or_default()
+                .push((i, length));
+        }
+    }
+    let mut neighbors = vec![Vec::new(); tris.len()];
+    for uses in edges.values() {
+        match *uses.as_slice() {
+            [(a, la), (b, lb)] => {
+                if !la.is_finite() || !lb.is_finite() || (la - lb).abs() > 1e-8 * la.max(lb) {
+                    return Err(bad(
+                        "intrinsic rest triangles disagree on a shared edge length",
+                    ));
+                }
+                if laws[a].is_some() != laws[b].is_some() {
+                    return Err(bad(
+                        "one connected source panel cannot mix scalar hinges and tensor patches; split at an explicit seam",
+                    ));
+                }
+                neighbors[a].push(b);
+                neighbors[b].push(a);
+            }
+            [_] => {}
+            _ => return Err(bad("non-manifold intrinsic source panel")),
+        }
+    }
+    let mut patches = Vec::new();
+    for (i, law) in laws.iter().enumerate() {
+        let Some(law) = law else { continue };
+        let base = tris[i];
+        let mut chart: BTreeMap<_, _> = base.into_iter().zip(rest[i]).collect();
+        let mut visited = BTreeSet::from([i]);
+        let mut frontier = vec![i];
+        let mut candidates = BTreeSet::new();
+        let mut patch = None;
+        for _ in 0..3 {
+            let mut next = Vec::new();
+            for t in frontier {
+                for &other in &neighbors[t] {
+                    if visited.insert(other)
+                        && unfold_intrinsic_triangle(tris[t], tris[other], rest[other], &mut chart)
+                    {
+                        next.push(other);
+                        candidates.extend(tris[other]);
+                    }
+                }
+            }
+            if candidates.len() > 96 {
+                break;
+            }
+            if let Some(v) = choose_from_chart(base, &chart, &candidates)
+                && let Ok(p) = BendingPatch::new(v.map(|j| weld[j]), v.map(|j| chart[&j]), *law)
+            {
+                patch = Some(p);
+                break;
+            }
+            frontier = next;
+        }
+        patches.push(patch.ok_or_else(|| bad(format!("intrinsic source triangle {i} lacks a well-conditioned six-node bending patch within three edge rings")))?);
+    }
+    Ok(patches)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -306,3 +306,120 @@ fn small_slope_cantilever_approaches_independent_beam_tip_deflection() {
     assert!(fine < 0.12, "relative tip error {coarse} -> {fine}");
     assert!(fine < coarse * 0.6, "relative tip error {coarse} -> {fine}");
 }
+
+#[test]
+fn intrinsic_charts_reproduce_quadratic_plate_energy_and_rigid_motion() {
+    // Independent quadratic answer: each local chart is translated, with the same material axes.
+    // There is no global chart supplied to the bending adapter.
+    let (rest, tris) = hex_grid(0.12, 0.08, 0.02, Vec2::ZERO);
+    let charts: Vec<_> = tris
+        .iter()
+        .map(|t| t.map(|v| rest[v] - rest[t[0]]))
+        .collect();
+    let mut m =
+        ClothModel::from_triangles(rest.len(), &tris, &charts, membrane(), 0.0002, 0.2).unwrap();
+    m.set_intrinsic_panel_bending(
+        &tris,
+        &charts,
+        &(0..rest.len()).collect::<Vec<_>>(),
+        &vec![Some(tensor(1.0)); tris.len()],
+        &vec![None; tris.len()],
+    )
+    .unwrap();
+    assert_eq!(m.panel_bending_patches().len(), tris.len());
+    assert!((0..m.hinges.len()).all(|i| m.hinge_rigidity(i) == 0.0));
+    let x: Vec<_> = rest
+        .iter()
+        .map(|p| {
+            Vec3::new(
+                p.x,
+                p.y,
+                0.4 * p.x * p.x + 0.2 * p.x * p.y - 0.3 * p.y * p.y,
+            )
+        })
+        .collect();
+    let curvature = [0.8, -0.6, 0.4];
+    let d = tensor(1.0).matrix();
+    let mut expected = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            expected += 0.5 * 0.12 * 0.08 * curvature[i] * d[i][j] * curvature[j];
+        }
+    }
+    assert!((bending_energy(&m, &x) - expected).abs() < 1e-15);
+    let moved: Vec<_> = x
+        .iter()
+        .map(|p| Vec3::new(p.z, p.x, p.y) + Vec3::new(1.0, -2.0, 0.5))
+        .collect();
+    assert!((bending_energy(&m, &moved) - expected).abs() < 1e-14);
+    let fixed = vec![[false; 3]; x.len()];
+    let a = Solver::new(m.clone(), x, &fixed, Vec3::ZERO).elastic_forces();
+    let b = Solver::new(m, moved, &fixed, Vec3::ZERO).elastic_forces();
+    for (before, after) in a.iter().zip(b) {
+        assert!((Vec3::new(before.z, before.x, before.y) - after).norm() < 1e-9);
+    }
+}
+
+#[test]
+fn intrinsic_charts_bend_a_closed_tube_without_a_global_flat_embedding() {
+    let circumference = 1.0;
+    let height = 0.08;
+    let (n, tris, charts, positions) = ftx_drape::hex_tube(circumference, height, 0.025);
+    let law = tensor(1.0).normal_projected();
+    let mut m = ClothModel::from_triangles(n, &tris, &charts, membrane(), 0.0002, 0.2).unwrap();
+    m.set_intrinsic_panel_bending(
+        &tris,
+        &charts,
+        &(0..n).collect::<Vec<_>>(),
+        &vec![Some(law); tris.len()],
+        &vec![None; tris.len()],
+    )
+    .unwrap();
+    assert_eq!(m.panel_bending_patches().len(), tris.len());
+    let radius = circumference / std::f64::consts::TAU;
+    let x: Vec<_> = positions
+        .iter()
+        .map(|p| {
+            let (s, c) = det::sin_cos(p.x / radius);
+            Vec3::new(radius * s, p.y, radius * (1.0 - c))
+        })
+        .collect();
+    m.check_panel_bending_domains(&x).unwrap();
+    let expected = 0.5 * circumference * height * law.matrix()[0][0] / (radius * radius);
+    let actual = bending_energy(&m, &x);
+    assert!(
+        (actual / expected - 1.0).abs() < 0.02,
+        "{actual} vs {expected}"
+    );
+}
+
+#[test]
+fn intrinsic_binding_refuses_changed_frames_and_inconsistent_edge_metrics_atomically() {
+    let (rest, tris) = hex_grid(0.08, 0.06, 0.02, Vec2::ZERO);
+    let charts: Vec<_> = tris.iter().map(|t| t.map(|v| rest[v])).collect();
+    let weld: Vec<_> = (0..rest.len()).collect();
+    let laws = vec![Some(tensor(1.0)); tris.len()];
+    let knit = vec![None; tris.len()];
+    let mut m = ClothModel::new(rest.clone(), &tris, membrane(), 0.0002, 0.2).unwrap();
+    let before = format!("{m:?}");
+    let mut rotated = charts.clone();
+    rotated[0] = rotated[0].map(|p| Vec2::new(-p.y, p.x));
+    assert!(
+        m.set_intrinsic_panel_bending(&tris, &rotated, &weld, &laws, &knit)
+            .is_err()
+    );
+    assert_eq!(format!("{m:?}"), before);
+
+    // The membrane accepts triangle-local charts, but bending must reject a torn intrinsic edge.
+    let mut incompatible = charts;
+    incompatible[0] = incompatible[0].map(|p| p * 1.05);
+    let mut torn =
+        ClothModel::from_triangles(rest.len(), &tris, &incompatible, membrane(), 0.0002, 0.2)
+            .unwrap();
+    let before = format!("{torn:?}");
+    let error = torn
+        .set_intrinsic_panel_bending(&tris, &incompatible, &weld, &laws, &knit)
+        .unwrap_err();
+    assert!(error.to_string().contains("shared edge length"), "{error}");
+    assert_eq!(format!("{torn:?}"), before);
+}

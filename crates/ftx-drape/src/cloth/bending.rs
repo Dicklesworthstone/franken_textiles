@@ -4,7 +4,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_bending::BendingTensor;
 
 use super::ClothModel;
-use crate::bending::{BendingPatch, build, build_local_isometric};
+use crate::bending::{BendingPatch, build, build_intrinsic, build_local_isometric};
 use crate::elements::MembraneElement;
 use crate::knit::AsymmetricKnitBending;
 
@@ -219,6 +219,99 @@ impl ClothModel {
             field.heterogeneous |= knit.windows(2).any(|pair| pair[0] != pair[1]);
             field.knit_laws = Some(field.triangles.iter().map(|&i| knit[i]).collect());
         }
+        Ok(())
+    }
+
+    /// Bind source-selected bending to exact intrinsic membrane charts. No global rest embedding
+    /// or source stitch geometry is altered to make a curved knit surface appear flat.
+    ///
+    /// # Errors
+    /// Mismatched source triangles/material frames, inconsistent edge lengths, unresolved local
+    /// quadratic support, overlapping laws or a second binding. Refusal leaves the model unchanged.
+    pub fn set_intrinsic_panel_bending(
+        &mut self,
+        source_triangles: &[[usize; 3]],
+        tri_rest: &[[Vec2; 3]],
+        weld: &[usize],
+        ordinary: &[Option<BendingTensor>],
+        knit: &[Option<AsymmetricKnitBending>],
+    ) -> Result<(), Refusal> {
+        let bad = |s| Refusal::new(RefusalCode::InvalidDocument, s);
+        if self.panel_bending.is_some()
+            || source_triangles.len() != self.membranes.len()
+            || tri_rest.len() != self.membranes.len()
+            || ordinary.len() != self.membranes.len()
+            || knit.len() != self.membranes.len()
+            || source_triangles.iter().flatten().any(|&v| v >= weld.len())
+            || weld.iter().any(|&v| v >= self.rest.len())
+        {
+            return Err(bad(
+                "intrinsic panel bending source geometry does not match unbound cloth",
+            ));
+        }
+        let mut tensors = Vec::with_capacity(knit.len());
+        for (i, source) in source_triangles.iter().enumerate() {
+            if MembraneElement::new(source.map(|v| weld[v]), tri_rest[i]).as_ref()
+                != Some(&self.membranes[i])
+            {
+                return Err(bad(
+                    "intrinsic bending chart or material frame differs from its membrane",
+                ));
+            }
+            if ordinary[i].is_some() && knit[i].is_some() {
+                return Err(bad(
+                    "an intrinsic triangle cannot select two panel-bending laws",
+                ));
+            }
+            tensors.push(if let Some(k) = knit[i] {
+                k.validate()?;
+                Some(
+                    BendingTensor::new(
+                        0.5 * (k.d_plus[0] + k.d_minus[0]),
+                        0.5 * (k.d_plus[1] + k.d_minus[1]),
+                        k.d12,
+                        k.d66,
+                    )?
+                    .normal_projected(),
+                )
+            } else {
+                ordinary[i]
+            });
+        }
+        if tensors.iter().all(Option::is_none) {
+            return Ok(());
+        }
+        let patches = build_intrinsic(source_triangles, tri_rest, weld, &tensors)?;
+        let replaced_hinges = self
+            .hinge_support
+            .iter()
+            .map(|&[(a, _), (b, _)]| {
+                source_triangles[a]
+                    .iter()
+                    .filter(|v| source_triangles[b].contains(v))
+                    .count()
+                    == 2
+                    && tensors[a].is_some()
+                    && tensors[b].is_some()
+            })
+            .collect();
+        let triangles: Vec<_> = tensors
+            .iter()
+            .enumerate()
+            .filter_map(|(i, law)| law.map(|_| i))
+            .collect();
+        let knit_laws = knit
+            .iter()
+            .any(Option::is_some)
+            .then(|| triangles.iter().map(|&i| knit[i]).collect());
+        self.panel_bending = Some(PanelField {
+            patches,
+            replaced_hinges,
+            triangles,
+            heterogeneous: tensors.windows(2).any(|pair| pair[0] != pair[1])
+                || knit.windows(2).any(|pair| pair[0] != pair[1]),
+            knit_laws,
+        });
         Ok(())
     }
 
