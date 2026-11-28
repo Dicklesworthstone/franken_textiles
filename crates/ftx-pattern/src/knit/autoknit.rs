@@ -884,7 +884,7 @@ mod tests {
                             .any(|node| node.kind == LoopKind::Decrease)
                     );
                 }
-                for pair in report.doc.passes.chunks_exact(2) {
+                for pair in report.doc.passes.as_chunks::<2>().0 {
                     assert_eq!(pair[0].direction, CourseDir::Plus);
                     assert_eq!(pair[1].direction, CourseDir::Minus);
                 }

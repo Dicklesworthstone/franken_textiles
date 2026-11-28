@@ -7,6 +7,7 @@ use ftx_drape::cloth::lifted_codim::golden_vectors::{
     CODIM_KERNEL_GOLDEN_FNV64, CODIM_KERNEL_GOLDEN_SHA256,
     compute_golden_digests as codim_compute_golden_digests,
 };
+use ftx_drape::cloth::lifted_codim::junction::NetworkDofLayout;
 use ftx_drape::cloth::lifted_codim::section_laws::{LinearElasticIsotropic, RodSectionModel};
 use ftx_drape::cloth::lifted_codim::solver::{
     CodimContactBridge, ContactStencilEval, NoContactBridge, RodNetwork, SolverConfig,
@@ -109,18 +110,23 @@ struct TwoCrossedFilamentsBridge {
 }
 
 impl CodimContactBridge for TwoCrossedFilamentsBridge {
-    fn ccd_step_bound(&mut self, q0: &[f64], q1: &[f64]) -> Result<f64, CodimError> {
+    fn ccd_max_step(
+        &self,
+        current: &RodNetwork,
+        trial: &RodNetwork,
+        _layout: &NetworkDofLayout,
+    ) -> Result<f64, CodimError> {
         let seg_q0 = [
-            [q0[0], q0[1], q0[2]],
-            [q0[6], q0[7], q0[8]],
-            [q0[12], q0[13], q0[14]],
-            [q0[18], q0[19], q0[20]],
+            current.cosserat_rods[0].positions[0],
+            current.cosserat_rods[0].positions[1],
+            current.cosserat_rods[1].positions[0],
+            current.cosserat_rods[1].positions[1],
         ];
         let seg_q1 = [
-            [q1[0], q1[1], q1[2]],
-            [q1[6], q1[7], q1[8]],
-            [q1[12], q1[13], q1[14]],
-            [q1[18], q1[19], q1[20]],
+            trial.cosserat_rods[0].positions[0],
+            trial.cosserat_rods[0].positions[1],
+            trial.cosserat_rods[1].positions[0],
+            trial.cosserat_rods[1].positions[1],
         ];
         let ccd = ccd_edge_edge::<ContactMath>(seg_q0, seg_q1, self.d_offset, CcdConfig::default())
             .map_err(|_| CodimError::ContactBridgeError {
@@ -129,16 +135,21 @@ impl CodimContactBridge for TwoCrossedFilamentsBridge {
         Ok(ccd.alpha_max)
     }
 
-    fn evaluate_contact(&mut self, q: &[f64]) -> Result<ContactStencilEval, CodimError> {
+    fn evaluate_contact(
+        &self,
+        network: &RodNetwork,
+        layout: &NetworkDofLayout,
+        _outer_start_positions: &[[f64; 3]],
+    ) -> Result<Vec<ContactStencilEval>, CodimError> {
         let segs = [
             PeriodicSegment {
-                p0: [q[0], q[1], q[2]],
-                p1: [q[6], q[7], q[8]],
+                p0: network.cosserat_rods[0].positions[0],
+                p1: network.cosserat_rods[0].positions[1],
                 radius_m: 0.5 * self.d_offset,
             },
             PeriodicSegment {
-                p0: [q[12], q[13], q[14]],
-                p1: [q[18], q[19], q[20]],
+                p0: network.cosserat_rods[1].positions[0],
+                p1: network.cosserat_rods[1].positions[1],
                 radius_m: 0.5 * self.d_offset,
             },
         ];
@@ -151,40 +162,38 @@ impl CodimContactBridge for TwoCrossedFilamentsBridge {
             detail: "periodic BVH query failed",
         })?;
         if cands.is_empty() {
-            return Ok(ContactStencilEval {
-                energy_j: 0.0,
-                grad: Vec::new(),
-                hess_triplets: Vec::new(),
-                min_clearance_m: 1.0,
-            });
+            return Ok(Vec::new());
         }
         let quad = [segs[0].p0, segs[0].p1, segs[1].p0, segs[1].p1];
         let ev = evaluate_ee_barrier::<ContactMath>(quad, self.m_bar, self.d_offset, &self.barrier)
             .map_err(|_| CodimError::InitialPenetration {
                 min_clearance_m: 0.0,
             })?;
-        let dofs = [0, 1, 2, 6, 7, 8, 12, 13, 14, 18, 19, 20];
-        let mut grad = Vec::with_capacity(12);
-        for (i, &di) in dofs.iter().enumerate() {
-            if ev.grad[i] != 0.0 {
-                grad.push((di, ev.grad[i]));
-            }
-        }
-        let mut hess_triplets = Vec::with_capacity(144);
-        for (i, &di) in dofs.iter().enumerate() {
-            for (j, &dj) in dofs.iter().enumerate() {
-                let v = ev.hess_spd[i][j];
-                if v != 0.0 {
-                    hess_triplets.push((di, dj, v));
-                }
-            }
-        }
-        Ok(ContactStencilEval {
+        let node_dofs = [
+            layout.cosserat_offsets[0],
+            layout.cosserat_offsets[0] + 6,
+            layout.cosserat_offsets[1],
+            layout.cosserat_offsets[1] + 6,
+        ];
+        Ok(vec![ContactStencilEval {
+            dofs_12: std::array::from_fn(|i| node_dofs[i / 3] + i % 3),
             energy_j: ev.energy_j,
-            grad,
-            hess_triplets,
-            min_clearance_m: ev.distance_m - self.d_offset,
-        })
+            grad_12: ev.grad,
+            hess_spd_12: ev.hess_spd,
+        }])
+    }
+
+    fn has_friction(&self) -> bool {
+        false
+    }
+
+    fn update_outer_friction(
+        &mut self,
+        _network: &RodNetwork,
+        _layout: &NetworkDofLayout,
+        _outer_start_positions: &[[f64; 3]],
+    ) -> Result<(bool, f64), CodimError> {
+        Ok((true, 0.0))
     }
 }
 
