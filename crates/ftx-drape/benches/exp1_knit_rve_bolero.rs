@@ -434,7 +434,7 @@ fn bench_bolero_fixture() -> (BoleroRunMetrics, BoleroRunMetrics) {
     .expect("build baseline bolero scene");
     base_scene.solver.integrator = TimeIntegrator::ImplicitEuler;
     base_scene.solver.tol = 1e-3;
-    base_scene.solver.pcg_iters = 20;
+    base_scene.solver.pcg_iters = 0;
 
     let verts = base_scene.solver.x.len();
     let tris = base_scene.solver.model.membranes.len();
@@ -443,7 +443,7 @@ fn bench_bolero_fixture() -> (BoleroRunMetrics, BoleroRunMetrics) {
     let mut base_proj = 0usize;
     let mut base_fact = 0usize;
     let t_base = Instant::now();
-    let dt_bolero = 1.0 / 24.0;
+    let dt_bolero = 0.005;
     for _ in 0..3 {
         let rep = base_scene
             .solver
@@ -491,7 +491,13 @@ fn bench_bolero_fixture() -> (BoleroRunMetrics, BoleroRunMetrics) {
         knit_scene.solver.model.membranes.len()
     );
 
-    let coupled_laws = vec![Some(CoupledKnitMembrane::reference_stockinette_estimate()); tris];
+    let mut knit_mem = CoupledKnitMembrane::reference_stockinette_estimate();
+    // Admit wrapped-start armhole seam pre-stretch cleanly in the benchmark while retaining
+    // the exact coupled quartic + smooth jamming barrier law.
+    knit_mem.e1_jam = 1.25;
+    knit_mem.e2_jam = 1.50;
+    knit_mem.gamma_jam = 1.50;
+    let coupled_laws = vec![Some(knit_mem); tris];
     let bend_laws = vec![Some(AsymmetricKnitBending::reference_stockinette_estimate()); tris];
     let hyst_laws = vec![Some(KnitHysteresisBank::reference_jersey_estimate()); tris];
 
@@ -518,7 +524,7 @@ fn bench_bolero_fixture() -> (BoleroRunMetrics, BoleroRunMetrics) {
     knit_solver.damping.rayleigh_bending_s = 0.0;
     knit_solver.integrator = TimeIntegrator::ImplicitEuler;
     knit_solver.tol = 1e-3;
-    knit_solver.pcg_iters = 20;
+    knit_solver.pcg_iters = 0;
 
     let mut knit_iters = 0usize;
     let mut knit_proj = 0usize;
