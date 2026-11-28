@@ -34,6 +34,8 @@ mod materials;
 pub use materials::SheetMaterial;
 mod bending;
 mod knit_hysteresis;
+pub mod lifted_codim;
+pub mod lifted_codim_ipc;
 mod membrane_plasticity;
 mod plasticity;
 mod relaxation;
