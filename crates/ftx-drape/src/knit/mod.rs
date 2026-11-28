@@ -8,6 +8,7 @@
 //! - Offline RVE surrogate card bridge (`Evidence::Estimate` / `MODEL_FIT`) & local audit patches.
 
 pub mod constitutive;
+pub mod drape;
 pub mod poincloux;
 pub mod poincloux_measured;
 
@@ -15,6 +16,10 @@ pub use constitutive::{
     AsymmetricKnitBending, CoupledKnitMembrane, KnitBendingEval, KnitHonestyFlag,
     KnitHysteresisBank, KnitHysteresisEval, KnitHysteresisState, KnitMembraneEval,
     KnitShellAssessment, assess_knit_shell_state, cayley_hamilton_inv_sqrt_2x2,
+};
+pub use drape::{
+    KnitDrapeOptions, KnitDrapeResult, KnitPatchAuditReport, audit_solver_knit_patch,
+    drape_knit_doc,
 };
 pub use poincloux::{
     KnitPriorCalibrationResult, LocalAuditPatchInput, LocalAuditPatchResult, PoinclouxParams,

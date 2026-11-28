@@ -4,7 +4,7 @@
 
 use ftx_core::np::percentile;
 use ftx_core::py::round;
-use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, Vec3, det, receipt::sha256_hex};
 use ftx_pattern::{Pattern, Side, instance::physical_side};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1095,7 +1095,7 @@ fn add_knit_material_report(
         min_jamming_margin = min_jamming_margin.min(evaluated.jamming_margin);
         let c11 = 1.0 + 2.0 * strain[0];
         let c22 = 1.0 + 2.0 * strain[1];
-        let largest = 0.5 * (c11 + c22 + (c11 - c22).hypot(2.0 * strain[2]));
+        let largest = 0.5 * (c11 + c22 + det::hypot(c11 - c22, 2.0 * strain[2]));
         if !largest.is_finite() || largest <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
