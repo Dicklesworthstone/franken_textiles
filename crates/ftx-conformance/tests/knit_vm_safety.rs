@@ -4,6 +4,9 @@
 use std::collections::BTreeMap;
 
 use ftx_core::RefusalCode;
+use ftx_pattern::dye::{
+    DYE_PROGRAM_SCHEMA, DyeSegment, DyeingRegime, IntakeEventKind, YarnDyeProgram,
+};
 use ftx_pattern::knit::lifted_procir::golden_vectors::{
     PROCIR_KERNEL_GOLDEN_FNV64, PROCIR_KERNEL_GOLDEN_SHA256, build_afp_topology_spec,
     build_valid_afp_program, compute_golden_digests as procir_compute_golden_digests,
@@ -17,7 +20,9 @@ use ftx_pattern::knit::lifted_tangle::{CrossingSign, FtxDetMath, certify_topolog
 use ftx_pattern::knit::{
     Bed, CamStitchSetting, CarrierId, CourseDir, GaugeSpec, KNIT_SCHEMA, KNITOUT_SCHEMA, KnitDoc,
     KnitSafetyContext, KnitoutHeader, KnitoutOp, KnitoutProgram, LoopKind, MachineProfile, Needle,
-    ShortRowTurn, StitchNode, WearerAgeClass, YarnRun, verify_knitout_program,
+    RackingStrainSpec, ShortRowTurn, StitchNode, WearerAgeClass, YarnRun,
+    synthesize_regime3_intake_timeline, verify_knitout_program,
+    verify_knitout_program_with_racking_strain, verify_racking_strain,
 };
 
 fn base_knitout_program(profile: &MachineProfile, ops: Vec<KnitoutOp>) -> KnitoutProgram {
@@ -706,10 +711,243 @@ fn vbed_vm_enforces_tex_range_child_float_infant_safety_and_swatch_caps() {
             KnitoutOp::Out { carriers: c1 },
         ],
     );
-    assert_eq!(
-        verify_knitout_program(&xfer_swatch, &kniterate, &swatch_ok_ctx)
-            .unwrap_err()
-            .code,
-        RefusalCode::MaterialProcessHazard
+    let err = verify_knitout_program(&xfer_swatch, &kniterate, &swatch_ok_ctx).unwrap_err();
+    assert_eq!(err.code, RefusalCode::MaterialProcessHazard);
+    assert!(!err.repairs.is_empty());
+}
+
+#[test]
+fn ftx_k03_generic_12e_profiles_racking_strain_ayab_rules_and_regime3_timeline() {
+    let vbed12 = MachineProfile::generic_vbed_12e();
+    let slider12 = MachineProfile::generic_slider_12e();
+    let kniterate = MachineProfile::kniterate_7e();
+    let ayab = MachineProfile::brother_kh930_ayab();
+    vbed12.validate().unwrap();
+    slider12.validate().unwrap();
+    assert!(vbed12.has_yarn_inserting_hooks && !vbed12.has_sliders && vbed12.supports_pause);
+    assert!(slider12.has_yarn_inserting_hooks && slider12.has_sliders && slider12.supports_pause);
+    vbed12.timing_kinematics().validate().unwrap();
+    slider12.timing_kinematics().validate().unwrap();
+    kniterate.timing_kinematics().validate().unwrap();
+    ayab.timing_kinematics().validate().unwrap();
+
+    let c1 = vec![CarrierId("1".to_string())];
+    let adult_vbed = KnitSafetyContext {
+        wearer_age_class: WearerAgeClass::Adult,
+        blocked_wale_pitch_mm: vbed12.needle_pitch_mm,
+        source_doc: None,
+        speed_fraction: None,
+        takedown_fraction: None,
+    };
+
+    // 1. Valid industrial 12E V-bed program with InHook -> ReleaseHook -> OutHook + 1x1 rib + rack/xfer.
+    let valid_12e = base_knitout_program(
+        &vbed12,
+        vec![
+            KnitoutOp::InHook {
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Stitch {
+                leading: 450,
+                trailing: 450,
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Front, 10),
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Back, 11),
+                carriers: c1.clone(),
+            },
+            KnitoutOp::ReleaseHook {
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Minus,
+                needle: Needle::new(Bed::Back, 11),
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Minus,
+                needle: Needle::new(Bed::Front, 10),
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Rack { quarter_pitches: 4 },
+            KnitoutOp::Xfer {
+                from: Needle::new(Bed::Back, 11),
+                to: Needle::new(Bed::Front, 12),
+            },
+            KnitoutOp::Rack { quarter_pitches: 0 },
+            KnitoutOp::OutHook {
+                carriers: c1.clone(),
+            },
+        ],
     );
+    let rep = verify_knitout_program(&valid_12e, &vbed12, &adult_vbed).unwrap();
+    assert_eq!(rep.total_transfers, 1);
+    assert_eq!(rep.max_abs_rack_quarter_pitches, 4);
+
+    // 2. Racking-strain physics checker (`sqrt(g^2 + (r*p/4)^2)` with SF >= 2.0):
+    //    - UNCERTAIN yarn_breaking_elongation (`None`) refuses cross-bed racking fail-closed with ranked repairs.
+    let uncertain_spec = RackingStrainSpec::for_profile(&vbed12, 0.0, None);
+    let err_unc = verify_racking_strain(&valid_12e, &vbed12, &uncertain_spec).unwrap_err();
+    assert_eq!(err_unc.code, RefusalCode::MaterialProcessHazard);
+    assert!(!err_unc.repairs.is_empty());
+
+    //    - Zagreb low-elongation wool (2.90% breaking elongation, zero extra slack) breaks on 1-pitch rack
+    //      (g = 2.646 mm, dx = 2.117 mm -> l_span = 3.389 mm, strain = 28.1% >> 1.45% allowable).
+    let zagreb_wool_tight = RackingStrainSpec::for_profile(&vbed12, 0.0, Some(0.029));
+    let err_wool = verify_racking_strain(&valid_12e, &vbed12, &zagreb_wool_tight).unwrap_err();
+    assert_eq!(err_wool.code, RefusalCode::MaterialProcessHazard);
+    assert!(!err_wool.repairs.is_empty());
+
+    //    - With calibrated inter-bed loop slack (1.0 mm) and elastic yarn (20% breaking elongation),
+    //      the same 1-pitch rack passes with verified SF >= 2.0.
+    let relaxed_spec = RackingStrainSpec::for_profile(&vbed12, 1.0, Some(0.20));
+    let (_, strain_rep) =
+        verify_knitout_program_with_racking_strain(&valid_12e, &vbed12, &adult_vbed, &relaxed_spec)
+            .unwrap();
+    assert_eq!(strain_rep.checked_racking_events, 1);
+    assert!(strain_rep.max_racking_strain <= strain_rep.allowable_strain.unwrap());
+
+    // 3. Brother AYAB manual-carriage rules: refuse motorized rack & unflagged xfer; accept pause-flagged xfer.
+    let ca = vec![CarrierId("A".to_string())];
+    let ayab_ctx = KnitSafetyContext {
+        wearer_age_class: WearerAgeClass::Adult,
+        blocked_wale_pitch_mm: ayab.needle_pitch_mm,
+        source_doc: None,
+        speed_fraction: None,
+        takedown_fraction: None,
+    };
+    let mut ayab_rack = base_knitout_program(
+        &ayab,
+        vec![
+            KnitoutOp::In {
+                carriers: ca.clone(),
+            },
+            KnitoutOp::Rack { quarter_pitches: 4 },
+            KnitoutOp::Out {
+                carriers: ca.clone(),
+            },
+        ],
+    );
+    ayab_rack.header.carriers = ca.clone();
+    let err_ayab_rack = verify_knitout_program(&ayab_rack, &ayab, &ayab_ctx).unwrap_err();
+    assert_eq!(err_ayab_rack.code, RefusalCode::MachineStateInfeasible);
+    assert!(!err_ayab_rack.repairs.is_empty());
+
+    let mut ayab_unflagged_xfer = base_knitout_program(
+        &ayab,
+        vec![
+            KnitoutOp::In {
+                carriers: ca.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Front, 10),
+                carriers: ca.clone(),
+            },
+            KnitoutOp::Xfer {
+                from: Needle::new(Bed::Front, 10),
+                to: Needle::new(Bed::Back, 10),
+            },
+            KnitoutOp::Out {
+                carriers: ca.clone(),
+            },
+        ],
+    );
+    ayab_unflagged_xfer.header.carriers = ca.clone();
+    let err_ayab_xfer = verify_knitout_program(&ayab_unflagged_xfer, &ayab, &ayab_ctx).unwrap_err();
+    assert_eq!(err_ayab_xfer.code, RefusalCode::MachineStateInfeasible);
+    assert!(!err_ayab_xfer.repairs.is_empty());
+
+    // Inserting an explicit operator pause before the manual transfer passes.
+    ayab_unflagged_xfer.ops.insert(
+        2,
+        KnitoutOp::Pause {
+            note: Some("hand-transfer f10 -> b10".to_string()),
+        },
+    );
+    assert!(verify_knitout_program(&ayab_unflagged_xfer, &ayab, &ayab_ctx).is_ok());
+
+    // 4. Duplicate carrier, out-of-range Stitch cam, zero SpeedNumber, and Kniterate fractional rack
+    //    all refuse with non-empty ranked repairs.
+    let kniterate_ctx = KnitSafetyContext {
+        wearer_age_class: WearerAgeClass::Adult,
+        blocked_wale_pitch_mm: kniterate.needle_pitch_mm,
+        source_doc: None,
+        speed_fraction: None,
+        takedown_fraction: None,
+    };
+    let dup_carrier = base_knitout_program(
+        &kniterate,
+        vec![
+            KnitoutOp::In {
+                carriers: c1.clone(),
+            },
+            KnitoutOp::Knit {
+                dir: CourseDir::Plus,
+                needle: Needle::new(Bed::Front, 10),
+                carriers: vec![CarrierId("1".to_string()), CarrierId("1".to_string())],
+            },
+            KnitoutOp::Out {
+                carriers: c1.clone(),
+            },
+        ],
+    );
+    let err_dup = verify_knitout_program(&dup_carrier, &kniterate, &kniterate_ctx).unwrap_err();
+    assert_eq!(err_dup.code, RefusalCode::MachineStateInfeasible);
+    assert!(!err_dup.repairs.is_empty());
+
+    let bad_stitch = base_knitout_program(
+        &kniterate,
+        vec![KnitoutOp::Stitch {
+            leading: 250,
+            trailing: 250,
+        }],
+    );
+    let err_st = verify_knitout_program(&bad_stitch, &kniterate, &kniterate_ctx).unwrap_err();
+    assert_eq!(err_st.code, RefusalCode::MaterialProcessHazard);
+    assert!(!err_st.repairs.is_empty());
+
+    let zero_speed = base_knitout_program(&kniterate, vec![KnitoutOp::SpeedNumber { speed: 0 }]);
+    let err_spd = verify_knitout_program(&zero_speed, &kniterate, &kniterate_ctx).unwrap_err();
+    assert_eq!(err_spd.code, RefusalCode::OutOfRange);
+    assert!(!err_spd.repairs.is_empty());
+
+    let frac_rack = base_knitout_program(&kniterate, vec![KnitoutOp::Rack { quarter_pitches: 2 }]);
+    let err_frac = verify_knitout_program(&frac_rack, &kniterate, &kniterate_ctx).unwrap_err();
+    assert_eq!(err_frac.code, RefusalCode::MachineStateInfeasible);
+    assert!(!err_frac.repairs.is_empty());
+
+    // 5. Regime III intake timeline synthesis preserves exact total yarn intake and emits
+    //    KnitPass, ReversalDwell, RackPause, and TransferPause events deterministically.
+    let loop_len_mm = 9.0;
+    let tl_a = synthesize_regime3_intake_timeline(&valid_12e, &vbed12, loop_len_mm, 0.05).unwrap();
+    let tl_b = synthesize_regime3_intake_timeline(&valid_12e, &vbed12, loop_len_mm, 0.05).unwrap();
+    assert_eq!(tl_a, tl_b);
+    assert!(
+        tl_a.events
+            .iter()
+            .any(|e| e.kind == IntakeEventKind::KnitPass)
+    );
+    assert!(
+        tl_a.events
+            .iter()
+            .any(|e| e.kind == IntakeEventKind::ReversalDwell)
+    );
+    assert!(
+        tl_a.events
+            .iter()
+            .any(|e| e.kind == IntakeEventKind::RackPause)
+    );
+    assert!(
+        tl_a.events
+            .iter()
+            .any(|e| e.kind == IntakeEventKind::TransferPause)
+    );
+    // 4 knit loops * 9.0 mm = 0.036 m exact yarn intake conservation!
+    assert!((tl_a.total_intake_m() - 0.036).abs() < 1e-12);
 }
