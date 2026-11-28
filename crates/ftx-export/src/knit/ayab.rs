@@ -2,7 +2,7 @@
 //! emits an un-antialiased 1-bit indexed PNG (`<= 200` px KH-930 / `<= 114` px KH-270) plus a
 //! synchronized `ayab_session_checklist.json` (`automated_carriage_control: false`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
@@ -136,6 +136,12 @@ pub fn export_brother_ayab(
         )
     })?;
 
+    let declared_carriers: BTreeSet<&str> = profile
+        .carrier_ids
+        .iter()
+        .map(ftx_pattern::knit::CarrierId::as_str)
+        .collect();
+    let mut used_carriers: BTreeSet<&str> = BTreeSet::new();
     let mut min_w = i32::MAX;
     let mut max_w = i32::MIN;
     let mut max_c = 0u32;
@@ -152,6 +158,42 @@ pub fn export_brother_ayab(
                     st.id, st.bed
                 ),
             ));
+        }
+        if st.carrier_ids.len() > 1 {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "stitch {} uses {} plated carriers; Brother AYAB 1-bit PNG can encode at most one yarn carrier per stitch",
+                    st.id,
+                    st.carrier_ids.len()
+                ),
+            )
+            .repair("use single-carrier stitches or export via Knitout v2 for plated multi-feeder knitting"));
+        }
+        if let Some(cid) = st.carrier_ids.first() {
+            if !declared_carriers.contains(cid.as_str()) {
+                return Err(Refusal::new(
+                    RefusalCode::MachineStateInfeasible,
+                    format!(
+                        "stitch {} uses carrier '{}' which is not declared on Brother AYAB profile '{}'",
+                        st.id,
+                        cid.as_str(),
+                        profile.id
+                    ),
+                )
+                .repair("map stitches to the machine profile's declared A/B yarn feeders"));
+            }
+            used_carriers.insert(cid.as_str());
+            if used_carriers.len() > 2 {
+                return Err(Refusal::new(
+                    RefusalCode::MachineStateInfeasible,
+                    format!(
+                        "Brother AYAB 1-bit indexed PNG supports at most 2 yarn colors/carriers (pattern uses {})",
+                        used_carriers.len()
+                    ),
+                )
+                .repair("reduce the pattern to 2 carriers or export bed-separated Knitout v2 / hand-knit charts"));
+            }
         }
         min_w = min_w.min(st.wale);
         max_w = max_w.max(st.wale);
@@ -297,6 +339,12 @@ pub fn verify_ayab_1bit_png(
     expected_width: u32,
     expected_height: u32,
 ) -> Result<(), Refusal> {
+    if expected_width == 0 || expected_height == 0 {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "AYAB read-back failed: expected PNG dimensions must be strictly positive",
+        ));
+    }
     if png_bytes.len() < 8 || &png_bytes[..8] != b"\x89PNG\r\n\x1a\n" {
         return Err(Refusal::new(
             RefusalCode::VerificationMismatch,
@@ -304,6 +352,7 @@ pub fn verify_ayab_1bit_png(
         ));
     }
     let mut pos = 8usize;
+    let mut chunk_index = 0usize;
     let mut seen_ihdr = false;
     let mut seen_plte = false;
     let mut seen_iend = false;
@@ -351,6 +400,12 @@ pub fn verify_ayab_1bit_png(
                 "AYAB read-back failed: PNG chunk CRC32 mismatch",
             ));
         }
+        if chunk_index == 0 && kind != b"IHDR" {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                "AYAB read-back failed: first PNG chunk must be IHDR",
+            ));
+        }
         match kind {
             b"IHDR" => {
                 if seen_ihdr || data.len() != 13 {
@@ -380,6 +435,12 @@ pub fn verify_ayab_1bit_png(
                 seen_ihdr = true;
             }
             b"PLTE" => {
+                if seen_plte || !idat.is_empty() {
+                    return Err(Refusal::new(
+                        RefusalCode::VerificationMismatch,
+                        "AYAB read-back failed: PLTE must appear once before IDAT",
+                    ));
+                }
                 if data != [255, 255, 255, 0, 0, 0] {
                     return Err(Refusal::new(
                         RefusalCode::VerificationMismatch,
@@ -388,7 +449,15 @@ pub fn verify_ayab_1bit_png(
                 }
                 seen_plte = true;
             }
-            b"IDAT" => idat.extend_from_slice(data),
+            b"IDAT" => {
+                if !seen_plte {
+                    return Err(Refusal::new(
+                        RefusalCode::VerificationMismatch,
+                        "AYAB read-back failed: IDAT appeared before PLTE",
+                    ));
+                }
+                idat.extend_from_slice(data);
+            }
             b"IEND" => {
                 if !data.is_empty() || data_end != png_bytes.len() {
                     return Err(Refusal::new(
@@ -400,6 +469,7 @@ pub fn verify_ayab_1bit_png(
             }
             _ => {}
         }
+        chunk_index += 1;
         pos = data_end;
     }
     if !seen_ihdr || !seen_plte || !seen_iend || idat.is_empty() {
@@ -577,5 +647,83 @@ mod tests {
             let back = doc.stitches.pop().unwrap();
             doc.stitches.insert(0, back);
         }
+    }
+
+    #[test]
+    fn ayab_refuses_plated_undeclared_or_three_carriers_and_malformed_png_chunk_order() {
+        use ftx_pattern::knit::CarrierId;
+
+        let profile = MachineProfile::brother_kh930_ayab();
+        let doc = draft_calibration_swatch(&profile, "synthetic-yarn", 8, 4, &[5.0]).unwrap();
+        let compiled = compile_knit_doc(&doc, &profile, None, None, None).unwrap();
+
+        // 1. Plated carriers (2 carriers on one stitch) refuse fail-closed.
+        let mut plated = doc.clone();
+        plated.stitches[0].carrier_ids = vec![CarrierId("A".into()), CarrierId("B".into())];
+        let err = export_brother_ayab(&plated, &profile, &compiled.cert).unwrap_err();
+        assert_eq!(err.code, RefusalCode::MachineStateInfeasible);
+        assert!(!err.repairs.is_empty());
+
+        // 2. Undeclared carrier refuses fail-closed.
+        let mut undeclared = doc.clone();
+        undeclared.stitches[0].carrier_ids = vec![CarrierId("Z".into())];
+        let err = export_brother_ayab(&undeclared, &profile, &compiled.cert).unwrap_err();
+        assert_eq!(err.code, RefusalCode::MachineStateInfeasible);
+
+        // 3. 3 distinct carriers on an extended profile refuse rather than collapsing into 1-bit PNG.
+        let mut three_carrier_profile = profile.clone();
+        three_carrier_profile
+            .carrier_ids
+            .push(CarrierId("C".into()));
+        let mut three_color_doc = doc.clone();
+        three_color_doc.stitches[0].carrier_ids = vec![CarrierId("A".into())];
+        three_color_doc.stitches[1].carrier_ids = vec![CarrierId("B".into())];
+        three_color_doc.stitches[2].carrier_ids = vec![CarrierId("C".into())];
+        let three_cert = KnitMachineCert::seal(
+            compiled.cert.program_sha256.clone(),
+            three_carrier_profile.canonical_sha256().unwrap(),
+            None,
+            None,
+            three_color_doc.wearer_age_class,
+            false,
+            compiled.cert.checks_passed.clone(),
+            compiled.cert.limitations.clone(),
+            compiled.cert.four_claims.clone(),
+        )
+        .unwrap();
+        let err =
+            export_brother_ayab(&three_color_doc, &three_carrier_profile, &three_cert).unwrap_err();
+        assert_eq!(err.code, RefusalCode::MachineStateInfeasible);
+        assert!(err.message.contains("at most 2 yarn colors/carriers"));
+
+        // 4. verify_ayab_1bit_png refuses 0x0 and out-of-order IDAT before PLTE.
+        let bundle = export_brother_ayab(&doc, &profile, &compiled.cert).unwrap();
+        assert_eq!(
+            verify_ayab_1bit_png(&bundle.png_bytes, 0, 0)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+        // Build a syntactically valid CRC PNG with IDAT before PLTE -> must fail!
+        let mut bad_order = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut push_chunk = |kind: &[u8; 4], data: &[u8]| {
+            bad_order.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            bad_order.extend_from_slice(kind);
+            bad_order.extend_from_slice(data);
+            bad_order.extend_from_slice(&crc32(&[kind, data]).to_be_bytes());
+        };
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&1u32.to_be_bytes());
+        ihdr.extend_from_slice(&1u32.to_be_bytes());
+        ihdr.extend_from_slice(&[1, 3, 0, 0, 0]);
+        push_chunk(b"IHDR", &ihdr);
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&[0, 0], 6);
+        push_chunk(b"IDAT", &compressed);
+        push_chunk(b"PLTE", &[255, 255, 255, 0, 0, 0]);
+        push_chunk(b"IEND", &[]);
+        assert_eq!(
+            verify_ayab_1bit_png(&bad_order, 1, 1).unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
     }
 }
