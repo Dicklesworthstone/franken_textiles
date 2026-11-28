@@ -11,6 +11,7 @@ pub mod constitutive;
 pub mod drape;
 pub mod poincloux;
 pub mod poincloux_measured;
+pub mod surface;
 
 pub use constitutive::{
     AsymmetricKnitBending, CoupledKnitMembrane, KnitBendingEval, KnitHonestyFlag,
@@ -25,4 +26,7 @@ pub use poincloux::{
     KnitPriorCalibrationResult, LocalAuditPatchInput, LocalAuditPatchResult, PoinclouxParams,
     PoinclouxPoint, RveHomogenizedKnitCard, audit_local_knit_patch,
     calibrate_knit_prior_to_uniaxial_strips, poincloux_uniaxial_curve,
+};
+pub use surface::{
+    KnitSurfaceMesh, KnitSurfaceSide, KnitSurfaceTopology, KnitSurfaceVertex, mesh_knit_doc,
 };

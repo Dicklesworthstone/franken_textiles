@@ -340,6 +340,61 @@ pub fn draft_autoknit_from_shell(
         "pathway".to_string(),
         "autoknit_annular_intrinsic_harmonic".to_string(),
     );
+    // An annulus alone does not identify a body part. Only the source's explicit
+    // hem/neck semantics admit torso placement; sleeves, cuffs and generic tubes stay unplaced.
+    let is_torso = shell
+        .boundary_rings
+        .iter()
+        .any(|ring| matches!(ring.name.as_str(), "hem" | "waist_hem"))
+        && shell.boundary_rings.iter().any(|ring| ring.name == "neck");
+    metadata.insert(
+        "surface_topology".to_string(),
+        if is_torso {
+            "torso_tube"
+        } else {
+            "annular_unplaced"
+        }
+        .to_string(),
+    );
+    for ring in &shell.boundary_rings {
+        metadata.insert(
+            if ring.is_start {
+                "source_start_boundary"
+            } else {
+                "source_end_boundary"
+            }
+            .to_string(),
+            ring.name.clone(),
+        );
+    }
+    // Vertical placement is a separate fact: overlapping source ring heights cannot
+    // be guessed as upward or downward torso growth.
+    let ring_z_range = |is_start| {
+        shell
+            .boundary_rings
+            .iter()
+            .find(|ring| ring.is_start == is_start)
+            .unwrap()
+            .vertices
+            .iter()
+            .map(|&vertex| shell.vertices_m[vertex as usize][2])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), z| {
+                (lo.min(z), hi.max(z))
+            })
+    };
+    let (start_min, start_max) = ring_z_range(true);
+    let (end_min, end_max) = ring_z_range(false);
+    metadata.insert(
+        "course_growth_direction".to_string(),
+        if start_max < end_min {
+            "upward"
+        } else if end_max < start_min {
+            "downward"
+        } else {
+            "unplaced"
+        }
+        .to_string(),
+    );
     metadata.insert(
         "source_body_sha256".to_string(),
         shell.source_body_sha256.clone(),
@@ -727,6 +782,30 @@ mod tests {
                 *position = [z + 0.4, y - 0.7, -x + 0.2];
             }
             let second = draft_autoknit_from_shell(&rotated, &gauge, &profile, &cfg).unwrap();
+            assert_eq!(first.doc.metadata["surface_topology"], "torso_tube");
+            assert_eq!(first.doc.metadata["course_growth_direction"], "upward");
+            assert_eq!(second.doc.metadata["course_growth_direction"], "unplaced");
+            let mut reversed = shell.clone();
+            for ring in &mut reversed.boundary_rings {
+                ring.is_start = !ring.is_start;
+            }
+            let backwards = draft_autoknit_from_shell(&reversed, &gauge, &profile, &cfg).unwrap();
+            assert_eq!(
+                backwards.doc.metadata["course_growth_direction"],
+                "downward"
+            );
+            let mut sleeve = shell.clone();
+            sleeve.boundary_rings[0].name = "left_wrist".to_string();
+            sleeve.boundary_rings[1].name = "left_armhole".to_string();
+            let sleeve_report = draft_autoknit_from_shell(&sleeve, &gauge, &profile, &cfg).unwrap();
+            assert_eq!(
+                sleeve_report.doc.metadata["surface_topology"],
+                "annular_unplaced"
+            );
+            assert_eq!(
+                sleeve_report.doc.metadata["source_start_boundary"],
+                "left_wrist"
+            );
             for report in [&first, &second] {
                 assert!((report.shell_height_mm - 120.0).abs() < 1e-8);
                 assert_eq!(report.course_count, 38);
