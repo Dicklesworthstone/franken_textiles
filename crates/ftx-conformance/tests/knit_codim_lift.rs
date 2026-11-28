@@ -54,12 +54,14 @@ fn lifted_codim_golden_vectors_are_deterministic_and_physics_checks_pass() {
     let (fnv_b, sha_b) = codim_compute_golden_digests::<CodimMath>();
     assert_eq!(fnv_a, fnv_b, "lifted_codim digest must be deterministic");
     assert_eq!(sha_a, sha_b, "lifted_codim sha256 must be deterministic");
-    assert_ne!(fnv_a, 0, "lifted_codim digest must be non-zero");
-    assert_ne!(sha_a, [0u8; 32], "lifted_codim sha256 must be non-zero");
-    if CODIM_KERNEL_GOLDEN_FNV64 != 0 {
-        assert_eq!(fnv_a, CODIM_KERNEL_GOLDEN_FNV64);
-        assert_eq!(sha_a, CODIM_KERNEL_GOLDEN_SHA256);
-    }
+    assert_eq!(
+        fnv_a, CODIM_KERNEL_GOLDEN_FNV64,
+        "lifted_codim FNV-1a64 drifted from pinned fs-codim golden vector"
+    );
+    assert_eq!(
+        sha_a, CODIM_KERNEL_GOLDEN_SHA256,
+        "lifted_codim SHA-256 drifted from pinned fs-codim golden vector"
+    );
 
     // Verify cantilevered Cosserat rod equilibrium + elastic IFT adjoint against finite difference.
     let sec = RodSectionModel::LinearElasticIsotropic(LinearElasticIsotropic {

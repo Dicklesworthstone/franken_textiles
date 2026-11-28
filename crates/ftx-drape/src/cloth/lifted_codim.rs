@@ -7,10 +7,9 @@
 //! - Upstream bead: `FS-K05` (`/dp/frankensim` workspace snapshot `2026-11-27`; note `/dp/frankensim`
 //!   has no `.git` directory, post-`frankensim-source-manifest.json` `source_root`
 //!   `f6c2ec6714e374fa3253654042d5ce3aed56e19dffc166f7e212617b226751b3`)
-//! - Upstream golden vector note: upstream `golden_vectors.rs` carried placeholder `0x0` constants at
-//!   lift snapshot time pending upstream `FS-K05` final pin; conformance tests verify deterministic
-//!   digest repeatability (`fnv64`, `sha256`), physics invariants, and exact IFT adjoint checks without
-//!   fabricating an upstream pin.
+//! - Pinned upstream golden digests:
+//!   - `CODIM_KERNEL_GOLDEN_FNV64 = 0x14cb_fef4_d2b6_5e84`
+//!   - `CODIM_KERNEL_GOLDEN_SHA256 = e0d3f1873c515c9acfb40b33ea4f1b05ae32adf7da72989cd1f62b308603dbe9`
 //! - Local adaptations:
 //!   - Added [`FtxDetMath`] binding [`DetMath`] to `ftx_core::det::{sin, cos, atan2, sqrt, ln, exp, acos}`.
 //!   - Submodule files copied verbatim from `/dp/frankensim/crates/fs-codim/src/kernel/`.

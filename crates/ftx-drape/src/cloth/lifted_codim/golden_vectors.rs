@@ -20,10 +20,13 @@ use super::sparse_ldlt::{DirectOrdering, LdltOptions, SymCsr, SymbolicLdlt, solv
 use super::{CodimError, DetMath, Fnv1a64, Sha256, quat_exp};
 
 /// Pinned FNV-1a 64-bit golden digest for [`compute_golden_digests`].
-pub const CODIM_KERNEL_GOLDEN_FNV64: u64 = 0x0000_0000_0000_0000;
+pub const CODIM_KERNEL_GOLDEN_FNV64: u64 = 0x14cb_fef4_d2b6_5e84;
 
 /// Pinned SHA-256 golden digest for [`compute_golden_digests`].
-pub const CODIM_KERNEL_GOLDEN_SHA256: [u8; 32] = [0u8; 32];
+pub const CODIM_KERNEL_GOLDEN_SHA256: [u8; 32] = [
+    0xe0, 0xd3, 0xf1, 0x87, 0x3c, 0x51, 0x5c, 0x9a, 0xcf, 0xb4, 0x0b, 0x33, 0xea, 0x4f, 0x1b, 0x05,
+    0xae, 0x32, 0xad, 0xf7, 0xda, 0x72, 0x98, 0x9c, 0xd1, 0xf6, 0x2b, 0x30, 0x86, 0x03, 0xdb, 0xe9,
+];
 
 fn feed_f64_pair(f: &mut Fnv1a64, s: &mut Sha256, v: f64) {
     f.feed_f64(v);
