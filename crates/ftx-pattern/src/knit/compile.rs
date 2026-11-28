@@ -1063,16 +1063,25 @@ pub fn compile_knit_doc(
             }
             for carrier in &node.carrier_ids {
                 if active_carriers.insert(carrier.clone()) {
-                    compiler.ops.push(if profile.has_yarn_inserting_hooks {
+                    if profile.has_yarn_inserting_hooks {
+                        // A V-bed machine has one physical yarn-inserting hook: release any
+                        // previously held carrier before inserting a new carrier on the hook.
+                        let held_others: Vec<_> = hooked_since.keys().cloned().collect();
+                        for prev in held_others {
+                            compiler.ops.push(KnitoutOp::ReleaseHook {
+                                carriers: vec![prev.clone()],
+                            });
+                            hooked_since.remove(&prev);
+                        }
                         hooked_since.insert(carrier.clone(), course_idx);
-                        KnitoutOp::InHook {
+                        compiler.ops.push(KnitoutOp::InHook {
                             carriers: vec![carrier.clone()],
-                        }
+                        });
                     } else {
-                        KnitoutOp::In {
+                        compiler.ops.push(KnitoutOp::In {
                             carriers: vec![carrier.clone()],
-                        }
-                    });
+                        });
+                    }
                 }
                 next_carrier_direction.insert(carrier.clone(), dir.reversed());
             }
