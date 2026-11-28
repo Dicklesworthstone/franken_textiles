@@ -178,6 +178,8 @@ pub fn resolve_knit_machine(id: &str) -> Result<MachineProfile, Refusal> {
         "kniterate-7e" | "kniterate" => Ok(MachineProfile::kniterate_7e()),
         "brother-kh930-ayab" | "brother-kh930" | "kh930" => Ok(MachineProfile::brother_kh930_ayab()),
         "brother-kh270-ayab" | "brother-kh270" | "kh270" => Ok(MachineProfile::brother_kh270_ayab()),
+        "generic-vbed-12e" => Ok(MachineProfile::generic_vbed_12e()),
+        "generic-slider-12e" => Ok(MachineProfile::generic_slider_12e()),
         "shima-seiki-12e-handoff" | "shima-12e" | "shima" => {
             Ok(MachineProfile::shima_seiki_12e_handoff())
         }
@@ -187,7 +189,7 @@ pub fn resolve_knit_machine(id: &str) -> Result<MachineProfile, Refusal> {
             RefusalCode::UnknownParameter,
             format!("unknown knitting machine profile '{id}'"),
         )
-        .repair("choose one of: kniterate-7e, brother-kh930-ayab, brother-kh270-ayab, shima-seiki-12e-handoff, stoll-12e-handoff, hand-knit")),
+        .repair("choose one of: kniterate-7e, brother-kh930-ayab, brother-kh270-ayab, generic-vbed-12e, generic-slider-12e, shima-seiki-12e-handoff, stoll-12e-handoff, hand-knit")),
     }
 }
 
