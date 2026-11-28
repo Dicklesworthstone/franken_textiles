@@ -5,6 +5,7 @@ const runSwatchBtn = document.getElementById("runSwatch");
 const runPanelBtn = document.getElementById("runPanel");
 const runPulloverBtn = document.getElementById("runPullover");
 const runExportBtn = document.getElementById("runExport");
+const cancelExportBtn = document.getElementById("cancelExport");
 const runDyeBtn = document.getElementById("runDye");
 
 let worker = null;
@@ -14,6 +15,7 @@ const latestRequestByKind = { swatch: 0, panel: 0, pullover: 0, export: 0, dye: 
 const targetByRequest = new Map();
 const downloadUrlsByContainer = new WeakMap();
 const MAX_EXPORT_INPUT_BYTES = 4 * 1024 * 1024;
+const MAX_DRAFT_INPUT_BYTES = 24 * 1024 * 1024;
 
 const PANEL_MACHINE_DEFAULTS = {
   "kniterate-7e": { needle_pitch_mm: 25.4 / 7.0, carrier_id: "1", cam_setting: 7.0, yarn_tex: 200.0 },
@@ -77,6 +79,7 @@ function invalidatePullover() {
 }
 
 function clearExportResult() {
+  cancelExportBtn.disabled = true;
   clearDownloads(document.getElementById("exportDownloads"));
   document.getElementById("exportOut").hidden = true;
   document.getElementById("exportSummary").textContent = "";
@@ -86,6 +89,14 @@ function clearExportResult() {
 function invalidateExport() {
   latestRequestByKind.export = ++reqId;
   clearExportResult();
+}
+
+function selectExportMode() {
+  const kind = document.getElementById("exportKind").value || "saved";
+  document.getElementById("exportSavedInputs").hidden = kind !== "saved";
+  document.getElementById("exportShapeInputs").hidden = kind !== "shape";
+  document.getElementById("exportMeasuredInputs").hidden = kind !== "measured";
+  document.getElementById("exportMachine").disabled = kind === "measured";
 }
 
 function buildPresetPixels(preset, w, h) {
@@ -328,6 +339,8 @@ function renderExport(res) {
   document.getElementById("exportSummary").textContent =
     `${res.machine} · ${res.files.length} files · pattern SHA-256 ${res.pattern_sha256} · KCode read-back verified: ${Boolean(kcodeFile)} · hardware execution authorized: false · physical knitting validated: false · fit claimed: false`;
   document.getElementById("exportPre").textContent = conversionNotice +
+    (res.shape ? "=== Shape geometry and gauge residuals ===\n" + JSON.stringify(res.shape, null, 2) + "\n\n" : "") +
+    (res.drafting ? "=== Body dimensions and garment ease ===\n" + JSON.stringify(res.drafting, null, 2) + "\n\n" : "") +
     `ZIP SHA-256: ${res.archive_sha256}\n\n=== Files (uncompressed bytes and SHA-256) ===\n` +
     res.files.map((file) => `${file.name}\n  ${file.bytes} bytes · ${file.sha256}`).join("\n") +
     "\n\n=== Virtual machine report ===\n" + JSON.stringify(res.vm_report, null, 2) +
@@ -429,14 +442,18 @@ function isStaleReply(msg) {
 }
 
 function startWorker() {
-  worker = new Worker("knit-worker.js", { type: "module" });
-  worker.onerror = (event) => {
+  const activeWorker = new Worker("knit-worker.js", { type: "module" });
+  worker = activeWorker;
+  activeWorker.onerror = (event) => {
+    if (worker !== activeWorker) return;
     failEngine(String(event?.message || "Knitting & dyeing worker failed to load."));
   };
-  worker.onmessageerror = () => {
+  activeWorker.onmessageerror = () => {
+    if (worker !== activeWorker) return;
     failEngine("Knitting & dyeing worker returned an unreadable message.");
   };
-  worker.onmessage = ({ data: msg }) => {
+  activeWorker.onmessage = ({ data: msg }) => {
+    if (worker !== activeWorker) return;
     if (msg.type === "ready") {
       engineReady = true;
       statusEl.textContent = "Local WASM knitting & dyeing engine ready.";
@@ -749,14 +766,43 @@ runExportBtn.addEventListener("click", async () => {
   const request = latestRequestByKind.export;
   try {
     if (!engineReady) throw new Error("Wait for the local engine to finish loading.");
-    const pattern = document.getElementById("exportPattern").files[0];
+    const kind = document.getElementById("exportKind").value || "saved";
+    if (!["saved", "shape", "measured"].includes(kind)) throw new Error("Choose a supported starting point.");
+    const requiredFile = (id, label) => {
+      const file = document.getElementById(id).files[0];
+      if (!file) throw new Error(`Choose ${label}.`);
+      return file;
+    };
     const qualification = document.getElementById("exportQualification").files[0];
     const drapeReceipt = document.getElementById("exportDrapeReceipt").files[0];
-    if (!pattern) throw new Error("Choose a saved pattern JSON file.");
-    const files = [pattern, qualification, drapeReceipt].filter(Boolean);
+    const sources = kind === "saved"
+      ? { pattern_json: requiredFile("exportPattern", "a saved pattern JSON file") }
+      : kind === "shape"
+        ? {
+          shell_json: requiredFile("exportShell", "a 3D shell JSON file"),
+          config: requiredFile("exportShapeConfig", "shaping choices JSON"),
+          gauge: requiredFile("exportShapeGauge", "relaxed gauge JSON"),
+        }
+        : {
+          input_json: requiredFile("exportBodyDesign", "a garment design JSON file"),
+          measurements_json: requiredFile("exportMeasurements", "a measurements JSON file"),
+        };
+    const bodyFit = kind === "measured" ? document.getElementById("exportBodyFit").files[0] : null;
+    const model = kind === "measured" ? document.getElementById("exportBodyModel").files[0] : null;
+    if (Boolean(bodyFit) !== Boolean(model)) {
+      throw new Error("An accepted body report requires its matching body model, and vice versa.");
+    }
+    if (model && (!Number.isSafeInteger(model.size) || model.size <= 0 || model.size > 512 * 1024 * 1024)) {
+      throw new Error("The body model must be a nonempty file no larger than 512 MiB.");
+    }
+    if (bodyFit) sources.body_fit_json = bodyFit;
+    if (qualification) sources.qualification_json = qualification;
+    if (drapeReceipt) sources.drape_receipt_json = drapeReceipt;
+    const limit = kind === "saved" ? MAX_EXPORT_INPUT_BYTES : MAX_DRAFT_INPUT_BYTES;
+    const files = Object.values(sources);
     if (files.some((file) => !Number.isSafeInteger(file.size) || file.size < 0) ||
-        files.reduce((total, file) => total + file.size, 0) > MAX_EXPORT_INPUT_BYTES) {
-      throw new Error("Saved pattern and evidence files exceed the combined 4 MiB budget.");
+        files.reduce((total, file) => total + file.size, 0) > limit) {
+      throw new Error(`Source and evidence files exceed the combined ${limit / (1024 * 1024)} MiB budget.`);
     }
     const machine = document.getElementById("exportMachine").value;
     const materialSha256 = document.getElementById("exportMaterialSha256").value.trim();
@@ -765,25 +811,33 @@ runExportBtn.addEventListener("click", async () => {
       throw new Error("Source Material SHA-256 must contain exactly 64 hexadecimal characters.");
     }
     statusEl.textContent = "Reading local pattern and evidence files…";
-    // Never parse and reserialize these documents: doing so can alter sealed float values.
-    const [patternJson, qualificationJson, drapeReceiptJson] = await Promise.all([
-      pattern.text(), qualification?.text(), drapeReceipt?.text(),
-    ]);
+    cancelExportBtn.disabled = false;
+    // Original shell, measurement, accepted-body and sealed-evidence texts stay unchanged.
+    const texts = Object.fromEntries(await Promise.all(
+      Object.entries(sources).map(async ([name, file]) => [name, await file.text()]),
+    ));
     if (request !== latestRequestByKind.export || !engineReady) return;
     const payload = {
-      machine,
-      pattern_json: patternJson,
-      ...(qualification ? { qualification_json: qualificationJson } : {}),
-      ...(drapeReceipt ? { drape_receipt_json: drapeReceiptJson } : {}),
+      ...(kind === "measured" ? {} : { machine }),
+      ...texts,
       ...(materialSha256 ? { material_sha256: materialSha256 } : {}),
       ...(created ? { created } : {}),
     };
-    // JSON string escaping also counts against the WASM request's UTF-8 byte budget.
-    if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > MAX_EXPORT_INPUT_BYTES) {
-      throw new Error("The encoded pattern and evidence request exceeds the 4 MiB budget.");
+    if (kind === "shape") {
+      payload.config = JSON.parse(texts.config);
+      payload.gauge = JSON.parse(texts.gauge);
     }
+    // JSON string escaping also counts against the WASM request's UTF-8 byte budget.
+    if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > limit) {
+      throw new Error(`The encoded source and evidence request exceeds the ${limit / (1024 * 1024)} MiB budget.`);
+    }
+    const modelBytes = model ? new Uint8Array(await model.arrayBuffer()) : null;
+    if (request !== latestRequestByKind.export || !engineReady) return;
     statusEl.textContent = "Verifying the saved pattern and building local export artifacts…";
-    worker.postMessage({ type: "export", request, payload });
+    worker.postMessage({
+      type: kind === "saved" ? "export" : kind, request, payload,
+      ...(modelBytes ? { model_bytes: modelBytes } : {}),
+    }, modelBytes ? [modelBytes.buffer] : []);
   } catch (err) {
     if (request !== latestRequestByKind.export) return;
     clearExportResult();
@@ -792,10 +846,14 @@ runExportBtn.addEventListener("click", async () => {
   }
 });
 
-for (const id of ["exportMachine", "exportPattern", "exportQualification", "exportDrapeReceipt", "exportMaterialSha256", "exportCreated"]) {
+for (const id of [
+  "exportKind", "exportMachine", "exportPattern", "exportQualification", "exportDrapeReceipt", "exportMaterialSha256", "exportCreated",
+  "exportShell", "exportShapeConfig", "exportShapeGauge", "exportBodyDesign", "exportMeasurements", "exportBodyFit", "exportBodyModel",
+]) {
   const input = document.getElementById(id);
   const changed = () => {
     invalidateExport();
+    selectExportMode();
     clearError();
     statusEl.textContent = engineReady
       ? "Export inputs changed. Verify again to generate current downloads."
@@ -804,6 +862,19 @@ for (const id of ["exportMachine", "exportPattern", "exportQualification", "expo
   input.addEventListener("input", changed);
   input.addEventListener("change", changed);
 }
+
+cancelExportBtn.addEventListener("click", () => {
+  invalidateExport();
+  for (const kind of ["swatch", "panel", "dye"]) latestRequestByKind[kind] = ++reqId;
+  targetByRequest.clear();
+  worker?.terminate();
+  worker = null;
+  engineReady = false;
+  for (const button of [runSwatchBtn, runPanelBtn, runExportBtn, runDyeBtn]) button.disabled = true;
+  clearError();
+  statusEl.textContent = "Cancelled. Restarting the local engine…";
+  startWorker();
+});
 
 runDyeBtn.addEventListener("click", () => {
   clearError();
@@ -872,4 +943,5 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   });
 }
 
+selectExportMode();
 startWorker();

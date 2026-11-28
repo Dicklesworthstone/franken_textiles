@@ -1,11 +1,11 @@
 // Local-only worker for Knitting & Programmed Continuous Yarn Dyeing (FTX-K18).
 // No pattern, image, or yarn data ever leaves the browser.
-import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.3";
+import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.4";
 
-const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.3";
+const EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.4";
 let loadFailure = null;
 
-const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-27.3", import.meta.url) }).then(() => {
+const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-27.4", import.meta.url) }).then(() => {
   if ((typeof ftx.initSync === "function" || "wasm_interface_stamp" in ftx) &&
       (typeof ftx.wasm_interface_stamp !== "function" || ftx.wasm_interface_stamp() !== EXPECTED_WASM_STAMP)) {
     throw new Error("Stale web/pkg bundle: rebuild web/pkg via ./tools/build_web.sh");
@@ -13,6 +13,8 @@ const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-2
   if (typeof ftx.knit_swatch_json !== "function" ||
       typeof ftx.knit_panel_preview_json !== "function" ||
       typeof ftx.knit_export_json !== "function" ||
+      typeof ftx.knit_shape_json !== "function" ||
+      typeof ftx.knit_body_json !== "function" ||
       typeof ftx.knit_pullover_json !== "function" ||
       typeof ftx.dye_optimize_json !== "function") {
     throw new Error("Knitting & dyeing WASM exports missing from web/pkg: rebuild via ./tools/build_web.sh");
@@ -24,6 +26,7 @@ const ready = init({ module_or_path: new URL("./pkg/ftx_wasm_bg.wasm?v=2026-11-2
 });
 
 self.onmessage = async ({ data: msg }) => {
+  const kind = msg.type === "shape" || msg.type === "measured" ? "export" : msg.type;
   try {
     await ready;
     if (loadFailure) throw loadFailure;
@@ -34,6 +37,10 @@ self.onmessage = async ({ data: msg }) => {
       raw = ftx.knit_panel_preview_json(JSON.stringify(msg.payload));
     } else if (msg.type === "export") {
       raw = ftx.knit_export_json(JSON.stringify(msg.payload));
+    } else if (msg.type === "shape") {
+      raw = ftx.knit_shape_json(JSON.stringify(msg.payload));
+    } else if (msg.type === "measured") {
+      raw = ftx.knit_body_json(JSON.stringify(msg.payload), msg.model_bytes || new Uint8Array());
     } else if (msg.type === "pullover") {
       raw = ftx.knit_pullover_json(JSON.stringify(msg.payload));
     } else if (msg.type === "dye") {
@@ -45,11 +52,11 @@ self.onmessage = async ({ data: msg }) => {
     if (!env.ok) {
       const code = env.refusal?.code || "refused";
       const message = env.refusal?.message || "operation refused";
-      postMessage({ type: "refusal", kind: msg.type, request: msg.request, code, message, refusal: env.refusal });
+      postMessage({ type: "refusal", kind, request: msg.request, code, message, refusal: env.refusal });
       return;
     }
-    postMessage({ type: "result", request: msg.request, kind: msg.type, result: env.result });
+    postMessage({ type: "result", request: msg.request, kind, result: env.result });
   } catch (error) {
-    postMessage({ type: "error", kind: msg?.type, request: msg?.request, message: String(error?.message || error) });
+    postMessage({ type: "error", kind, request: msg?.request, message: String(error?.message || error) });
   }
 };

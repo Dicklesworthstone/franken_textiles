@@ -232,13 +232,20 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
 </section>
 
 <section id="exportSection">
-  <h2>4. Export a Saved Knit Pattern</h2>
-  <p>Open a pattern JSON saved from the swatch or panel tools, or from the CLI, and verify it for the selected machine. Add measured swatch qualification and a sealed drape receipt when required. All files stay in this browser; their original JSON text goes directly to the local engine.</p>
-  <p>Files and the encoded request must fit within a combined 4 MiB budget. Download the accepted software artifacts and certificate as a ZIP, with file hashes shown below. Kniterate emits read-back-verified pass KCode (<code>program.kc</code>) for supported whole-number dials and operations, and retains verified Knitout v2 with an explicit refusal otherwise. Export does not authorize hardware execution or establish physical knitting or fit validation.</p>
+  <h2>4. Draft &amp; Export a Knit Garment</h2>
+  <p>Verify a saved knit pattern, draft a branched pullover from body measurements and explicit ease, or shape a sleeve or tube from an extracted 3D shell. Add measured swatch qualification and a sealed drape receipt when required. All inputs stay in this browser.</p>
+  <p>Download the complete program, charts, source inputs, residuals and certificate as a ZIP. Kniterate exports include KCode when the program is representable; otherwise the result explains the conversion refusal. Export does not authorize hardware execution or establish physical knitting or fit validation.</p>
   <div class="row">
+    <label>Starting Point
+      <select id="exportKind">
+        <option value="saved">Saved knit pattern</option>
+        <option value="measured">Body measurements → branched pullover</option>
+        <option value="shape">3D sleeve or tube shell → shaped knitting</option>
+      </select>
+    </label>
     <label>Export Machine
       <select id="exportMachine">
-        <option value="kniterate-7e">Kniterate 7E (Knitout v2 + verified KCode .kc)</option>
+        <option value="kniterate-7e">Kniterate 7E (KCode when representable)</option>
         <option value="brother-kh930-ayab">Brother KH-930 / AYAB</option>
         <option value="brother-kh270-ayab">Brother KH-270 / AYAB</option>
         <option value="generic-vbed-12e">Generic 12E V-Bed (Knitout v2, hooks)</option>
@@ -248,7 +255,7 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
         <option value="stoll-12e-handoff">Stoll 12E (verified Knitout handoff only)</option>
       </select>
     </label>
-    <label>Pattern JSON (required)
+    <label id="exportSavedInputs">Pattern JSON (required)
       <input id="exportPattern" type="file" accept=".json,application/json">
     </label>
     <label>Measured Swatch Qualification JSON (optional)
@@ -264,10 +271,29 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(130,
       <input id="exportCreated" type="datetime-local" aria-describedby="exportTimestampHelp">
     </label>
     <button id="runExport" class="primary" type="button" disabled>Verify &amp; Build ZIP</button>
+    <button id="cancelExport" type="button" disabled>Cancel current work</button>
   </div>
+  <div id="exportShapeInputs" hidden>
+    <p>Choose the <code>shell.json</code> from anatomical extraction, explicit shaping choices, and your relaxed gauge. This route supports one sleeve or tube with two openings. Full upper-body branching is refused; use the measured pullover route for a branched garment.</p>
+    <div class="row">
+      <label>3D Shell JSON <input id="exportShell" type="file" accept=".json,application/json"></label>
+      <label>Shaping Choices JSON <input id="exportShapeConfig" type="file" accept=".json,application/json"></label>
+      <label>Relaxed Gauge JSON <input id="exportShapeGauge" type="file" accept=".json,application/json"></label>
+    </div>
+  </div>
+  <div id="exportMeasuredInputs" hidden>
+    <p>The design file specifies the machine, gauge, signed ease, and garment lengths. Measurements supply chest, neck, upper-arm and wrist girths. To reuse an accepted body, choose both its report and matching model; model-derived values retain their MODEL_FIT basis.</p>
+    <div class="row">
+      <label>Garment Design JSON <input id="exportBodyDesign" type="file" accept=".json,application/json"></label>
+      <label>Measurements JSON <input id="exportMeasurements" type="file" accept=".json,application/json"></label>
+      <label>Accepted Body Report (optional) <input id="exportBodyFit" type="file" accept=".json,application/json"></label>
+      <label>Matching Body Model (optional) <input id="exportBodyModel" type="file"></label>
+    </div>
+  </div>
+  <p>Saved-pattern requests are limited to 4 MiB; geometry and measured-draft JSON requests to 24 MiB. An optional body model is supplied separately, up to 512 MiB. Evidence JSON is passed unchanged to the local engine.</p>
   <p id="exportTimestampHelp">Leave the timestamp blank to use the engine's fixed, reproducible default.</p>
   <div id="exportOut" hidden>
-    <h3>Saved Pattern Export</h3>
+    <h3>Verified Garment Artifacts</h3>
     <p id="exportSummary"></p>
     <div id="exportDownloads" class="downloads"></div>
     <pre id="exportPre"></pre>

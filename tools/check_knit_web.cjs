@@ -79,11 +79,13 @@ assert(!page.includes("tr.innerHTML"), "knit-page.js must build table rows with 
 assert(html.includes('id="panelLength" type="number" min="120"'), "panelLength min must stay >= 120 mm");
 
 // 5. Worker enforces WASM interface stamp, cache-busting revision, & local-only execution (no fetch/XMLHttpRequest)
-assert(worker.includes('EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.3"'), "worker missing updated stamp check");
-assert(worker.includes('ftx_wasm.js?v=2026-11-27.3') && worker.includes('ftx_wasm_bg.wasm?v=2026-11-27.3'), "worker missing matching ?v=2026-11-27.3 cache buster");
+assert(worker.includes('EXPECTED_WASM_STAMP = "ftx-wasm-interface/2026-11-27.4"'), "worker missing updated stamp check");
+assert(worker.includes('ftx_wasm.js?v=2026-11-27.4') && worker.includes('ftx_wasm_bg.wasm?v=2026-11-27.4'), "worker missing matching ?v=2026-11-27.4 cache buster");
 assert(worker.includes("ftx.knit_swatch_json"), "worker missing knit_swatch_json call");
 assert(worker.includes("ftx.knit_panel_preview_json"), "worker missing knit_panel_preview_json call");
 assert(worker.includes("ftx.knit_export_json"), "worker missing knit_export_json call");
+assert(worker.includes("ftx.knit_shape_json"), "worker missing knit_shape_json call");
+assert(worker.includes("ftx.knit_body_json"), "worker missing knit_body_json call");
 assert(worker.includes("ftx.knit_pullover_json"), "worker missing knit_pullover_json call");
 assert(worker.includes("ftx.dye_optimize_json"), "worker missing dye_optimize_json call");
 assert(!/\bfetch\s*\(/.test(worker), "worker must not perform network fetch calls");
@@ -143,6 +145,7 @@ elMap.pulloverBodyRib.value = "0";
 elMap.pulloverCuffRib.value = "0";
 elMap.pulloverSeamTolerance.value = "6";
 elMap.exportMachine.value = "kniterate-7e";
+elMap.exportKind.value = "saved";
 elMap.dyeMachine.value = "piezo-cmyk";
 elMap.dyeAgeClass.value = "calibration_swatch_only";
 elMap.dyePreset.value = "horizon";
@@ -200,6 +203,7 @@ const ctx = vm.createContext({
   Worker: class {
     constructor(url) { this.url = url; workerInstance = this; }
     postMessage(m) { posted.push(m); }
+    terminate() { this.terminated = true; }
   },
   document: {
     getElementById: (id) => elMap[id] || null,
@@ -623,7 +627,7 @@ elMap.exportQualification.files = [];
 elMap.exportDrapeReceipt.files = [];
 await elMap.runExport.handlers.click();
 assert.equal(posted.length, beforeMissingFile);
-assert.match(elMap.error.textContent, /encoded pattern and evidence request exceeds the 4 MiB budget/);
+assert.match(elMap.error.textContent, /encoded source and evidence request exceeds the 4 MiB budget/);
 
 elMap.exportPattern.files = [localFile(rawPattern)];
 elMap.exportQualification.files = [localFile(rawQualification)];
@@ -756,6 +760,64 @@ await elMap.runExport.handlers.click();
 assert.equal(posted.length, beforeReadFailure);
 assert.match(elMap.error.textContent, /Local file could not be read/);
 assert.equal(elMap.exportDownloads.children.length, 0);
+
+// New drafting sources use the same export lifecycle, retaining original source text.
+const rawShell = ' {"source_body_sha256":"synthetic","coordinate":1.0000000000000001}\n';
+const rawDesign = ' {"machine":"hand-knit","design":{"chest_ease_mm":1.0000000000000001}}\n';
+const rawMeasurements = ' {"observations":[0.1234567890123456789]}\n';
+const rawBodyFit = ' {"accepted_value":1.0000000000000001}\n';
+elMap.exportKind.value = "shape";
+elMap.exportKind.handlers.change();
+assert.equal(elMap.exportSavedInputs.hidden, true);
+assert.equal(elMap.exportShapeInputs.hidden, false);
+elMap.exportShell.files = [localFile(rawShell)];
+elMap.exportShapeConfig.files = [localFile('{"name":"synthetic-shape"}')];
+elMap.exportShapeGauge.files = [localFile('{"wales_per_100mm":20}')];
+await elMap.runExport.handlers.click();
+const shapeExport = posted.at(-1);
+assert.equal(shapeExport.type, "shape");
+assert.equal(shapeExport.payload.shell_json, rawShell);
+assert.equal(shapeExport.payload.config.name, "synthetic-shape");
+assert.equal(shapeExport.payload.gauge.wales_per_100mm, 20);
+replyExport(shapeExport.request, { ...exportResult, shape: { max_abs_girth_residual_mm: 1.25 } });
+assert.match(elMap.exportPre.textContent, /girth_residual_mm/);
+elMap.exportShapeGauge.handlers.input();
+replyExport(shapeExport.request);
+assert.equal(elMap.exportDownloads.children.length, 0, "changed gauge invalidates a shaped artifact");
+
+elMap.exportKind.value = "measured";
+elMap.exportKind.handlers.change();
+assert.equal(elMap.exportMachine.disabled, true, "measured source file owns the machine choice");
+assert.equal(elMap.exportMeasuredInputs.hidden, false);
+elMap.exportBodyDesign.files = [localFile(rawDesign)];
+elMap.exportMeasurements.files = [localFile(rawMeasurements)];
+await elMap.runExport.handlers.click();
+const measuredExport = posted.at(-1);
+assert.equal(measuredExport.type, "measured");
+assert.equal(measuredExport.payload.input_json, rawDesign);
+assert.equal(measuredExport.payload.measurements_json, rawMeasurements);
+assert.equal(Object.hasOwn(measuredExport.payload, "machine"), false);
+assert.equal(Object.hasOwn(measuredExport, "model_bytes"), false);
+elMap.exportBodyFit.files = [localFile(rawBodyFit)];
+const beforeUnpairedBody = posted.length;
+await elMap.runExport.handlers.click();
+assert.equal(posted.length, beforeUnpairedBody);
+assert.match(elMap.error.textContent, /matching body model/);
+elMap.exportBodyModel.files = [new Blob([new Uint8Array([0, 128, 255, 1])])];
+await elMap.runExport.handlers.click();
+const bodyExport = posted.at(-1);
+assert.equal(bodyExport.payload.body_fit_json, rawBodyFit);
+assert.deepEqual(Array.from(bodyExport.model_bytes), [0, 128, 255, 1]);
+const cancelledWorker = workerInstance;
+elMap.cancelExport.handlers.click();
+assert.equal(cancelledWorker.terminated, true, "cancellation stops the numerical worker");
+assert.equal(elMap.exportDownloads.children.length, 0);
+cancelledWorker.onmessage({ data: { type: "result", kind: "export", request: bodyExport.request, result: exportResult } });
+assert.equal(elMap.exportDownloads.children.length, 0, "a terminated worker cannot publish its old result");
+workerInstance.onmessage({ data: { type: "ready" } });
+elMap.exportKind.value = "saved";
+elMap.exportKind.handlers.change();
+assert.equal(elMap.exportMachine.disabled, false);
 elMap.exportPattern.files = [localFile(rawPattern)];
 await elMap.runExport.handlers.click();
 const exportBeforePagehide = posted.at(-1);
@@ -850,12 +912,13 @@ assert(!activeUrls.has(pulloverUrl));
 
 // Execute the worker dispatcher too: only the outer envelope is serialized, preserving raw files.
 const workerSource = worker
-  .replace('import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.3";', "")
+  .replace('import init, * as ftx from "./pkg/ftx_wasm.js?v=2026-11-27.4";', "")
   .replace("import.meta.url", '"https://local.invalid/knit-worker.js"');
 let forwardedRequest;
+let forwardedModel;
 let forwardedPullover;
 const workerApi = {
-  wasm_interface_stamp: () => "ftx-wasm-interface/2026-11-27.3",
+  wasm_interface_stamp: () => "ftx-wasm-interface/2026-11-27.4",
   knit_swatch_json: () => '{"ok":true,"result":{}}',
   knit_panel_preview_json: () => '{"ok":true,"result":{}}',
   knit_pullover_json: (raw) => {
@@ -865,6 +928,15 @@ const workerApi = {
   dye_optimize_json: () => '{"ok":true,"result":{}}',
   knit_export_json: (raw) => {
     forwardedRequest = JSON.parse(raw);
+    return JSON.stringify({ ok: true, result: exportResult });
+  },
+  knit_shape_json: (raw) => {
+    forwardedRequest = JSON.parse(raw);
+    return JSON.stringify({ ok: true, result: exportResult });
+  },
+  knit_body_json: (raw, model) => {
+    forwardedRequest = JSON.parse(raw);
+    forwardedModel = model;
     return JSON.stringify({ ok: true, result: exportResult });
   },
 };
@@ -891,6 +963,15 @@ assert.equal(forwardedRequest.qualification_json, rawQualification);
 assert.equal(forwardedRequest.drape_receipt_json, rawReceipt);
 assert.equal(loadedWorker.messages.at(-1).kind, "export");
 assert.equal(loadedWorker.messages.at(-1).result.archive_base64, exportResult.archive_base64);
+await loadedWorker.scope.self.onmessage({ data: shapeExport });
+assert.equal(forwardedRequest.shell_json, rawShell);
+assert.equal(loadedWorker.messages.at(-1).kind, "export");
+await loadedWorker.scope.self.onmessage({ data: bodyExport });
+assert.equal(forwardedRequest.input_json, rawDesign);
+assert.equal(forwardedRequest.measurements_json, rawMeasurements);
+assert.equal(forwardedRequest.body_fit_json, rawBodyFit);
+assert.deepEqual(Array.from(forwardedModel), [0, 128, 255, 1]);
+assert.equal(loadedWorker.messages.at(-1).kind, "export");
 workerApi.knit_export_json = () => JSON.stringify({ ok: false, refusal: {
   code: "unqualified_process", message: "Evidence mismatch", repairs: ["Select matching measured evidence"],
 } });
@@ -902,6 +983,10 @@ const missingExportWorker = await loadWorker({ ...workerApi, knit_export_json: u
 assert.equal(missingExportWorker.messages[0].type, "loadError", "old bundle without saved-document export must refuse readiness");
 await missingExportWorker.scope.self.onmessage({ data: firstExport });
 assert.equal(missingExportWorker.messages.at(-1).type, "error");
+for (const binding of ["knit_shape_json", "knit_body_json"]) {
+  const missing = await loadWorker({ ...workerApi, [binding]: undefined });
+  assert.equal(missing.messages[0].type, "loadError", `old bundle without ${binding} must refuse readiness`);
+}
 
 }
 
