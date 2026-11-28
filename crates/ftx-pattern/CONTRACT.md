@@ -509,11 +509,16 @@ acyclic DAG and a mechanical extraction boundary).
   `KnitMachineCert` (`ftx-machine-cert/1`) unconditionally sealing `hardware_execution_authorized: false`,
   `physical_knitting_validated: false`, and `four_claims.fit_claimed: false`.
 - `knit::profile` & `knit::vm` define built-in `MachineProfile` envelopes (Kniterate 7E, Brother KH-930/KH-270
-  AYAB, hand-knit, Tier-B Shima/Stoll 12E handoffs) and `verify_knitout_program`
-  enforcing all 7 discrete crash & child/infant safety gates (slider ban on `Knit`/`Tuck`/`Split`,
-  hook-stack/tuck caps, carrier hook-vs-gripper lifecycle & spacing, racking alignment & strain,
+  AYAB, `generic-vbed-12e`, `generic-slider-12e`, hand-knit, Tier-B Shima/Stoll 12E handoffs) with
+  `supports_pause()` and `timing_kinematics()` (`MachineTimingKinematics` feeding
+  `synthesize_regime3_intake_timeline` for Regime III yarn dyeing), plus `verify_knitout_program` and
+  `verify_racking_strain` / `verify_knitout_program_with_racking_strain` (`RackingStrainSpec`) enforcing
+  all 7 discrete crash & child/infant safety gates (slider ban on `Knit`/`Tuck`/`Split`, hook-stack/tuck
+  caps, carrier insertion/hook/duplicate guards, whole-pitch Kniterate racking & `sqrt(g^2 + (rp/4 * p)^2)`
+  cross-bed racking yarn-strain `SF >= 2.0`, manual-carriage AYAB rack/unflagged-xfer refusal,
   `UniformRoller` short-row imbalance, blocked-pitch child float limit, EN 14682 hood/neck drawstring ban,
-  infant unanchored short-row eyelet refusal, and `CalibrationSwatchCaps` hard limits).
+  infant unanchored short-row eyelet refusal, and `CalibrationSwatchCaps` hard limits, with ranked repairs
+  on every refusal).
 - `knit::compile` consumes exact parent loop identities on independent front/back hooks, including
   stack order through cross-bed transfers. Flat courses alternate direction; full tube courses
   traverse front ascending and back descending. Bounded transfer hooks and temporary parking
