@@ -864,7 +864,7 @@ mod tests {
             .filter_map(|(_, s)| s.as_ref())
             .map(|s| String::from_utf8_lossy(s).into_owned())
             .collect();
-        assert!(pdf_streams.contains("Knit (RS) / Purl (WS)"));
+        assert!(pdf_streams.contains(r"Knit \(RS\) / Purl \(WS\)"));
         assert!(pdf_streams.contains("Cable crossing"));
         for id in held_ids.split(',').map(|id| id.parse::<u32>().unwrap()) {
             let source = doc.stitches.iter().find(|stitch| stitch.id == id).unwrap();
