@@ -91,6 +91,7 @@ const USAGE: &str = "usage:
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
             [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
+            [--audit-patch ZONE] [--qual SWATCH.json] [--material-sha256 SHA256]
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json | --material-bindings B.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
@@ -205,18 +206,21 @@ const USAGE: &str = "usage:
   ftx scale-fit PATTERN --target REF=LEN [--target REF=LEN ...] --out PATTERN [--json]
   ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250] [--label-tol 0.03] [--json]
   ftx knit swatch --out DIR [--machine ID] [--yarn ID] [--material-sha256 SHA256] [--needles N] [--courses-per-zone N] [--cams C1,C2,...] [--created YYYY-MM-DDTHH:MM] [--json]
-  ftx knit draft --age-class infant|child|adult --out DIR [--style panel|tube|pullover] [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--has-drawstring] [--json]
+  ftx knit draft --age-class infant|child|adult --out DIR [--style panel|tube|pullover|rib] [--measurements M] [--body-fit REPORT] [--model PATH] [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--has-drawstring] [--json]
       panel: [--neck-mm N --neck-depth-mm N --shoulder-short-row-pairs N] [--cables GROUPS.json]
       pullover: [--sleeve-cuff-mm N --upper-arm-mm N --sleeve-length-mm N --cuff-rib N] [--rib-courses N --collar-rib N]
-  ftx knit verify PATTERN.knit.json [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--json]
-  ftx knit export PATTERN.knit.json --out DIR [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--created YYYY-MM-DDTHH:MM] [--json]
+  ftx knit shape --age-class infant|child|adult --out NEW_DIR (--measurements M | --body-fit REPORT | --shell SHELL.json | --input ANATOMY.json) [--model PATH] [--region torso|left_sleeve|right_sleeve|full_upper_body|tube] [--ease EASE.json] [--allow-negative-ease] [--machine ID] [--qual SWATCH.json --material-sha256 SHA256] [--created YYYY-MM-DDTHH:MM] [--json]
+  ftx knit verify PATTERN.knit.json [--machine ID] [--strict-knitout] [--qual SWATCH.json --material-sha256 SHA256] [--json]
+  ftx knit export PATTERN.knit.json --out DIR [--target knitout|kniterate|ayab|hand-pdf|shima-handoff|stoll-handoff] [--machine ID] [--allow-proprietary-binary] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx knit pullover SPEC.json --gauge GAUGE.json --out DIR [--machine hand-knit|ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipts RECEIPTS.json] [--json]
   ftx knit shell --input SOURCE.json --out NEW_DIR [--json]
   ftx knit shell --body-fit ACCEPTED.json --model FILE --region REGION --ease EASE.json --out NEW_DIR [--pose drape|rest|arms-up] [--json]
   ftx knit poincloux [--mu MU] [--dataset published-sliding --fit-min-strain F --fit-max-strain F --check-max-strain F --rmse-limit-n N --max-error-limit-n N] [--json]
-  ftx dye swatch --out DIR [--machine piezo-cmyk|dip-3bath] [--yarn ID] [--json]
+  ftx dye swatch --out DIR [--applicator dip|piezo] [--machine piezo-cmyk|dip-3bath] [--yarn ID] [--json]
+  ftx dye plan [PATTERN.knit.json] --out NEW_DIR [--drape DRAPE.json] [--image PNG] [--qual Q.json] [--applicator dip|piezo] [--machine piezo-cmyk|dip-3bath] [--age-class infant|child|adult|swatch] [--regime stripes|pooling|fiducial|inline|jacquard] [--circular] [--json]
   ftx dye optimize --out DIR [--machine piezo-cmyk|dip-3bath] [--age-class infant|child|adult|swatch] [--regime stripes|pooling|fiducial|inline|jacquard] [--circular] [--image PNG] [--courses N] [--wales N] [--cells N] [--max-iters N] [--dye-qual Q.json] [--json]
-  ftx dye verify PROGRAM.json [--machine piezo-cmyk|dip-3bath] [--dye-qual Q.json] [--out DIR] [--json]
+  ftx dye verify PROGRAM.json [--machine piezo-cmyk|dip-3bath] [--dye-qual Q.json] [--receipt RECEIPT.json] [--out DIR] [--json]
+  ftx dye export PROGRAM.json --out NEW_DIR [--machine piezo-cmyk|dip-3bath] [--qual Q.json] [--receipt RECEIPT.json] [--material-sha256 SHA256] [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
@@ -308,7 +312,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
 }
 
 /// A Wavefront OBJ (metres; `v x y z [r g b]`, 1-based faces).
-fn obj(vertices: &[Vec3], faces: &[[usize; 3]], colours: Option<&[[f64; 3]]>) -> String {
+pub(crate) fn obj(vertices: &[Vec3], faces: &[[usize; 3]], colours: Option<&[[f64; 3]]>) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
     for (i, v) in vertices.iter().enumerate() {
@@ -374,7 +378,7 @@ pub(crate) fn read_regular_bounded(
     Ok(bytes)
 }
 
-fn read_json(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
+pub(crate) fn read_json(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
     const MAX_JSON_BYTES: u64 = 64 * 1024 * 1024;
     let bytes = read_regular_bounded(std::path::Path::new(path), MAX_JSON_BYTES, "JSON input")?;
     let v = serde_json::from_slice(&bytes).map_err(|e| bad_input(format!("{path}: {e}")))?;
@@ -383,7 +387,7 @@ fn read_json(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
 
 /// Recompute record-bearing inputs; explicit fused-only/flat callers retain their supplied targets.
 /// Keep the original bytes separately for source identity, never replace them with a fused serialization.
-fn current_measurements(raw: Value) -> Result<Value, Refusal> {
+pub(crate) fn current_measurements(raw: Value) -> Result<Value, Refusal> {
     if raw.get("records").is_some() {
         round::measurements(&raw)
     } else {
@@ -1262,7 +1266,7 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
 }
 
 /// Pose the same fitted body; do not change its tape-fit reference pose.
-fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
+pub(crate) fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
     let mut pose = Pose::drape();
     if let Some(value) = args.options.get("arm-deg") {
         let angle = value
@@ -1370,7 +1374,7 @@ fn audit_authored_hands(
 
 /// Claim a fresh destination before fitting/solving. A failed retry must not leave a previous
 /// successful run at the path the caller will inspect for its new result.
-fn reserve_drape_output(out: &std::path::Path) -> Result<(), Refusal> {
+pub(crate) fn reserve_drape_output(out: &std::path::Path) -> Result<(), Refusal> {
     reserve_output(out, "drape")
 }
 
@@ -1394,7 +1398,7 @@ fn reserve_output(out: &std::path::Path, command: &str) -> Result<(), Refusal> {
 
 /// All serialization succeeds before publication starts. The report is the final completion
 /// record, never an invitation to consume stale or half-written geometry from an earlier run.
-fn write_drape_output(
+pub(crate) fn write_drape_output(
     out: &std::path::Path,
     report: &Value,
     files: &[(&str, Vec<u8>)],
@@ -1490,6 +1494,9 @@ fn cmd_drape_bound(
             "spread-hem-mm",
             "spread-clearance-mm",
             "spread-seam-pp",
+            "audit-patch",
+            "qual",
+            "material-sha256",
             "res",
         ],
     )?;
@@ -1507,6 +1514,27 @@ fn cmd_drape_bound(
     }
     let pattern_path = &args.positional[1];
     let (mut pat, pattern_bytes) = fold::pattern_document(std::path::Path::new(pattern_path))?;
+    if pat["schema"] == ftx_pattern::knit::KNIT_SCHEMA {
+        if args.options.contains_key("fabric")
+            || args.options.contains_key("material-bindings")
+            || pair.is_some()
+        {
+            return Err(bad_input(
+                "ftx-knit/1 drapes do not accept woven --fabric, --material-bindings, or --two-start-sew",
+            ));
+        }
+        return knit::cmd_drape_knit(
+            args,
+            pattern_path,
+            &pat,
+            &opts,
+            pose,
+            thumbs,
+            skinning,
+            hands,
+            expected_model_sha256,
+        );
+    }
     let outfit = if pat["schema"] == ftx_drape::outfit::SCHEMA {
         if args.options.contains_key("fabric")
             || args.options.contains_key("material-bindings")
@@ -1733,6 +1761,18 @@ fn cmd_drape_bound(
         report["effective_pattern_sha256"] = json!(sha256_hex(&snapshot));
         files.push(("effective_pattern.json", snapshot));
     }
+    let patch_audit = if let Some(zone) = args.options.get("audit-patch") {
+        let audited =
+            ftx_drape::knit::audit_solver_knit_patch(&run.scene.solver, zone, None, 0.004)?;
+        let audit_bytes =
+            serde_json::to_vec_pretty(&audited).map_err(|e| bad_input(e.to_string()))?;
+        let audit_val = serde_json::to_value(&audited).map_err(|e| bad_input(e.to_string()))?;
+        report["patch_audit"] = audit_val.clone();
+        files.push(("patch_audit.json", audit_bytes));
+        Some(audit_val)
+    } else {
+        None
+    };
     write_drape_output(&out, &report, &files)?;
     let (gating, advisory) = (run.gating(), run.advisory());
     let mut text = format!(
@@ -1825,6 +1865,9 @@ fn cmd_drape_bound(
     }
     if let Some(hash) = report.get("effective_pattern_sha256") {
         result["effective_pattern_sha256"] = hash.clone();
+    }
+    if let Some(audit) = patch_audit {
+        result["patch_audit"] = audit;
     }
     append_drape_constitutive_summary(&report, None, Some(&mut result));
     if let Some(composition) = report.get("outfit") {
