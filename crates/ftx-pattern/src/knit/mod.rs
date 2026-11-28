@@ -28,14 +28,21 @@ pub use garment::{
     SEAMED_PULLOVER_SCHEMA, SeamJoinGroup, SeamedPulloverDraft, SeamedPulloverSpec,
     draft_seamed_pullover,
 };
-pub use vm::{KnitSafetyContext, VBedVmReport, verify_knitout_program};
+pub use vm::{
+    KnitSafetyContext, RackingStrainReport, RackingStrainSpec, VBedVmReport,
+    synthesize_regime3_intake_timeline, verify_knitout_program,
+    verify_knitout_program_with_racking_strain, verify_racking_strain,
+};
 
 pub use ir::{
     Bed, CableGroup, CamStitchSetting, CarrierId, CourseDir, GaugeSpec, KNIT_SCHEMA,
     KNITOUT_SCHEMA, KnitDoc, KnitPass, KnitoutHeader, KnitoutOp, KnitoutProgram, LoopKind, Needle,
     ParentRef, ShortRowTurn, StitchNode, YarnRun, format_quarter_pitches, parse_knitout,
 };
-pub use profile::{CalibrationSwatchCaps, MachineBackendKind, MachineProfile, WearerAgeClass};
+pub use profile::{
+    CalibrationSwatchCaps, MachineBackendKind, MachineProfile, MachineTimingKinematics,
+    WearerAgeClass,
+};
 pub use receipts::{
     DRAPE_UNCERTAINTY_SCHEMA, DrapeUncertaintyReceipt, FourClaimsVerdict, KNIT_CERT_SCHEMA,
     KnitMachineCert, KnitSwatchQualification,

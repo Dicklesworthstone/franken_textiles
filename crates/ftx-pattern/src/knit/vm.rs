@@ -10,7 +10,8 @@ use ftx_core::{Refusal, RefusalCode};
 use serde::{Deserialize, Serialize};
 
 use super::ir::{Bed, CarrierId, CourseDir, KnitDoc, KnitoutOp, KnitoutProgram, Needle};
-use super::profile::{CalibrationSwatchCaps, MachineProfile, WearerAgeClass};
+use super::profile::{CalibrationSwatchCaps, MachineBackendKind, MachineProfile, WearerAgeClass};
+use crate::dye::{IntakeEvent, IntakeEventKind, Regime3IntakeTimeline};
 
 /// Structured telemetry emitted by a passing V-bed VM verification run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -225,7 +226,8 @@ pub fn verify_knitout_program(
                 "Knitout header width {} is outside machine '{}' bed range 1..={}",
                 program.header.width, profile.id, profile.needle_count
             ),
-        ));
+        )
+        .repair("set Knitout `;;Width:` within the target machine needle_count"));
     }
 
     // Initialize known carriers from MachineProfile + header validation
@@ -241,7 +243,8 @@ pub fn verify_knitout_program(
                     cid.as_str(),
                     profile.id
                 ),
-            ));
+            )
+            .repair("declare only carriers listed in MachineProfile.carrier_ids"));
         }
         carriers.insert(
             cid.0.clone(),
@@ -256,6 +259,7 @@ pub fn verify_knitout_program(
 
     let mut hooks: BTreeMap<(Bed, i32), HookState> = BTreeMap::new();
     let mut rack_quarter_pitches: i32 = 0;
+    let mut active_bridge_racks: BTreeSet<i32> = BTreeSet::new();
     let mut max_abs_rack: i32 = 0;
     let mut max_loops_on_hook: u8 = 0;
     let mut max_tuck_depth: u8 = 0;
@@ -266,52 +270,91 @@ pub fn verify_knitout_program(
     let mut active_max_needle: Option<i32> = None;
     let mut prev_pass_dir: Option<CourseDir> = None;
     let mut estimated_courses: u32 = 0;
+    let mut ayab_transfer_acknowledged = false;
 
-    let check_bed_and_bounds =
-        |needle: Needle, allow_slider: bool, step: usize| -> Result<(), Refusal> {
-            if needle.bed.is_slider() {
-                if !profile.has_sliders {
+    let both_beds_live = |h: &BTreeMap<(Bed, i32), HookState>| -> bool {
+        let has_front = h
+            .iter()
+            .any(|((bed, _), st)| matches!(bed, Bed::Front | Bed::FrontSlider) && st.loops > 0);
+        let has_back = h
+            .iter()
+            .any(|((bed, _), st)| matches!(bed, Bed::Back | Bed::BackSlider) && st.loops > 0);
+        has_front && has_back
+    };
+
+    let check_unique_carriers =
+        |cs: &[CarrierId], op_name: &str, step: usize| -> Result<(), Refusal> {
+            if cs.is_empty() {
+                return Err(Refusal::new(
+                    RefusalCode::MachineStateInfeasible,
+                    format!("op #{step}: `{op_name}` requires at least one carrier"),
+                )
+                .repair("specify at least one declared active carrier"));
+            }
+            let mut seen = BTreeSet::new();
+            for c in cs {
+                if !seen.insert(c.as_str()) {
                     return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: `{op_name}` lists duplicate carrier '{}'", c.0),
+                    )
+                    .repair("remove duplicate carrier entries from the Knitout carrier set"));
+                }
+            }
+            Ok(())
+        };
+
+    let check_bed_and_bounds = |needle: Needle,
+                                allow_slider: bool,
+                                step: usize|
+     -> Result<(), Refusal> {
+        if needle.bed.is_slider() {
+            if !profile.has_sliders {
+                return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
                         format!(
                             "op #{step}: slider needle {} used on sliderless machine '{}'",
                             needle.knitout_token(),
                             profile.id
                         ),
-                    ));
-                }
-                if !allow_slider {
-                    return Err(Refusal::new(
+                    )
+                    .repair("switch to half-gauge empty-needle parking or select a slider-bed machine profile"));
+            }
+            if !allow_slider {
+                return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
                         format!(
                             "op #{step}: loop formation forbidden on slider bed {}",
                             needle.knitout_token()
                         ),
-                    ));
-                }
+                    )
+                    .repair("transfer loops back to main needles (`f`/`b`) before knitting, tucking, or splitting"));
             }
-            if matches!(needle.bed, Bed::Back | Bed::BackSlider) && !profile.has_back_bed {
-                return Err(Refusal::new(
-                    RefusalCode::MachineStateInfeasible,
-                    format!(
-                        "op #{step}: back-bed needle {} used on single-bed machine '{}'",
-                        needle.knitout_token(),
-                        profile.id
-                    ),
-                ));
-            }
-            if needle.index < 0 || i64::from(needle.index) >= i64::from(profile.needle_count) {
-                return Err(Refusal::new(
+        }
+        if matches!(needle.bed, Bed::Back | Bed::BackSlider) && !profile.has_back_bed {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "op #{step}: back-bed needle {} used on single-bed machine '{}'",
+                    needle.knitout_token(),
+                    profile.id
+                ),
+            )
+            .repair("use front-bed stitches only or switch to a V-bed / ribber profile"));
+        }
+        if needle.index < 0 || i64::from(needle.index) >= i64::from(profile.needle_count) {
+            return Err(Refusal::new(
                     RefusalCode::MachineStateInfeasible,
                     format!(
                         "op #{step}: needle {} outside bed range 0..{}",
                         needle.knitout_token(),
                         profile.needle_count
                     ),
-                ));
-            }
-            Ok(())
-        };
+                )
+                .repair("reduce pattern stitch width, adjust centering offset, or choose a wider needle bed"));
+        }
+        Ok(())
+    };
 
     let record_needle_span = |idx: i32, lo: &mut Option<i32>, hi: &mut Option<i32>| {
         *lo = Some(lo.map_or(idx, |m| m.min(idx)));
@@ -321,40 +364,39 @@ pub fn verify_knitout_program(
     for (step, op) in program.ops.iter().enumerate() {
         match op {
             KnitoutOp::In { carriers: cs } => {
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `in` requires at least one carrier"),
-                    ));
-                }
+                ayab_transfer_acknowledged = false;
+                check_unique_carriers(cs, "in", step)?;
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
                         )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
+                        )
                     })?;
                     if st.active {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: carrier '{}' brought in twice", c.0),
-                        ));
+                        )
+                        .repair("park the carrier with `out` before bringing it in again"));
                     }
                     st.active = true;
                 }
             }
             KnitoutOp::Out { carriers: cs } => {
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `out` requires at least one carrier"),
-                    ));
-                }
+                ayab_transfer_acknowledged = false;
+                check_unique_carriers(cs, "out", step)?;
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
+                        )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
                         )
                     })?;
                     if !st.active || st.hook_holding {
@@ -364,7 +406,8 @@ pub fn verify_knitout_program(
                                 "op #{step}: carrier '{}' cannot execute `out` in current state",
                                 c.0
                             ),
-                        ));
+                        )
+                        .repair("ensure the carrier is active and its yarn-inserting hook is released before `out`"));
                     }
                     st.active = false;
                     st.last_needle = None;
@@ -372,6 +415,7 @@ pub fn verify_knitout_program(
                 }
             }
             KnitoutOp::InHook { carriers: cs } => {
+                ayab_transfer_acknowledged = false;
                 if !profile.has_yarn_inserting_hooks {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
@@ -379,13 +423,19 @@ pub fn verify_knitout_program(
                             "op #{step}: `inhook` forbidden on machine '{}' (uses direct grippers `in`/`out`, no yarn-inserting hooks)",
                             profile.id
                         ),
-                    ));
+                    )
+                    .repair("replace `inhook`/`releasehook`/`outhook` with gripper `in`/`out` for this profile"));
                 }
-                if cs.is_empty() {
+                check_unique_carriers(cs, "inhook", step)?;
+                if cs.len() > 1 || carriers.values().any(|s| s.hook_holding) {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `inhook` requires at least one carrier"),
-                    ));
+                        format!(
+                            "op #{step}: single yarn-inserting hook on '{}' cannot hold multiple carriers concurrently",
+                            profile.id
+                        ),
+                    )
+                    .repair("call `releasehook` on the currently held carrier before executing `inhook` on another carrier"));
                 }
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
@@ -393,18 +443,23 @@ pub fn verify_knitout_program(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
                         )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
+                        )
                     })?;
                     if st.active {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: carrier '{}' already active on `inhook`", c.0),
-                        ));
+                        )
+                        .repair("park the carrier with `outhook` before re-inserting it"));
                     }
                     st.active = true;
                     st.hook_holding = true;
                 }
             }
             KnitoutOp::ReleaseHook { carriers: cs } => {
+                ayab_transfer_acknowledged = false;
                 if !profile.has_yarn_inserting_hooks {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
@@ -412,19 +467,18 @@ pub fn verify_knitout_program(
                             "op #{step}: `releasehook` forbidden on machine '{}'",
                             profile.id
                         ),
-                    ));
+                    )
+                    .repair("remove `releasehook` on gripper-only machines"));
                 }
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `releasehook` requires at least one carrier"),
-                    ));
-                }
+                check_unique_carriers(cs, "releasehook", step)?;
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
+                        )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
                         )
                     })?;
                     if !st.hook_holding {
@@ -434,12 +488,14 @@ pub fn verify_knitout_program(
                                 "op #{step}: `releasehook` without active `inhook` on '{}'",
                                 c.0
                             ),
-                        ));
+                        )
+                        .repair("emit `inhook` before `releasehook` for each carrier"));
                     }
                     st.hook_holding = false;
                 }
             }
             KnitoutOp::OutHook { carriers: cs } => {
+                ayab_transfer_acknowledged = false;
                 if !profile.has_yarn_inserting_hooks {
                     return Err(Refusal::new(
                         RefusalCode::MachineStateInfeasible,
@@ -447,26 +503,26 @@ pub fn verify_knitout_program(
                             "op #{step}: `outhook` forbidden on machine '{}'",
                             profile.id
                         ),
-                    ));
+                    )
+                    .repair("replace `outhook` with gripper `out` for this profile"));
                 }
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `outhook` requires at least one carrier"),
-                    ));
-                }
+                check_unique_carriers(cs, "outhook", step)?;
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
                         )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
+                        )
                     })?;
                     if !st.active || st.hook_holding {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: invalid `outhook` on carrier '{}'", c.0),
-                        ));
+                        )
+                        .repair("call `releasehook` after cast-on before parking with `outhook`"));
                     }
                     st.active = false;
                     st.last_needle = None;
@@ -474,6 +530,7 @@ pub fn verify_knitout_program(
                 }
             }
             KnitoutOp::Rack { quarter_pitches } => {
+                ayab_transfer_acknowledged = false;
                 if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
                     && !CalibrationSwatchCaps::ALLOW_RACK
                     && *quarter_pitches != 0
@@ -481,7 +538,36 @@ pub fn verify_knitout_program(
                     return Err(Refusal::new(
                         RefusalCode::MaterialProcessHazard,
                         format!("op #{step}: racking forbidden in CalibrationSwatchOnly mode"),
+                    )
+                    .repair(
+                        "remove non-zero `rack` operations from uncalibrated swatch programs",
                     ));
+                }
+                if profile.backend_kind == MachineBackendKind::BrotherAyab
+                    && !profile.automated_carriage_control
+                    && *quarter_pitches != 0
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: motorized `rack` ({quarter_pitches} quarter-pitches) is unsupported on manual-carriage Brother AYAB '{}'",
+                            profile.id
+                        ),
+                    )
+                    .repair("remove motorized `rack` ops and record manual KR-850 racking handle changes as operator pauses"));
+                }
+                if (profile.requires_whole_pitch_racking
+                    || profile.backend_kind == MachineBackendKind::KniterateKc)
+                    && quarter_pitches % 4 != 0
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: machine '{}' requires whole-pitch racking (got {quarter_pitches} quarter-pitches)",
+                            profile.id
+                        ),
+                    )
+                    .repair("use integer-pitch racking (multiples of 4 quarter-pitches) on this machine"));
                 }
                 let abs_qp = quarter_pitches.unsigned_abs();
                 if abs_qp > profile.max_racking_quarter_pitches as u32 {
@@ -491,7 +577,35 @@ pub fn verify_knitout_program(
                             "op #{step}: rack {} quarter-pitches exceeds machine limit ±{}",
                             quarter_pitches, profile.max_racking_quarter_pitches
                         ),
-                    ));
+                    )
+                    .repair("split wide shifts into multi-step transfers within the machine racking cap"));
+                }
+                if both_beds_live(&hooks) {
+                    let delta_qp = active_bridge_racks
+                        .iter()
+                        .map(|&r0| quarter_pitches.abs_diff(r0))
+                        .max()
+                        .unwrap_or(abs_qp);
+                    if delta_qp > 0 {
+                        let dx = (f64::from(delta_qp) * profile.needle_pitch_mm) / 4.0;
+                        let span = (profile.bed_gap_mm * profile.bed_gap_mm + dx * dx).sqrt();
+                        // Conservative inter-bed unstretched yarn length (bed gap + ~2.2 pitches
+                        // of draw-in slack from adjacent rib/transfer stitches).
+                        let l0 = profile.bed_gap_mm + 2.2 * profile.needle_pitch_mm;
+                        let strain = ((span - l0) / l0).max(0.0);
+                        let max_allow = profile.racking_yarn_breaking_elongation / 2.0;
+                        if strain > max_allow {
+                            return Err(Refusal::new(
+                                RefusalCode::MaterialProcessHazard,
+                                format!(
+                                    "op #{step}: cross-bed racking ({quarter_pitches} quarter-pitches, span {span:.2} mm) induces strain {:.2}% exceeding SF >= 2.0 limit {:.2}%",
+                                    strain * 100.0,
+                                    max_allow * 100.0
+                                ),
+                            )
+                            .repair("split wide transfers into multi-step smaller racks, increase stitch cam slack, or select a higher-elongation yarn"));
+                        }
+                    }
                 }
                 rack_quarter_pitches = *quarter_pitches;
                 max_abs_rack = max_abs_rack.max(abs_qp as i32);
@@ -501,13 +615,9 @@ pub fn verify_knitout_program(
                 needle,
                 carriers: cs,
             } => {
+                ayab_transfer_acknowledged = false;
                 check_bed_and_bounds(*needle, false, step)?;
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `knit` requires at least one active carrier"),
-                    ));
-                }
+                check_unique_carriers(cs, "knit", step)?;
                 if prev_pass_dir != Some(*dir) {
                     estimated_courses += 1;
                     prev_pass_dir = Some(*dir);
@@ -519,11 +629,17 @@ pub fn verify_knitout_program(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
                         )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
+                        )
                     })?;
                     if !st.active {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: carrier '{}' knitted before `in`/`inhook`", c.0),
+                        )
+                        .repair(
+                            "bring the carrier into action with `in` or `inhook` before knitting",
                         ));
                     }
                     if let Some(prev_k) = st.last_knit_needle {
@@ -545,19 +661,18 @@ pub fn verify_knitout_program(
                 h.tuck_depth = 0;
                 h.last_active_course = estimated_courses;
                 max_loops_on_hook = max_loops_on_hook.max(h.loops);
+                if both_beds_live(&hooks) {
+                    active_bridge_racks.insert(rack_quarter_pitches);
+                }
             }
             KnitoutOp::Tuck {
                 dir,
                 needle,
                 carriers: cs,
             } => {
+                ayab_transfer_acknowledged = false;
                 check_bed_and_bounds(*needle, false, step)?;
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `tuck` requires at least one active carrier"),
-                    ));
-                }
+                check_unique_carriers(cs, "tuck", step)?;
                 if prev_pass_dir != Some(*dir) {
                     estimated_courses += 1;
                     prev_pass_dir = Some(*dir);
@@ -569,11 +684,17 @@ pub fn verify_knitout_program(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
                         )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
+                        )
                     })?;
                     if !st.active {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: carrier '{}' tucked before `in`/`inhook`", c.0),
+                        )
+                        .repair(
+                            "bring the carrier into action with `in` or `inhook` before tucking",
                         ));
                     }
                     if let Some(prev_k) = st.last_knit_needle {
@@ -601,7 +722,8 @@ pub fn verify_knitout_program(
                             needle.knitout_token(),
                             profile.max_loops_per_hook
                         ),
-                    ));
+                    )
+                    .repair("knit off accumulated loops on this needle before adding another tuck"));
                 }
                 if tuck_depth > u16::from(profile.max_tuck_stack) {
                     return Err(Refusal::new(
@@ -611,7 +733,8 @@ pub fn verify_knitout_program(
                             needle.knitout_token(),
                             profile.max_tuck_stack
                         ),
-                    ));
+                    )
+                    .repair("insert a knit pass to clear consecutive tucks on this hook"));
                 }
                 if h.loops == 0 {
                     h.last_active_course = estimated_courses;
@@ -620,6 +743,9 @@ pub fn verify_knitout_program(
                 h.tuck_depth = tuck_depth as u8;
                 max_loops_on_hook = max_loops_on_hook.max(h.loops);
                 max_tuck_depth = max_tuck_depth.max(h.tuck_depth);
+                if both_beds_live(&hooks) {
+                    active_bridge_racks.insert(rack_quarter_pitches);
+                }
             }
             KnitoutOp::Split {
                 dir,
@@ -633,17 +759,25 @@ pub fn verify_knitout_program(
                     return Err(Refusal::new(
                         RefusalCode::MaterialProcessHazard,
                         format!("op #{step}: `split` forbidden in CalibrationSwatchOnly mode"),
-                    ));
+                    )
+                    .repair("remove `split` transfers from uncalibrated swatch programs"));
+                }
+                if profile.backend_kind == MachineBackendKind::BrotherAyab
+                    && !ayab_transfer_acknowledged
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: unflagged `split` on manual-carriage Brother AYAB '{}' requires a preceding operator `pause`",
+                            profile.id
+                        ),
+                    )
+                    .repair("insert an explicit operator `pause ; hand-transfer ...` before any transfer/split on Brother AYAB"));
                 }
                 check_bed_and_bounds(*from, false, step)?;
                 check_bed_and_bounds(*to, true, step)?;
                 validate_bed_transfer_alignment(*from, *to, rack_quarter_pitches, step)?;
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `split` requires >= 1 active carrier"),
-                    ));
-                }
+                check_unique_carriers(cs, "split", step)?;
                 if prev_pass_dir != Some(*dir) {
                     estimated_courses += 1;
                     prev_pass_dir = Some(*dir);
@@ -656,11 +790,17 @@ pub fn verify_knitout_program(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
                         )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
+                        )
                     })?;
                     if !st.active {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: inactive carrier '{}' in `split`", c.0),
+                        )
+                        .repair(
+                            "bring the carrier into action with `in` or `inhook` before `split`",
                         ));
                     }
                     if let Some(prev_k) = st.last_knit_needle {
@@ -692,6 +832,9 @@ pub fn verify_knitout_program(
                 src.tuck_depth = 0;
                 src.last_active_course = estimated_courses;
                 total_transfers += 1;
+                if both_beds_live(&hooks) {
+                    active_bridge_racks.insert(rack_quarter_pitches);
+                }
             }
             KnitoutOp::Xfer { from, to } => {
                 if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
@@ -700,7 +843,20 @@ pub fn verify_knitout_program(
                     return Err(Refusal::new(
                         RefusalCode::MaterialProcessHazard,
                         format!("op #{step}: `xfer` forbidden in CalibrationSwatchOnly mode"),
-                    ));
+                    )
+                    .repair("remove `xfer` operations from uncalibrated swatch programs"));
+                }
+                if profile.backend_kind == MachineBackendKind::BrotherAyab
+                    && !ayab_transfer_acknowledged
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: unflagged `xfer` on manual-carriage Brother AYAB '{}' requires a preceding operator `pause`",
+                            profile.id
+                        ),
+                    )
+                    .repair("insert an explicit operator `pause ; hand-transfer ...` before any transfer on Brother AYAB"));
                 }
                 check_bed_and_bounds(*from, true, step)?;
                 check_bed_and_bounds(*to, true, step)?;
@@ -719,36 +875,44 @@ pub fn verify_knitout_program(
                     *src = HookState::default();
                 }
                 total_transfers += 1;
+                if !both_beds_live(&hooks) {
+                    active_bridge_racks.clear();
+                } else if active_bridge_racks.is_empty() {
+                    active_bridge_racks.insert(rack_quarter_pitches);
+                }
             }
             KnitoutOp::Miss {
                 needle,
                 carriers: cs,
                 ..
             } => {
+                ayab_transfer_acknowledged = false;
                 check_bed_and_bounds(*needle, false, step)?;
-                if cs.is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::MachineStateInfeasible,
-                        format!("op #{step}: `miss` requires at least one active carrier"),
-                    ));
-                }
+                check_unique_carriers(cs, "miss", step)?;
                 for c in cs {
                     let st = carriers.get_mut(&c.0).ok_or_else(|| {
                         Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: undeclared carrier '{}'", c.0),
                         )
+                        .repair(
+                            "declare the carrier in `;;Carriers:` and MachineProfile.carrier_ids",
+                        )
                     })?;
                     if !st.active {
                         return Err(Refusal::new(
                             RefusalCode::MachineStateInfeasible,
                             format!("op #{step}: inactive carrier '{}' in `miss`", c.0),
+                        )
+                        .repair(
+                            "bring the carrier into action with `in` or `inhook` before `miss`",
                         ));
                     }
                     st.last_needle = Some(needle.index);
                 }
             }
             KnitoutOp::Amiss { needle } => {
+                ayab_transfer_acknowledged = false;
                 check_bed_and_bounds(*needle, false, step)?;
             }
             KnitoutOp::Drop { needle } => {
@@ -757,6 +921,9 @@ pub fn verify_knitout_program(
                     h.loops = 0;
                     h.tuck_depth = 0;
                     h.last_active_course = 0;
+                }
+                if !both_beds_live(&hooks) {
+                    active_bridge_racks.clear();
                 }
             }
             KnitoutOp::CarrierSpacing { needles } => {
@@ -767,15 +934,94 @@ pub fn verify_knitout_program(
                             "op #{step}: carrier spacing {needles} below machine minimum {}",
                             profile.min_carrier_spacing
                         ),
+                    )
+                    .repair(
+                        "set `x-carrier-spacing` to at least MachineProfile.min_carrier_spacing",
                     ));
                 }
             }
-            KnitoutOp::Stitch { .. }
-            | KnitoutOp::Pause { .. }
-            | KnitoutOp::Comment { .. }
-            | KnitoutOp::AddRollerAdvance { .. }
-            | KnitoutOp::SpeedNumber { .. }
-            | KnitoutOp::PresserMode { .. } => {}
+            KnitoutOp::Stitch { leading, trailing } => {
+                let lo = profile.cam_setting_range[0] - 1e-6;
+                let hi = profile.cam_setting_range[1] + 1e-6;
+                let lead_cam = f64::from(*leading) / 10.0;
+                let trail_cam = f64::from(*trailing) / 10.0;
+                if lead_cam < lo || lead_cam > hi || trail_cam < lo || trail_cam > hi {
+                    return Err(Refusal::new(
+                        RefusalCode::MaterialProcessHazard,
+                        format!(
+                            "op #{step}: stitch cam setting {lead_cam:.1}/{trail_cam:.1} outside machine '{}' cam_setting_range {:?}",
+                            profile.id, profile.cam_setting_range
+                        ),
+                    )
+                    .repair("adjust cam stitch numbers to fall inside MachineProfile.cam_setting_range"));
+                }
+            }
+            KnitoutOp::SpeedNumber { speed } => {
+                if !profile.automated_carriage_control {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: motorized `x-speed-number` is unsupported on manual-carriage machine '{}'",
+                            profile.id
+                        ),
+                    )
+                    .repair("remove `x-speed-number` directives when targeting a manual-carriage machine"));
+                }
+                if *speed == 0 {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!("op #{step}: `x-speed-number` must be positive"),
+                    )
+                    .repair("set a positive carriage speed number"));
+                }
+                if ctx.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly
+                    && profile.backend_kind == MachineBackendKind::KniterateKc
+                    && *speed > 150
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::MaterialProcessHazard,
+                        format!(
+                            "op #{step}: CalibrationSwatchOnly speed {speed} exceeds Kniterate swatch cap 150"
+                        ),
+                    )
+                    .repair("cap `x-speed-number` to <= 150 on uncalibrated Kniterate swatches"));
+                }
+            }
+            KnitoutOp::Pause { .. } => {
+                if !profile.supports_pause {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!("op #{step}: machine '{}' does not support operator `pause`", profile.id),
+                    )
+                    .repair("remove `pause` operations or select a machine profile supporting operator pauses"));
+                }
+                ayab_transfer_acknowledged = true;
+            }
+            KnitoutOp::AddRollerAdvance { .. } => {
+                if !profile.automated_carriage_control {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: motorized `x-add-roller-advance` is unsupported on manual-carriage machine '{}'",
+                            profile.id
+                        ),
+                    )
+                    .repair("remove roller-advance commands and manage takedown weights manually on this machine"));
+                }
+            }
+            KnitoutOp::PresserMode { .. } => {
+                if !profile.supports_presser || !profile.automated_carriage_control {
+                    return Err(Refusal::new(
+                        RefusalCode::MachineStateInfeasible,
+                        format!(
+                            "op #{step}: `x-presser-mode` is unsupported on machine '{}'",
+                            profile.id
+                        ),
+                    )
+                    .repair("remove `x-presser-mode` directives or select a machine profile equipped with presser-foot control"));
+                }
+            }
+            KnitoutOp::Comment { .. } => {}
         }
     }
 
@@ -785,7 +1031,8 @@ pub fn verify_knitout_program(
             return Err(Refusal::new(
                 RefusalCode::MachineStateInfeasible,
                 format!("carrier '{cid}' was not parked (`out`/`outhook`) before end of program"),
-            ));
+            )
+            .repair("park every active carrier with `out` or `outhook` before EOF"));
         }
     }
 
@@ -804,7 +1051,8 @@ pub fn verify_knitout_program(
                         "calibration swatch needle span {span} exceeds hard cap {}",
                         CalibrationSwatchCaps::MAX_NEEDLES
                     ),
-                ));
+                )
+                .repair("reduce calibration swatch width to <= 80 needles"));
             }
         }
         if estimated_courses > CalibrationSwatchCaps::MAX_COURSES {
@@ -814,7 +1062,8 @@ pub fn verify_knitout_program(
                     "calibration swatch course count {estimated_courses} exceeds hard cap {}",
                     CalibrationSwatchCaps::MAX_COURSES
                 ),
-            ));
+            )
+            .repair("reduce calibration swatch length to <= 200 courses"));
         }
     }
 
@@ -833,7 +1082,8 @@ pub fn verify_knitout_program(
                 "short-row roller imbalance ({max_roller_imbalance} courses) exceeds machine cap {}",
                 profile.max_roller_imbalance_courses
             ),
-        ));
+        )
+        .repair("distribute short rows symmetrically across opposing edges or reduce held-loop depth"));
     }
 
     // Check 6: Child float length gate (measured over max(needle_pitch_mm, blocked_wale_pitch_mm))
@@ -933,7 +1183,8 @@ fn validate_bed_transfer_alignment(
                 from.knitout_token(),
                 to.knitout_token()
             ),
-        ));
+        )
+        .repair("transfer across to an empty opposite-bed needle, rack, and transfer back"));
     }
     if rack_quarter_pitches % 4 != 0 {
         return Err(Refusal::new(
@@ -944,7 +1195,8 @@ fn validate_bed_transfer_alignment(
                 to.knitout_token(),
                 rack_quarter_pitches
             ),
-        ));
+        )
+        .repair("set `rack` to an integer needle pitch before executing `xfer` or `split`"));
     }
     let rack_int = i64::from(rack_quarter_pitches / 4);
     // Standard Knitout convention: back needle `b_j` aligns with front needle `f_{j + rack}`
@@ -961,9 +1213,423 @@ fn validate_bed_transfer_alignment(
                 from.knitout_token(),
                 to.knitout_token()
             ),
-        ));
+        )
+        .repair("align front and back needle indices with `rack` before transferring"));
     }
     Ok(())
+}
+
+/// Physical parameters for geometric cross-bed racking-strain verification (`FTX-K03` mode #2):
+/// $\ell_{\text{span}} = \sqrt{g^2 + (r \cdot p / 4)^2}$ compared against unstretched bridge
+/// length $\ell_0 = g + \text{available\_loop\_slack\_mm}$ and yarn breaking elongation with
+/// safety factor $\text{SF} \ge 2.0$.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RackingStrainSpec {
+    /// Physical needle-bed clearance gap `g`, in mm (`> 0`).
+    pub bed_gap_mm: f64,
+    /// Unstretched inter-bed yarn slack drawn from adjacent stitches beyond `bed_gap_mm`, in mm (`>= 0`).
+    pub available_loop_slack_mm: f64,
+    /// Measured yarn breaking elongation fraction (e.g. `0.029` for 2.90% wool, `0.052` for 5.20% cotton).
+    /// `None` denotes `UNCERTAIN` and refuses fail-closed whenever cross-bed racking occurs!
+    pub yarn_breaking_elongation: Option<f64>,
+    /// Required tensile elongation safety factor (`>= 2.0`).
+    pub safety_factor: f64,
+}
+
+impl RackingStrainSpec {
+    /// Builds a default envelope from `profile.bed_gap_mm` with `SF = 2.0`.
+    #[must_use]
+    pub fn for_profile(
+        profile: &MachineProfile,
+        available_loop_slack_mm: f64,
+        yarn_breaking_elongation: Option<f64>,
+    ) -> Self {
+        Self {
+            bed_gap_mm: profile.bed_gap_mm,
+            available_loop_slack_mm,
+            yarn_breaking_elongation,
+            safety_factor: 2.0,
+        }
+    }
+}
+
+/// Verified cross-bed racking-strain telemetry (`FTX-K03`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RackingStrainReport {
+    /// Maximum geometric inter-bed span $\sqrt{g^2 + (r \cdot p / 4)^2}$ observed during cross-bed racking, in mm.
+    pub max_racking_span_mm: f64,
+    /// Peak geometric elongation fraction `(l_span - l0) / l0` (`>= 0`).
+    pub max_racking_strain: f64,
+    /// Allowable elongation ceiling `eps_break / safety_factor` (`None` if no cross-bed racking occurred and elongation was omitted).
+    pub allowable_strain: Option<f64>,
+    /// Number of non-zero cross-bed racking events evaluated while both beds held live loops.
+    pub checked_racking_events: usize,
+}
+
+/// Checks diagonal cross-bed racking yarn-span breakage ($\sqrt{g^2 + (r \cdot p / 4)^2}$) across
+/// every `Rack` step while both front and back beds hold live loops (`FTX-K03` mode #2).
+///
+/// # Errors
+/// [`RefusalCode::MaterialProcessHazard`] if cross-bed racking occurs with `UNCERTAIN`
+/// (`yarn_breaking_elongation: None`) or exceeds `eps_break / safety_factor`; [`RefusalCode::OutOfRange`]
+/// or [`RefusalCode::NonFinite`] for invalid specification values.
+pub fn verify_racking_strain(
+    program: &KnitoutProgram,
+    profile: &MachineProfile,
+    spec: &RackingStrainSpec,
+) -> Result<RackingStrainReport, Refusal> {
+    profile.validate()?;
+    Refusal::finite("bed_gap_mm", spec.bed_gap_mm)?;
+    Refusal::finite("available_loop_slack_mm", spec.available_loop_slack_mm)?;
+    Refusal::finite("safety_factor", spec.safety_factor)?;
+    if spec.bed_gap_mm <= 0.0 || spec.available_loop_slack_mm < 0.0 || spec.safety_factor < 2.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "racking strain verification requires bed_gap_mm > 0, available_loop_slack_mm >= 0, and safety_factor >= 2.0",
+        )
+        .repair("provide positive bed_gap_mm, non-negative loop slack, and safety_factor >= 2.0"));
+    }
+    if let Some(eps) = spec.yarn_breaking_elongation {
+        Refusal::finite("yarn_breaking_elongation", eps)?;
+        if !(eps > 0.0 && eps <= 5.0) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("yarn_breaking_elongation {eps} must lie in (0, 5.0]"),
+            )
+            .repair("provide measured yarn breaking elongation fraction (e.g. 0.029 for 2.9%)"));
+        }
+    }
+
+    let l0 = spec.bed_gap_mm + spec.available_loop_slack_mm;
+    let allowable = spec
+        .yarn_breaking_elongation
+        .map(|eps| eps / spec.safety_factor);
+    let mut front_live: BTreeSet<(Bed, i32)> = BTreeSet::new();
+    let mut back_live: BTreeSet<(Bed, i32)> = BTreeSet::new();
+    let mut current_rack: i32 = 0;
+    let mut active_bridge_racks: BTreeSet<i32> = BTreeSet::new();
+    let mut max_span = spec.bed_gap_mm;
+    let mut max_strain = 0.0_f64;
+    let mut checked = 0usize;
+
+    let set_live =
+        |n: Needle, occupied: bool, f: &mut BTreeSet<(Bed, i32)>, b: &mut BTreeSet<(Bed, i32)>| {
+            let target = if matches!(n.bed, Bed::Front | Bed::FrontSlider) {
+                f
+            } else {
+                b
+            };
+            if occupied {
+                target.insert((n.bed, n.index));
+            } else {
+                target.remove(&(n.bed, n.index));
+            }
+        };
+
+    for (step, op) in program.ops.iter().enumerate() {
+        match op {
+            KnitoutOp::Knit { needle, .. } | KnitoutOp::Tuck { needle, .. } => {
+                set_live(*needle, true, &mut front_live, &mut back_live);
+                if !front_live.is_empty() && !back_live.is_empty() {
+                    active_bridge_racks.insert(current_rack);
+                }
+            }
+            KnitoutOp::Split { from, to, .. } => {
+                let had_src = if matches!(from.bed, Bed::Front | Bed::FrontSlider) {
+                    front_live.contains(&(from.bed, from.index))
+                } else {
+                    back_live.contains(&(from.bed, from.index))
+                };
+                if had_src {
+                    set_live(*to, true, &mut front_live, &mut back_live);
+                }
+                set_live(*from, true, &mut front_live, &mut back_live);
+                if !front_live.is_empty() && !back_live.is_empty() {
+                    active_bridge_racks.insert(current_rack);
+                }
+            }
+            KnitoutOp::Xfer { from, to } => {
+                let had_src = if matches!(from.bed, Bed::Front | Bed::FrontSlider) {
+                    front_live.remove(&(from.bed, from.index))
+                } else {
+                    back_live.remove(&(from.bed, from.index))
+                };
+                if had_src {
+                    set_live(*to, true, &mut front_live, &mut back_live);
+                }
+                if front_live.is_empty() || back_live.is_empty() {
+                    active_bridge_racks.clear();
+                } else if active_bridge_racks.is_empty() {
+                    // Single-bed fabric just bridged onto the opposite bed at `current_rack`.
+                    active_bridge_racks.insert(current_rack);
+                }
+            }
+            KnitoutOp::Drop { needle } => {
+                set_live(*needle, false, &mut front_live, &mut back_live);
+                if front_live.is_empty() || back_live.is_empty() {
+                    active_bridge_racks.clear();
+                }
+            }
+            KnitoutOp::Rack { quarter_pitches } => {
+                if !front_live.is_empty() && !back_live.is_empty() {
+                    let delta_qp = active_bridge_racks
+                        .iter()
+                        .map(|&r0| quarter_pitches.abs_diff(r0))
+                        .max()
+                        .unwrap_or_else(|| quarter_pitches.unsigned_abs());
+                    if delta_qp > 0 {
+                        let Some(max_allow) = allowable else {
+                            return Err(Refusal::new(
+                                RefusalCode::MaterialProcessHazard,
+                                format!(
+                                    "op #{step}: cross-bed racking ({quarter_pitches} quarter-pitches, delta {delta_qp}) refused because yarn_breaking_elongation is UNCERTAIN"
+                                ),
+                            )
+                            .repair("measure or supply source-qualified yarn breaking elongation before cross-bed racking")
+                            .repair("or eliminate cross-bed racking while both beds hold live loops"));
+                        };
+                        let dx = (f64::from(delta_qp) * profile.needle_pitch_mm) / 4.0;
+                        let span = (spec.bed_gap_mm * spec.bed_gap_mm + dx * dx).sqrt();
+                        let strain = ((span - l0) / l0).max(0.0);
+                        checked += 1;
+                        max_span = max_span.max(span);
+                        max_strain = max_strain.max(strain);
+                        if strain > max_allow {
+                            return Err(Refusal::new(
+                                RefusalCode::MaterialProcessHazard,
+                                format!(
+                                    "op #{step}: cross-bed racking ({quarter_pitches} quarter-pitches, delta {delta_qp}, span {span:.2} mm) induces strain {:.2}% exceeding allowable {:.2}% (SF >= {:.1})",
+                                    strain * 100.0,
+                                    max_allow * 100.0,
+                                    spec.safety_factor
+                                ),
+                            )
+                            .repair("split the transfer into smaller racking steps, increase stitch cam loop slack, or choose a higher-elongation yarn"));
+                        }
+                    }
+                }
+                current_rack = *quarter_pitches;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(RackingStrainReport {
+        max_racking_span_mm: max_span,
+        max_racking_strain: max_strain,
+        allowable_strain: allowable,
+        checked_racking_events: checked,
+    })
+}
+
+/// Runs both [`verify_knitout_program`] and [`verify_racking_strain`] atomically (`FTX-K03`).
+///
+/// # Errors
+/// Returns any discrete VM, child-safety, or racking-strain refusal.
+pub fn verify_knitout_program_with_racking_strain(
+    program: &KnitoutProgram,
+    profile: &MachineProfile,
+    ctx: &KnitSafetyContext<'_>,
+    strain_spec: &RackingStrainSpec,
+) -> Result<(VBedVmReport, RackingStrainReport), Refusal> {
+    let vm_report = verify_knitout_program(program, profile, ctx)?;
+    let strain_report = verify_racking_strain(program, profile, strain_spec)?;
+    Ok((vm_report, strain_report))
+}
+
+/// Synthesizes a deterministic Regime III inline yarn-dyeing intake timeline
+/// ([`Regime3IntakeTimeline`]) directly from a Knitout v2 program and [`MachineProfile`] timing
+/// kinematics (`FTX-K03` -> `FTX-K16` bridge).
+///
+/// Consecutive same-direction loop-forming operations (`Knit`/`Tuck`/`Split`) form [`IntakeEventKind::KnitPass`]
+/// intervals preserving exact yarn mass (`duration_s * yarn_intake_speed_m_s == n_loops * loop_length_mm * 0.001`),
+/// while carriage reversals, transfer passes, racks, and operator pauses emit zero-feed dwell events
+/// for dancer-arm accumulator ODE verification.
+///
+/// # Errors
+/// [`RefusalCode::OutOfRange`], [`RefusalCode::NonFinite`], or [`RefusalCode::DegenerateGeometry`].
+pub fn synthesize_regime3_intake_timeline(
+    program: &KnitoutProgram,
+    profile: &MachineProfile,
+    loop_length_mm: f64,
+    dt_verify_s: f64,
+) -> Result<Regime3IntakeTimeline, Refusal> {
+    profile.validate()?;
+    let kin = profile.timing;
+    kin.validate()?;
+    Refusal::finite("loop_length_mm", loop_length_mm)?;
+    Refusal::finite("dt_verify_s", dt_verify_s)?;
+    if loop_length_mm <= 0.0 || dt_verify_s <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "Regime III intake timeline synthesis requires loop_length_mm > 0 and dt_verify_s > 0",
+        )
+        .repair("pass calibrated positive loop_length_mm and dt_verify_s"));
+    }
+
+    let mut events: Vec<IntakeEvent> = Vec::new();
+    let mut pass_dir: Option<CourseDir> = None;
+    let mut pass_min: i32 = i32::MAX;
+    let mut pass_max: i32 = i32::MIN;
+    let mut pass_loops: u64 = 0;
+    let mut last_completed_dir: Option<CourseDir> = None;
+    let mut in_xfer_batch = false;
+
+    let flush_pass = |events: &mut Vec<IntakeEvent>,
+                      pass_dir: &mut Option<CourseDir>,
+                      pass_min: &mut i32,
+                      pass_max: &mut i32,
+                      pass_loops: &mut u64,
+                      last_completed_dir: &mut Option<CourseDir>| {
+        if let Some(dir) = pass_dir.take()
+            && *pass_loops > 0
+        {
+            if let Some(prev) = *last_completed_dir
+                && prev != dir
+                && kin.reversal_dwell_s > 0.0
+            {
+                events.push(IntakeEvent {
+                    duration_s: kin.reversal_dwell_s,
+                    yarn_intake_speed_m_s: 0.0,
+                    kind: IntakeEventKind::ReversalDwell,
+                });
+            }
+            let travel_needles =
+                ((i64::from(*pass_max) - i64::from(*pass_min)).unsigned_abs() + 1).max(1) as f64;
+            let travel_m = travel_needles * profile.needle_pitch_mm * 0.001;
+            let duration_s = (travel_m / kin.carriage_speed_m_s).max(1e-4);
+            let yarn_m = (*pass_loops as f64) * loop_length_mm * 0.001;
+            events.push(IntakeEvent {
+                duration_s,
+                yarn_intake_speed_m_s: yarn_m / duration_s,
+                kind: IntakeEventKind::KnitPass,
+            });
+            *last_completed_dir = Some(dir);
+            *pass_min = i32::MAX;
+            *pass_max = i32::MIN;
+            *pass_loops = 0;
+        }
+    };
+
+    for op in &program.ops {
+        match op {
+            KnitoutOp::Knit { dir, needle, .. } | KnitoutOp::Tuck { dir, needle, .. } => {
+                in_xfer_batch = false;
+                if pass_dir.is_some() && pass_dir != Some(*dir) {
+                    flush_pass(
+                        &mut events,
+                        &mut pass_dir,
+                        &mut pass_min,
+                        &mut pass_max,
+                        &mut pass_loops,
+                        &mut last_completed_dir,
+                    );
+                }
+                pass_dir = Some(*dir);
+                pass_min = pass_min.min(needle.index);
+                pass_max = pass_max.max(needle.index);
+                pass_loops += 1;
+            }
+            KnitoutOp::Split { dir, from, .. } => {
+                in_xfer_batch = false;
+                if pass_dir.is_some() && pass_dir != Some(*dir) {
+                    flush_pass(
+                        &mut events,
+                        &mut pass_dir,
+                        &mut pass_min,
+                        &mut pass_max,
+                        &mut pass_loops,
+                        &mut last_completed_dir,
+                    );
+                }
+                pass_dir = Some(*dir);
+                pass_min = pass_min.min(from.index);
+                pass_max = pass_max.max(from.index);
+                pass_loops += 1;
+            }
+            KnitoutOp::Xfer { .. } => {
+                flush_pass(
+                    &mut events,
+                    &mut pass_dir,
+                    &mut pass_min,
+                    &mut pass_max,
+                    &mut pass_loops,
+                    &mut last_completed_dir,
+                );
+                if !in_xfer_batch {
+                    events.push(IntakeEvent {
+                        duration_s: kin.xfer_cycle_s,
+                        yarn_intake_speed_m_s: 0.0,
+                        kind: IntakeEventKind::TransferPause,
+                    });
+                    in_xfer_batch = true;
+                }
+            }
+            KnitoutOp::Rack { .. } => {
+                in_xfer_batch = false;
+                flush_pass(
+                    &mut events,
+                    &mut pass_dir,
+                    &mut pass_min,
+                    &mut pass_max,
+                    &mut pass_loops,
+                    &mut last_completed_dir,
+                );
+                events.push(IntakeEvent {
+                    duration_s: kin.rack_cycle_s,
+                    yarn_intake_speed_m_s: 0.0,
+                    kind: IntakeEventKind::RackPause,
+                });
+            }
+            KnitoutOp::Pause { .. } => {
+                in_xfer_batch = false;
+                flush_pass(
+                    &mut events,
+                    &mut pass_dir,
+                    &mut pass_min,
+                    &mut pass_max,
+                    &mut pass_loops,
+                    &mut last_completed_dir,
+                );
+                if kin.pause_budget_s > 0.0 {
+                    events.push(IntakeEvent {
+                        duration_s: kin.pause_budget_s,
+                        yarn_intake_speed_m_s: 0.0,
+                        kind: IntakeEventKind::OperatorPause,
+                    });
+                }
+            }
+            KnitoutOp::Comment { .. } => {}
+            _ => {
+                in_xfer_batch = false;
+            }
+        }
+    }
+    flush_pass(
+        &mut events,
+        &mut pass_dir,
+        &mut pass_min,
+        &mut pass_max,
+        &mut pass_loops,
+        &mut last_completed_dir,
+    );
+
+    if events.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::DegenerateGeometry,
+            "cannot synthesize Regime III intake timeline from an empty Knitout program",
+        )
+        .repair(
+            "compile a non-empty knitted garment or swatch before synthesizing an intake timeline",
+        ));
+    }
+
+    Ok(Regime3IntakeTimeline {
+        events,
+        dt_verify_s,
+    })
 }
 
 #[cfg(test)]
