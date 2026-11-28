@@ -16,7 +16,7 @@ pub mod receipts;
 pub mod shaping;
 pub mod vm;
 
-pub use autoknit::{AutoKnitConfig, AutoKnitReport, draft_autoknit_from_shell};
+pub use autoknit::{AutoKnitConfig, AutoKnitCourse, AutoKnitReport, draft_autoknit_from_shell};
 pub use compile::{CompiledKnitBundle, compile_knit_doc};
 pub use draft::{
     BranchedPulloverSpec, ParametricPanelSpec, RaglanPulloverSpec, apply_cable_crossings,

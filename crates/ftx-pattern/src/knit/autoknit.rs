@@ -1,25 +1,29 @@
-//! Pathway 2: Intrinsic-Delaunay harmonic time-field 3D-to-knit drafter (`FTX-K12`, AutoKnit-style).
+//! Annular source-shell to knit drafting (`FTX-K12`, bounded AutoKnit-style pathway).
 //!
-//! Consumes any open manifold [`EaseShellMesh`] (Seam 1, metres, z-up) via `ftx-core::sparse`
-//! (zero dependency on `ftx-body` or `ftx-drape`), performs intrinsic Delaunay edge flips (`iDT`)
-//! so all cotangent Laplacian weights are nonnegative (enforcing the discrete maximum principle),
-//! solves the harmonic time field `t in [0, 1]`, slices iso-time courses at anisotropic gauge, and
-//! emits a validated `ftx-knit/1` [`KnitDoc`] with exact per-ring girth quantization residuals.
+//! Intrinsic edge flips preserve the piecewise-flat metric. A harmonic field is
+//! checked for a single closed contour through every vertex-level interval, then
+//! sampled at uniform coarea mean-normal spacing. Lengths belong to that intrinsic
+//! metric, not spatial chords through the flipped shell. This does not solve
+//! arbitrary branched garments, local short-row placement, drape, or physical fit.
 
-use std::collections::{BTreeMap, BTreeSet};
+mod geometry;
 
+use std::collections::BTreeMap;
+
+use ftx_core::receipt::canonical_json_sha256;
 use ftx_core::shaping::EaseShellMesh;
-use ftx_core::sparse::SparseCoo;
-use ftx_core::{Refusal, RefusalCode, Vec3};
+use ftx_core::{Refusal, RefusalCode};
+use serde::{Deserialize, Serialize};
 
 use super::ir::{
-    Bed, CamStitchSetting, CarrierId, GaugeSpec, KNIT_SCHEMA, KnitDoc, LoopKind, ParentRef,
-    StitchNode, YarnRun,
+    Bed, CamStitchSetting, CarrierId, CourseDir, GaugeSpec, KNIT_SCHEMA, KnitDoc, KnitPass,
+    LoopKind, ParentRef, StitchNode, YarnRun,
 };
 use super::profile::{MachineProfile, WearerAgeClass};
 
 /// Configuration for 3D-to-knit harmonic AutoKnit drafting.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AutoKnitConfig {
     /// Output pattern name.
     pub name: String,
@@ -37,30 +41,58 @@ pub struct AutoKnitConfig {
     pub has_hood_or_neck_drawstring: bool,
 }
 
-/// Summary report returned alongside the drafted [`KnitDoc`].
-#[derive(Clone, Debug)]
+/// One actual course and its intrinsic source-contour quantization residual.
+#[derive(Clone, Debug, Serialize)]
+pub struct AutoKnitCourse {
+    /// Cast-on is course zero; the last course forms a real terminal bind-off.
+    pub course: u32,
+    /// Solved harmonic coordinate at this contour.
+    pub harmonic_time: f64,
+    /// Coarea mean-normal distance from the start ring, in mm.
+    pub distance_from_start_mm: f64,
+    /// Intrinsic piecewise-flat contour length, in mm.
+    pub shell_girth_mm: f64,
+    /// Total front plus back stitches actually present in the document.
+    pub stitch_count: u32,
+    /// Actual stitch count times blocked wale pitch minus source contour length.
+    pub girth_residual_mm: f64,
+}
+
+/// Numerical geometry report; the document is exported separately as pattern.knit.json.
+#[derive(Clone, Debug, Serialize)]
 pub struct AutoKnitReport {
     /// Drafted topological stitch graph (`ftx-knit/1`).
+    #[serde(skip_serializing)]
     pub doc: KnitDoc,
+    /// Canonical digest of the entire supplied shell, including its source identity.
+    pub source_shell_sha256: String,
+    /// Names the geometry coordinate and its intrinsic metric explicitly.
+    pub geometry_method: String,
     /// Number of intrinsic Delaunay flips applied to eliminate negative cotangent weights.
     pub idt_flips_applied: usize,
-    /// Minimum edge cotangent weight after `iDT` (`>= -1e-9` proves discrete maximum principle).
+    /// Minimum free-edge cotangent weight, including unmodified numerical roundoff.
     pub min_cotangent_weight: f64,
-    /// Total geodesic height from `t = 0` to `t = 1`, in mm.
+    /// Integrated coarea mean-normal contour span, in mm; not a geodesic distance.
     pub shell_height_mm: f64,
-    /// Number of iso-time courses extracted.
+    /// Number of formed courses after cast-on, including terminal bind-off.
     pub course_count: u32,
+    /// Formed course count times blocked course height minus source mean-normal span.
+    pub height_residual_mm: f64,
     /// Peak absolute girth quantization residual across all courses, in mm.
     pub max_abs_girth_residual_mm: f64,
+    /// Source contours and actual integer stitch counts, including both boundaries.
+    pub courses: Vec<AutoKnitCourse>,
 }
 
 /// Upper bound on generated AutoKnit courses to prevent unbounded memory allocation on malformed shells.
 const MAX_AUTOKNIT_COURSES: u32 = 5_000;
+const MAX_AUTOKNIT_STITCHES: usize = 100_000;
 
-/// Drafts a seamless tubular [`KnitDoc`] directly from a 3D [`EaseShellMesh`] via `iDT` + harmonic time field.
+/// Drafts an annular tube with exact parent ownership, front/back passes and bind-off.
+/// Full qualification and VM admission remain the ordinary compiler/exporter's job.
 ///
 /// # Errors
-/// [`RefusalCode::DegenerateGeometry`] if the shell has `< 2` boundary rings, out-of-range indices, or degenerate triangles,
+/// [`RefusalCode::DegenerateGeometry`] for non-annular, intersecting or unsliceable shells,
 /// [`RefusalCode::OutOfRange`] or [`RefusalCode::InvalidDocument`] if `cfg` has invalid fields,
 /// [`RefusalCode::BudgetExceeded`] if the shell exceeds the course cap,
 /// [`RefusalCode::MachineStateInfeasible`] if the circumference or carrier exceeds machine capacity, or
@@ -102,165 +134,27 @@ pub fn draft_autoknit_from_shell(
             ),
         ));
     }
-    if shell.vertices_m.len() < 6 || shell.triangles.len() < 4 {
+    if !profile.has_back_bed {
         return Err(Refusal::new(
-            RefusalCode::DegenerateGeometry,
-            "EaseShellMesh has too few vertices/triangles for 3D-to-knit drafting",
+            RefusalCode::MachineStateInfeasible,
+            "an annular AutoKnit shell requires two beds; it cannot be silently flattened",
         ));
     }
-    let n_shell_verts = shell.vertices_m.len();
-    for ring in &shell.boundary_rings {
-        for &v in &ring.vertices {
-            if (v as usize) >= n_shell_verts {
-                return Err(Refusal::new(
-                    RefusalCode::DegenerateGeometry,
-                    format!(
-                        "EaseShellMesh boundary ring '{}' references out-of-range vertex {v} (n_verts={n_shell_verts})",
-                        ring.name
-                    ),
-                ));
-            }
-        }
-    }
-    let start_verts: BTreeSet<usize> = shell
-        .boundary_rings
-        .iter()
-        .filter(|r| r.is_start)
-        .flat_map(|r| r.vertices.iter().map(|&v| v as usize))
-        .collect();
-    let end_verts: BTreeSet<usize> = shell
-        .boundary_rings
-        .iter()
-        .filter(|r| !r.is_start)
-        .flat_map(|r| r.vertices.iter().map(|&v| v as usize))
-        .collect();
-    if start_verts.is_empty() || end_verts.is_empty() {
+    if cfg.wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
         return Err(Refusal::new(
-            RefusalCode::DegenerateGeometry,
-            "EaseShellMesh must declare at least one start (t=0) and one end (t=1) boundary ring",
+            RefusalCode::UnqualifiedProcess,
+            "shell shaping and terminal bind-off require production transfers; use the dedicated calibration-swatch drafter",
         ));
     }
-    if start_verts.intersection(&end_verts).next().is_some() {
+    if cfg.max_idt_flips > 100_000 {
         return Err(Refusal::new(
-            RefusalCode::DegenerateGeometry,
-            "start and end boundary rings share a vertex",
+            RefusalCode::BudgetExceeded,
+            "AutoKnit max_idt_flips exceeds the bounded limit of 100000",
         ));
     }
-
-    let verts: Vec<Vec3> = shell
-        .vertices_m
-        .iter()
-        .map(|&[x, y, z]| Vec3::new(x, y, z))
-        .collect();
-    let n_verts = verts.len();
-    for (idx, v) in verts.iter().enumerate() {
-        if !v.is_finite() {
-            return Err(Refusal::new(
-                RefusalCode::NonFinite,
-                format!("EaseShellMesh vertex {idx} is non-finite"),
-            ));
-        }
-    }
-
-    // Step 1: Intrinsic Delaunay edge flips on triangle topology
-    let mut tris: Vec<[usize; 3]> = shell
-        .triangles
-        .iter()
-        .map(|&[a, b, c]| [a as usize, b as usize, c as usize])
-        .collect();
-    for &[a, b, c] in &tris {
-        if a >= n_verts || b >= n_verts || c >= n_verts || a == b || b == c || c == a {
-            return Err(Refusal::new(
-                RefusalCode::DegenerateGeometry,
-                "EaseShellMesh contains out-of-range or degenerate triangle indices",
-            ));
-        }
-    }
-    let idt_flips_applied = intrinsic_delaunay_flip(&verts, &mut tris, cfg.max_idt_flips);
-
-    // Step 2: Assemble nonnegative cotangent Laplacian with Dirichlet BCs (t=0 start, t=1 end)
-    let mut edge_weights: BTreeMap<(usize, usize), f64> = BTreeMap::new();
-    for &[i, j, k] in &tris {
-        let vi = verts[i];
-        let vj = verts[j];
-        let vk = verts[k];
-        let cot_i = safe_cotangent(vj - vi, vk - vi);
-        let cot_j = safe_cotangent(vk - vj, vi - vj);
-        let cot_k = safe_cotangent(vi - vk, vj - vk);
-        for ((a, b), w) in [
-            ((j, k), 0.5 * cot_i),
-            ((k, i), 0.5 * cot_j),
-            ((i, j), 0.5 * cot_k),
-        ] {
-            let key = if a < b { (a, b) } else { (b, a) };
-            *edge_weights.entry(key).or_insert(0.0) += w;
-        }
-    }
-    let min_cotangent_weight = edge_weights.values().copied().fold(f64::INFINITY, f64::min);
-
-    // Solve reduced SPD system on interior (non-Dirichlet) vertices
-    let mut var_of: Vec<Option<usize>> = vec![None; n_verts];
-    let mut free_verts = Vec::new();
-    for (v, slot) in var_of.iter_mut().enumerate() {
-        if !start_verts.contains(&v) && !end_verts.contains(&v) {
-            *slot = Some(free_verts.len());
-            free_verts.push(v);
-        }
-    }
-    let mut time_field = vec![0.0_f64; n_verts];
-    for &v in &end_verts {
-        time_field[v] = 1.0;
-    }
-
-    let n_free = free_verts.len();
-    if n_free > 0 {
-        let mut coo = SparseCoo::new(n_free, n_free);
-        let mut rhs = vec![0.0_f64; n_free];
-        for (&(a, b), &raw_w) in &edge_weights {
-            let w = raw_w.max(1e-8); // nonnegative discrete-maximum-principle weight
-            match (var_of[a], var_of[b]) {
-                (Some(ia), Some(ib)) => {
-                    coo.push(ia, ia, w);
-                    coo.push(ib, ib, w);
-                    coo.push(ia, ib, -w);
-                    coo.push(ib, ia, -w);
-                }
-                (Some(ia), None) => {
-                    coo.push(ia, ia, w);
-                    rhs[ia] += w * time_field[b];
-                }
-                (None, Some(ib)) => {
-                    coo.push(ib, ib, w);
-                    rhs[ib] += w * time_field[a];
-                }
-                (None, None) => {}
-            }
-        }
-        let csr = coo.assemble();
-        let sol = csr.solve_spd(&rhs, 1e-10, 6000)?;
-        for (idx, &v) in free_verts.iter().enumerate() {
-            time_field[v] = sol[idx].clamp(0.0, 1.0);
-        }
-    }
-
-    // Estimate shell geodesic arc-height (mm) via average gradient along edges crossing t
-    let mut total_dz = 0.0_f64;
-    let mut weight_sum = 0.0_f64;
-    for &(a, b) in edge_weights.keys() {
-        let dt = (time_field[b] - time_field[a]).abs();
-        if dt > 1e-4 {
-            let len = (verts[b] - verts[a]).norm();
-            total_dz += len * dt;
-            weight_sum += dt * dt;
-        }
-    }
-    let shell_height_mm = if weight_sum > 1e-12 {
-        (total_dz / weight_sum) * 1000.0
-    } else {
-        let zmin = verts.iter().map(|v| v.z).fold(f64::INFINITY, f64::min);
-        let zmax = verts.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
-        ((zmax - zmin) * 1000.0).max(20.0)
-    };
+    let field = geometry::AnnularField::build(shell, cfg.max_idt_flips)?;
+    let source_shell_sha256 = canonical_json_sha256(shell)?;
+    let shell_height_mm = field.height_m * 1000.0;
 
     let course_height_mm = gauge.blocked_course_height_mm();
     let wale_pitch_mm = gauge.blocked_wale_pitch_mm();
@@ -273,98 +167,140 @@ pub fn draft_autoknit_from_shell(
             ),
         ));
     }
-    let course_count = raw_courses.max(4.0) as u32;
+    if raw_courses < 2.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "AutoKnit shell is too short for one formed course and a terminal bind-off at the selected gauge",
+        ));
+    }
+    let course_count = raw_courses as u32;
+    let height_residual_mm = f64::from(course_count) * course_height_mm - shell_height_mm;
 
-    // Step 3: Slice iso-time contours t_c = c / course_count and compute per-course girth
-    let mut stitches = Vec::new();
+    let mut courses = Vec::with_capacity(course_count as usize + 1);
+    for course in 0..=course_count {
+        let fraction = f64::from(course) / f64::from(course_count);
+        let (harmonic_time, perimeter_m) = field.contour(fraction);
+        let shell_girth_mm = perimeter_m * 1000.0;
+        let per_bed = (shell_girth_mm / (2.0 * wale_pitch_mm)).round();
+        if !per_bed.is_finite()
+            || per_bed > f64::from(profile.needle_count)
+            || per_bed > f64::from(i32::MAX / 2)
+        {
+            return Err(Refusal::new(
+                RefusalCode::MachineStateInfeasible,
+                format!(
+                    "AutoKnit course {course} girth requires {per_bed:.0} needles per bed, exceeding machine capacity"
+                ),
+            ));
+        }
+        if per_bed < 4.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "AutoKnit course {course} is too narrow for an eight-stitch tube at the selected gauge"
+                ),
+            ));
+        }
+        courses.push(AutoKnitCourse {
+            course,
+            harmonic_time,
+            distance_from_start_mm: fraction * shell_height_mm,
+            shell_girth_mm,
+            stitch_count: 2 * per_bed as u32,
+            girth_residual_mm: 2.0 * per_bed * wale_pitch_mm - shell_girth_mm,
+        });
+    }
+    // Bind-off consumes one old loop then the same-course chain predecessor.
+    // Finish all shaping in the preceding course. Its actual residual is retained,
+    // including any one-course anticipation of the terminal contour width.
+    let terminal_count = courses[course_count as usize].stitch_count;
+    let penultimate = &mut courses[course_count as usize - 1];
+    penultimate.stitch_count = terminal_count;
+    penultimate.girth_residual_mm =
+        f64::from(terminal_count) * wale_pitch_mm - penultimate.shell_girth_mm;
+    let mut stitch_budget = 0usize;
+    for course in &courses {
+        stitch_budget = stitch_budget
+            .checked_add(course.stitch_count as usize)
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "AutoKnit stitch count overflow",
+                )
+            })?;
+        if stitch_budget > MAX_AUTOKNIT_STITCHES {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                format!("AutoKnit graph exceeds its {MAX_AUTOKNIT_STITCHES}-stitch budget"),
+            ));
+        }
+    }
+
+    let mut stitches = Vec::with_capacity(stitch_budget);
+    let mut passes = Vec::with_capacity(courses.len() * 2);
     let mut prev_front: BTreeMap<i32, u32> = BTreeMap::new();
     let mut prev_back: BTreeMap<i32, u32> = BTreeMap::new();
     let mut next_id = 0u32;
-    let mut max_abs_girth_residual_mm = 0.0_f64;
+    let max_abs_girth_residual_mm = courses
+        .iter()
+        .map(|c| c.girth_residual_mm.abs())
+        .fold(0.0_f64, f64::max);
     let est_loop_mm = 2.6 * wale_pitch_mm;
-    let max_total_st_f64 =
-        f64::from(profile.needle_count) * if profile.has_back_bed { 2.0 } else { 1.0 };
-
-    for c in 0..=course_count {
-        let t_iso = f64::from(c) / f64::from(course_count);
-        let girth_mm = iso_contour_perimeter_m(&verts, &tris, &time_field, t_iso) * 1000.0;
-        let girth_mm = if girth_mm > 1.0 {
-            girth_mm
-        } else {
-            shell
-                .boundary_rings
-                .first()
-                .map_or(200.0, |r| r.perimeter_m * 1000.0)
-        };
-        if !girth_mm.is_finite() {
-            return Err(Refusal::new(
-                RefusalCode::NonFinite,
-                format!("AutoKnit course {c} produced non-finite girth"),
-            ));
-        }
-        let raw_st_f64 = (girth_mm / wale_pitch_mm).round().max(8.0);
-        if raw_st_f64 > max_total_st_f64 + 2.0 {
-            return Err(Refusal::new(
-                RefusalCode::MachineStateInfeasible,
-                format!(
-                    "AutoKnit course {c} girth {girth_mm:.1} mm ({raw_st_f64:.0} stitches) exceeds machine '{}' capacity",
-                    profile.id
-                ),
-            ));
-        }
-        let raw_st = raw_st_f64 as i32;
-        let total_st = if raw_st % 2 == 0 { raw_st } else { raw_st + 1 };
-        let residual = (f64::from(total_st) * wale_pitch_mm - girth_mm).abs();
-        max_abs_girth_residual_mm = max_abs_girth_residual_mm.max(residual);
-
-        let per_bed = if profile.has_back_bed {
-            total_st / 2
-        } else {
-            total_st
-        };
-        if per_bed as u32 > profile.needle_count {
-            return Err(Refusal::new(
-                RefusalCode::MachineStateInfeasible,
-                format!(
-                    "AutoKnit course {c} requires {per_bed} needles/bed, exceeding machine '{}' limit {}",
-                    profile.id, profile.needle_count
-                ),
-            ));
-        }
-
+    for course in &courses {
+        let c = course.course;
+        let per_bed = (course.stitch_count / 2) as i32;
         let left = -(per_bed / 2);
         let right = left + per_bed - 1;
         let mut cur_front = BTreeMap::new();
         let mut cur_back = BTreeMap::new();
-        let beds: &[Bed] = if profile.has_back_bed {
-            &[Bed::Front, Bed::Back]
-        } else {
-            &[Bed::Front]
-        };
-
-        for &bed in beds {
+        let mut bind_chain = None;
+        for bed in [Bed::Front, Bed::Back] {
             let (prev_bed, cur_bed) = if bed == Bed::Front {
                 (&prev_front, &mut cur_front)
             } else {
                 (&prev_back, &mut cur_back)
             };
-            for w in left..=right {
+            let mut wales: Vec<i32> = (left..=right).collect();
+            let direction = if bed == Bed::Front {
+                CourseDir::Plus
+            } else {
+                wales.reverse();
+                CourseDir::Minus
+            };
+            let mut stitch_ids = Vec::with_capacity(wales.len());
+            for w in wales {
                 let mut parents = Vec::new();
-                if c > 0
-                    && let Some(&pid) = prev_bed
-                        .get(&w)
-                        .or_else(|| prev_bed.get(&(w - 1)))
-                        .or_else(|| prev_bed.get(&(w + 1)))
-                {
-                    parents.push(ParentRef {
-                        stitch_id: pid,
-                        stack_pos: 0,
-                    });
+                if let Some(&pid) = prev_bed.get(&w) {
+                    push_parent(&mut parents, pid, profile)?;
                 }
-                let kind = if c == 0 {
-                    LoopKind::CastOn
-                } else if c == course_count {
+                if w == left {
+                    for (&old_wale, &pid) in prev_bed.range(..left).rev() {
+                        check_shaping_reach(old_wale, w, profile)?;
+                        push_parent(&mut parents, pid, profile)?;
+                    }
+                }
+                if w == right {
+                    for (&old_wale, &pid) in prev_bed.range((right + 1)..) {
+                        check_shaping_reach(old_wale, w, profile)?;
+                        push_parent(&mut parents, pid, profile)?;
+                    }
+                }
+                let kind = if c == course_count {
+                    if parents.len() != 1 {
+                        return Err(Refusal::new(
+                            RefusalCode::MachineStateInfeasible,
+                            "AutoKnit terminal bind-off requires one retained loop per needle",
+                        ));
+                    }
+                    if let Some(pid) = bind_chain {
+                        push_parent(&mut parents, pid, profile)?;
+                    }
+                    bind_chain = Some(next_id);
                     LoopKind::BindOff
+                } else if parents.is_empty() {
+                    LoopKind::CastOn
+                } else if parents.len() > 1 {
+                    LoopKind::Decrease
                 } else if bed == Bed::Back {
                     LoopKind::Purl
                 } else {
@@ -385,9 +321,14 @@ pub fn draft_autoknit_from_shell(
                     },
                     yarn_length_mm: Some(est_loop_mm),
                 });
+                stitch_ids.push(next_id);
                 cur_bed.insert(w, next_id);
                 next_id += 1;
             }
+            passes.push(KnitPass {
+                direction,
+                stitch_ids,
+            });
         }
         prev_front = cur_front;
         prev_back = cur_back;
@@ -397,16 +338,13 @@ pub fn draft_autoknit_from_shell(
     let mut metadata = BTreeMap::new();
     metadata.insert(
         "pathway".to_string(),
-        "autoknit_idt_harmonic_3d".to_string(),
+        "autoknit_annular_intrinsic_harmonic".to_string(),
     );
     metadata.insert(
         "source_body_sha256".to_string(),
         shell.source_body_sha256.clone(),
     );
-    metadata.insert(
-        "idt_flips_applied".to_string(),
-        idt_flips_applied.to_string(),
-    );
+    metadata.insert("idt_flips_applied".to_string(), field.flips.to_string());
     metadata.insert(
         "shell_height_mm".to_string(),
         format!("{shell_height_mm:.2}"),
@@ -414,6 +352,24 @@ pub fn draft_autoknit_from_shell(
     metadata.insert(
         "max_abs_girth_residual_mm".to_string(),
         format!("{max_abs_girth_residual_mm:.2}"),
+    );
+    metadata.insert(
+        "source_shell_sha256".to_string(),
+        source_shell_sha256.clone(),
+    );
+    metadata.insert(
+        "geometry_method".to_string(),
+        "intrinsic_metric_harmonic_coarea_mean_normal_span".to_string(),
+    );
+    metadata.insert(
+        "height_residual_mm".to_string(),
+        format!("{height_residual_mm:+.6}"),
+    );
+    metadata.insert("construction_scope".to_string(), "One annular tube; no branch synthesis, local short-row correction, drape or physical-fit claim. Widening uses edge cast-ons; the final bind-off loop requires operator tail securing.".to_string());
+    metadata.insert(
+        "yarn_length_basis".to_string(),
+        "Geometric estimate: 2.6 times blocked wale pitch per loop; not measured yarn consumption."
+            .to_string(),
     );
 
     let doc = KnitDoc {
@@ -423,7 +379,7 @@ pub fn draft_autoknit_from_shell(
         gauge: gauge.clone(),
         stitches,
         short_row_turns: vec![],
-        passes: vec![],
+        passes,
         cable_groups: vec![],
         yarn_runs: vec![YarnRun {
             run_id: 0,
@@ -441,124 +397,63 @@ pub fn draft_autoknit_from_shell(
 
     Ok(AutoKnitReport {
         doc,
-        idt_flips_applied,
-        min_cotangent_weight,
+        source_shell_sha256,
+        geometry_method: "intrinsic_metric_harmonic_coarea_mean_normal_span".to_string(),
+        idt_flips_applied: field.flips,
+        min_cotangent_weight: field.min_weight,
         shell_height_mm,
         course_count,
+        height_residual_mm,
         max_abs_girth_residual_mm,
+        courses,
     })
 }
 
-fn safe_cotangent(u: Vec3, v: Vec3) -> f64 {
-    let cross = u.cross(v).norm();
-    if cross <= 1e-14 {
-        return 0.0;
+fn push_parent(
+    parents: &mut Vec<ParentRef>,
+    stitch_id: u32,
+    profile: &MachineProfile,
+) -> Result<(), Refusal> {
+    if parents.len() >= usize::from(profile.max_loops_per_hook) {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            "AutoKnit shaping exceeds the machine's live-loop stack capacity",
+        )
+        .repair("reduce the source shell taper per course or use a finer course gauge"));
     }
-    u.dot(v) / cross
+    parents.push(ParentRef {
+        stitch_id,
+        stack_pos: parents.len() as u8,
+    });
+    Ok(())
 }
 
-/// Performs deterministic intrinsic Delaunay edge flips to remove negative cotangent edge weights.
-fn intrinsic_delaunay_flip(verts: &[Vec3], tris: &mut [[usize; 3]], max_flips: usize) -> usize {
-    let mut flips = 0usize;
-    for _ in 0..max_flips {
-        // Build edge -> incident (tri_idx, opposite_vertex) map deterministically
-        let mut edge_tris: BTreeMap<(usize, usize), Vec<(usize, usize)>> = BTreeMap::new();
-        for (ti, &[a, b, c]) in tris.iter().enumerate() {
-            for (u, v, opp) in [(a, b, c), (b, c, a), (c, a, b)] {
-                let key = if u < v { (u, v) } else { (v, u) };
-                edge_tris.entry(key).or_default().push((ti, opp));
-            }
-        }
-        let mut did_flip = false;
-        for (&(u, v), inc) in &edge_tris {
-            if inc.len() != 2 {
-                continue;
-            }
-            let (t0, o0) = inc[0];
-            let (t1, o1) = inc[1];
-            if o0 == o1 {
-                continue;
-            }
-            let cot0 = safe_cotangent(verts[u] - verts[o0], verts[v] - verts[o0]);
-            let cot1 = safe_cotangent(verts[u] - verts[o1], verts[v] - verts[o1]);
-            if cot0 + cot1 < -1e-9 {
-                // Only flip if the new edge (o0, o1) does not already exist
-                let new_key = if o0 < o1 { (o0, o1) } else { (o1, o0) };
-                if !edge_tris.contains_key(&new_key) {
-                    let area0 = (verts[o1] - verts[u]).cross(verts[o0] - verts[u]).norm();
-                    let area1 = (verts[o0] - verts[v]).cross(verts[o1] - verts[v]).norm();
-                    if area0 <= 1e-14 || area1 <= 1e-14 {
-                        continue;
-                    }
-                    // Preserve outward orientation cleanly
-                    let tri0 = tris[t0];
-                    let u_before_v = (tri0[0] == u && tri0[1] == v)
-                        || (tri0[1] == u && tri0[2] == v)
-                        || (tri0[2] == u && tri0[0] == v);
-                    if u_before_v {
-                        tris[t0] = [u, o1, o0];
-                        tris[t1] = [v, o0, o1];
-                    } else {
-                        tris[t0] = [u, o0, o1];
-                        tris[t1] = [v, o1, o0];
-                    }
-                    flips += 1;
-                    did_flip = true;
-                    break;
-                }
-            }
-        }
-        if !did_flip {
-            break;
-        }
+fn check_shaping_reach(from: i32, to: i32, profile: &MachineProfile) -> Result<(), Refusal> {
+    if (i64::from(from) - i64::from(to)).abs() * 4 > i64::from(profile.max_racking_quarter_pitches)
+    {
+        return Err(Refusal::new(
+            RefusalCode::MachineStateInfeasible,
+            "AutoKnit shaping exceeds the machine's transfer racking reach",
+        )
+        .repair("reduce the source shell taper per course or use a finer course gauge"));
     }
-    flips
-}
-
-/// Measures the exact 3D perimeter of the piecewise-linear iso-contour `{ x : t(x) = t_iso }`.
-fn iso_contour_perimeter_m(verts: &[Vec3], tris: &[[usize; 3]], t: &[f64], t_iso: f64) -> f64 {
-    let iso = t_iso.clamp(1e-5, 1.0 - 1e-5);
-    let mut perimeter = 0.0_f64;
-    for &[a, b, c] in tris {
-        let idx = [a, b, c];
-        let tv = [t[a], t[b], t[c]];
-        let mut pts = Vec::with_capacity(2);
-        for e in 0..3 {
-            let i0 = idx[e];
-            let i1 = idx[(e + 1) % 3];
-            let t0 = tv[e];
-            let t1 = tv[(e + 1) % 3];
-            if (t0 < iso && t1 >= iso) || (t1 < iso && t0 >= iso) {
-                let denom = t1 - t0;
-                if denom.abs() > 1e-14 {
-                    let s = ((iso - t0) / denom).clamp(0.0, 1.0);
-                    pts.push(verts[i0] + (verts[i1] - verts[i0]) * s);
-                }
-            }
-        }
-        if pts.len() == 2 {
-            perimeter += (pts[1] - pts[0]).norm();
-        }
-    }
-    perimeter
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftx_core::det;
+    use crate::knit::{KnitSwatchQualification, compile_knit_doc};
+    use crate::materials::{Evidence, Source};
     use ftx_core::shaping::BoundaryRing;
+    use ftx_core::{Vec3, det};
 
-    #[test]
-    fn autoknit_solves_harmonic_field_and_recovers_tapered_cylinder_girth() {
-        // Tapered open frustum cylinder: bottom radius 0.10m (girth 628.3mm), top radius 0.07m (439.8mm), height 0.25m
-        let n_theta = 24usize;
-        let n_z = 8usize;
+    fn frustum(bottom: f64, top: f64, height: f64, n_theta: usize, n_z: usize) -> EaseShellMesh {
         let mut vertices_m = Vec::new();
         for iz in 0..=n_z {
             let u = iz as f64 / n_z as f64;
-            let r = 0.10 * (1.0 - u) + 0.07 * u;
-            let z = 0.25 * u;
+            let r = bottom * (1.0 - u) + top * u;
+            let z = height * u;
             for it in 0..n_theta {
                 let ang = 2.0 * std::f64::consts::PI * (it as f64) / (n_theta as f64);
                 vertices_m.push([r * det::cos(ang), r * det::sin(ang), z]);
@@ -577,8 +472,10 @@ mod tests {
             }
         }
         let bot_ring: Vec<u32> = (0..n_theta as u32).collect();
-        let top_ring: Vec<u32> = ((n_z * n_theta) as u32..((n_z + 1) * n_theta) as u32).collect();
-        let shell = EaseShellMesh {
+        let top_ring: Vec<u32> = ((n_z * n_theta) as u32..((n_z + 1) * n_theta) as u32)
+            .rev()
+            .collect();
+        EaseShellMesh {
             vertices_m,
             triangles,
             boundary_rings: vec![
@@ -586,40 +483,135 @@ mod tests {
                     name: "hem".to_string(),
                     is_start: true,
                     vertices: bot_ring,
-                    perimeter_m: 2.0 * std::f64::consts::PI * 0.10,
+                    perimeter_m: 2.0
+                        * n_theta as f64
+                        * bottom
+                        * det::sin(std::f64::consts::PI / n_theta as f64),
                 },
                 BoundaryRing {
                     name: "neck".to_string(),
                     is_start: false,
                     vertices: top_ring,
-                    perimeter_m: 2.0 * std::f64::consts::PI * 0.07,
+                    perimeter_m: 2.0
+                        * n_theta as f64
+                        * top
+                        * det::sin(std::f64::consts::PI / n_theta as f64),
                 },
             ],
             source_body_sha256: "synthetic-frustum".to_string(),
-        };
-        let prof = MachineProfile::kniterate_7e();
+        }
+    }
+
+    fn settings(prof: &MachineProfile) -> (GaugeSpec, AutoKnitConfig) {
         let gauge = GaugeSpec {
             wales_per_100mm: 24.0,
             courses_per_100mm: 32.0,
             needle_pitch_mm: prof.needle_pitch_mm,
-            yarn_tex: Some(180.0),
+            yarn_tex: Some(100.0),
             thickness_mm: Some(2.0),
             relaxed_after_wash: true,
         };
         let cfg = AutoKnitConfig {
             name: "tapered_tube".to_string(),
             wearer_age_class: WearerAgeClass::Adult,
-            yarn_id: "merino-180tex".to_string(),
+            yarn_id: "synthetic-yarn-100tex".to_string(),
             carrier_id: CarrierId("1".to_string()),
             cam_setting: 8.0,
             max_idt_flips: 200,
             has_hood_or_neck_drawstring: false,
         };
+        (gauge, cfg)
+    }
+
+    fn qualification(profile: &MachineProfile, gauge: &GaugeSpec) -> KnitSwatchQualification {
+        KnitSwatchQualification {
+            id: "synthetic-autoknit-qualification".to_string(),
+            material_sha256: "synthetic-autoknit-material".to_string(),
+            machine_sha256: profile.canonical_sha256().unwrap(),
+            yarn_lot_id: "synthetic-test-lot".to_string(),
+            was_washed_and_blocked: true,
+            wales_per_100mm: gauge.wales_per_100mm,
+            courses_per_100mm: gauge.courses_per_100mm,
+            thickness_mm: gauge.thickness_mm.unwrap(),
+            cam_stitch_setting: 8.0,
+            wick_dispersion_mm: None,
+            shrinkage_axial_pct: None,
+            yarn_intake_drift_eps: Some(0.0),
+            yarn_intake_drift_sigma_eta: Some(0.01),
+            evidence: Evidence::Measured,
+            source: Source {
+                reference: "test:synthetic-annular-autoknit".to_string(),
+                accessed_on: "2026-11-28".to_string(),
+                note: "Synthetic software-admission fixture, not a physical machine experiment."
+                    .to_string(),
+            },
+            method: "synthetic test values".to_string(),
+            conditioning: BTreeMap::new(),
+            allow_estimates: false,
+        }
+    }
+
+    #[test]
+    fn autoknit_solves_harmonic_field_and_recovers_tapered_cylinder_girth() {
+        let shell = frustum(0.10, 0.07, 0.25, 24, 8);
+        let prof = MachineProfile::kniterate_7e();
+        let (gauge, cfg) = settings(&prof);
         let rep = draft_autoknit_from_shell(&shell, &gauge, &prof, &cfg).unwrap();
         assert!(rep.min_cotangent_weight >= -1e-6);
         assert!(rep.course_count >= 60);
         assert!(rep.max_abs_girth_residual_mm < 10.0);
         assert!(rep.doc.stitches.len() > 2000);
+        let expected_span =
+            det::sqrt(0.25_f64.powi(2) + (0.03 * det::cos(std::f64::consts::PI / 24.0)).powi(2))
+                * 1000.0;
+        assert!(
+            (rep.shell_height_mm - expected_span).abs() < 1e-6,
+            "{} != {expected_span}",
+            rep.shell_height_mm
+        );
+        for course in &rep.courses {
+            let expected = shell.boundary_rings[0].perimeter_m * 1000.0
+                + (shell.boundary_rings[1].perimeter_m - shell.boundary_rings[0].perimeter_m)
+                    * 1000.0
+                    * f64::from(course.course)
+                    / f64::from(rep.course_count);
+            assert!((course.shell_girth_mm - expected).abs() < 1e-6);
+            assert_eq!(
+                rep.doc
+                    .stitches
+                    .iter()
+                    .filter(|node| node.course == course.course)
+                    .count(),
+                course.stitch_count as usize
+            );
+            assert!(
+                (f64::from(course.stitch_count) * gauge.blocked_wale_pitch_mm()
+                    - course.shell_girth_mm
+                    - course.girth_residual_mm)
+                    .abs()
+                    < 1e-10
+            );
+        }
+        let qualified = qualification(&prof, &gauge);
+        let compiled = compile_knit_doc(
+            &rep.doc,
+            &prof,
+            Some(&qualified),
+            Some(&qualified.material_sha256),
+            None,
+        )
+        .unwrap();
+        assert!(compiled.vm_report.total_transfers > 0);
+        compiled.cert.verify_integrity().unwrap();
+        assert!(!compiled.cert.physical_knitting_validated);
+        assert!(!compiled.cert.hardware_execution_authorized);
+        assert_eq!(
+            rep.source_shell_sha256,
+            canonical_json_sha256(&shell).unwrap()
+        );
+        let json = serde_json::to_value(&rep).unwrap();
+        assert!(json.get("doc").is_none());
+        assert_eq!(json["courses"].as_array().unwrap().len(), rep.courses.len());
     }
 
     #[test]
@@ -683,7 +675,16 @@ mod tests {
         );
 
         // Fix boundary ring and test invalid cam_setting & unknown carrier
-        shell.boundary_rings[1].vertices = vec![3, 4, 5];
+        shell.boundary_rings[1].vertices = vec![5, 4, 3];
+        for ring in &mut shell.boundary_rings {
+            ring.perimeter_m = (0..ring.vertices.len())
+                .map(|i| {
+                    let a = shell.vertices_m[ring.vertices[i] as usize];
+                    let b = shell.vertices_m[ring.vertices[(i + 1) % ring.vertices.len()] as usize];
+                    (Vec3::new(a[0], a[1], a[2]) - Vec3::new(b[0], b[1], b[2])).norm()
+                })
+                .sum();
+        }
         let mut bad_cam = base_cfg.clone();
         bad_cam.cam_setting = f64::NAN;
         assert_eq!(
@@ -711,5 +712,171 @@ mod tests {
                 .code,
             RefusalCode::BudgetExceeded
         );
+    }
+
+    #[test]
+    fn cylinder_height_is_independent_of_rotation_and_axial_tessellation() {
+        let profile = MachineProfile::kniterate_7e();
+        let (gauge, cfg) = settings(&profile);
+        for axial_divisions in [1, 6] {
+            let shell = frustum(0.03, 0.03, 0.12, 12, axial_divisions);
+            let first = draft_autoknit_from_shell(&shell, &gauge, &profile, &cfg).unwrap();
+            let mut rotated = shell.clone();
+            for position in &mut rotated.vertices_m {
+                let [x, y, z] = *position;
+                *position = [z + 0.4, y - 0.7, -x + 0.2];
+            }
+            let second = draft_autoknit_from_shell(&rotated, &gauge, &profile, &cfg).unwrap();
+            for report in [&first, &second] {
+                assert!((report.shell_height_mm - 120.0).abs() < 1e-8);
+                assert_eq!(report.course_count, 38);
+                assert!((report.height_residual_mm + 1.25).abs() < 1e-8);
+                assert_eq!(report.courses[0].harmonic_time, 0.0);
+                assert_eq!(report.courses.last().unwrap().harmonic_time, 1.0);
+                for course in &report.courses {
+                    assert!(
+                        (course.shell_girth_mm - shell.boundary_rings[0].perimeter_m * 1000.0)
+                            .abs()
+                            < 1e-8
+                    );
+                }
+            }
+            assert_eq!(first.doc.passes, second.doc.passes);
+        }
+    }
+
+    #[test]
+    fn tapered_and_widening_shells_compile_with_exact_live_parent_conservation() {
+        for profile in [
+            MachineProfile::kniterate_7e(),
+            MachineProfile::shima_seiki_12e_handoff(),
+        ] {
+            let (gauge, cfg) = settings(&profile);
+            let qualified = qualification(&profile, &gauge);
+            for (bottom, top) in [(0.04, 0.025), (0.025, 0.04)] {
+                let shell = frustum(bottom, top, 0.12, 12, 4);
+                let report = draft_autoknit_from_shell(&shell, &gauge, &profile, &cfg).unwrap();
+                let mut live = std::collections::BTreeSet::new();
+                for node in &report.doc.stitches {
+                    for parent in &node.parents {
+                        assert!(
+                            live.remove(&parent.stitch_id),
+                            "parent {} was lost or reused",
+                            parent.stitch_id
+                        );
+                    }
+                    assert!(live.insert(node.id));
+                }
+                assert_eq!(
+                    live.len(),
+                    1,
+                    "only the final tail-securing loop may remain"
+                );
+                assert!(
+                    report
+                        .doc
+                        .stitches
+                        .iter()
+                        .filter(|node| node.course == 0)
+                        .all(|node| node.kind == LoopKind::CastOn)
+                );
+                assert!(
+                    report
+                        .doc
+                        .stitches
+                        .iter()
+                        .filter(|node| node.course == report.course_count)
+                        .all(|node| node.kind == LoopKind::BindOff)
+                );
+                if top > bottom {
+                    assert!(
+                        report
+                            .doc
+                            .stitches
+                            .iter()
+                            .any(|node| node.course > 0 && node.kind == LoopKind::CastOn)
+                    );
+                } else {
+                    assert!(
+                        report
+                            .doc
+                            .stitches
+                            .iter()
+                            .any(|node| node.kind == LoopKind::Decrease)
+                    );
+                }
+                for pair in report.doc.passes.chunks_exact(2) {
+                    assert_eq!(pair[0].direction, CourseDir::Plus);
+                    assert_eq!(pair[1].direction, CourseDir::Minus);
+                }
+                assert_eq!(
+                    compile_knit_doc(&report.doc, &profile, None, None, None)
+                        .unwrap_err()
+                        .code,
+                    RefusalCode::UnqualifiedProcess
+                );
+                let compiled = compile_knit_doc(
+                    &report.doc,
+                    &profile,
+                    Some(&qualified),
+                    Some(&qualified.material_sha256),
+                    None,
+                )
+                .unwrap();
+                assert!(compiled.vm_report.total_transfers > 0);
+                compiled.cert.verify_integrity().unwrap();
+                assert!(!compiled.cert.hardware_execution_authorized);
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_branched_and_unrepresentable_shells_refuse_without_substitution() {
+        let profile = MachineProfile::kniterate_7e();
+        let (gauge, cfg) = settings(&profile);
+        let source = frustum(0.03, 0.03, 0.12, 12, 4);
+        for mutation in 0..5 {
+            let mut shell = source.clone();
+            match mutation {
+                0 => shell.boundary_rings.push(shell.boundary_rings[1].clone()),
+                1 => shell.boundary_rings[1].vertices.reverse(),
+                2 => shell.boundary_rings[0].perimeter_m += 0.001,
+                3 => {
+                    shell.vertices_m.push([0.0, 0.0, 0.06]);
+                }
+                4 => {
+                    shell.triangles.pop();
+                }
+                _ => unreachable!(),
+            }
+            let refusal = draft_autoknit_from_shell(&shell, &gauge, &profile, &cfg).unwrap_err();
+            assert_eq!(refusal.code, RefusalCode::DegenerateGeometry);
+        }
+        let mut one_bed = profile.clone();
+        one_bed.has_back_bed = false;
+        assert_eq!(
+            draft_autoknit_from_shell(&source, &gauge, &one_bed, &cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::MachineStateInfeasible
+        );
+        let too_short = frustum(0.03, 0.03, 0.002, 12, 1);
+        assert_eq!(
+            draft_autoknit_from_shell(&too_short, &gauge, &profile, &cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+        let mut too_large = source.clone();
+        too_large.vertices_m.resize(20_001, [0.0, 0.0, 0.0]);
+        assert_eq!(
+            draft_autoknit_from_shell(&too_large, &gauge, &profile, &cfg)
+                .unwrap_err()
+                .code,
+            RefusalCode::BudgetExceeded
+        );
+        let mut invalid_config = serde_json::to_value(&cfg).unwrap();
+        invalid_config["silently_enable_branches"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<AutoKnitConfig>(invalid_config).is_err());
     }
 }

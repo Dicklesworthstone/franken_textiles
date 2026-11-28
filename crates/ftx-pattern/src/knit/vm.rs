@@ -74,6 +74,18 @@ pub struct KnitSafetyContext<'a> {
     pub takedown_fraction: Option<f64>,
 }
 
+/// The built-in profile envelope used by both VM admission and local transfer routing.
+/// This is the existing nominal draw-in slack model, not measured yarn elongation.
+pub(super) fn profile_racking_strain(
+    profile: &MachineProfile,
+    delta_quarter_pitches: u32,
+) -> (f64, f64) {
+    let dx = (f64::from(delta_quarter_pitches) * profile.needle_pitch_mm) / 4.0;
+    let span = (profile.bed_gap_mm * profile.bed_gap_mm + dx * dx).sqrt();
+    let unstretched = profile.bed_gap_mm + 2.2 * profile.needle_pitch_mm;
+    (span, ((span - unstretched) / unstretched).max(0.0))
+}
+
 /// Verifies a [`KnitoutProgram`] against a [`MachineProfile`] and [`KnitSafetyContext`] using all 7 checks.
 ///
 /// # Errors
@@ -587,12 +599,7 @@ pub fn verify_knitout_program(
                         .max()
                         .unwrap_or(abs_qp);
                     if delta_qp > 0 {
-                        let dx = (f64::from(delta_qp) * profile.needle_pitch_mm) / 4.0;
-                        let span = (profile.bed_gap_mm * profile.bed_gap_mm + dx * dx).sqrt();
-                        // Conservative inter-bed unstretched yarn length (bed gap + ~2.2 pitches
-                        // of draw-in slack from adjacent rib/transfer stitches).
-                        let l0 = profile.bed_gap_mm + 2.2 * profile.needle_pitch_mm;
-                        let strain = ((span - l0) / l0).max(0.0);
+                        let (span, strain) = profile_racking_strain(profile, delta_qp);
                         let max_allow = profile.racking_yarn_breaking_elongation / 2.0;
                         if strain > max_allow {
                             return Err(Refusal::new(

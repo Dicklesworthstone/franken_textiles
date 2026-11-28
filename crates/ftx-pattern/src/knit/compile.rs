@@ -15,7 +15,7 @@ use super::ir::{
 };
 use super::profile::{CalibrationSwatchCaps, MachineProfile, WearerAgeClass};
 use super::receipts::{FourClaimsVerdict, KnitMachineCert, KnitSwatchQualification};
-use super::vm::{KnitSafetyContext, VBedVmReport, verify_knitout_program};
+use super::vm::{KnitSafetyContext, VBedVmReport, profile_racking_strain, verify_knitout_program};
 
 /// Complete verified compilation bundle returned by [`compile_knit_doc`].
 #[derive(Clone, Debug)]
@@ -33,6 +33,9 @@ pub struct CompiledKnitBundle {
 struct LoopCompiler<'a> {
     profile: &'a MachineProfile,
     live: BTreeMap<Needle, Vec<u32>>,
+    /// Rack positions at which currently live cross-bed bridges were established.
+    /// Mirrors the VM; every emitted transfer returns the carriage beds to rack zero.
+    bridge_racks: BTreeSet<i32>,
     ops: Vec<KnitoutOp>,
 }
 
@@ -48,6 +51,86 @@ fn topology_refusal(node: &StitchNode, detail: impl std::fmt::Display) -> Refusa
 }
 
 impl LoopCompiler<'_> {
+    fn live_bed_counts(&self) -> [usize; 2] {
+        let mut counts = [0, 0];
+        for needle in self.live.keys() {
+            counts[usize::from(needle.bed == Bed::Back)] += 1;
+        }
+        counts
+    }
+
+    fn observe_transfer_bridges(&mut self, rack: i32) {
+        let counts = self.live_bed_counts();
+        if counts.contains(&0) {
+            self.bridge_racks.clear();
+        } else if self.bridge_racks.is_empty() {
+            self.bridge_racks.insert(rack);
+        }
+    }
+
+    /// Simulate only a candidate's local crossings and return its peak rack delta.
+    /// Occupancy overrides are limited to these few hooks; no full program replay
+    /// or copy of the stitch graph is needed to check bridge strain and stack caps.
+    fn route_cost(&self, route: &[(Needle, Needle)]) -> Option<u32> {
+        let mut counts = self.live_bed_counts();
+        let mut bridges = self.bridge_racks.clone();
+        let mut changed = BTreeMap::new();
+        let mut cost = 0;
+        let rack_cost = |rack: i32, counts: [usize; 2], bridges: &BTreeSet<i32>| {
+            if counts.contains(&0) {
+                return Some(rack.unsigned_abs());
+            }
+            let delta = bridges
+                .iter()
+                .map(|&born| rack.abs_diff(born))
+                .max()
+                .unwrap_or_else(|| rack.unsigned_abs());
+            let (_, strain) = profile_racking_strain(self.profile, delta);
+            (strain <= self.profile.racking_yarn_breaking_elongation / 2.0)
+                .then_some(delta.max(rack.unsigned_abs()))
+        };
+        for &(from, to) in route {
+            let rack = match (from.bed, to.bed) {
+                (Bed::Front, Bed::Back) => (i64::from(from.index) - i64::from(to.index)) * 4,
+                (Bed::Back, Bed::Front) => (i64::from(to.index) - i64::from(from.index)) * 4,
+                _ => return None,
+            };
+            if rack.abs() > i64::from(self.profile.max_racking_quarter_pitches)
+                || [from.index, to.index]
+                    .iter()
+                    .any(|&index| index < 0 || index as u32 >= self.profile.needle_count)
+            {
+                return None;
+            }
+            let rack = rack as i32;
+            cost = cost.max(rack_cost(rack, counts, &bridges)?);
+            let source = changed
+                .get(&from)
+                .copied()
+                .unwrap_or_else(|| self.live.get(&from).map_or(0, Vec::len));
+            let destination = changed
+                .get(&to)
+                .copied()
+                .unwrap_or_else(|| self.live.get(&to).map_or(0, Vec::len));
+            if source == 0 || source + destination > usize::from(self.profile.max_loops_per_hook) {
+                return None;
+            }
+            counts[usize::from(from.bed == Bed::Back)] -= 1;
+            if destination == 0 {
+                counts[usize::from(to.bed == Bed::Back)] += 1;
+            }
+            changed.insert(from, 0);
+            changed.insert(to, source + destination);
+            if counts.contains(&0) {
+                bridges.clear();
+            } else if bridges.is_empty() {
+                bridges.insert(rack);
+            }
+            cost = cost.max(rack_cost(0, counts, &bridges)?);
+        }
+        Some(cost)
+    }
+
     fn cross(&mut self, from: Needle, to: Needle) -> Result<(), Refusal> {
         let rack = if from.bed == Bed::Front && to.bed == Bed::Back {
             (i64::from(from.index) - i64::from(to.index)) * 4
@@ -79,6 +162,15 @@ impl LoopCompiler<'_> {
                 "parent transfer would exceed the machine hook-stack limit",
             ));
         }
+        if self.route_cost(&[(from, to)]).is_none() {
+            return Err(Refusal::new(
+                RefusalCode::MaterialProcessHazard,
+                "parent transfer exceeds the profile's live cross-bed racking strain envelope",
+            )
+            .repair(
+                "use smaller staged transfers through available hooks or reduce the shaping step",
+            ));
+        }
         self.ops.push(KnitoutOp::Rack {
             quarter_pitches: rack as i32,
         });
@@ -89,6 +181,7 @@ impl LoopCompiler<'_> {
         // crosses twice; temporary parking also restores the original order.
         source.reverse();
         self.live.entry(to).or_default().extend(source);
+        self.observe_transfer_bridges(rack as i32);
         Ok(())
     }
 
@@ -107,9 +200,10 @@ impl LoopCompiler<'_> {
             return self.cross(from, to);
         }
 
-        // A same-bed move uses one empty opposite-bed hook. Prefer the source-aligned
-        // hook, then nearby hooks inside both racking ranges. Searching occupied hooks
-        // is bounded by the input's live-loop count rather than a fixed-size bed allocation.
+        // A same-bed move crosses twice. An intermediate near the midpoint splits
+        // the rack displacement instead of placing the whole move on one crossing.
+        // Admit the complete local route before emitting it, including rack-zero
+        // returns and temporary parking of unrelated live stacks.
         let reach = self.profile.max_racking_quarter_pitches / 4;
         let lo = (i64::from(from.index) - i64::from(reach))
             .max(i64::from(to.index) - i64::from(reach))
@@ -118,39 +212,90 @@ impl LoopCompiler<'_> {
             .min(i64::from(to.index) + i64::from(reach))
             .min(i64::from(self.profile.needle_count) - 1);
         if lo <= hi {
-            let pivot = i64::from(from.index).max(lo).min(hi);
-            for index in (pivot..=hi).chain((lo..pivot).rev()) {
+            const MAX_ROUTE_CANDIDATES: usize = 16_384;
+            if hi - lo + 1 > MAX_ROUTE_CANDIDATES as i64 {
+                return Err(Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "parent transfer candidate range exceeds the bounded local route search",
+                ));
+            }
+            let mut middles: Vec<i64> = (lo..=hi).collect();
+            middles.sort_by_key(|&index| {
+                (
+                    (index - i64::from(from.index))
+                        .abs()
+                        .max((index - i64::from(to.index)).abs()),
+                    (index - i64::from(from.index)).abs(),
+                    index,
+                )
+            });
+            let mut best: Option<(u32, Vec<(Needle, Needle)>)> = None;
+            for &index in &middles {
                 let middle = Needle::new(from.bed.opposite(), index as i32);
                 if !self.live.contains_key(&middle) {
-                    self.cross(from, middle)?;
-                    return self.cross(middle, to);
+                    let route = vec![(from, middle), (middle, to)];
+                    if let Some(cost) = self.route_cost(&route)
+                        && best.as_ref().is_none_or(|(previous, _)| cost < *previous)
+                    {
+                        best = Some((cost, route));
+                    }
                 }
+            }
+            if let Some((_, route)) = best.take() {
+                for (source, target) in route {
+                    self.cross(source, target)?;
+                }
+                return Ok(());
             }
 
             // Full-gauge tubes occupy both beds. Temporarily park the opposite
             // loop on a free nearby hook, move the requested stack, then restore
             // that unrelated loop before the next stitch is formed.
-            for index in (pivot..=hi).chain((lo..pivot).rev()) {
+            let mut candidates = middles.len();
+            for index in middles {
                 let middle = Needle::new(from.bed.opposite(), index as i32);
+                if !self.live.contains_key(&middle) {
+                    continue;
+                }
                 let spare_lo = (index - i64::from(reach)).max(0);
                 let spare_hi =
                     (index + i64::from(reach)).min(i64::from(self.profile.needle_count) - 1);
                 for spare_index in spare_lo..=spare_hi {
+                    candidates += 1;
+                    if candidates > MAX_ROUTE_CANDIDATES {
+                        return Err(Refusal::new(
+                            RefusalCode::BudgetExceeded,
+                            "parent transfer parking search exceeded its bounded local route work",
+                        ));
+                    }
                     let spare = Needle::new(from.bed, spare_index as i32);
                     if spare == from || spare == to || self.live.contains_key(&spare) {
                         continue;
                     }
-                    self.cross(middle, spare)?;
-                    self.cross(from, middle)?;
-                    self.cross(middle, to)?;
-                    return self.cross(spare, middle);
+                    let route = vec![
+                        (middle, spare),
+                        (from, middle),
+                        (middle, to),
+                        (spare, middle),
+                    ];
+                    if let Some(cost) = self.route_cost(&route)
+                        && best.as_ref().is_none_or(|(previous, _)| cost < *previous)
+                    {
+                        best = Some((cost, route));
+                    }
                 }
+            }
+            if let Some((_, route)) = best {
+                for (source, target) in route {
+                    self.cross(source, target)?;
+                }
+                return Ok(());
             }
         }
         Err(Refusal::new(
             RefusalCode::MachineStateInfeasible,
             format!(
-                "no parent-preserving transfer from {} to {} within the available hooks and racking range",
+                "no parent-preserving transfer from {} to {} within the available hooks, racking range and live bridge-strain envelope",
                 from.knitout_token(),
                 to.knitout_token()
             ),
@@ -826,6 +971,7 @@ pub fn compile_knit_doc(
     let mut compiler = LoopCompiler {
         profile,
         live: BTreeMap::new(),
+        bridge_racks: BTreeSet::new(),
         ops,
     };
     let mut flat_dir = CourseDir::Plus;
@@ -1132,6 +1278,9 @@ pub fn compile_knit_doc(
                 compiler.live.entry(needle).or_default().push(node.id);
             } else {
                 compiler.live.insert(needle, vec![node.id]);
+            }
+            if !compiler.live_bed_counts().contains(&0) {
+                compiler.bridge_racks.insert(0);
             }
             if doc.wearer_age_class.is_infant() {
                 let held = compiler
@@ -2708,6 +2857,7 @@ mod tests {
         let mut compiler = LoopCompiler {
             profile: &profile,
             live: BTreeMap::from([(front, vec![0, 1])]),
+            bridge_racks: BTreeSet::new(),
             ops: Vec::new(),
         };
         compiler.cross(front, back).unwrap();
@@ -2720,6 +2870,130 @@ mod tests {
             .unwrap();
         assert_eq!(compiler.live[&Needle::new(Bed::Front, 11)], vec![0, 1]);
         assert_eq!(compiler.live[&back], vec![2]);
+    }
+
+    #[test]
+    fn midpoint_transfer_preserves_stacks_and_passes_the_unchanged_strain_gate() {
+        let profile = MachineProfile::hand_knit(4.0);
+        let from = Needle::new(Bed::Front, 10);
+        let target = Needle::new(Bed::Front, 14);
+        let other = Needle::new(Bed::Back, 20);
+        let aligned = Needle::new(Bed::Back, 10);
+        let carrier = CarrierId("1".to_string());
+        let program = |transfers: &[KnitoutOp]| {
+            let mut ops = vec![KnitoutOp::In {
+                carriers: vec![carrier.clone()],
+            }];
+            for needle in [from, from, target, other] {
+                ops.push(KnitoutOp::Tuck {
+                    dir: CourseDir::Plus,
+                    needle,
+                    carriers: vec![carrier.clone()],
+                });
+            }
+            ops.extend_from_slice(transfers);
+            ops.push(KnitoutOp::Out {
+                carriers: vec![carrier.clone()],
+            });
+            KnitoutProgram {
+                schema: KNITOUT_SCHEMA.to_string(),
+                header: KnitoutHeader {
+                    machine: profile.id.clone(),
+                    gauge: format!("{:.1}", profile.gauge_e),
+                    width: profile.needle_count,
+                    position: "Center".to_string(),
+                    carriers: vec![carrier.clone()],
+                    extra: BTreeMap::new(),
+                },
+                ops,
+            }
+        };
+        let context = KnitSafetyContext {
+            wearer_age_class: WearerAgeClass::Adult,
+            blocked_wale_pitch_mm: 5.0,
+            source_doc: None,
+            speed_fraction: None,
+            takedown_fraction: None,
+        };
+        let old_route = [
+            KnitoutOp::Rack { quarter_pitches: 0 },
+            KnitoutOp::Xfer { from, to: aligned },
+            KnitoutOp::Rack { quarter_pitches: 0 },
+            KnitoutOp::Rack {
+                quarter_pitches: 16,
+            },
+            KnitoutOp::Xfer {
+                from: aligned,
+                to: target,
+            },
+            KnitoutOp::Rack { quarter_pitches: 0 },
+        ];
+        let refusal = verify_knitout_program(&program(&old_route), &profile, &context).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::MaterialProcessHazard);
+        assert!(refusal.message.contains("strain"));
+
+        let original = BTreeMap::from([(from, vec![0, 1]), (target, vec![2]), (other, vec![3])]);
+        let mut compiler = LoopCompiler {
+            profile: &profile,
+            live: original,
+            bridge_racks: BTreeSet::from([0]),
+            ops: Vec::new(),
+        };
+        compiler.transfer(from, target).unwrap();
+        assert_eq!(compiler.live[&target], vec![2, 0, 1]);
+        assert_eq!(compiler.live[&other], vec![3]);
+        assert_eq!(compiler.live.len(), 2);
+        let racks: Vec<_> = compiler
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                KnitoutOp::Rack { quarter_pitches } => Some(*quarter_pitches),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(racks, vec![-8, 0, 8, 0]);
+        let verified = verify_knitout_program(&program(&compiler.ops), &profile, &context).unwrap();
+        assert_eq!(verified.total_transfers, 2);
+
+        // Eight pitches cannot be split into two strain-admitted crossings by
+        // this local planner. Do not emit a failed partial route or weaken the VM.
+        let mut impossible = LoopCompiler {
+            profile: &profile,
+            live: BTreeMap::from([(from, vec![0, 1]), (other, vec![3])]),
+            bridge_racks: BTreeSet::from([0]),
+            ops: Vec::new(),
+        };
+        let before = impossible.live.clone();
+        let refusal = impossible
+            .transfer(from, Needle::new(Bed::Front, 18))
+            .unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::MachineStateInfeasible);
+        assert_eq!(impossible.live, before);
+        assert!(impossible.ops.is_empty());
+    }
+
+    #[test]
+    fn transfer_route_retains_nonzero_bridge_birth_racks_until_one_bed_is_empty() {
+        let profile = MachineProfile::hand_knit(4.0);
+        let from = Needle::new(Bed::Front, 10);
+        let mut compiler = LoopCompiler {
+            profile: &profile,
+            live: BTreeMap::from([(from, vec![0]), (Needle::new(Bed::Front, 20), vec![1])]),
+            bridge_racks: BTreeSet::new(),
+            ops: Vec::new(),
+        };
+        let back = Needle::new(Bed::Back, 12);
+        compiler.cross(from, back).unwrap();
+        assert_eq!(compiler.bridge_racks, BTreeSet::from([-8]));
+        // Absolute rack +8 is ordinarily small, but it is four pitches away
+        // from the still-live bridge born at rack -8.
+        assert!(
+            compiler
+                .route_cost(&[(back, Needle::new(Bed::Front, 14))])
+                .is_none()
+        );
+        compiler.cross(back, from).unwrap();
+        assert!(compiler.bridge_racks.is_empty());
     }
 
     fn neckline_doc() -> KnitDoc {
