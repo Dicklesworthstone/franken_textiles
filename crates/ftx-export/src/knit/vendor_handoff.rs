@@ -10,7 +10,8 @@
 use ftx_core::receipt::{canonical_json_sha256, sha256_hex};
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::knit::{
-    CompiledKnitBundle, KnitSafetyContext, MachineBackendKind, MachineProfile, VBedVmReport,
+    CompiledKnitBundle, KnitMachineCert, KnitSafetyContext, MachineBackendKind, MachineProfile,
+    VBedVmReport,
 };
 use serde::{Deserialize, Serialize};
 
@@ -266,6 +267,19 @@ impl VendorHandoffManifest {
                 ),
             ));
         }
+        let expected_fmt = match target_vendor {
+            "shima_seiki" => TierBProprietaryTarget::ShimaSeikiDat.withheld_format(),
+            "stoll" => TierBProprietaryTarget::StollSintral.withheld_format(),
+            _ => unreachable!(),
+        };
+        if withheld_binary_format != expected_fmt {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!(
+                    "Tier-B vendor handoff target_vendor '{target_vendor}' requires withheld_binary_format '{expected_fmt}' (got '{withheld_binary_format}')"
+                ),
+            ));
+        }
         if withheld_binary_format.trim().is_empty()
             || machine_id.trim().is_empty()
             || machine_sha256.trim().is_empty()
@@ -449,6 +463,20 @@ pub fn verify_tier_b_handoff_bundle(
     let target = TierBProprietaryTarget::from_profile(profile)?;
     handoff.manifest.verify_integrity()?;
     handoff.knitout.cert.verify_integrity()?;
+    let reparsed_cert: KnitMachineCert =
+        serde_json::from_str(&handoff.knitout.cert_json).map_err(|e| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("cannot parse serialized Knitout certificate: {e}"),
+            )
+        })?;
+    reparsed_cert.verify_integrity()?;
+    if reparsed_cert != handoff.knitout.cert {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "Tier-B vendor handoff knitout.cert_json disagrees with knitout.cert struct",
+        ));
+    }
     let reparsed_manifest: VendorHandoffManifest = serde_json::from_str(&handoff.manifest_json)
         .map_err(|e| {
             Refusal::new(
@@ -470,11 +498,12 @@ pub fn verify_tier_b_handoff_bundle(
         ));
     }
     if handoff.manifest.target_vendor != target.vendor_key()
+        || handoff.manifest.withheld_binary_format != target.withheld_format()
         || handoff.manifest.machine_id != profile.id
     {
         return Err(Refusal::new(
             RefusalCode::VerificationMismatch,
-            "Tier-B vendor handoff manifest target_vendor or machine_id disagrees with MachineProfile",
+            "Tier-B vendor handoff manifest target_vendor, withheld_binary_format, or machine_id disagrees with MachineProfile",
         ));
     }
     let expected_machine_sha = profile.canonical_sha256()?;
@@ -607,7 +636,7 @@ mod tests {
         }
 
         // Bundle verification catches tampered manifest_json even if struct wasn't modified
-        let mut bad_bundle = handoff;
+        let mut bad_bundle = handoff.clone();
         bad_bundle.manifest_json = bad_bundle.manifest_json.replace("SINTRAL", ".dat");
         let ctx = KnitSafetyContext {
             wearer_age_class: WearerAgeClass::CalibrationSwatchOnly,
@@ -618,6 +647,64 @@ mod tests {
         };
         assert_eq!(
             verify_tier_b_handoff_bundle(&bad_bundle, &stoll, &ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Bundle verification catches tampered knitout.cert_json even if cert struct wasn't modified
+        let mut bad_cert_json_bundle = handoff.clone();
+        bad_cert_json_bundle.knitout.cert_json = bad_cert_json_bundle.knitout.cert_json.replace(
+            "\"hardware_execution_authorized\": false",
+            "\"hardware_execution_authorized\": true",
+        );
+        assert_eq!(
+            verify_tier_b_handoff_bundle(&bad_cert_json_bundle, &stoll, &ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Replacing cert_json with a differently sealed cert also fails VerificationMismatch
+        let mut stale_cert_json_bundle = handoff.clone();
+        let alt_cert = KnitMachineCert::seal(
+            "0".repeat(64),
+            handoff.knitout.cert.machine_sha256.clone(),
+            handoff.knitout.cert.qualification_sha256.clone(),
+            handoff.knitout.cert.drape_receipt_sha256.clone(),
+            handoff.knitout.cert.wearer_age_class,
+            handoff.knitout.cert.automated_carriage_control,
+            handoff.knitout.cert.checks_passed.clone(),
+            handoff.knitout.cert.limitations.clone(),
+            handoff.knitout.cert.four_claims.clone(),
+        )
+        .unwrap();
+        stale_cert_json_bundle.knitout.cert_json = serde_json::to_string_pretty(&alt_cert).unwrap();
+        assert_eq!(
+            verify_tier_b_handoff_bundle(&stale_cert_json_bundle, &stoll, &ctx)
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
+
+        // Mismatched target_vendor vs withheld_binary_format refuses at seal and export
+        assert_eq!(
+            VendorHandoffManifest::seal(
+                "stoll".to_string(),
+                ".dat".to_string(),
+                stoll.id.clone(),
+                stoll.canonical_sha256().unwrap(),
+                handoff.knitout.knitout_sha256.clone(),
+                handoff.knitout.cert.cert_sha256.clone(),
+                handoff.manifest.unresolved_vendor_tables.clone(),
+                handoff.manifest.operator_handoff_steps.clone(),
+            )
+            .unwrap_err()
+            .code,
+            RefusalCode::VerificationMismatch
+        );
+        assert_eq!(
+            export_tier_b_vendor_handoff(&compiled, &stoll, ".dat")
                 .unwrap_err()
                 .code,
             RefusalCode::VerificationMismatch
