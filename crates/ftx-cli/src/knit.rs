@@ -76,14 +76,25 @@ fn parse_machine(id: &str) -> Result<MachineProfile, Refusal> {
         "brother-kh270-ayab" | "brother-kh270" | "kh270" => {
             Ok(MachineProfile::brother_kh270_ayab())
         }
+        "generic-vbed-12e" => Ok(MachineProfile::generic_vbed_12e()),
+        "generic-slider-12e" => Ok(MachineProfile::generic_slider_12e()),
         "shima-seiki-12e-handoff" | "shima-12e" | "shima" => {
             Ok(MachineProfile::shima_seiki_12e_handoff())
         }
         "stoll-12e-handoff" | "stoll-12e" | "stoll" => Ok(MachineProfile::stoll_12e_handoff()),
         "hand-knit" | "hand" => Ok(MachineProfile::hand_knit(4.0)),
         _ => Err(bad_input(format!(
-            "unknown --machine '{id}' (expected kniterate-7e, brother-kh930, brother-kh270, shima-12e, stoll-12e, or hand-knit)"
+            "unknown --machine '{id}' (expected kniterate-7e, brother-kh930, brother-kh270, generic-vbed-12e, generic-slider-12e, shima-12e, stoll-12e, or hand-knit)"
         ))),
+    }
+}
+
+fn default_cam_setting(profile: &MachineProfile) -> f64 {
+    let mid = 0.5 * (profile.cam_setting_range[0] + profile.cam_setting_range[1]);
+    if profile.backend_kind == MachineBackendKind::KniterateKc {
+        mid.floor()
+    } else {
+        mid
     }
 }
 
@@ -536,10 +547,8 @@ fn cmd_knit_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let cam = opt_f64(
         args,
         "cam",
-        qual.as_ref().map_or(
-            0.5 * (profile.cam_setting_range[0] + profile.cam_setting_range[1]),
-            |q| q.cam_stitch_setting,
-        ),
+        qual.as_ref()
+            .map_or_else(|| default_cam_setting(&profile), |q| q.cam_stitch_setting),
     )?;
     let has_drawstring = args.options.contains_key("has-drawstring");
     let shoulder_short_row_pairs = opt_u32(args, "shoulder-short-row-pairs", 0)?;
@@ -949,10 +958,8 @@ fn cmd_knit_shape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let cam = opt_f64(
         args,
         "cam",
-        qual.as_ref().map_or(
-            0.5 * (profile.cam_setting_range[0] + profile.cam_setting_range[1]),
-            |q| q.cam_stitch_setting,
-        ),
+        qual.as_ref()
+            .map_or_else(|| default_cam_setting(&profile), |q| q.cam_stitch_setting),
     )?;
     let has_hood_or_neck_drawstring = args.options.contains_key("has-drawstring");
     let max_idt_flips = opt_u32(args, "max-idt-flips", 200)? as usize;
@@ -1429,12 +1436,18 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "knit verify",
-        &["machine", "qual", "material-sha256", "strict-knitout"],
+        &[
+            "machine",
+            "age-class",
+            "qual",
+            "material-sha256",
+            "strict-knitout",
+        ],
     )?;
     no_extra_positional(
         args,
         3,
-        "ftx knit verify PATTERN.knit.json [--machine ID] [--strict-knitout] [--qual SWATCH.json --material-sha256 SOURCE_DIGEST] [--json]",
+        "ftx knit verify PATTERN.knit.json [--machine ID] [--age-class CLASS] [--strict-knitout] [--qual SWATCH.json --material-sha256 SOURCE_DIGEST] [--json]",
     )?;
     let doc_path = PathBuf::from(&args.positional[2]);
     let txt = read_utf8(&doc_path, "knit pattern document")?;
@@ -1447,17 +1460,30 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let strict_knitout = args.options.contains_key("strict-knitout");
 
     if txt.trim_start().starts_with(";!knitout-2") {
+        let wearer_age_class = match args.options.get("age-class") {
+            Some(raw) => parse_age_class(raw)?,
+            None => WearerAgeClass::Adult,
+        };
         let ctx = KnitSafetyContext {
-            wearer_age_class: WearerAgeClass::Adult,
+            wearer_age_class,
             blocked_wale_pitch_mm: profile.needle_pitch_mm,
             source_doc: None,
-            speed_fraction: None,
-            takedown_fraction: None,
+            speed_fraction: if wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
+                Some(CalibrationSwatchCaps::MAX_SPEED_FRACTION)
+            } else {
+                None
+            },
+            takedown_fraction: if wearer_age_class == WearerAgeClass::CalibrationSwatchOnly {
+                Some(CalibrationSwatchCaps::MAX_TAKEDOWN_FRACTION)
+            } else {
+                None
+            },
         };
         let (_program, vm_report) = verify_knitout_v2_readback(&txt, &profile, &ctx)?;
         let result = json!({
             "verified": true,
             "strict_knitout": true,
+            "wearer_age_class": wearer_age_class,
             "vm_report": vm_report,
             "hardware_execution_authorized": false,
             "physical_knitting_validated": false,
@@ -1553,12 +1579,23 @@ pub(super) fn cmd_drape_knit(
 
     let qual = read_knit_qualification(args)?;
     let expected_mat = expected_knit_material(args)?;
+    if let (Some(q), Some(mat)) = (&qual, expected_mat)
+        && q.material_sha256 != mat
+    {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "supplied --qual material_sha256 disagrees with --material-sha256",
+        )
+        .repair("pass the swatch qualification recorded for the selected source material"));
+    }
     let material_sha256 = expected_mat
         .map(str::to_string)
         .or_else(|| doc.metadata.get("material_sha256").cloned())
         .or_else(|| qual.as_ref().map(|q| q.material_sha256.clone()))
         .unwrap_or_else(|| "unqualified-knit-material".to_string());
-    let evidence = qual.as_ref().map_or(Evidence::Estimate, |q| q.evidence);
+    // `cmd_drape_knit` drapes using the reference RVE stockinette estimate card, so its
+    // constitutive evidence must remain Estimate (never falsely upgraded to Measured).
+    let evidence = Evidence::Estimate;
 
     let meas_path = required(args, "measurements")?;
     let (meas, meas_bytes) = read_json(meas_path)?;
@@ -1963,33 +2000,62 @@ fn knit_doc_to_stitch_map(
     let mut c_max = u32::MIN;
     let mut w_min = i32::MAX;
     let mut w_max = i32::MIN;
-    let mut has_front = false;
-    let mut has_back = false;
+    let mut front_cells = std::collections::BTreeSet::new();
+    let mut has_tubular_overlap = false;
     for st in &doc.stitches {
         c_min = c_min.min(st.course);
         c_max = c_max.max(st.course);
         w_min = w_min.min(st.wale);
         w_max = w_max.max(st.wale);
-        match st.bed {
-            Bed::Front | Bed::FrontSlider => has_front = true,
-            Bed::Back | Bed::BackSlider => has_back = true,
+        if matches!(st.bed, Bed::Front | Bed::FrontSlider) {
+            front_cells.insert((st.course, st.wale));
         }
     }
-    let courses = c_max.saturating_sub(c_min).saturating_add(1).max(1);
-    let wales = (i64::from(w_max) - i64::from(w_min) + 1).max(1) as u32;
-    let is_circular = force_circular || (has_front && has_back);
+    for st in &doc.stitches {
+        if matches!(st.bed, Bed::Back | Bed::BackSlider)
+            && front_cells.contains(&(st.course, st.wale))
+        {
+            has_tubular_overlap = true;
+            break;
+        }
+    }
+    let courses_raw = c_max.saturating_sub(c_min).saturating_add(1);
+    let wales_i64 = i64::from(w_max) - i64::from(w_min) + 1;
+    if wales_i64 <= 0
+        || wales_i64 > 2_048
+        || courses_raw > 4_096
+        || (wales_i64 as u64).saturating_mul(u64::from(courses_raw)) > 4_000_000
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            format!(
+                "knit dye stitch map {wales_i64} wales x {courses_raw} courses exceeds export preview budget (max 2048 wales, 4096 courses, 4000000 cells)"
+            ),
+        ));
+    }
+    let courses = courses_raw.max(1);
+    let wales = (wales_i64 as u32).max(1);
+    // Infer circular topology ONLY when both beds occupy the same `(course, wale)` (a real tube),
+    // never on a flat panel with a 1x1 rib hem!
+    let is_circular = force_circular || has_tubular_overlap;
     let default_loop_m = (2.6 * doc.gauge.blocked_wale_pitch_mm()) * 0.001;
 
     let mut ordered: Vec<&ftx_pattern::knit::StitchNode> = doc.stitches.iter().collect();
     ordered.sort_by_key(|s| {
-        let rev = !is_circular && ((s.course - c_min) % 2 == 1);
-        let w_key = if rev { -s.wale } else { s.wale };
-        (
-            s.course,
-            matches!(s.bed, Bed::Back | Bed::BackSlider),
-            w_key,
-            s.id,
-        )
+        let is_back = matches!(s.bed, Bed::Back | Bed::BackSlider);
+        // Flatbed alternates left-to-right / right-to-left every course; circular tubes traverse
+        // front bed ascending then back bed descending around the cylinder (matching compile.rs).
+        let rev = if is_circular {
+            is_back
+        } else {
+            (s.course - c_min) % 2 == 1
+        };
+        let w_key = if rev {
+            -i64::from(s.wale)
+        } else {
+            i64::from(s.wale)
+        };
+        (s.course, is_back, w_key, s.id)
     });
 
     let mut stitches = Vec::with_capacity(ordered.len());
@@ -2002,7 +2068,8 @@ fn knit_doc_to_stitch_map(
         let s0 = s;
         let s1 = s + len_m;
         s = s1;
-        let target_u = ((f64::from(st.wale - w_min) + 0.5) / f64::from(wales)).clamp(0.0, 1.0);
+        let wale_offset = (i64::from(st.wale) - i64::from(w_min)) as f64;
+        let target_u = ((wale_offset + 0.5) / f64::from(wales)).clamp(0.0, 1.0);
         let target_v =
             (1.0 - (f64::from(st.course - c_min) + 0.5) / f64::from(courses)).clamp(0.0, 1.0);
         stitches.push(StitchArcMapping {
@@ -2038,7 +2105,7 @@ fn render_dye_preview_png(
     let h = stitch_map.courses.max(1) as usize;
     let mut rgb = vec![220u8; w * h * 3];
     for (st, color) in stitch_map.stitches.iter().zip(predicted_srgb) {
-        let col = (st.wale - w_min).clamp(0, w as i32 - 1) as usize;
+        let col = (i64::from(st.wale) - i64::from(w_min)).clamp(0, w as i64 - 1) as usize;
         let row = h
             .saturating_sub(1)
             .saturating_sub((st.course as usize).min(h.saturating_sub(1)));
@@ -2050,29 +2117,44 @@ fn render_dye_preview_png(
     ftx_drape::render::png(w, h, &rgb)
 }
 
-fn parse_drape_dye_context(path: &Path) -> Result<(f64, f64), Refusal> {
+fn parse_drape_dye_context(
+    path: &Path,
+    expected_pattern_sha256: Option<&str>,
+) -> Result<(f64, f64), Refusal> {
     let txt = read_utf8(path, "knit drape report or receipt")?;
     let val: Value = serde_json::from_str(&txt)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let verify_receipt = |receipt: &DrapeUncertaintyReceipt| -> Result<(f64, f64), Refusal> {
+        receipt.verify_seal()?;
+        if let Some(expected) = expected_pattern_sha256
+            && receipt.pattern_sha256 != expected
+        {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!(
+                    "drape uncertainty receipt pattern_sha256 '{}' does not match supplied knit pattern '{expected}'",
+                    receipt.pattern_sha256
+                ),
+            )
+            .repair("pass the drape_uncertainty_receipt.json generated from this exact knit pattern"));
+        }
+        let stretch = receipt.max_strain_ratio.max(1.0);
+        let pore = (0.05 + 0.35 * (stretch - 1.0)).clamp(0.0, 0.95);
+        Ok((stretch, pore))
+    };
     if val.get("schema").and_then(Value::as_str)
         == Some(ftx_pattern::knit::DRAPE_UNCERTAINTY_SCHEMA)
     {
         let receipt: DrapeUncertaintyReceipt = serde_json::from_value(val)
             .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
-        receipt.verify_seal()?;
-        let stretch = receipt.max_strain_ratio.max(1.0);
-        let pore = (0.05 + 0.35 * (stretch - 1.0)).clamp(0.0, 0.95);
-        return Ok((stretch, pore));
+        return verify_receipt(&receipt);
     }
     if let Some(receipt_val) = val.get("drape_uncertainty_receipt")
         && receipt_val.is_object()
     {
         let receipt: DrapeUncertaintyReceipt = serde_json::from_value(receipt_val.clone())
             .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
-        receipt.verify_seal()?;
-        let stretch = receipt.max_strain_ratio.max(1.0);
-        let pore = (0.05 + 0.35 * (stretch - 1.0)).clamp(0.0, 0.95);
-        return Ok((stretch, pore));
+        return verify_receipt(&receipt);
     }
     if let Some(stretch) = val
         .get("knit_shell")
@@ -2084,7 +2166,14 @@ fn parse_drape_dye_context(path: &Path) -> Result<(f64, f64), Refusal> {
         let pore = (0.05 + 0.35 * (s - 1.0)).clamp(0.0, 0.95);
         return Ok((s, pore));
     }
-    Ok((1.0, 0.05))
+    Err(Refusal::new(
+        RefusalCode::InvalidDocument,
+        format!(
+            "{}: --drape must be a sealed ftx-drape-uncertainty/1 receipt or knit drape sim_report.json",
+            path.display()
+        ),
+    )
+    .repair("pass drape_uncertainty_receipt.json or sim_report.json produced by `ftx drape`"))
 }
 
 fn cmd_dye_plan(args: &Args) -> Result<(Value, i32, String), Refusal> {
@@ -2130,13 +2219,24 @@ fn cmd_dye_plan(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
 
     let machine = resolve_dye_machine(args)?;
-    let wearer_age_class = match args.options.get("age-class") {
-        Some(raw) => parse_age_class(raw)?,
-        None => knit_doc
-            .as_ref()
-            .map_or(WearerAgeClass::CalibrationSwatchOnly, |d| {
-                d.wearer_age_class
-            }),
+    let wearer_age_class = match (args.options.get("age-class"), &knit_doc) {
+        (Some(raw), Some(doc)) => {
+            let parsed = parse_age_class(raw)?;
+            if parsed != doc.wearer_age_class {
+                return Err(Refusal::new(
+                    RefusalCode::VerificationMismatch,
+                    format!(
+                        "--age-class {:?} conflicts with knit document wearer_age_class {:?}",
+                        parsed, doc.wearer_age_class
+                    ),
+                )
+                .repair("omit --age-class to inherit the knit document's wearer_age_class or match it exactly"));
+            }
+            parsed
+        }
+        (Some(raw), None) => parse_age_class(raw)?,
+        (None, Some(doc)) => doc.wearer_age_class,
+        (None, None) => WearerAgeClass::CalibrationSwatchOnly,
     };
     let regime = parse_regime(
         args.options
@@ -2145,8 +2245,12 @@ fn cmd_dye_plan(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .unwrap_or("stripes"),
     )?;
     let qual = read_dye_qualification_opt(args)?;
+    let knit_pattern_sha256 = knit_doc
+        .as_ref()
+        .map(KnitDoc::canonical_sha256)
+        .transpose()?;
     let (aspect_ratio_stretch_bound, pore_open_fraction) = match args.options.get("drape") {
-        Some(path) => parse_drape_dye_context(Path::new(path))?,
+        Some(path) => parse_drape_dye_context(Path::new(path), knit_pattern_sha256.as_deref())?,
         None => (1.0, 0.05),
     };
     let drift = DriftParameters {
@@ -2628,50 +2732,35 @@ fn cmd_dye_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "dye verify",
-        &["machine", "dye-qual", "receipt", "out"],
+        &[
+            "machine",
+            "applicator",
+            "qual",
+            "dye-qual",
+            "receipt",
+            "material-sha256",
+            "out",
+        ],
     )?;
     no_extra_positional(
         args,
         3,
-        "ftx dye verify PROGRAM.json [--machine ID] [--dye-qual Q.json] [--receipt RECEIPT.json] [--out NEW_DIR] [--json]",
+        "ftx dye verify PROGRAM.json [--applicator dip|piezo] [--machine ID] [--qual Q.json] [--receipt RECEIPT.json] [--material-sha256 SHA] [--out NEW_DIR] [--json]",
     )?;
     let prog_path = PathBuf::from(&args.positional[2]);
     let txt = read_utf8(&prog_path, "dye program document")?;
     let prog: YarnDyeProgram = serde_json::from_str(&txt)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
-    let machine = parse_dye_machine(
-        args.options
-            .get("machine")
-            .map(String::as_str)
-            .unwrap_or("piezo-cmyk"),
-    )?;
-    let qual: Option<YarnDyeingQualification> = match args.options.get("dye-qual") {
-        Some(path) => {
-            let p = PathBuf::from(path);
-            let qtxt = read_utf8(&p, "yarn dyeing qualification")?;
-            Some(
-                serde_json::from_str(&qtxt)
-                    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
-            )
-        }
-        None => None,
-    };
-    let receipt: Option<DyePlanUncertaintyReceipt> = match args.options.get("receipt") {
-        Some(path) => {
-            let p = PathBuf::from(path);
-            let rtxt = read_utf8(&p, "dye plan uncertainty receipt")?;
-            Some(
-                serde_json::from_str(&rtxt)
-                    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?,
-            )
-        }
-        None => None,
-    };
+    let machine = resolve_dye_machine(args)?;
+    let qual = read_dye_qualification_opt(args)?;
+    let expected_material_sha256 = expected_knit_material(args)?;
+    let receipt: Option<DyePlanUncertaintyReceipt> =
+        read_optional_knit_json(args, "receipt", "dye plan uncertainty receipt")?;
     let bundle = verify_and_export_dye_program_with_receipt(
         &prog,
         &machine,
         qual.as_ref(),
-        None,
+        expected_material_sha256,
         receipt.as_ref(),
     )?;
     if let Some(out) = args.options.get("out") {
@@ -3333,6 +3422,98 @@ mod tests {
             RefusalCode::OpaqueProprietaryTarget
         );
         assert!(!root.join("never-created-shima").exists());
+
+        // Generic 12E V-bed and slider-bed profiles resolve via CLI `--machine`.
+        for machine_id in ["generic-vbed-12e", "generic-slider-12e"] {
+            let vbed_dir = root.join(format!("swatch-{machine_id}"));
+            let vbed_args = parse(
+                &[
+                    "knit",
+                    "swatch",
+                    "--machine",
+                    machine_id,
+                    "--needles",
+                    "16",
+                    "--courses-per-zone",
+                    "6",
+                    "--created",
+                    "2026-11-27T12:00",
+                    "--out",
+                    vbed_dir.to_str().unwrap(),
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+            let (vbed_val, vbed_code, _) = cmd_knit(&vbed_args).unwrap();
+            assert_eq!(vbed_code, 0);
+            assert_eq!(vbed_val["machine"], machine_id);
+            assert!(vbed_dir.join("swatch.k").is_file());
+        }
+
+        // `ftx dye plan` refuses unrecognized `--drape` JSON, refuses `--age-class` downgrades of
+        // an infant knit doc, and refuses huge wale-span knit docs before preview allocation.
+        let bogus_drape = root.join("bogus_drape.json");
+        std::fs::write(&bogus_drape, br#"{"unrelated": true}"#).unwrap();
+        let bad_drape_plan = parse(
+            &[
+                "dye",
+                "plan",
+                "--drape",
+                bogus_drape.to_str().unwrap(),
+                "--out",
+                root.join("never-bad-drape").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_dye(&bad_drape_plan).unwrap_err().code,
+            RefusalCode::InvalidDocument
+        );
+        assert!(!root.join("never-bad-drape").exists());
+
+        let infant_downgrade = parse(
+            &[
+                "dye",
+                "plan",
+                hand_dir.join("pattern.knit.json").to_str().unwrap(),
+                "--age-class",
+                "adult",
+                "--out",
+                root.join("never-downgrade").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_dye(&infant_downgrade).unwrap_err().code,
+            RefusalCode::VerificationMismatch
+        );
+        assert!(!root.join("never-downgrade").exists());
+
+        let mut huge_knit: KnitDoc =
+            serde_json::from_slice(&std::fs::read(swatch_dir.join("swatch.knit.json")).unwrap())
+                .unwrap();
+        huge_knit.stitches[0].wale = -500_000;
+        huge_knit.stitches[1].wale = 500_000;
+        let huge_knit_path = root.join("huge_span.knit.json");
+        std::fs::write(&huge_knit_path, serde_json::to_vec(&huge_knit).unwrap()).unwrap();
+        let huge_plan = parse(
+            &[
+                "dye",
+                "plan",
+                huge_knit_path.to_str().unwrap(),
+                "--out",
+                root.join("never-huge").to_str().unwrap(),
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd_dye(&huge_plan).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+        assert!(!root.join("never-huge").exists());
     }
 
     #[test]
@@ -3634,5 +3815,117 @@ mod tests {
                 RefusalCode::InvalidDocument
             );
         }
+    }
+
+    #[test]
+    fn dye_stitch_map_preserves_flat_rib_parity_and_drape_receipt_binding() {
+        let profile = MachineProfile::kniterate_7e();
+        let gauge = GaugeSpec {
+            wales_per_100mm: 22.0,
+            courses_per_100mm: 30.0,
+            needle_pitch_mm: profile.needle_pitch_mm,
+            yarn_tex: Some(200.0),
+            thickness_mm: Some(2.0),
+            relaxed_after_wash: true,
+        };
+        let panel = draft_shaped_panel(
+            &ParametricPanelSpec {
+                name: "ribbed_flat_panel".to_string(),
+                wearer_age_class: WearerAgeClass::Child3To14,
+                hem_width_mm: 200.0,
+                chest_width_mm: 220.0,
+                length_mm: 200.0,
+                armhole_depth_mm: 60.0,
+                armhole_inset_total_mm: 24.0,
+                neck_width_mm: 0.0,
+                neck_depth_mm: 0.0,
+                rib_hem_courses: 4,
+                cam_setting: 7.0,
+                yarn_id: "merino-200tex".to_string(),
+                carrier_id: ftx_pattern::knit::CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &profile,
+        )
+        .unwrap();
+        let (panel_map, _) = knit_doc_to_stitch_map(&panel, false, 0.05).unwrap();
+        assert!(
+            !panel_map.is_circular,
+            "flat panel with 1x1 rib hem must stay flatbed boustrophedon"
+        );
+        let c1_wales: Vec<i32> = panel_map
+            .stitches
+            .iter()
+            .filter(|s| s.course == 1)
+            .map(|s| s.wale)
+            .collect();
+        assert!(
+            c1_wales.windows(2).all(|w| w[0] >= w[1]),
+            "odd flatbed course must traverse right-to-left: {c1_wales:?}"
+        );
+
+        let tube = draft_seamless_raglan_tube(
+            &RaglanPulloverSpec {
+                name: "circular_tube".to_string(),
+                wearer_age_class: WearerAgeClass::Child3To14,
+                neck_girth_mm: 240.0,
+                chest_girth_mm: 400.0,
+                yoke_depth_mm: 60.0,
+                body_length_below_arm_mm: 80.0,
+                collar_rib_courses: 0,
+                hem_rib_courses: 0,
+                cam_setting: 7.0,
+                yarn_id: "merino-200tex".to_string(),
+                carrier_id: ftx_pattern::knit::CarrierId("1".to_string()),
+                has_hood_or_neck_drawstring: false,
+            },
+            &gauge,
+            &profile,
+        )
+        .unwrap();
+        let (tube_map, _) = knit_doc_to_stitch_map(&tube, false, 0.05).unwrap();
+        assert!(tube_map.is_circular);
+        let c0: Vec<i32> = tube_map
+            .stitches
+            .iter()
+            .filter(|s| s.course == 0)
+            .map(|s| s.wale)
+            .collect();
+        let half = c0.len() / 2;
+        assert!(
+            c0[..half].windows(2).all(|w| w[0] <= w[1]),
+            "front half of circular tube must ascend"
+        );
+        assert!(
+            c0[half..].windows(2).all(|w| w[0] >= w[1]),
+            "back half of circular tube must descend seamlessly around the cylinder"
+        );
+
+        // Sealed drape receipt from another pattern must refuse with VerificationMismatch.
+        let root = fresh_dir("drape-bind");
+        let receipt = DrapeUncertaintyReceipt::seal(
+            panel.canonical_sha256().unwrap(),
+            "mat-sha".to_string(),
+            1.15,
+            0.25,
+            0.0,
+            0.0,
+            Vec::new(),
+            Evidence::Estimate,
+        )
+        .unwrap();
+        let receipt_path = root.join("receipt.json");
+        std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+        assert!(
+            parse_drape_dye_context(&receipt_path, Some(&panel.canonical_sha256().unwrap()))
+                .is_ok()
+        );
+        assert_eq!(
+            parse_drape_dye_context(&receipt_path, Some(&tube.canonical_sha256().unwrap()))
+                .unwrap_err()
+                .code,
+            RefusalCode::VerificationMismatch
+        );
     }
 }
