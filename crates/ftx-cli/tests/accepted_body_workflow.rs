@@ -2355,7 +2355,9 @@ fn body_reuses_exact_shape_not_image_pose_or_new_stature() {
     let dir = setup();
     save(
         &dir.join("measurements.json"),
-        &json!({"wearer":{"age_months":30,"sex":"F","stature_mm":1111}}),
+        &json!({"schema":"fabric-measurements/1",
+            "wearer":{"age_months":30,"sex":"F","stature_mm":1111},
+            "fused":{"stature":{"value_mm":1111,"sigma_mm":5}}}),
     );
     let before = std::fs::read(dir.join("fit.json")).unwrap();
     let value = body(
@@ -2393,6 +2395,37 @@ fn body_reuses_exact_shape_not_image_pose_or_new_stature() {
         std::fs::read(dir.join("second/body.obj")).unwrap()
     );
     assert_eq!(std::fs::read(dir.join("fit.json")).unwrap(), before);
+    // Explicit targets do not relax evidence handling when a records key is present.
+    let mut invalid_records = read(&dir.join("measurements.json"));
+    invalid_records["records"] = Value::Null;
+    save(&dir.join("invalid-records.json"), &invalid_records);
+    let refused = body(
+        &dir,
+        &[
+            "--out",
+            "invalid-record-output",
+            "--measurements",
+            "invalid-records.json",
+        ],
+        3,
+    );
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("records must be a list")
+    );
+    assert!(!dir.join("invalid-record-output").exists());
+    for (name, data) in [("array-targets", json!([])), ("null-targets", Value::Null)] {
+        let path = format!("{name}.json");
+        save(&dir.join(&path), &data);
+        let refused = body(&dir, &["--out", name, "--measurements", &path], 3);
+        assert_eq!(
+            refused["refusal"]["message"],
+            "measurements must be an object"
+        );
+        assert!(!dir.join(name).exists());
+    }
 }
 
 #[test]

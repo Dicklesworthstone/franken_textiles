@@ -342,9 +342,55 @@ fn synthetic_anatomy_request() -> AnatomicalShellRequest {
     }
 }
 
+fn synthetic_knit_qualification(material_sha256: &str) -> KnitSwatchQualification {
+    KnitSwatchQualification {
+        id: "synthetic-round-swatch".to_string(),
+        material_sha256: material_sha256.to_string(),
+        machine_sha256: MachineProfile::kniterate_7e().canonical_sha256().unwrap(),
+        yarn_lot_id: "lot-round".to_string(),
+        was_washed_and_blocked: true,
+        // A coarse authored software-fixture gauge keeps the complete one-stitch
+        // surface bounded; the draper must never decimate a finer source document.
+        wales_per_100mm: 12.0,
+        courses_per_100mm: 8.0,
+        thickness_mm: 0.6,
+        cam_stitch_setting: 7.0,
+        wick_dispersion_mm: None,
+        shrinkage_axial_pct: None,
+        yarn_intake_drift_eps: Some(0.001),
+        yarn_intake_drift_sigma_eta: Some(0.01),
+        evidence: Evidence::Estimate,
+        source: Source {
+            reference: "synthetic:knit_round_workflow".to_string(),
+            accessed_on: "2026-11-27".to_string(),
+            note: "synthetic test qualification; no physical measurements".to_string(),
+        },
+        method: "synthetic".to_string(),
+        conditioning: BTreeMap::new(),
+        allow_estimates: true,
+    }
+}
+
 #[test]
 fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
     let root = scratch_dir("full-round");
+    let knit_selection: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-coupled-knit.json"
+    ))
+    .unwrap();
+    let knit_fabric = json!({"material": knit_selection});
+    let material = ftx_pattern::textile_import::resolve_fabric(&knit_fabric)
+        .unwrap()
+        .unwrap();
+    let mat_sha = material.sha256().to_string();
+    let fabric_bytes = serde_json::to_vec_pretty(&knit_fabric).unwrap();
+    fs::write(root.join("knit_fabric.json"), &fabric_bytes).unwrap();
+    let knit_qual = synthetic_knit_qualification(&mat_sha);
+    fs::write(
+        root.join("knit_qual.json"),
+        serde_json::to_vec_pretty(&knit_qual).unwrap(),
+    )
+    .unwrap();
     let model_bytes = synthetic_ftxbody_bytes();
     let model_sha = sha256_hex(&model_bytes);
     fs::write(root.join("model.ftxbody"), &model_bytes).unwrap();
@@ -428,9 +474,13 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "--machine",
             "kniterate-7e",
             "--wales",
-            "24",
+            "12",
             "--courses",
-            "32",
+            "8",
+            "--qual",
+            "knit_qual.json",
+            "--material-sha256",
+            &mat_sha,
             "--out",
             "shape_body",
         ],
@@ -438,6 +488,13 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
     );
     assert!(shape_body["result"]["course_count"].as_u64().unwrap() >= 4);
     assert!(shape_body["result"]["max_abs_girth_residual_mm"].is_number());
+    assert!(shape_body["result"]["height_residual_mm"].is_number());
+    assert_eq!(
+        shape_body["result"]["geometry_method"],
+        "intrinsic_metric_harmonic_coarea_mean_normal_span"
+    );
+    assert_eq!(shape_body["result"]["course_growth_direction"], "upward");
+    assert_eq!(shape_body["result"]["surface_topology"], "annular_unplaced");
     assert_eq!(shape_body["result"]["hardware_execution_authorized"], false);
     assert!(root.join("shape_body/pattern.knit.json").is_file());
     assert!(root.join("shape_body/autoknit_report.json").is_file());
@@ -453,12 +510,17 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "adult",
             "--machine",
             "kniterate-7e",
+            "--qual",
+            "knit_qual.json",
+            "--material-sha256",
+            &mat_sha,
             "--out",
             "shape_input",
         ],
         0,
     );
     assert!(shape_input["result"]["stitches"].as_u64().unwrap() > 100);
+    assert_eq!(shape_input["result"]["surface_topology"], "torso_tube");
 
     // 3. `ftx knit draft` with `--style rib` and `--measurements` / `--body-fit`
     let draft_rib = run_json_expect(
@@ -503,6 +565,10 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "shape_body/pattern.knit.json",
             "--machine",
             "kniterate-7e",
+            "--qual",
+            "knit_qual.json",
+            "--material-sha256",
+            &mat_sha,
             "--strict-knitout",
         ],
         0,
@@ -523,6 +589,8 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "shape_body/pattern.knit.json",
             "--target",
             "hand-pdf",
+            "--material-sha256",
+            &mat_sha,
             "--created",
             "2026-11-27T12:00",
             "--out",
@@ -538,6 +606,8 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "shape_body/pattern.knit.json",
             "--target",
             "hand-pdf",
+            "--material-sha256",
+            &mat_sha,
             "--created",
             "2026-11-27T12:00",
             "--out",
@@ -560,6 +630,8 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "shape_body/pattern.knit.json",
             "--target",
             "shima-dat",
+            "--material-sha256",
+            &mat_sha,
             "--out",
             "never_shima_dat",
         ],
@@ -576,6 +648,8 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "shape_body/pattern.knit.json",
             "--target",
             "stoll-sintral",
+            "--material-sha256",
+            &mat_sha,
             "--out",
             "never_stoll_sintral",
         ],
@@ -586,10 +660,56 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
         "opaque_proprietary_target"
     );
 
-    // 6. `ftx drape <PATTERN.knit.json> --measurements ... --body-fit ... --audit-patch selvedge`
-    let knit_drape = run_ftx(
-        &root,
-        &[
+    // 6. Knit drapes admit an explicit source material before writing output.
+    fs::write(
+        root.join("legacy_fabric.json"),
+        serde_json::to_vec(&json!({
+            "areal_g_m2": 200.0, "tensile_N_m": 900.0, "bending_Nm": 0.00003
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut no_consent = knit_fabric.clone();
+    no_consent["material"]["allow_estimates"] = json!(false);
+    fs::write(
+        root.join("no_consent_fabric.json"),
+        serde_json::to_vec(&no_consent).unwrap(),
+    )
+    .unwrap();
+    let mut no_contact = knit_fabric.clone();
+    no_contact["material"]["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("friction_skin");
+    fs::write(
+        root.join("no_contact_fabric.json"),
+        serde_json::to_vec(&no_contact).unwrap(),
+    )
+    .unwrap();
+    for (name, extra, expected_code) in [
+        ("no_fabric", Vec::<&str>::new(), "unqualified_process"),
+        (
+            "legacy_fabric",
+            vec!["--fabric", "legacy_fabric.json"],
+            "unqualified_process",
+        ),
+        (
+            "wrong_material",
+            vec!["--fabric", "knit_fabric.json", "--material-sha256", "wrong"],
+            "verification_mismatch",
+        ),
+        (
+            "no_estimate_consent",
+            vec!["--fabric", "no_consent_fabric.json"],
+            "invalid_document",
+        ),
+        (
+            "no_contact_source",
+            vec!["--fabric", "no_contact_fabric.json"],
+            "verification_mismatch",
+        ),
+    ] {
+        let mut args = vec![
             "drape",
             "shape_body/pattern.knit.json",
             "--measurements",
@@ -598,6 +718,158 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
             "body_fit.json",
             "--model",
             "model.ftxbody",
+            "--out",
+            name,
+        ];
+        args.extend(extra);
+        let refused = run_json_expect(&root, &args, 3);
+        assert_eq!(refused["refusal"]["code"], expected_code, "{name}");
+        assert!(
+            !root.join(name).exists(),
+            "{name} reserved output before admission"
+        );
+    }
+    // Missing body contact characterization also refuses on an otherwise unbound KnitDoc.
+    let mut unbound_doc: Value =
+        serde_json::from_slice(&fs::read(root.join("shape_body/pattern.knit.json")).unwrap())
+            .unwrap();
+    unbound_doc["metadata"]
+        .as_object_mut()
+        .unwrap()
+        .remove("material_sha256");
+    fs::write(
+        root.join("unbound.knit.json"),
+        serde_json::to_vec(&unbound_doc).unwrap(),
+    )
+    .unwrap();
+    let contact_refusal = run_json_expect(
+        &root,
+        &[
+            "drape",
+            "unbound.knit.json",
+            "--fabric",
+            "no_contact_fabric.json",
+            "--measurements",
+            "measurements.json",
+            "--out",
+            "uncharacterized_contact",
+        ],
+        3,
+    );
+    assert_eq!(contact_refusal["refusal"]["code"], "invalid_document");
+    assert!(!root.join("uncharacterized_contact").exists());
+
+    for (name, field, changed, expected_code) in [
+        (
+            "wrong_q_material",
+            "material_sha256",
+            json!("wrong"),
+            "verification_mismatch",
+        ),
+        (
+            "wrong_q_machine",
+            "machine_sha256",
+            json!("wrong"),
+            "verification_mismatch",
+        ),
+        (
+            "wrong_q_gauge",
+            "wales_per_100mm",
+            json!(25.0),
+            "verification_mismatch",
+        ),
+        (
+            "wrong_q_cam",
+            "cam_stitch_setting",
+            json!(8.0),
+            "verification_mismatch",
+        ),
+        (
+            "wrong_q_lot",
+            "yarn_lot_id",
+            json!("other-lot"),
+            "verification_mismatch",
+        ),
+        (
+            "unwashed_q",
+            "was_washed_and_blocked",
+            json!(false),
+            "unqualified_process",
+        ),
+    ] {
+        let mut changed_qual = serde_json::to_value(&knit_qual).unwrap();
+        changed_qual[field] = changed;
+        let path = format!("{name}.json");
+        fs::write(root.join(&path), serde_json::to_vec(&changed_qual).unwrap()).unwrap();
+        let refused = run_json_expect(
+            &root,
+            &[
+                "drape",
+                "shape_body/pattern.knit.json",
+                "--fabric",
+                "knit_fabric.json",
+                "--qual",
+                &path,
+                "--measurements",
+                "measurements.json",
+                "--out",
+                name,
+            ],
+            3,
+        );
+        assert_eq!(refused["refusal"]["code"], expected_code, "{name}");
+        assert!(
+            !root.join(name).exists(),
+            "{name} reserved output before binding checks"
+        );
+    }
+
+    let unplaced = run_json_expect(
+        &root,
+        &[
+            "drape",
+            "shape_body/pattern.knit.json",
+            "--fabric",
+            "knit_fabric.json",
+            "--qual",
+            "knit_qual.json",
+            "--measurements",
+            "measurements.json",
+            "--out",
+            "unplaced_generic_tube",
+        ],
+        3,
+    );
+    assert_eq!(unplaced["refusal"]["code"], "unqualified_process");
+    assert!(
+        unplaced["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("torso placement")
+    );
+    assert!(!root.join("unplaced_generic_tube").exists());
+
+    // The explicit source hem/neck shell supplies torso semantics. A generic body tube
+    // remains exportable but does not silently acquire an anatomical placement.
+    let knit_drape = run_ftx(
+        &root,
+        &[
+            "drape",
+            "shape_input/pattern.knit.json",
+            "--measurements",
+            "measurements.json",
+            "--body-fit",
+            "body_fit.json",
+            "--model",
+            "model.ftxbody",
+            "--fabric",
+            "knit_fabric.json",
+            "--qual",
+            "knit_qual.json",
+            "--material-sha256",
+            &mat_sha,
+            "--sew",
+            "2",
             "--drape",
             "6",
             "--audit-patch",
@@ -621,6 +893,44 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
         false
     );
     assert_eq!(knit_drape_val["result"]["fit_claimed"], false);
+    assert_eq!(knit_drape_val["result"]["material_sha256"], mat_sha);
+    assert_eq!(knit_drape_val["result"]["sew_steps_run"], 2);
+    assert_eq!(knit_drape_val["result"]["drape_steps_run"], 6);
+    assert_eq!(knit_drape_val["result"]["steps_run"], 8);
+    assert_eq!(
+        knit_drape_val["result"]["material"]["mechanics"]["areal_kg_m2"],
+        0.2
+    );
+    assert_eq!(
+        knit_drape_val["result"]["material"]["mechanics"]["thickness_m"],
+        0.0006
+    );
+    assert_eq!(
+        knit_drape_val["result"]["material"]["mechanics"]["friction_skin"],
+        0.2
+    );
+    assert_eq!(knit_drape_val["result"]["surface"]["topology"], "tube");
+    assert_eq!(
+        knit_drape_val["result"]["surface"]["vertices"],
+        shape_input["result"]["stitches"]
+    );
+    assert_eq!(knit_drape_val["result"]["surface"]["boundary_loops"], 2);
+    assert_eq!(
+        knit_drape_val["result"]["surface"]["course_growth_upward"],
+        true
+    );
+    assert_eq!(
+        knit_drape_val["result"]["patch_audit"]["material_sha256"],
+        mat_sha
+    );
+    assert_eq!(
+        knit_drape_val["result"]["drape_uncertainty_receipt"]["evidence"],
+        "estimate"
+    );
+    assert_eq!(
+        knit_drape_val["result"]["patch_audit"]["pore_open_fraction"],
+        Value::Null
+    );
     assert!(knit_drape_val["result"]["drape_uncertainty_receipt"]["payload_sha256"].is_string());
     assert!(knit_drape_val["result"]["patch_audit"]["energy_density_j_m2"].is_number());
     assert!(
@@ -630,40 +940,49 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
     assert!(root.join("drape_knit_out/patch_audit.json").is_file());
     assert!(root.join("drape_knit_out/garment.obj").is_file());
     assert!(root.join("drape_knit_out/sim_report.json").is_file());
-
-    // 7. Build a qualified KnitSwatchQualification & export `shape_body` with `kniterate` + `drape_uncertainty_receipt`
-    //    (if gating flags are empty) or verify `export_knit_document` refuses when gating flags are non-empty.
-    let kniterate = MachineProfile::kniterate_7e();
-    let mat_sha = "c".repeat(64);
-    let knit_qual = KnitSwatchQualification {
-        id: "synthetic-round-swatch".to_string(),
-        material_sha256: mat_sha.clone(),
-        machine_sha256: kniterate.canonical_sha256().unwrap(),
-        yarn_lot_id: "lot-round".to_string(),
-        was_washed_and_blocked: true,
-        wales_per_100mm: 24.0,
-        courses_per_100mm: 32.0,
-        thickness_mm: 2.0,
-        cam_stitch_setting: 7.5,
-        wick_dispersion_mm: None,
-        shrinkage_axial_pct: None,
-        yarn_intake_drift_eps: Some(0.001),
-        yarn_intake_drift_sigma_eta: Some(0.01),
-        evidence: Evidence::Estimate,
-        source: Source {
-            reference: "synthetic:knit_round_workflow".to_string(),
-            accessed_on: "2026-11-27".to_string(),
-            note: "synthetic test qualification".to_string(),
-        },
-        method: "synthetic".to_string(),
-        conditioning: BTreeMap::new(),
-        allow_estimates: true,
-    };
-    fs::write(
-        root.join("knit_qual.json"),
-        serde_json::to_vec_pretty(&knit_qual).unwrap(),
+    let source_surface_bytes = fs::read(root.join("drape_knit_out/knit_surface.json")).unwrap();
+    assert_eq!(
+        knit_drape_val["result"]["surface"]["sha256"],
+        sha256_hex(&source_surface_bytes)
+    );
+    let source_surface: Value = serde_json::from_slice(&source_surface_bytes).unwrap();
+    assert_eq!(
+        source_surface["pattern_sha256"],
+        shape_input["result"]["pattern_sha256"]
+    );
+    let source_vertices = source_surface["vertices"].as_array().unwrap();
+    for (triangle, source_ids) in source_surface["triangles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(source_surface["triangle_stitch_ids"].as_array().unwrap())
+    {
+        for corner in 0..3 {
+            assert_eq!(
+                source_vertices[triangle[corner].as_u64().unwrap() as usize]["stitch_id"],
+                source_ids[corner]
+            );
+        }
+    }
+    assert_eq!(
+        fs::read(root.join("drape_knit_out/fabric.source.json")).unwrap(),
+        fabric_bytes
+    );
+    let frozen_fabric: Value = serde_json::from_slice(
+        &fs::read(root.join("drape_knit_out/fabric_override.json")).unwrap(),
     )
     .unwrap();
+    let replay_material =
+        ftx_pattern::textile_import::resolve_fabric(&frozen_fabric["effective_fabric"])
+            .unwrap()
+            .unwrap();
+    assert_eq!(replay_material.sha256(), mat_sha);
+    assert!(
+        root.join("drape_knit_out/swatch_qualification.json")
+            .is_file()
+    );
+
+    // 7. Export the same synthetic gauge/process-bound garment with Kniterate.
     let export_kniterate = run_json_expect(
         &root,
         &[
@@ -758,7 +1077,7 @@ fn plan_5_1_full_knit_and_dye_round_cli_and_woven_parity() {
         &[
             "dye",
             "plan",
-            "shape_body/pattern.knit.json",
+            "shape_input/pattern.knit.json",
             "--drape",
             "drape_knit_out/drape_uncertainty_receipt.json",
             "--image",

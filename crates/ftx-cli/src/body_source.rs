@@ -173,7 +173,16 @@ pub(super) fn prepare_bound(
             "body-fit model SHA-256 mismatch; no shape was reused or refitted",
         ));
     }
-    let data = measurements.map(crate::round::measurements).transpose()?;
+    // Match ordinary drape/placement input semantics: re-fuse any present records,
+    // but preserve explicit target-only inputs instead of requiring new evidence records.
+    let data = measurements
+        .map(|data| {
+            if !data.is_object() {
+                return Err(bad_input("measurements must be an object"));
+            }
+            crate::current_measurements(data.clone())
+        })
+        .transpose()?;
     let (shape, mut description) =
         accepted_shape::prepare(&model, &hash, &report_bytes, data.as_ref())?;
     let occupancy = data

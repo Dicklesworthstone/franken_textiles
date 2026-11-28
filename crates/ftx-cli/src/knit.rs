@@ -49,7 +49,7 @@ use ftx_pattern::knit::{
     draft_autoknit_from_shell, draft_branched_raglan_pullover, draft_seamed_pullover,
     draft_seamless_raglan_tube, draft_short_row_neckline_panel,
 };
-use ftx_pattern::materials::Evidence;
+use ftx_pattern::{material_catalog::ResolvedMaterial, textile_import::resolve_fabric};
 use ftx_trace::raster::load_target_raster_with_limit;
 use serde_json::{Value, json};
 
@@ -1090,9 +1090,15 @@ fn cmd_knit_shape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "schema": "ftx-autoknit-report/1",
         "pattern_sha256": rep.doc.canonical_sha256()?,
         "source_body_sha256": shell.source_body_sha256,
+        "source_shell_sha256": rep.source_shell_sha256,
+        "geometry_method": rep.geometry_method,
         "source": source_description,
         "shell_height_mm": rep.shell_height_mm,
         "course_count": rep.course_count,
+        "height_residual_mm": rep.height_residual_mm,
+        "courses": rep.courses,
+        "surface_topology": rep.doc.metadata.get("surface_topology"),
+        "course_growth_direction": rep.doc.metadata.get("course_growth_direction"),
         "idt_flips_applied": rep.idt_flips_applied,
         "min_cotangent_weight": rep.min_cotangent_weight,
         "max_abs_girth_residual_mm": rep.max_abs_girth_residual_mm,
@@ -1129,9 +1135,14 @@ fn cmd_knit_shape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "machine": profile.id,
         "wearer_age_class": rep.doc.wearer_age_class,
         "pattern_sha256": rep.doc.canonical_sha256()?,
+        "source_shell_sha256": rep.source_shell_sha256,
+        "geometry_method": rep.geometry_method,
         "stitches": rep.doc.stitches.len(),
         "shell_height_mm": rep.shell_height_mm,
         "course_count": rep.course_count,
+        "height_residual_mm": rep.height_residual_mm,
+        "surface_topology": rep.doc.metadata.get("surface_topology"),
+        "course_growth_direction": rep.doc.metadata.get("course_growth_direction"),
         "idt_flips_applied": rep.idt_flips_applied,
         "min_cotangent_weight": rep.min_cotangent_weight,
         "max_abs_girth_residual_mm": rep.max_abs_girth_residual_mm,
@@ -1560,6 +1571,95 @@ fn cmd_knit_verify(args: &Args) -> Result<(Value, i32, String), Refusal> {
     Ok((result, 0, text))
 }
 
+fn validate_drape_material_binding(
+    doc: &KnitDoc,
+    material: &ResolvedMaterial,
+    qualification: Option<&KnitSwatchQualification>,
+    expected_sha256: Option<&str>,
+) -> Result<(), Refusal> {
+    for (source, digest) in [
+        ("--material-sha256", expected_sha256),
+        (
+            "KnitDoc material_sha256",
+            doc.metadata.get("material_sha256").map(String::as_str),
+        ),
+    ] {
+        if let Some(digest) = digest
+            && digest != material.sha256()
+        {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("{source} disagrees with the material selected by --fabric"),
+            )
+            .repair("select the exact source material used to draft this garment"));
+        }
+    }
+    let Some(qualification) = qualification else {
+        return Ok(());
+    };
+    let family = &doc.stitches[0].cam_stitch_setting.machine_family;
+    let profile = if family.starts_with("hand-knit-") {
+        MachineProfile::hand_knit(doc.gauge.needle_pitch_mm)
+    } else {
+        parse_machine(family)?
+    };
+    qualification.validate_for_production(material.sha256(), &profile.canonical_sha256()?)?;
+    if !doc.gauge.relaxed_after_wash {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "supplied --qual describes washed and blocked gauge, but the KnitDoc does not",
+        )
+        .repair(
+            "redraft with the selected swatch's relaxed gauge before using its qualification",
+        ));
+    }
+    for (field, actual, qualified) in [
+        (
+            "needle_pitch_mm",
+            doc.gauge.needle_pitch_mm,
+            profile.needle_pitch_mm,
+        ),
+        (
+            "wales_per_100mm",
+            doc.gauge.wales_per_100mm,
+            qualification.wales_per_100mm,
+        ),
+        (
+            "courses_per_100mm",
+            doc.gauge.courses_per_100mm,
+            qualification.courses_per_100mm,
+        ),
+    ] {
+        if actual != qualified {
+            return Err(Refusal::new(
+                RefusalCode::VerificationMismatch,
+                format!("KnitDoc {field} ({actual}) disagrees with supplied --qual ({qualified})"),
+            )
+            .repair("use the gauge and machine recorded for the selected material's swatch"));
+        }
+    }
+    if doc
+        .gauge
+        .thickness_mm
+        .is_some_and(|thickness| thickness != qualification.thickness_mm)
+        || doc.stitches.iter().any(|stitch| {
+            stitch.cam_stitch_setting.setting != qualification.cam_stitch_setting
+                || stitch.cam_stitch_setting.machine_family != profile.id
+        })
+        || doc
+            .metadata
+            .get("yarn_lot_id")
+            .is_some_and(|lot| lot != &qualification.yarn_lot_id)
+    {
+        return Err(Refusal::new(
+            RefusalCode::VerificationMismatch,
+            "KnitDoc thickness, stitch-cam process, or retained yarn lot disagrees with supplied --qual",
+        )
+        .repair("retain the exact swatch process and yarn lot, or qualify the changed process"));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cmd_drape_knit(
     args: &Args,
@@ -1581,29 +1681,62 @@ pub(super) fn cmd_drape_knit(
         && zone.trim().is_empty()
     {
         return Err(bad_input(
-            "--audit-patch requires a non-empty zone name (e.g. selvedge, collar, hem, armhole)",
+            "--audit-patch requires a non-empty supported zone (all, boundary, or selvedge)",
         ));
     }
 
+    // Freeze the existing whole-fabric selection without adding woven fields to KnitDoc.
+    // A gauge qualification never supplies or upgrades the constitutive material model.
+    let mut material_pattern = json!({});
+    let selected_fabric = super::fabric::load(args)?
+        .ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::UnqualifiedProcess,
+                "ftx-knit/1 drapes require --fabric with a source-bearing coupled knit material",
+            )
+            .repair("supply a fabric.material selection containing the constitutive law, mass, thickness, and active contact properties")
+        })?
+        .apply(&mut material_pattern)?;
+    let material = resolve_fabric(&material_pattern["fabric"])?
+        .ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::UnqualifiedProcess,
+                "a legacy scalar --fabric does not identify a coupled knit material",
+            )
+            .repair("select a source-bearing fabric.material record with knit_response; estimates require explicit allow_estimates in the selection")
+        })?;
+    if material.coupled_knit()?.is_none() {
+        return Err(Refusal::new(
+            RefusalCode::UnqualifiedProcess,
+            "selected --fabric has no coupled knit constitutive law",
+        )
+        .repair("select a material record with an independently sourced or explicitly estimated knit_response"));
+    }
     let qual = read_knit_qualification(args)?;
-    let expected_mat = expected_knit_material(args)?;
-    if let (Some(q), Some(mat)) = (&qual, expected_mat)
-        && q.material_sha256 != mat
+    validate_drape_material_binding(
+        &doc,
+        &material,
+        qual.as_ref(),
+        expected_knit_material(args)?,
+    )?;
+    // Resolve all active mechanical/contact capabilities before reserving an output directory.
+    ftx_drape::material::resolve(&ftx_pattern::Pattern::new(material_pattern), opts)?;
+    if doc.metadata.get("pathway").map(String::as_str)
+        == Some("autoknit_annular_intrinsic_harmonic")
+        && (doc.metadata.get("surface_topology").map(String::as_str) != Some("torso_tube")
+            || !matches!(
+                doc.metadata
+                    .get("course_growth_direction")
+                    .map(String::as_str),
+                Some("upward" | "downward")
+            ))
     {
         return Err(Refusal::new(
-            RefusalCode::VerificationMismatch,
-            "supplied --qual material_sha256 disagrees with --material-sha256",
+            RefusalCode::UnqualifiedProcess,
+            "source annulus has no supported torso placement; generic tubes and limb shells are not torso garments",
         )
-        .repair("pass the swatch qualification recorded for the selected source material"));
+        .repair("use an explicit hem/neck source shell with unambiguous vertical growth for torso draping; other annuli remain available for shape and knitting export"));
     }
-    let material_sha256 = expected_mat
-        .map(str::to_string)
-        .or_else(|| doc.metadata.get("material_sha256").cloned())
-        .or_else(|| qual.as_ref().map(|q| q.material_sha256.clone()))
-        .unwrap_or_else(|| "unqualified-knit-material".to_string());
-    // `cmd_drape_knit` drapes using the reference RVE stockinette estimate card, so its
-    // constitutive evidence must remain Estimate (never falsely upgraded to Measured).
-    let evidence = Evidence::Estimate;
 
     let meas_path = required(args, "measurements")?;
     let (meas, meas_bytes) = read_json(meas_path)?;
@@ -1637,9 +1770,7 @@ pub(super) fn cmd_drape_knit(
         &body,
         &KnitDrapeOptions {
             drape_opts: *opts,
-            material_sha256,
-            evidence,
-            rve_card: None,
+            material: material.clone(),
         },
     )?;
 
@@ -1647,7 +1778,7 @@ pub(super) fn cmd_drape_knit(
         Some(audit_solver_knit_patch(
             &drape_res.solver,
             zone,
-            None,
+            &material,
             doc.gauge.blocked_wale_pitch_mm() * 0.001,
         )?)
     } else {
@@ -1658,9 +1789,23 @@ pub(super) fn cmd_drape_knit(
     let gating = receipt.gating_flags.clone();
     let receipt_bytes = serde_json::to_vec_pretty(receipt)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let surface_bytes = serde_json::to_vec_pretty(&drape_res.surface)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    let surface_summary = json!({
+        "file": "knit_surface.json",
+        "sha256": sha256_hex(&surface_bytes),
+        "pattern_sha256": drape_res.surface.pattern_sha256,
+        "topology": drape_res.surface.topology,
+        "vertices": drape_res.surface.vertices.len(),
+        "triangles": drape_res.surface.triangles.len(),
+        "boundary_loops": drape_res.surface.boundary_loops.len(),
+        "course_growth_upward": drape_res.surface.course_growth_upward,
+        "basis": "one vertex per source stitch; intrinsic charts and uncapped boundaries from actual parent-loop topology",
+    });
 
     let mut files = vec![
         ("drape_uncertainty_receipt.json", receipt_bytes),
+        ("knit_surface.json", surface_bytes),
         (
             "garment.obj",
             obj(&drape_res.solver.x, &drape_res.triangles, None).into_bytes(),
@@ -1670,6 +1815,13 @@ pub(super) fn cmd_drape_knit(
             obj(&full.vertices, &full.triangles, None).into_bytes(),
         ),
     ];
+    files.extend(selected_fabric.entries()?);
+    if let Some(qualification) = &qual {
+        files.push((
+            "swatch_qualification.json",
+            workspace::json_bytes(&json!(qualification))?,
+        ));
+    }
     if let Some(source) = source_bytes {
         files.push(("body_fit.json", source));
     }
@@ -1692,12 +1844,20 @@ pub(super) fn cmd_drape_knit(
         "pattern_name": doc.name,
         "pattern_sha256": receipt.pattern_sha256,
         "material_sha256": receipt.material_sha256,
+        "material": drape_res.material_report,
+        "fabric_override": selected_fabric.receipt(),
+        "swatch_qualification_sha256": qual.as_ref().map(KnitSwatchQualification::canonical_sha256).transpose()?,
+        "swatch_qualification_scope": "optional gauge/process identity check; does not qualify constitutive response, physical garment performance, or fit",
         "measurements_sha256": sha256_hex(&meas_bytes),
         "body": description,
         "is_tubular": drape_res.is_tubular,
+        "surface": surface_summary,
         "course_range": drape_res.course_range,
         "wale_range": drape_res.wale_range,
         "steps_run": drape_res.steps_run,
+        "sew_steps_run": drape_res.sew_steps_run,
+        "drape_steps_run": drape_res.drape_steps_run,
+        "quiet_gravity_steps": drape_res.quiet_gravity_steps,
         "newton_iterations": drape_res.newton_iterations,
         "unconverged_steps": drape_res.unconverged_steps,
         "max_speed_m_s": drape_res.max_speed_m_s,
@@ -1732,6 +1892,14 @@ pub(super) fn cmd_drape_knit(
         "gating": gating,
         "settled": drape_res.settled,
         "is_tubular": drape_res.is_tubular,
+        "surface": surface_summary,
+        "steps_run": drape_res.steps_run,
+        "sew_steps_run": drape_res.sew_steps_run,
+        "drape_steps_run": drape_res.drape_steps_run,
+        "quiet_gravity_steps": drape_res.quiet_gravity_steps,
+        "material_sha256": receipt.material_sha256,
+        "material": drape_res.material_report,
+        "fabric_override": selected_fabric.receipt(),
         "drape_uncertainty_receipt": receipt,
         "receipt_sha256": receipt.payload_sha256,
         "files": file_names,
@@ -2880,6 +3048,7 @@ mod tests {
     use super::*;
     use crate::parse;
     use ftx_pattern::knit::draft_shaped_panel;
+    use ftx_pattern::materials::Evidence;
 
     fn fresh_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -54,6 +54,50 @@ refuses DiscreteShells and Rayleigh bending damping; knit hysteresis refuses
 unsupported integrators and static solves. Retained-liquid mechanical binding is
 not admitted for these selected knit records.
 
+## Drape a saved stitch graph
+
+`ftx drape` also accepts a saved `ftx-knit/1` document. Supply the actual selected
+material with `--fabric`; the file contains `{"material": SELECTION}`, where
+`SELECTION` is the canonical source-bearing selection described above.
+
+```sh
+ftx drape pattern.knit.json --measurements measurements.json \
+  --body-fit body_fit.json --model body.ftxbody \
+  --fabric fabric.json --drape 36 --out knit-drape --json
+```
+
+The surface uses the document's actual loop centres, parent connections and
+blocked gauge. Shaped edges and held neckline openings are retained; full- and
+half-gauge torso tubes remain closed tubes. Each output vertex and triangle maps
+back to source stitch IDs in `knit_surface.json`. Free edges stop at the outer
+loop centres: this discretization adds no fictitious half-stitch boundary width.
+Unsupported branch, cable and anchored short-row surface cells refuse instead
+of becoming a filled rectangle. The machine compiler can support a topology
+before this continuum surface consumer supports it.
+
+This path currently admits at most 12,000 source vertices and 2,000,000 retained
+vertex-frames. These are explicit refusal bounds, not requests to reduce the
+mesh or simulation schedule. The initial placement uses the actual torso frame
+and two disclosed source-loop supports. Generic annuli, sleeves and cuffs need
+their own placement; they are not automatically placed as torso garments.
+
+The selected record supplies mass, thickness, friction and the coupled law.
+There is no reference-stockinette fallback. Material identity retained in the
+KnitDoc or supplied as `--material-sha256` must match the consumed record. An
+optional `--qual swatch.json` checks the exact washed gauge, machine, cam and
+retained yarn lot; a gauge qualification does not characterize the mechanical
+law. The output preserves the original fabric file and frozen selection for
+replay, alongside the material report and drape receipt.
+
+`--audit-patch all`, `boundary` or `selvedge` evaluates the same selected continuum
+law on the indicated triangles. It is a continuum diagnostic, not an independent
+yarn-level patch solve. It does not invent pore optics from an unrelated prior.
+The audit requires the unmodified source compression response and a supported
+normal-curvature diagnostic. Ordinary vector-Hessian bending remains available
+for draping with the optional patch audit omitted.
+Newton convergence and numerical settling are reported separately; neither
+establishes physical knitting or wearer fit.
+
 ## Run a finite-grip coupon
 
 The existing coupon requests now accept the same canonical material selection,

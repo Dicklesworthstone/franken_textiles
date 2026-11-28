@@ -91,7 +91,8 @@ const USAGE: &str = "usage:
             [--min-spacing-mm MM] [--cvt-iters N] [--max-turning-angle-rad RAD] [--gather-refinement F]
             [--construction-standard] [--hem-width-mm MM] [--hem-mass-mult F] [--hem-bending-mult F] [--seam-width-mm MM] [--seam-mass-mult F] [--seam-bending-mult F]
             [--start-self-repulsion] [--start-repulsion-mm MM] [--start-repulsion-stiffness F] [--start-repulsion-period N] [--start-repulsion-max-checks N]
-            [--audit-patch ZONE] [--qual SWATCH.json] [--material-sha256 SHA256]
+            [--audit-patch all|boundary|selvedge] [--qual SWATCH.json] [--material-sha256 SHA256]
+            (ftx-knit/1 requires --fabric with a source-bearing coupled knit material; swatch gauge does not supply a mechanical law)
             [--res 960x540] (size of the pictures a refused drape leaves under DIR/refused)
   ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json | --material-bindings B.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG]
@@ -1517,12 +1518,9 @@ fn cmd_drape_bound(
     let pattern_path = &args.positional[1];
     let (mut pat, pattern_bytes) = fold::pattern_document(std::path::Path::new(pattern_path))?;
     if pat["schema"] == ftx_pattern::knit::KNIT_SCHEMA {
-        if args.options.contains_key("fabric")
-            || args.options.contains_key("material-bindings")
-            || pair.is_some()
-        {
+        if args.options.contains_key("material-bindings") || pair.is_some() {
             return Err(bad_input(
-                "ftx-knit/1 drapes do not accept woven --fabric, --material-bindings, or --two-start-sew",
+                "ftx-knit/1 drapes do not accept --material-bindings or --two-start-sew; select one source-bearing coupled knit material with --fabric",
             ));
         }
         return knit::cmd_drape_knit(
@@ -1564,6 +1562,41 @@ fn cmd_drape_bound(
     let material_probe = Pattern::new(pat.clone());
     ftx_drape::garment::simulation_scope(&material_probe)?;
     let material = ftx_drape::material::resolve(&material_probe, &opts)?;
+    let patch_source = if args.options.contains_key("audit-patch") {
+        let record =
+            ftx_pattern::textile_import::resolve_fabric(&pat["fabric"])?.ok_or_else(|| {
+                bad_input("--audit-patch requires a source-bearing coupled knit material")
+            })?;
+        if record.coupled_knit()?.is_none() {
+            return Err(bad_input(
+                "--audit-patch requires an active coupled knit material law",
+            ));
+        }
+        if let Some(pieces) = pat["pieces"].as_array() {
+            for piece in pieces {
+                if let Some(fabric) = piece.get("fabric").filter(|fabric| !fabric.is_null())
+                    && ftx_pattern::textile_import::resolve_fabric(fabric)?
+                        .is_none_or(|selected| selected.sha256() != record.sha256())
+                {
+                    return Err(bad_input(
+                        "--audit-patch requires one uniform selected knit material; a mixed-material patch has no single source law",
+                    ));
+                }
+            }
+        }
+        let density =
+            record
+                .material()
+                .require("knit_wale_density", "1/m", record.allows_estimates())?;
+        if density <= 0.0 {
+            return Err(bad_input(
+                "--audit-patch requires a positive source-bearing knit_wale_density",
+            ));
+        }
+        Some((record, 1.0 / density))
+    } else {
+        None
+    };
     let meas_path = required(args, "measurements")?;
     let (meas, meas_bytes) = read_json(meas_path)?;
     let meas = current_measurements(meas)?;
@@ -1763,9 +1796,15 @@ fn cmd_drape_bound(
         report["effective_pattern_sha256"] = json!(sha256_hex(&snapshot));
         files.push(("effective_pattern.json", snapshot));
     }
-    let patch_audit = if let Some(zone) = args.options.get("audit-patch") {
-        let audited =
-            ftx_drape::knit::audit_solver_knit_patch(&run.scene.solver, zone, None, 0.004)?;
+    let patch_audit = if let Some((zone, (record, wale_pitch_m))) =
+        args.options.get("audit-patch").zip(patch_source.as_ref())
+    {
+        let audited = ftx_drape::knit::audit_solver_knit_patch(
+            &run.scene.solver,
+            zone,
+            record,
+            *wale_pitch_m,
+        )?;
         let audit_bytes =
             serde_json::to_vec_pretty(&audited).map_err(|e| bad_input(e.to_string()))?;
         let audit_val = serde_json::to_value(&audited).map_err(|e| bad_input(e.to_string()))?;
