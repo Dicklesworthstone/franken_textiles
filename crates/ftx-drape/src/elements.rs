@@ -189,6 +189,109 @@ impl MembraneElement {
         })
     }
 
+    /// Transforms a 2D material-coordinate triangle `uv` by the unique symmetric positive-definite
+    /// polar square root `G0^{1/2}` of a non-Euclidean rest metric tensor `g0 = [g00, g01, g11]`
+    /// (`FTX-K09`).
+    ///
+    /// Uses the singularity-free Cayley–Hamilton closed form (`s = sqrt(det)`, `q = sqrt(tr + 2s)`,
+    /// `G0^{1/2} = (G0 + s I) / q`), preserving exact Riemannian edge lengths `sqrt(du^T G0 du)`
+    /// and area `sqrt(det G0) * A_uv` without eigendecomposition or `atan2`.
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`], [`RefusalCode::OutOfRange`], or [`RefusalCode::DegenerateGeometry`].
+    pub fn tri_rest_from_metric_g0(uv: [Vec2; 3], g0: [f64; 3]) -> Result<[Vec2; 3], Refusal> {
+        if uv.iter().any(|p| !p.is_finite()) || g0.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite coordinates or rest metric tensor G0",
+            ));
+        }
+        let [g00, g01, g11] = g0;
+        let tr = g00 + g11;
+        let det = g00 * g11 - g01 * g01;
+        if tr <= 0.0 || det <= 1e-18 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("rest metric tensor G0=[[{g00},{g01}],[{g01},{g11}]] is not strictly SPD"),
+            )
+            .repair("supply a symmetric positive-definite 2x2 rest metric tensor G0"));
+        }
+        let s = det.sqrt();
+        let q = (tr + 2.0 * s).sqrt();
+        let m00 = (g00 + s) / q;
+        let m01 = g01 / q;
+        let m11 = (g11 + s) / q;
+        let map = |p: Vec2| {
+            let d = p - uv[0];
+            Vec2::new(m00 * d.x + m01 * d.y, m01 * d.x + m11 * d.y)
+        };
+        let out = [Vec2::ZERO, map(uv[1]), map(uv[2])];
+        let area2 = out[1].cross(out[2]).abs();
+        if !area2.is_finite() || area2 <= 1e-18 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "degenerate triangle under non-Euclidean rest metric G0",
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Builds a membrane triangle endowed with a non-Euclidean rest metric tensor `G0 = [g00, g01, g11]`
+    /// via its symmetric polar square root `G0^{1/2}` (`FTX-K09`).
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`], [`RefusalCode::OutOfRange`], or [`RefusalCode::DegenerateGeometry`].
+    pub fn from_metric_g0(v: [usize; 3], uv: [Vec2; 3], g0: [f64; 3]) -> Result<Self, Refusal> {
+        let rest = Self::tri_rest_from_metric_g0(uv, g0)?;
+        Self::new(v, rest).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "degenerate membrane triangle after G0^{1/2} mapping",
+            )
+        })
+    }
+
+    /// Embeds a curved 3D rest triangle isometrically into its local orthonormal tangent chart
+    /// `(u_hat, v_hat)` aligned with optional 3D `grain_dir` (`FTX-K09`).
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] or [`RefusalCode::DegenerateGeometry`].
+    pub fn tri_rest_from_3d(
+        rest_3d: [Vec3; 3],
+        grain_dir: Option<Vec3>,
+    ) -> Result<[Vec2; 3], Refusal> {
+        if rest_3d.iter().any(|p| !p.is_finite()) || grain_dir.is_some_and(|g| !g.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite 3D rest triangle or grain direction",
+            ));
+        }
+        let e1 = rest_3d[1] - rest_3d[0];
+        let e2 = rest_3d[2] - rest_3d[0];
+        let n_raw = e1.cross(e2);
+        let n_norm = n_raw.norm();
+        if !n_norm.is_finite() || n_norm <= 1e-15 {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "degenerate 3D rest triangle cannot define an isometric tangent chart",
+            ));
+        }
+        let n_hat = n_raw / n_norm;
+        let u_hat = if let Some(g) = grain_dir {
+            let g_t = g - n_hat * g.dot(n_hat);
+            let gn = g_t.norm();
+            if gn > 1e-12 { g_t / gn } else { e1 / e1.norm() }
+        } else {
+            e1 / e1.norm()
+        };
+        let v_hat = n_hat.cross(u_hat);
+        Ok([
+            Vec2::ZERO,
+            Vec2::new(e1.dot(u_hat), e1.dot(v_hat)),
+            Vec2::new(e2.dot(u_hat), e2.dot(v_hat)),
+        ])
+    }
+
     /// Rest lengths of the edges (v0v1, v1v2, v2v0), recovered from the shape gradients (exact also
     /// across welds, where per-vertex rest coordinates are not).
     #[must_use]

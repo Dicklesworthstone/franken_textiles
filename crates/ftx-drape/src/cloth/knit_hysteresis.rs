@@ -753,4 +753,166 @@ mod tests {
                 .contains(&KnitHonestyFlag::KnitHysteresisDrift)
         );
     }
+
+    #[test]
+    fn non_euclidean_spherical_cap_metric_g0_and_local_isometric_bending_are_exact() {
+        // 1. Verify MembraneElement::from_metric_g0 exact Riemannian edge lengths & area via G0^{1/2}.
+        let uv = [Vec2::ZERO, Vec2::new(0.02, 0.0), Vec2::new(0.0, 0.03)];
+        let g0 = [1.44, 0.20, 1.21]; // anisotropic sheared SPD metric
+        let elem = MembraneElement::from_metric_g0([0, 1, 2], uv, g0).unwrap();
+        let det_g0 = g0[0] * g0[2] - g0[1] * g0[1];
+        let expected_area = 0.5 * 0.02 * 0.03 * det_g0.sqrt();
+        assert!((elem.area - expected_area).abs() < 1e-14);
+        let [l01, l12, l20] = elem.rest_edge_lengths();
+        let norm_g =
+            |d: Vec2| (g0[0] * d.x * d.x + 2.0 * g0[1] * d.x * d.y + g0[2] * d.y * d.y).sqrt();
+        assert!((l01 - norm_g(uv[1] - uv[0])).abs() < 1e-14);
+        assert!((l12 - norm_g(uv[2] - uv[1])).abs() < 1e-14);
+        assert!((l20 - norm_g(uv[0] - uv[2])).abs() < 1e-14);
+        // Non-SPD metric refuses fail-closed.
+        assert_eq!(
+            MembraneElement::from_metric_g0([0, 1, 2], uv, [1.0, 2.0, 1.0])
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        // 2. Build a curved non-Euclidean spherical cap of radius R = 0.25 m (Gaussian curvature K = 16 m^-2).
+        let radius = 0.25_f64;
+        let (flat, tris) = rectangular_grid(6, 6, 0.12, 0.12);
+        let rest_3d: Vec<Vec3> = flat
+            .iter()
+            .map(|p| {
+                let u = p.x - 0.06;
+                let v = p.y - 0.06;
+                let z = radius - (radius * radius - u * u - v * v).sqrt();
+                Vec3::new(u, v, z)
+            })
+            .collect();
+        let grain_dirs = vec![Vec3::new(1.0, 0.0, 0.0); tris.len()];
+        let tri_rest: Vec<[Vec2; 3]> = tris
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                MembraneElement::tri_rest_from_3d(t.map(|v| rest_3d[v]), Some(grain_dirs[i]))
+                    .unwrap()
+            })
+            .collect();
+        let mut model = ClothModel::from_triangles(
+            rest_3d.len(),
+            &tris,
+            &tri_rest,
+            Membrane::orthotropic(180.0, 95.0, 0.25, 48.0, 1.0),
+            1e-5,
+            0.22,
+        )
+        .unwrap();
+
+        // Zero in-plane membrane strain in the curved spherical-cap rest pose!
+        for e in &model.membranes {
+            let eps = e.strain(&rest_3d);
+            assert!(
+                eps[0].abs() < 1e-12 && eps[1].abs() < 1e-12 && eps[2].abs() < 1e-12,
+                "non-Euclidean rest cap must be stress-free, got strain {eps:?}"
+            );
+        }
+
+        let kappa_cap = 1.0 / radius; // 4.0 m^-1 on both axes
+        let law = AsymmetricKnitBending {
+            d_plus: [4.5e-5, 3.0e-5],
+            d_minus: [2.5e-5, 1.8e-5],
+            d12: 0.3e-5,
+            d66: 1.2e-5,
+            kappa0: [kappa_cap, kappa_cap, 0.0],
+            delta_kappa: 2.0,
+        };
+        let weld: Vec<usize> = (0..rest_3d.len()).collect();
+        model
+            .set_non_euclidean_knit_panel_bending(
+                &rest_3d,
+                &tris,
+                &weld,
+                Some(&grain_dirs),
+                &vec![Some(law); tris.len()],
+            )
+            .unwrap();
+
+        // Interior apex patch recovers spherical physical curvature [1/R, 1/R, 0]!
+        let apex_patch = &model.panel_bending_patches()[tris.len() / 2];
+        let kp = apex_patch.physical_curvature(&rest_3d).unwrap();
+        assert!(
+            (kp[0] - kappa_cap).abs() < 0.15
+                && (kp[1] - kappa_cap).abs() < 0.15
+                && kp[2].abs() < 0.15,
+            "spherical cap local-isometric chart must recover [1/R, 1/R, 0]=[{kappa_cap}, {kappa_cap}, 0], got {kp:?}"
+        );
+
+        // Exact Jet<18> gradient check on the curved spherical cap!
+        let perturbed: Vec<Vec3> = rest_3d
+            .iter()
+            .map(|p| Vec3::new(p.x * 1.02, p.y * 0.99, p.z * 1.15))
+            .collect();
+        let local = apex_patch.knit_bending_local(&perturbed, &law).unwrap();
+        let h = 1e-6;
+        for a in 0..6 {
+            let v = apex_patch.v[a];
+            for comp in 0..3 {
+                let delta = match comp {
+                    0 => Vec3::new(h, 0.0, 0.0),
+                    1 => Vec3::new(0.0, h, 0.0),
+                    _ => Vec3::new(0.0, 0.0, h),
+                };
+                let mut xp = perturbed.clone();
+                let mut xm = perturbed.clone();
+                xp[v] += delta;
+                xm[v] -= delta;
+                let ep = apex_patch.knit_bending_energy(&xp, &law).unwrap();
+                let em = apex_patch.knit_bending_energy(&xm, &law).unwrap();
+                let fd_g = (ep - em) / (2.0 * h);
+                let g_idx = 3 * a + comp;
+                assert!(
+                    (local.grad[g_idx] - fd_g).abs() < 1e-6 * fd_g.abs().max(1e-7),
+                    "spherical cap grad[{g_idx}] mismatch: ana={} fd={fd_g}",
+                    local.grad[g_idx]
+                );
+            }
+        }
+
+        // Pin rim boundary and solve equilibrium under gravity on the non-Euclidean spherical cap!
+        // Also exercise opt-in PanelField zone multipliers (e.g. ribbed cuff/rim 2x flexural stiffness).
+        let zone_mults: Vec<f64> = (0..tris.len())
+            .map(|i| if i < tris.len() / 2 { 2.0 } else { 1.0 })
+            .collect();
+        model
+            .apply_knit_panel_zone_multipliers(&zone_mults)
+            .unwrap();
+        assert!(
+            (model.panel_knit_bending(0).unwrap().d_plus[0] - 2.0 * law.d_plus[0]).abs() < 1e-18
+        );
+        assert_eq!(
+            model
+                .apply_knit_panel_zone_multipliers(&vec![0.0; tris.len()])
+                .unwrap_err()
+                .code,
+            RefusalCode::OutOfRange
+        );
+
+        let fixed: Vec<[bool; 3]> = flat
+            .iter()
+            .map(|p| {
+                let rim = p.x <= 1e-9
+                    || (p.x - 0.12).abs() <= 1e-9
+                    || p.y <= 1e-9
+                    || (p.y - 0.12).abs() <= 1e-9;
+                [rim; 3]
+            })
+            .collect();
+        let mut solver = Solver::new(model, rest_3d, &fixed, Vec3::new(0.0, 0.0, -9.81));
+        solver.tol = 1e-8;
+        let rep = solver.static_solve().unwrap();
+        assert!(
+            rep.converged,
+            "non-Euclidean spherical cap static solve must converge cleanly: {rep:?}"
+        );
+    }
 }

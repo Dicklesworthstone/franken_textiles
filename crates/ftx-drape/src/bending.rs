@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_bending::BendingTensor;
 
-use crate::elements::Local;
+use crate::elements::{Local, MembraneElement};
 
 mod normal;
 mod rate;
@@ -359,6 +359,210 @@ pub(crate) fn build(
             frontier = next;
         }
         patches.push(patch.ok_or_else(|| bad(format!("source triangle {i} lacks a well-conditioned six-node panel bending patch within three edge rings")))?);
+    }
+    Ok(patches)
+}
+
+fn choose_from_chart(
+    base: [usize; 3],
+    chart: &BTreeMap<usize, Vec2>,
+    candidates: &BTreeSet<usize>,
+) -> Option<[usize; 6]> {
+    let origin = *chart.get(&base[0])?;
+    let p1 = *chart.get(&base[1])?;
+    let p2 = *chart.get(&base[2])?;
+    let scale = (p1 - origin).norm().max((p2 - origin).norm());
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let points = [Vec2::ZERO, (p1 - origin) / scale, (p2 - origin) / scale];
+    let mut orthogonal = Vec::<[f64; 3]>::new();
+    let mut chosen = Vec::new();
+    for _ in 0..3 {
+        let mut best = None;
+        let mut score = 0.0;
+        for &i in candidates {
+            if base.contains(&i) || chosen.contains(&i) {
+                continue;
+            }
+            let Some(&ci) = chart.get(&i) else {
+                continue;
+            };
+            let p = (ci - origin) / scale;
+            let (mut row, _) = residual(points, p);
+            for q in &orthogonal {
+                let dot = row.iter().zip(q).map(|(a, b)| a * b).sum::<f64>();
+                for k in 0..3 {
+                    row[k] -= dot * q[k];
+                }
+            }
+            let n = row.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let s = n / (1.0 + p.norm2());
+            if s > score && s.is_finite() {
+                score = s;
+                best = Some((i, row.map(|v| v / n)));
+            }
+        }
+        if score < 1e-9 {
+            return None;
+        }
+        let (i, q) = best?;
+        chosen.push(i);
+        orthogonal.push(q);
+    }
+    Some([base[0], base[1], base[2], chosen[0], chosen[1], chosen[2]])
+}
+
+/// Hinge-unfolds `next_tri` isometrically across its shared edge with `cur_tri` into `chart`,
+/// preserving all 3D edge lengths and placing the opposite vertex strictly on the opposite side of
+/// the shared edge from `cur_tri`'s third vertex (`FTX-K09`).
+fn unfold_triangle_across_edge(
+    rest_3d: &[Vec3],
+    cur_tri: [usize; 3],
+    next_tri: [usize; 3],
+    chart: &mut BTreeMap<usize, Vec2>,
+) -> bool {
+    let mut shared = Vec::with_capacity(2);
+    let mut vc_cur = None;
+    for &v in &cur_tri {
+        if next_tri.contains(&v) {
+            shared.push(v);
+        } else {
+            vc_cur = Some(v);
+        }
+    }
+    let vd_next = next_tri.iter().copied().find(|v| !cur_tri.contains(v));
+    let (Some(vc), Some(vd)) = (vc_cur, vd_next) else {
+        return false;
+    };
+    if shared.len() != 2 {
+        return false;
+    }
+    if chart.contains_key(&vd) {
+        return true;
+    }
+    let (va, vb) = (shared[0], shared[1]);
+    let (Some(&pa), Some(&pb), Some(&pc)) = (chart.get(&va), chart.get(&vb), chart.get(&vc)) else {
+        return false;
+    };
+    let e3 = rest_3d[vb] - rest_3d[va];
+    let l_ab = e3.norm();
+    let e2 = pb - pa;
+    let l_ab_2d = e2.norm();
+    if !l_ab.is_finite() || l_ab <= 1e-15 || !l_ab_2d.is_finite() || l_ab_2d <= 1e-15 {
+        return false;
+    }
+    let e3_hat = e3 / l_ab;
+    let d3 = rest_3d[vd] - rest_3d[va];
+    let s = d3.dot(e3_hat);
+    let perp3 = d3 - e3_hat * s;
+    let h = perp3.norm();
+    if !s.is_finite() || !h.is_finite() {
+        return false;
+    }
+    let e2_hat = e2 / l_ab_2d;
+    let mut n2 = Vec2::new(-e2_hat.y, e2_hat.x);
+    // Keep `vd` strictly on the opposite side of `(pa, pb)` from `pc` to prevent chart foldover.
+    if (pc - pa).dot(n2) > 0.0 {
+        n2 = n2 * -1.0;
+    }
+    let pd = pa + e2_hat * s + n2 * h;
+    if !pd.is_finite() {
+        return false;
+    }
+    chart.insert(vd, pd);
+    true
+}
+
+/// Build quadratic curvature patches using per-triangle local isometric 1-ring tangent charts
+/// unfolded from a curved/non-Euclidean 3D rest surface `rest_3d` (`FTX-K09`).
+///
+/// Respects unwelded source seams identically to [`build`]: curvature support never jumps a seam
+/// or mixes scalar hinges and tensor patches inside one connected panel.
+pub(crate) fn build_local_isometric(
+    rest_3d: &[Vec3],
+    tris: &[[usize; 3]],
+    weld: &[usize],
+    laws: &[Option<BendingTensor>],
+    grain_dirs: Option<&[Vec3]>,
+) -> Result<Vec<BendingPatch>, Refusal> {
+    if tris.len() != laws.len()
+        || rest_3d.len() != weld.len()
+        || grain_dirs.is_some_and(|g| g.len() != tris.len())
+        || rest_3d.iter().any(|p| !p.is_finite())
+        || tris.iter().flatten().any(|&i| i >= rest_3d.len())
+    {
+        return Err(bad(
+            "invalid 3D source connectivity for non-Euclidean local-isometric panel bending",
+        ));
+    }
+    let mut edges = BTreeMap::<(usize, usize), Vec<usize>>::new();
+    for (i, t) in tris.iter().enumerate() {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            edges.entry((a.min(b), a.max(b))).or_default().push(i);
+        }
+    }
+    let mut neighbors = vec![Vec::new(); tris.len()];
+    for uses in edges.values() {
+        match uses.as_slice() {
+            [a, b] => {
+                if laws[*a].is_some() != laws[*b].is_some() {
+                    return Err(bad(
+                        "one connected source panel cannot mix scalar hinges and tensor patches; split at an explicit seam",
+                    ));
+                }
+                neighbors[*a].push(*b);
+                neighbors[*b].push(*a);
+            }
+            [_] => {}
+            _ => return Err(bad("non-manifold source panel")),
+        }
+    }
+    let mut patches = Vec::new();
+    for (i, law) in laws.iter().enumerate() {
+        let Some(law) = law else {
+            continue;
+        };
+        let base = tris[i];
+        let base_2d =
+            MembraneElement::tri_rest_from_3d(base.map(|v| rest_3d[v]), grain_dirs.map(|g| g[i]))?;
+        let mut chart = BTreeMap::<usize, Vec2>::new();
+        for k in 0..3 {
+            chart.insert(base[k], base_2d[k]);
+        }
+        let mut visited = BTreeSet::from([i]);
+        let mut frontier = vec![i];
+        let mut candidates = BTreeSet::new();
+        let mut patch = None;
+        for _ in 0..3 {
+            let mut next = Vec::new();
+            for t in frontier {
+                for &other in &neighbors[t] {
+                    if visited.insert(other)
+                        && unfold_triangle_across_edge(rest_3d, tris[t], tris[other], &mut chart)
+                    {
+                        next.push(other);
+                        candidates.extend(tris[other]);
+                    }
+                }
+            }
+            if candidates.len() > 96 {
+                break;
+            }
+            if let Some(v) = choose_from_chart(base, &chart, &candidates)
+                && let Ok(p) = BendingPatch::new(v.map(|j| weld[j]), v.map(|j| chart[&j]), *law)
+            {
+                patch = Some(p);
+                break;
+            }
+            frontier = next;
+        }
+        patches.push(patch.ok_or_else(|| {
+            bad(format!(
+                "non-Euclidean source triangle {i} lacks a well-conditioned local isometric six-node bending patch within three edge rings"
+            ))
+        })?);
     }
     Ok(patches)
 }

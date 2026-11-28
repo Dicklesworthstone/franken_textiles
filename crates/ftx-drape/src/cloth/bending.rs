@@ -4,7 +4,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_bending::BendingTensor;
 
 use super::ClothModel;
-use crate::bending::{BendingPatch, build};
+use crate::bending::{BendingPatch, build, build_local_isometric};
 use crate::elements::MembraneElement;
 use crate::knit::AsymmetricKnitBending;
 
@@ -219,6 +219,175 @@ impl ClothModel {
             field.heterogeneous |= knit.windows(2).any(|pair| pair[0] != pair[1]);
             field.knit_laws = Some(field.triangles.iter().map(|&i| knit[i]).collect());
         }
+        Ok(())
+    }
+
+    /// Bind twice-integrated `C^3` strictly convex asymmetric knit bending laws (with exact
+    /// Cayley–Hamilton `C^{-1/2}` objective physical curvature pullback) on a curved non-Euclidean
+    /// 3D rest surface using local isometric 1-ring tangent charts (`FTX-K09`).
+    ///
+    /// Unlike [`Self::set_knit_panel_bending`], this validates per-triangle local isometric
+    /// `tri_rest` metric equivalence against `self.membranes` (edge lengths and area), enabling
+    /// intrinsically curved surfaces (such as spherical caps or shaped seamless knit shells with
+    /// non-zero Gaussian curvature) without requiring a global flat 2D `source_rest`.
+    ///
+    /// # Errors
+    /// Invalid bending parameters, mismatched per-triangle rest metrics/welds, unresolved local
+    /// isometric patches, or an attempted second binding. A refusal leaves the model unchanged.
+    pub fn set_non_euclidean_knit_panel_bending(
+        &mut self,
+        source_rest_3d: &[Vec3],
+        source_triangles: &[[usize; 3]],
+        weld: &[usize],
+        grain_dirs: Option<&[Vec3]>,
+        laws: &[Option<AsymmetricKnitBending>],
+    ) -> Result<(), Refusal> {
+        let bad = |s| Refusal::new(RefusalCode::InvalidDocument, s);
+        if self.panel_bending.is_some() {
+            return Err(bad(
+                "panel bending is already bound; rebuild for material substitution",
+            ));
+        }
+        if source_rest_3d.len() != weld.len()
+            || source_triangles.len() != self.membranes.len()
+            || laws.len() != self.membranes.len()
+            || grain_dirs.is_some_and(|g| g.len() != self.membranes.len())
+            || weld.iter().any(|&v| v >= self.rest.len())
+            || source_triangles
+                .iter()
+                .flatten()
+                .any(|&v| v >= source_rest_3d.len())
+        {
+            return Err(bad(
+                "non-Euclidean panel bending source geometry does not match cloth",
+            ));
+        }
+        // Validate per-triangle isometric `tri_rest` metric equivalence (edge lengths + area),
+        // rather than global flat `source_rest`.
+        for (idx, (source, e)) in source_triangles.iter().zip(&self.membranes).enumerate() {
+            let tri_rest = MembraneElement::tri_rest_from_3d(
+                source.map(|v| source_rest_3d[v]),
+                grain_dirs.map(|g| g[idx]),
+            )?;
+            let Some(cand) = MembraneElement::new(source.map(|v| weld[v]), tri_rest) else {
+                return Err(bad("degenerate non-Euclidean rest triangle"));
+            };
+            let le = e.rest_edge_lengths();
+            let lc = cand.rest_edge_lengths();
+            let area_scale = e.area.max(1e-12);
+            let edges_match = le
+                .iter()
+                .zip(&lc)
+                .all(|(a, b)| (a - b).abs() <= 1e-8 * a.max(1e-9));
+            if cand.v != e.v || !edges_match || (cand.area - e.area).abs() > 1e-8 * area_scale {
+                return Err(bad(
+                    "non-Euclidean panel bending per-triangle rest metric or weld differs from membrane geometry",
+                ));
+            }
+        }
+        if laws.iter().all(Option::is_none) {
+            return Ok(());
+        }
+        let mut tensors = Vec::with_capacity(laws.len());
+        for knit in laws {
+            tensors.push(if let Some(k) = knit {
+                k.validate()?;
+                let d11 = 0.5 * (k.d_plus[0] + k.d_minus[0]);
+                let d22 = 0.5 * (k.d_plus[1] + k.d_minus[1]);
+                Some(BendingTensor::new(d11, d22, k.d12, k.d66)?.normal_projected())
+            } else {
+                None
+            });
+        }
+        let patches =
+            build_local_isometric(source_rest_3d, source_triangles, weld, &tensors, grain_dirs)?;
+        let replaced_hinges = self
+            .hinge_support
+            .iter()
+            .map(|&[(a, _), (b, _)]| {
+                let common = source_triangles[a]
+                    .iter()
+                    .filter(|v| source_triangles[b].contains(v))
+                    .count();
+                common == 2 && laws[a].is_some() && laws[b].is_some()
+            })
+            .collect();
+        let triangles: Vec<usize> = laws
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| m.is_some().then_some(i))
+            .collect();
+        let knit_laws = Some(triangles.iter().map(|&i| laws[i]).collect());
+        self.panel_bending = Some(PanelField {
+            patches,
+            replaced_hinges,
+            triangles,
+            heterogeneous: laws.windows(2).any(|pair| pair[0] != pair[1]),
+            knit_laws,
+        });
+        Ok(())
+    }
+
+    /// Opt-in per-triangle zone flexural rigidity multipliers on bound asymmetric knit panel
+    /// bending (`FTX-K09`, lifting the scalar-only restriction of `cloth/materials.rs:208` for
+    /// knit hems/cuffs/rib borders/jacquard back-float zones without disturbing legacy scalar
+    /// construction mechanics).
+    ///
+    /// Scales `(d_plus, d_minus, d12, d66)` of each knit patch by `multipliers[tri] > 0`,
+    /// preserving strict global convexity `min(D11) * min(D22) > D12^2`.
+    ///
+    /// # Errors
+    /// Missing knit panel bending binding, length mismatch, or non-finite/non-positive multiplier.
+    pub fn apply_knit_panel_zone_multipliers(
+        &mut self,
+        multipliers: &[f64],
+    ) -> Result<(), Refusal> {
+        if multipliers.len() != self.membranes.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "one zone bending multiplier per membrane triangle is required",
+            ));
+        }
+        for (idx, &m) in multipliers.iter().enumerate() {
+            if !m.is_finite() || m <= 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "knit zone bending multiplier[{idx}] = {m} must be finite and positive"
+                    ),
+                )
+                .repair("supply positive finite flexural multipliers per triangle"));
+            }
+        }
+        let Some(field) = self.panel_bending.as_mut() else {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "cannot apply knit zone multipliers before binding knit panel bending",
+            ));
+        };
+        let Some(knit_laws) = field.knit_laws.as_mut() else {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "cannot apply knit zone multipliers to non-knit panel bending",
+            ));
+        };
+        let mut updated = Vec::with_capacity(knit_laws.len());
+        for (&tri_idx, law_opt) in field.triangles.iter().zip(knit_laws.iter()) {
+            let mult = multipliers[tri_idx];
+            if let Some(law) = law_opt {
+                let mut scaled = *law;
+                scaled.d_plus = [law.d_plus[0] * mult, law.d_plus[1] * mult];
+                scaled.d_minus = [law.d_minus[0] * mult, law.d_minus[1] * mult];
+                scaled.d12 = law.d12 * mult;
+                scaled.d66 = law.d66 * mult;
+                scaled.validate()?;
+                updated.push(Some(scaled));
+            } else {
+                updated.push(None);
+            }
+        }
+        field.heterogeneous |= updated.windows(2).any(|pair| pair[0] != pair[1]);
+        *knit_laws = updated;
         Ok(())
     }
 
