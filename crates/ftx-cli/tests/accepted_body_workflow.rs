@@ -7,6 +7,8 @@ mod adaptive;
 mod consumer_adaptive;
 #[path = "accepted_body_workflow/drafting.rs"]
 mod drafting;
+#[path = "accepted_body_workflow/knit_drafting.rs"]
+mod knit_drafting;
 #[path = "accepted_body_workflow/outfit.rs"]
 mod outfit;
 #[path = "accepted_body_workflow/surface_water.rs"]

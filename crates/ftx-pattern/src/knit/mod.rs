@@ -5,6 +5,7 @@
 //! `ftx-drape`, `ftx-trace`, or `ftx-export`, preserving the 10-crate acyclic DAG.
 
 pub mod autoknit;
+pub mod body_draft;
 pub mod compile;
 pub mod draft;
 pub mod garment;
@@ -17,6 +18,10 @@ pub mod shaping;
 pub mod vm;
 
 pub use autoknit::{AutoKnitConfig, AutoKnitCourse, AutoKnitReport, draft_autoknit_from_shell};
+pub use body_draft::{
+    BodyDimension, BodyPulloverDraft, BodyPulloverInput, BodyPulloverReport, BodyPulloverSpec,
+    BodySizingBasis, PULLOVER_BODY_MEASUREMENTS, draft_pullover_from_body,
+};
 pub use compile::{CompiledKnitBundle, compile_knit_doc};
 pub use draft::{
     BranchedPulloverSpec, ParametricPanelSpec, RaglanPulloverSpec, apply_cable_crossings,

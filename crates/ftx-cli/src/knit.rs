@@ -4,9 +4,13 @@
 //! - `ftx knit verify` — 7-check V-bed VM & child-safety verifier for any `ftx-knit/1` document
 //! - `ftx knit export` — recompile and export a saved document with its current qualification
 //! - `ftx knit pullover` — four-piece garment with checked manual seam assembly
+//! - `ftx knit shape` — source-bound annular shell to verified knit program
 //! - `ftx knit poincloux` — published sliding-swatch comparison or explicitly unvalidated legacy surrogate
 //! - `ftx dye optimize` — 4-stage radiometric KM + Sobol-CVaR Bertsekas L-BFGS + 5-regime Pareto
 //! - `ftx dye verify` — physical dye-rig Capstan/dwell/Tg/accumulator/fastness verifier + `.csv`/`.gcode`/cert
+
+mod body_draft;
+mod shape;
 
 use std::path::{Path, PathBuf};
 
@@ -192,19 +196,23 @@ fn no_extra_positional(args: &Args, expected: usize, usage: &str) -> Result<(), 
     Ok(())
 }
 
-/// Dispatches `ftx knit <swatch|draft|shape|pullover|verify|export|shell|poincloux> ...`.
+/// Dispatches `ftx knit <swatch|draft|measured|pullover|shape|verify|export|shell|poincloux> ...`.
 pub(super) fn cmd_knit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     match args.positional.get(1).map(String::as_str) {
         Some("swatch") => cmd_knit_swatch(args),
         Some("draft") => cmd_knit_draft(args),
-        Some("shape") => cmd_knit_shape(args),
+        Some("measured") => body_draft::cmd_knit_measured(args),
         Some("pullover") => cmd_knit_pullover(args),
+        Some("shape") if args.positional.len() > 2 || args.options.contains_key("config") => {
+            shape::cmd_knit_shape(args)
+        }
+        Some("shape") => cmd_knit_shape(args),
         Some("verify") => cmd_knit_verify(args),
         Some("export") => cmd_knit_export(args),
         Some("shell") => crate::knit_shell::cmd_knit_shell(args),
         Some("poincloux") => cmd_knit_poincloux(args),
         _ => Err(bad_input(
-            "expected `ftx knit swatch|draft|shape|pullover|verify|export|shell|poincloux`",
+            "expected `ftx knit swatch|draft|measured|pullover|shape|verify|export|shell|poincloux`",
         )),
     }
 }
@@ -2871,6 +2879,7 @@ fn cmd_dye_export(args: &Args) -> Result<(Value, i32, String), Refusal> {
 mod tests {
     use super::*;
     use crate::parse;
+    use ftx_pattern::knit::draft_shaped_panel;
 
     fn fresh_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

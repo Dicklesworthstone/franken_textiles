@@ -9,6 +9,7 @@ pub mod ayab;
 pub mod hand_knit;
 pub mod kniterate;
 pub mod knitout;
+pub mod shape;
 pub mod vendor_handoff;
 
 pub use ayab::{
@@ -26,6 +27,7 @@ pub use knitout::{
     KnitoutExportBundle, SwatchKitBundle, export_calibration_swatch_kit, export_knitout_v2,
     verify_knitout_v2_readback,
 };
+pub use shape::{ShapedKnitExportBundle, ShapedKnitSource, export_shaped_knit};
 pub use vendor_handoff::{
     TierBProprietaryTarget, TierBVendorHandoff, VENDOR_HANDOFF_SCHEMA, VendorHandoffManifest,
     export_tier_b_vendor_handoff, is_proprietary_handoff, refuse_proprietary_binary_target,

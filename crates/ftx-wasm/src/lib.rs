@@ -9,6 +9,8 @@ pub mod alteration;
 pub mod body_fit;
 pub mod fold;
 pub mod knit;
+pub mod knit_body;
+pub mod knit_shape;
 pub mod knit_shell;
 pub mod manufacturing;
 pub mod materials;

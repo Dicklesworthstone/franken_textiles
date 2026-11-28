@@ -161,7 +161,7 @@ pub struct KnitWasmEnvelope {
     pub refusal: Option<Refusal>,
 }
 
-fn default_created() -> String {
+pub(crate) fn default_created() -> String {
     "2026-11-27T08:00".to_string()
 }
 
@@ -679,7 +679,7 @@ pub fn default_carrier() -> CarrierId {
     CarrierId("1".to_string())
 }
 
-fn encode_base64(bytes: &[u8]) -> String {
+pub(crate) fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let (chunks, rem) = bytes.as_chunks::<3>();

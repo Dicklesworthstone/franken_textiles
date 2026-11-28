@@ -214,6 +214,8 @@ const USAGE: &str = "usage:
   ftx knit export PATTERN.knit.json --out DIR [--target knitout|kniterate|ayab|hand-pdf|shima-handoff|stoll-handoff] [--machine ID] [--allow-proprietary-binary] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipt RECEIPT.json] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx knit pullover SPEC.json --gauge GAUGE.json --out DIR [--machine hand-knit|ID] [--qual SWATCH.json --material-sha256 SHA256] [--drape-receipts RECEIPTS.json] [--json]
   ftx knit shell --input SOURCE.json --out NEW_DIR [--json]
+  ftx knit shape SHELL.json --config CONFIG.json --gauge GAUGE.json --out NEW_DIR [--machine hand-knit|ID] [--qual SWATCH.json --material-sha256 SHA256] [--json]
+  ftx knit measured --input DESIGN.json --measurements MEAS.json --out NEW_DIR [--body-fit ACCEPTED.json --model FILE] [--qual SWATCH.json --material-sha256 SHA256] [--json]
   ftx knit shell --body-fit ACCEPTED.json --model FILE --region REGION --ease EASE.json --out NEW_DIR [--pose drape|rest|arms-up] [--json]
   ftx knit poincloux [--mu MU] [--dataset published-sliding --fit-min-strain F --fit-max-strain F --check-max-strain F --rmse-limit-n N --max-error-limit-n N] [--json]
   ftx dye swatch --out DIR [--applicator dip|piezo] [--machine piezo-cmyk|dip-3bath] [--yarn ID] [--json]
