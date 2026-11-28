@@ -619,13 +619,10 @@ pub fn verify_and_export_dye_program_with_receipt(
                 "dye plan uncertainty receipt qualification_sha256 does not match supplied YarnDyeingQualification",
             ));
         }
-        if qual_sha.is_some()
-            && receipt.qualification_sha256.is_none()
-            && receipt.four_claims.color_fidelity_claimed
-        {
+        if qual_sha.is_some() && receipt.qualification_sha256.is_none() {
             return Err(Refusal::new(
                 RefusalCode::VerificationMismatch,
-                "unqualified dye plan uncertainty receipt cannot claim color fidelity",
+                "dye plan uncertainty receipt has no qualification_sha256 for the supplied YarnDyeingQualification",
             ));
         }
         hazard_report
@@ -1458,12 +1455,16 @@ mod tests {
                 Some(qhash),
             ),
             make_receipt(
-                phash,
-                mhash,
+                phash.clone(),
+                mhash.clone(),
                 DyeingRegime::Regime1AStripes,
                 Some("0".repeat(64)),
             ),
+            // Unqualified receipt (qualification_sha256 = None, color_fidelity_claimed = false)
+            // must still refuse when paired with a supplied YarnDyeingQualification.
+            make_receipt(phash, mhash, DyeingRegime::Regime1AStripes, None),
         ] {
+            assert!(!bad_receipt.four_claims.color_fidelity_claimed);
             assert_eq!(
                 verify_and_export_dye_program_with_receipt(
                     &prog,
